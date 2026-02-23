@@ -13,6 +13,17 @@ static constexpr uint32_t REGION_H           = 1440;
 static constexpr uint32_t MAX_PARTICLE_TYPES = 10;
 static constexpr uint32_t GROUP_DENSITY      = 256;
 
+// ── Particle behavior flags (bitmask per type, must match shader constants) ──
+
+enum ParticleBehavior : uint32_t {
+    BEHAVIOR_NONE     = 0,
+    BEHAVIOR_REPEL    = 1u << 0,  // repels all types (shader)
+    BEHAVIOR_POLAR    = 1u << 1,  // magnetic dipole orientation (shader + render)
+    BEHAVIOR_HEAVY    = 1u << 2,  // high effective mass (shader)
+    BEHAVIOR_CATALYST = 1u << 3,  // boosts speed of nearby particles (shader)
+    BEHAVIOR_VIRAL    = 1u << 4   // converts adjacent non-viral particles (CPU only)
+};
+
 // ── GPU push-constant block (must match GLSL layout exactly) ─────────────────
 
 struct PushConstants {

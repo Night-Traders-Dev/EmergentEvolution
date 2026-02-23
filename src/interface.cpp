@@ -112,13 +112,16 @@ void Interface::render_imgui(SimConfig&       cfg,
     ImGui::TextDisabled("Hover + scroll: change force | Right-click: zero force");
     draw_particle_grid(cfg, particles);
 
+    // ── Archetype panel ───────────────────────────────────────────────────────
+    draw_archetype_panel(particles, cfg);
+
     // ── Organism panel ────────────────────────────────────────────────────────
     draw_organism_panel(org_manager, particles, cfg);
 
     ImGui::Separator();
     ImGui::TextDisabled("F1: toggle UI  |  F2: reset  |  Space: pause");
     ImGui::TextDisabled("Drag: pan  |  Scroll: zoom  |  ESC: quit");
-    ImGui::TextDisabled("CodeNoodles 2026");
+    ImGui::TextDisabled("Night-Traders-Dev 2026");
 
     ImGui::End();
 
@@ -223,6 +226,67 @@ void Interface::draw_particle_grid(SimConfig& cfg, Particles& particles) {
             if (col < pt)
                 ImGui::SameLine(0, 0);
         }
+    }
+}
+
+// ── Archetype panel ───────────────────────────────────────────────────────────
+
+void Interface::draw_archetype_panel(Particles& particles, const SimConfig& cfg) {
+    if (!ImGui::CollapsingHeader("Particle Archetypes"))
+        return;
+
+    static const char* archetype_names[] = {
+        "Default", "Repeller", "Polar", "Heavy", "Catalyst", "Membrane", "Viral"
+    };
+    static const char* flag_names[] = {
+        nullptr, "REPEL", "POLAR", "HEAVY", "CATALYST", nullptr, "VIRAL"
+    };
+
+    uint32_t pt = cfg.particle_types;
+    if (pt > MAX_PARTICLE_TYPES) pt = MAX_PARTICLE_TYPES;
+
+    ImGui::TextDisabled("Set behavior archetype per particle type:");
+
+    for (uint32_t t = 0; t < pt; ++t) {
+        ImGui::PushID(static_cast<int>(t));
+
+        const glm::vec4& c = particles.colors[t];
+        ImGui::ColorButton("##swatch",
+            ImVec4(c.r, c.g, c.b, 1.0f),
+            ImGuiColorEditFlags_NoTooltip,
+            ImVec2(14, 14));
+        ImGui::SameLine();
+
+        // Archetype combo
+        ImGui::SetNextItemWidth(100.0f);
+        if (ImGui::Combo("##arch", &archetype_selection[t], archetype_names, 7)) {
+            switch (archetype_selection[t]) {
+            case 0: particles.apply_preset_default(t);              break;
+            case 1: particles.apply_preset_repeller(t);             break;
+            case 2: particles.apply_preset_polar(t, pt);            break;
+            case 3: particles.apply_preset_heavy(t);                break;
+            case 4: particles.apply_preset_catalyst(t);             break;
+            case 5: particles.apply_preset_membrane(t);             break;
+            case 6: particles.apply_preset_viral(t, pt);            break;
+            }
+        }
+
+        // Show active behavior flags as small badges
+        uint32_t flags = particles.behavior_flags[t];
+        if (flags == BEHAVIOR_NONE) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("──");
+        } else {
+            for (int fi = 0; fi < 7; ++fi) {
+                if (flag_names[fi] == nullptr) continue;
+                uint32_t bit = 1u << fi;
+                if (!(flags & bit)) continue;
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", flag_names[fi]);
+            }
+        }
+
+        ImGui::PopID();
     }
 }
 

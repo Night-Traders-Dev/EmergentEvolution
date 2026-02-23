@@ -61,6 +61,15 @@ private:
     Buffer force_buffer_{};
     Buffer color_buffer_{};
 
+    // Behavior flags (shared, static per reset)
+    Buffer behavior_buffer_{};
+
+    // Double-buffered polar orientation (angle + angular velocity)
+    Buffer angle_buffer_a_{};
+    Buffer angle_buffer_b_{};
+    Buffer angular_vel_buffer_a_{};
+    Buffer angular_vel_buffer_b_{};
+
     // Descriptor sets: set_a uses (a→in, b→out), set_b uses (b→in, a→out)
     VkDescriptorSet desc_set_a_ = VK_NULL_HANDLE;
     VkDescriptorSet desc_set_b_ = VK_NULL_HANDLE;

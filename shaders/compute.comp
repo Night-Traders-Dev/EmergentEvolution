@@ -14,6 +14,13 @@ layout(set = 0, binding = 5, std430) buffer OutPosBuffer { vec2  data[]; } out_p
 layout(set = 0, binding = 6, std430) buffer OutVelBuffer { vec2  data[]; } out_vel_buffer;
 layout(set = 0, binding = 7, rgba32f) uniform image2D out_render_texture;
 
+// Behavior / orientation buffers
+layout(set = 0, binding =  8, std430) readonly buffer Behaviors { uint  data[]; } behavior_buffer;
+layout(set = 0, binding =  9, std430) buffer AngleIn            { float data[]; } angle_in_buffer;
+layout(set = 0, binding = 10, std430) buffer AngVelIn           { float data[]; } avel_in_buffer;
+layout(set = 0, binding = 11, std430) buffer AngleOut           { float data[]; } angle_out_buffer;
+layout(set = 0, binding = 12, std430) buffer AngVelOut          { float data[]; } avel_out_buffer;
+
 // Push constants
 layout(push_constant, std430) uniform Params {
     vec2  region_size;
@@ -30,6 +37,12 @@ layout(push_constant, std430) uniform Params {
     float density_limit;
 } params;
 
+// Behavior flag constants (must match ParticleBehavior enum in types.h)
+const uint BEHAVIOR_REPEL    = 1u;
+const uint BEHAVIOR_POLAR    = 2u;
+const uint BEHAVIOR_HEAVY    = 4u;
+const uint BEHAVIOR_CATALYST = 8u;
+const uint BEHAVIOR_VIRAL    = 16u;
 
 // https://stackoverflow.com/questions/4200224/random-noise-functions-for-glsl
 float random(float v) {
@@ -40,11 +53,21 @@ float random(float v) {
 void apply_physics(uint i) {
     const float MAX_RADIUS = params.interaction_radius * params.interaction_radius;
 
-    vec2  pos_a        = in_pos_buffer.data[i];
-    vec2  vel_a        = in_vel_buffer.data[i];
-    uint  type_a       = type_buffer.data[i];
-    vec2  total_force  = vec2(0.0f);
+    vec2  pos_a         = in_pos_buffer.data[i];
+    vec2  vel_a         = in_vel_buffer.data[i];
+    uint  type_a        = type_buffer.data[i];
+    uint  flags_a       = behavior_buffer.data[type_a];
+    vec2  total_force   = vec2(0.0f);
     float local_density = 0.0f;
+
+    bool is_repel    = (flags_a & BEHAVIOR_REPEL)    != 0u;
+    bool is_polar    = (flags_a & BEHAVIOR_POLAR)    != 0u;
+    bool is_heavy    = (flags_a & BEHAVIOR_HEAVY)    != 0u;
+
+    float angle_a        = is_polar ? angle_in_buffer.data[i] : 0.0f;
+    vec2  dipole_a       = is_polar ? vec2(cos(angle_a), sin(angle_a)) : vec2(0.0f);
+    float torque_total   = 0.0f;
+    float catalyst_boost = 0.0f;
 
     // --- density pass ---
     for (int j = 0; j < int(params.particle_count); j++) {
@@ -86,9 +109,42 @@ void apply_physics(uint i) {
 
         if (dist > 0.0f) {
             uint  type_b     = type_buffer.data[j];
+            uint  flags_b    = behavior_buffer.data[type_b];
             float attraction = force_buffer.data[type_a + type_b * params.particle_types];
             vec2  normal     = normalize(delta);
             float force;
+
+            // REPEL: override force matrix — always push away
+            if (is_repel) {
+                attraction = -1.0f;
+            }
+
+            // POLAR: modulate attraction by dipole alignment; accumulate torque
+            if (is_polar) {
+                float align_a = dot(dipole_a, -normal);  // >0 if dipole points toward j
+                attraction *= clamp(1.0f + 1.5f * align_a, -0.5f, 2.5f);
+
+                if ((flags_b & BEHAVIOR_POLAR) != 0u) {
+                    vec2  dipole_b = vec2(cos(angle_in_buffer.data[j]),
+                                         sin(angle_in_buffer.data[j]));
+                    float align_b  = dot(dipole_b, normal);
+                    attraction    *= clamp(1.0f + 1.5f * align_b, -0.5f, 2.5f);
+
+                    // Torque for parallel alignment between dipoles
+                    float cross_ab = dipole_a.x * dipole_b.y - dipole_a.y * dipole_b.x;
+                    torque_total  += cross_ab * (1.0f - dist / params.interaction_radius) * 0.02f;
+                }
+
+                // Torque to steer dipole toward attraction direction
+                float to_j_cross = dipole_a.x * (-normal.y) - dipole_a.y * (-normal.x);
+                torque_total += to_j_cross * abs(attraction)
+                              * (1.0f - dist / params.interaction_radius) * 0.04f;
+            }
+
+            // CATALYST neighbour: note boost factor for dampening
+            if ((flags_b & BEHAVIOR_CATALYST) != 0u) {
+                catalyst_boost += 1.0f - dist / params.interaction_radius;
+            }
 
             if (attraction > 0.0f) {
                 float density_factor = 1.0f - min(max(0.0f, local_density - params.density_limit), 1.005f);
@@ -112,24 +168,45 @@ void apply_physics(uint i) {
         }
     }
 
+    // HEAVY: high effective mass — reduce force response
+    if (is_heavy) total_force *= 0.25f;
+
     const float MAX_FORCE = 100.0f;
-    float dist_sq = dot(total_force, total_force);
-    if (dist_sq > MAX_FORCE * MAX_FORCE)
+    float f_sq = dot(total_force, total_force);
+    if (f_sq > MAX_FORCE * MAX_FORCE)
         total_force = normalize(total_force) * MAX_FORCE;
 
     vel_a += total_force * params.dt;
-    vel_a *= params.dampening;
+
+    // CATALYST: particles near catalysts lose less energy (higher effective dampening)
+    float damp = min(params.dampening + catalyst_boost * 0.04f, 0.99f);
+    vel_a *= damp;
+
     pos_a += vel_a * params.dt;
     pos_a  = mod(pos_a + params.region_size, params.region_size);
 
     out_pos_buffer.data[i] = pos_a;
     out_vel_buffer.data[i] = vel_a;
+
+    // POLAR: integrate angular velocity and write updated angle
+    if (is_polar) {
+        float avel = avel_in_buffer.data[i];
+        avel += torque_total * params.dt;
+        avel *= params.dampening;
+        angle_out_buffer.data[i] = mod(angle_in_buffer.data[i] + avel * params.dt, 6.28318f);
+        avel_out_buffer.data[i]  = avel;
+    } else {
+        angle_out_buffer.data[i] = angle_in_buffer.data[i];
+        avel_out_buffer.data[i]  = avel_in_buffer.data[i];
+    }
 }
 
 
 void render_particle(uint i) {
     vec2 pos  = in_pos_buffer.data[i];
     uint type = type_buffer.data[i];
+    uint flags = behavior_buffer.data[type];
+    bool polar  = (flags & BEHAVIOR_POLAR) != 0u;
 
     vec2 region_size   = params.region_size;
     vec2 region_center = region_size * 0.5f;
@@ -141,12 +218,41 @@ void render_particle(uint i) {
     int   range  = int(ceil(radius));
     vec2  screen_pos = region_center + (delta * params.camera_zoom) - vec2(range, range);
 
+    float angle   = polar ? angle_in_buffer.data[i] : 0.0f;
+    vec2  dip_dir = polar ? vec2(cos(angle), sin(angle)) : vec2(0.0f);
+    // North pole is displaced in dipole direction from the screen-space center
+    // screen_pos is the render reference; actual centre = screen_pos + (range, range)
+    vec2  center     = screen_pos + vec2(float(range), float(range));
+    vec2  north_pt   = center + dip_dir * (radius * 0.55f);
+
     for (int x = -range; x <= range; x++) {
         for (int y = -range; y <= range; y++) {
             ivec2 pixel_pos = ivec2(floor(screen_pos)) + ivec2(x, y);
-            float dist      = distance(vec2(pixel_pos) + 0.5f, screen_pos);
-            if (dist < radius)
-                imageStore(out_render_texture, pixel_pos, color_buffer.data[type]);
+            vec2  px_center = vec2(pixel_pos) + 0.5f;
+
+            float d_main = distance(px_center, center);
+            if (d_main >= radius) continue;
+
+            vec4 col = color_buffer.data[type];
+
+            if (polar) {
+                float d_north = distance(px_center, north_pt);
+                if (d_north < radius * 0.38f) {
+                    // North pole: warm yellow dot
+                    col = vec4(1.0f, 0.85f, 0.3f, 1.0f);
+                } else {
+                    // South hemisphere: blend in cool blue tint
+                    vec2  to_px     = px_center - center;
+                    float len_to_px = length(to_px);
+                    float south_dot = (len_to_px > 0.0f)
+                                    ? dot(to_px / len_to_px, -dip_dir)
+                                    : 0.0f;
+                    float south_blend = max(0.0f, south_dot) * 0.45f;
+                    col = mix(col, vec4(0.3f, 0.5f, 1.0f, 1.0f), south_blend);
+                }
+            }
+
+            imageStore(out_render_texture, pixel_pos, col);
         }
     }
 }

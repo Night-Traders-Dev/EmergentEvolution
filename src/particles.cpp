@@ -2,6 +2,7 @@
 #include <random>
 #include <cstring>
 #include <algorithm>
+#include <cmath>
 
 Particles::Particles() {
     // Pre-allocate force / color arrays at max size
@@ -12,6 +13,7 @@ Particles::Particles() {
 void Particles::gen_data(const SimConfig& cfg) {
     rng_.seed(cfg.generation_seed);
     for (float& s : trait_scales) s = 1.0f;
+    for (auto& f : behavior_flags) f = BEHAVIOR_NONE;
 
     if (cfg.reset_forces)
         gen_random_force_matrix();
@@ -37,6 +39,9 @@ void Particles::gen_particles(const SimConfig& cfg) {
         add_particle(glm::vec2(rw / 2.0f + 30.0f, rh / 2.0f),
                      glm::vec2(0.0f),
                      rand_range_i(0, (int)cfg.particle_types - 1));
+        // Init orientation arrays for 2-particle case
+        angles.assign(2, 0.0f);
+        angular_velocities.assign(2, 0.0f);
         return;
     }
 
@@ -46,6 +51,12 @@ void Particles::gen_particles(const SimConfig& cfg) {
         uint32_t t = static_cast<uint32_t>(rand_range_i(0, (int)cfg.particle_types - 1));
         add_particle(pos, glm::vec2(0.0f), t);
     }
+
+    // Random initial orientations for all particles (used by POLAR types)
+    angles.resize(cfg.particle_count);
+    angular_velocities.assign(cfg.particle_count, 0.0f);
+    for (uint32_t i = 0; i < cfg.particle_count; ++i)
+        angles[i] = rand_range_f(0.0f, 6.28318f);
 }
 
 void Particles::add_particle(glm::vec2 pos, glm::vec2 vel, uint32_t type) {
@@ -88,4 +99,65 @@ int Particles::rand_range_i(int lo, int hi) {
 float Particles::rand_range_f(float lo, float hi) {
     std::uniform_real_distribution<float> dist(lo, hi);
     return dist(rng_);
+}
+
+// ── Archetype presets ─────────────────────────────────────────────────────────
+// Each preset clears then sets behavior_flags for `type` and seeds the
+// corresponding row of the force matrix.  The UI can still hand-edit forces.
+
+static void set_row(std::vector<float>& forces, uint32_t type, float self_val, float cross_val) {
+    for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b) {
+        uint32_t fi = type + b * MAX_PARTICLE_TYPES;
+        forces[fi]  = (b == type) ? self_val : cross_val;
+    }
+}
+
+void Particles::apply_preset_default(uint32_t type) {
+    if (type >= MAX_PARTICLE_TYPES) return;
+    behavior_flags[type] = BEHAVIOR_NONE;
+    // Leave force matrix as-is (user-controlled)
+}
+
+void Particles::apply_preset_repeller(uint32_t type) {
+    if (type >= MAX_PARTICLE_TYPES) return;
+    behavior_flags[type] = BEHAVIOR_REPEL;
+    set_row(forces, type, -0.8f, -0.8f);
+}
+
+void Particles::apply_preset_polar(uint32_t type, uint32_t active_types) {
+    if (type >= MAX_PARTICLE_TYPES) return;
+    behavior_flags[type] = BEHAVIOR_POLAR;
+    // Strong self-attraction to form chains; random-ish cross forces
+    set_row(forces, type, 0.4f, 0.0f);
+    // Give slight positive force toward all active types to mix into the soup
+    for (uint32_t b = 0; b < active_types; ++b) {
+        if (b == type) continue;
+        forces[type + b * MAX_PARTICLE_TYPES] = 0.15f;
+    }
+}
+
+void Particles::apply_preset_heavy(uint32_t type) {
+    if (type >= MAX_PARTICLE_TYPES) return;
+    behavior_flags[type] = BEHAVIOR_HEAVY;
+    set_row(forces, type, -0.2f, -0.2f);
+}
+
+void Particles::apply_preset_catalyst(uint32_t type) {
+    if (type >= MAX_PARTICLE_TYPES) return;
+    behavior_flags[type] = BEHAVIOR_CATALYST;
+    set_row(forces, type, 0.1f, 0.2f);
+}
+
+void Particles::apply_preset_membrane(uint32_t type) {
+    if (type >= MAX_PARTICLE_TYPES) return;
+    behavior_flags[type] = BEHAVIOR_NONE;  // pure force-matrix behaviour
+    set_row(forces, type, 0.7f, -0.4f);
+}
+
+void Particles::apply_preset_viral(uint32_t type, uint32_t active_types) {
+    if (type >= MAX_PARTICLE_TYPES) return;
+    behavior_flags[type] = BEHAVIOR_VIRAL;
+    // Strong attraction toward all types to get close enough to infect
+    set_row(forces, type, 0.6f, 0.6f);
+    (void)active_types;  // unused, kept for API symmetry
 }

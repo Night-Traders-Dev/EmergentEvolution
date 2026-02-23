@@ -61,6 +61,10 @@ private:
     // Returns parent[i] = root cluster index for particle i.
     std::vector<int> build_clusters(const std::vector<glm::vec2>& positions);
 
+    // Convert non-viral particles adjacent to viral particles (CPU-side, every 5 frames).
+    void apply_viral_infections(const std::vector<glm::vec2>& positions,
+                                Particles& particles);
+
     // Write trait_scales into particles based on current organisms.
     void apply_trait_feedback(Particles& particles);
 };

@@ -46,17 +46,28 @@ void ComputePipeline::destroy(VulkanContext& ctx) {
 }
 
 // ── Descriptor set layout ─────────────────────────────────────────────────────
-// Bindings 0-6: storage buffers  |  binding 7: storage image
+// Bindings 0-6: particle storage buffers
+// Binding  7:   storage image (render texture)
+// Binding  8:   behavior flags (shared, static per type)
+// Bindings 9-12: polar angle/angular-velocity (double-buffered)
 
 void ComputePipeline::create_descriptor_set_layout(VkDevice device) {
-    std::array<VkDescriptorSetLayoutBinding, 8> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 13> bindings{};
+
+    // Bindings 0-6 and 8-12: storage buffers
     for (uint32_t i = 0; i < 7; ++i) {
-        bindings[i].binding            = i;
-        bindings[i].descriptorType     = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        bindings[i].descriptorCount    = 1;
-        bindings[i].stageFlags         = VK_SHADER_STAGE_COMPUTE_BIT;
+        bindings[i].binding         = i;
+        bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
     }
-    // binding 7: storage image
+    for (uint32_t i = 8; i < 13; ++i) {
+        bindings[i].binding         = i;
+        bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    // Binding 7: storage image
     bindings[7].binding         = 7;
     bindings[7].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[7].descriptorCount = 1;
@@ -117,9 +128,10 @@ void ComputePipeline::create_compute_pipeline(VulkanContext& ctx,
 // ── Descriptor pool ───────────────────────────────────────────────────────────
 
 void ComputePipeline::create_descriptor_pool(VkDevice device) {
-    // 2 sets × 7 storage buffers + 2 sets × 1 storage image
+    // 2 sets × 12 storage buffers (7 orig + 1 behavior + 4 angle/avel) = 24
+    // 2 sets × 1 storage image = 2
     std::array<VkDescriptorPoolSize, 2> pool_sizes{};
-    pool_sizes[0] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 14 };
+    pool_sizes[0] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 24 };
     pool_sizes[1] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,   2 };
 
     VkDescriptorPoolCreateInfo ci{};
@@ -135,33 +147,44 @@ void ComputePipeline::create_descriptor_pool(VkDevice device) {
 // ── Buffer creation ───────────────────────────────────────────────────────────
 
 void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& particles) {
-    // Flags: storage buffer, visible from compute (HOST_VISIBLE + COHERENT for ease)
-    const VkBufferUsageFlags   BUF_USAGE = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    const VkBufferUsageFlags    BUF_USAGE = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
     const VkMemoryPropertyFlags MEM_PROPS =
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 
-    VkDeviceSize pos_size   = particles.positions.size()  * sizeof(glm::vec2);
-    VkDeviceSize vel_size   = particles.velocities.size() * sizeof(glm::vec2);
-    VkDeviceSize type_size  = particles.types.size()       * sizeof(uint32_t);
-    VkDeviceSize force_size = particles.forces.size()      * sizeof(float);
-    VkDeviceSize color_size = particles.colors.size()      * sizeof(glm::vec4);
+    VkDeviceSize pos_size      = particles.positions.size()  * sizeof(glm::vec2);
+    VkDeviceSize vel_size      = particles.velocities.size() * sizeof(glm::vec2);
+    VkDeviceSize type_size     = particles.types.size()       * sizeof(uint32_t);
+    VkDeviceSize force_size    = particles.forces.size()      * sizeof(float);
+    VkDeviceSize color_size    = particles.colors.size()      * sizeof(glm::vec4);
+    VkDeviceSize behavior_size = MAX_PARTICLE_TYPES            * sizeof(uint32_t);
+    VkDeviceSize angle_size    = particles.angles.size()       * sizeof(float);
 
-    pos_buffer_a_  = ctx.create_buffer(pos_size,   BUF_USAGE, MEM_PROPS);
-    pos_buffer_b_  = ctx.create_buffer(pos_size,   BUF_USAGE, MEM_PROPS);
-    vel_buffer_a_  = ctx.create_buffer(vel_size,   BUF_USAGE, MEM_PROPS);
-    vel_buffer_b_  = ctx.create_buffer(vel_size,   BUF_USAGE, MEM_PROPS);
-    type_buffer_   = ctx.create_buffer(type_size,  BUF_USAGE, MEM_PROPS);
-    force_buffer_  = ctx.create_buffer(force_size, BUF_USAGE, MEM_PROPS);
-    color_buffer_  = ctx.create_buffer(color_size, BUF_USAGE, MEM_PROPS);
+    pos_buffer_a_          = ctx.create_buffer(pos_size,      BUF_USAGE, MEM_PROPS);
+    pos_buffer_b_          = ctx.create_buffer(pos_size,      BUF_USAGE, MEM_PROPS);
+    vel_buffer_a_          = ctx.create_buffer(vel_size,      BUF_USAGE, MEM_PROPS);
+    vel_buffer_b_          = ctx.create_buffer(vel_size,      BUF_USAGE, MEM_PROPS);
+    type_buffer_           = ctx.create_buffer(type_size,     BUF_USAGE, MEM_PROPS);
+    force_buffer_          = ctx.create_buffer(force_size,    BUF_USAGE, MEM_PROPS);
+    color_buffer_          = ctx.create_buffer(color_size,    BUF_USAGE, MEM_PROPS);
+    behavior_buffer_       = ctx.create_buffer(behavior_size, BUF_USAGE, MEM_PROPS);
+    angle_buffer_a_        = ctx.create_buffer(angle_size,    BUF_USAGE, MEM_PROPS);
+    angle_buffer_b_        = ctx.create_buffer(angle_size,    BUF_USAGE, MEM_PROPS);
+    angular_vel_buffer_a_  = ctx.create_buffer(angle_size,    BUF_USAGE, MEM_PROPS);
+    angular_vel_buffer_b_  = ctx.create_buffer(angle_size,    BUF_USAGE, MEM_PROPS);
 
     // Upload initial data
-    ctx.update_buffer(pos_buffer_a_,  particles.positions.data(),  pos_size);
-    ctx.update_buffer(pos_buffer_b_,  particles.positions.data(),  pos_size);
-    ctx.update_buffer(vel_buffer_a_,  particles.velocities.data(), vel_size);
-    ctx.update_buffer(vel_buffer_b_,  particles.velocities.data(), vel_size);
-    ctx.update_buffer(type_buffer_,   particles.types.data(),      type_size);
-    ctx.update_buffer(force_buffer_,  particles.forces.data(),     force_size);
-    ctx.update_buffer(color_buffer_,  particles.colors.data(),     color_size);
+    ctx.update_buffer(pos_buffer_a_,  particles.positions.data(),        pos_size);
+    ctx.update_buffer(pos_buffer_b_,  particles.positions.data(),        pos_size);
+    ctx.update_buffer(vel_buffer_a_,  particles.velocities.data(),       vel_size);
+    ctx.update_buffer(vel_buffer_b_,  particles.velocities.data(),       vel_size);
+    ctx.update_buffer(type_buffer_,   particles.types.data(),            type_size);
+    ctx.update_buffer(force_buffer_,  particles.forces.data(),           force_size);
+    ctx.update_buffer(color_buffer_,  particles.colors.data(),           color_size);
+    ctx.update_buffer(behavior_buffer_, particles.behavior_flags,        behavior_size);
+    ctx.update_buffer(angle_buffer_a_,  particles.angles.data(),         angle_size);
+    ctx.update_buffer(angle_buffer_b_,  particles.angles.data(),         angle_size);
+    ctx.update_buffer(angular_vel_buffer_a_, particles.angular_velocities.data(), angle_size);
+    ctx.update_buffer(angular_vel_buffer_b_, particles.angular_velocities.data(), angle_size);
 
     allocate_and_write_descriptor_sets(ctx);
 
@@ -185,6 +208,11 @@ void ComputePipeline::clear_buffers(VulkanContext& ctx) {
     ctx.destroy_buffer(type_buffer_);
     ctx.destroy_buffer(force_buffer_);
     ctx.destroy_buffer(color_buffer_);
+    ctx.destroy_buffer(behavior_buffer_);
+    ctx.destroy_buffer(angle_buffer_a_);
+    ctx.destroy_buffer(angle_buffer_b_);
+    ctx.destroy_buffer(angular_vel_buffer_a_);
+    ctx.destroy_buffer(angular_vel_buffer_b_);
 }
 
 // ── Write descriptor sets ─────────────────────────────────────────────────────
@@ -222,7 +250,6 @@ static void write_storage_image(std::vector<VkWriteDescriptorSet>& writes,
 }
 
 void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
-    // Allocate both sets
     std::array<VkDescriptorSetLayout, 2> layouts = { desc_set_layout_, desc_set_layout_ };
     VkDescriptorSetAllocateInfo alloc{};
     alloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -237,39 +264,50 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     desc_set_a_ = sets[0];
     desc_set_b_ = sets[1];
 
-    // These vectors must stay alive until vkUpdateDescriptorSets
     std::vector<VkWriteDescriptorSet>    writes;
     std::vector<VkDescriptorBufferInfo>  buf_infos;
     std::vector<VkDescriptorImageInfo>   img_infos;
-    writes.reserve(16);
-    buf_infos.reserve(14);
+    writes.reserve(26);
+    buf_infos.reserve(24);
     img_infos.reserve(2);
 
-    auto pos_a_size  = pos_buffer_a_.size;
-    auto vel_a_size  = vel_buffer_a_.size;
-    auto type_size   = type_buffer_.size;
-    auto force_size  = force_buffer_.size;
-    auto color_size  = color_buffer_.size;
+    auto pos_sz  = pos_buffer_a_.size;
+    auto vel_sz  = vel_buffer_a_.size;
+    auto type_sz = type_buffer_.size;
+    auto frc_sz  = force_buffer_.size;
+    auto col_sz  = color_buffer_.size;
+    auto beh_sz  = behavior_buffer_.size;
+    auto ang_sz  = angle_buffer_a_.size;
 
-    // Set A: in=a, out=b
-    write_storage_buffer(writes, buf_infos, desc_set_a_, 0, pos_buffer_a_.handle,  pos_a_size);
-    write_storage_buffer(writes, buf_infos, desc_set_a_, 1, vel_buffer_a_.handle,  vel_a_size);
-    write_storage_buffer(writes, buf_infos, desc_set_a_, 2, type_buffer_.handle,   type_size);
-    write_storage_buffer(writes, buf_infos, desc_set_a_, 3, force_buffer_.handle,  force_size);
-    write_storage_buffer(writes, buf_infos, desc_set_a_, 4, color_buffer_.handle,  color_size);
-    write_storage_buffer(writes, buf_infos, desc_set_a_, 5, pos_buffer_b_.handle,  pos_a_size);
-    write_storage_buffer(writes, buf_infos, desc_set_a_, 6, vel_buffer_b_.handle,  vel_a_size);
-    write_storage_image (writes, img_infos, desc_set_a_, 7, particle_texture.view);
+    // ── Set A: in=a, out=b ────────────────────────────────────────────────────
+    write_storage_buffer(writes, buf_infos, desc_set_a_,  0, pos_buffer_a_.handle,         pos_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_,  1, vel_buffer_a_.handle,         vel_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_,  2, type_buffer_.handle,          type_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_,  3, force_buffer_.handle,         frc_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_,  4, color_buffer_.handle,         col_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_,  5, pos_buffer_b_.handle,         pos_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_,  6, vel_buffer_b_.handle,         vel_sz);
+    write_storage_image (writes, img_infos, desc_set_a_,  7, particle_texture.view);
+    write_storage_buffer(writes, buf_infos, desc_set_a_,  8, behavior_buffer_.handle,      beh_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_,  9, angle_buffer_a_.handle,       ang_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_, 10, angular_vel_buffer_a_.handle, ang_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_, 11, angle_buffer_b_.handle,       ang_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_, 12, angular_vel_buffer_b_.handle, ang_sz);
 
-    // Set B: in=b, out=a
-    write_storage_buffer(writes, buf_infos, desc_set_b_, 0, pos_buffer_b_.handle,  pos_a_size);
-    write_storage_buffer(writes, buf_infos, desc_set_b_, 1, vel_buffer_b_.handle,  vel_a_size);
-    write_storage_buffer(writes, buf_infos, desc_set_b_, 2, type_buffer_.handle,   type_size);
-    write_storage_buffer(writes, buf_infos, desc_set_b_, 3, force_buffer_.handle,  force_size);
-    write_storage_buffer(writes, buf_infos, desc_set_b_, 4, color_buffer_.handle,  color_size);
-    write_storage_buffer(writes, buf_infos, desc_set_b_, 5, pos_buffer_a_.handle,  pos_a_size);
-    write_storage_buffer(writes, buf_infos, desc_set_b_, 6, vel_buffer_a_.handle,  vel_a_size);
-    write_storage_image (writes, img_infos, desc_set_b_, 7, particle_texture.view);
+    // ── Set B: in=b, out=a ────────────────────────────────────────────────────
+    write_storage_buffer(writes, buf_infos, desc_set_b_,  0, pos_buffer_b_.handle,         pos_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_,  1, vel_buffer_b_.handle,         vel_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_,  2, type_buffer_.handle,          type_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_,  3, force_buffer_.handle,         frc_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_,  4, color_buffer_.handle,         col_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_,  5, pos_buffer_a_.handle,         pos_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_,  6, vel_buffer_a_.handle,         vel_sz);
+    write_storage_image (writes, img_infos, desc_set_b_,  7, particle_texture.view);
+    write_storage_buffer(writes, buf_infos, desc_set_b_,  8, behavior_buffer_.handle,      beh_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_,  9, angle_buffer_b_.handle,       ang_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_, 10, angular_vel_buffer_b_.handle, ang_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_, 11, angle_buffer_a_.handle,       ang_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_, 12, angular_vel_buffer_a_.handle, ang_sz);
 
     vkUpdateDescriptorSets(ctx.device,
                            static_cast<uint32_t>(writes.size()),
@@ -290,10 +328,15 @@ void ComputePipeline::upload_dynamic_data(VulkanContext& ctx, const Particles& p
             effective_forces[fi] = particles.forces[fi] * particles.trait_scales[a];
         }
 
-    VkDeviceSize force_size = particles.forces.size() * sizeof(float);
-    VkDeviceSize color_size = particles.colors.size() * sizeof(glm::vec4);
-    ctx.update_buffer(force_buffer_, effective_forces, force_size);
-    ctx.update_buffer(color_buffer_, particles.colors.data(), color_size);
+    VkDeviceSize force_size    = particles.forces.size()     * sizeof(float);
+    VkDeviceSize color_size    = particles.colors.size()     * sizeof(glm::vec4);
+    VkDeviceSize type_size     = particles.types.size()      * sizeof(uint32_t);
+    VkDeviceSize behavior_size = MAX_PARTICLE_TYPES           * sizeof(uint32_t);
+
+    ctx.update_buffer(force_buffer_,    effective_forces,              force_size);
+    ctx.update_buffer(color_buffer_,    particles.colors.data(),       color_size);
+    ctx.update_buffer(type_buffer_,     particles.types.data(),        type_size);
+    ctx.update_buffer(behavior_buffer_, particles.behavior_flags,      behavior_size);
 }
 
 void ComputePipeline::read_current_state(VulkanContext& ctx,
@@ -332,7 +375,6 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     VkDescriptorSet active_set = (tick % 2 == 0) ? desc_set_a_ : desc_set_b_;
     uint32_t particle_count    = static_cast<uint32_t>(cfg.particle_count);
 
-    // ── Build push constants ──────────────────────────────────────────────────
     PushConstants pc{};
     pc.region_size = {
         static_cast<float>(REGION_W) + cfg.radius * 2.0f,
@@ -340,7 +382,7 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     };
     pc.camera_origin      = cfg.camera_origin;
     pc.particle_count     = particle_count;
-    pc.particle_types     = MAX_PARTICLE_TYPES;  // always send full matrix size to shader
+    pc.particle_types     = MAX_PARTICLE_TYPES;
     pc.dt                 = dt;
     pc.camera_zoom        = cfg.current_camera_zoom;
     pc.radius             = cfg.radius;

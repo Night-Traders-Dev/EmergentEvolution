@@ -21,10 +21,27 @@ public:
     // Per-type force multipliers set by OrganismManager (1.0 = no effect)
     float trait_scales[MAX_PARTICLE_TYPES];
 
+    // Per-type behavior bitmask (ParticleBehavior flags)
+    uint32_t behavior_flags[MAX_PARTICLE_TYPES];
+
+    // Per-particle orientation (radians) and angular velocity — for POLAR type
+    std::vector<float> angles;
+    std::vector<float> angular_velocities;
+
     Particles();
 
     // Called once at startup and on every reset (F2).
     void gen_data(const SimConfig& cfg);
+
+    // Archetype presets: set behavior_flags AND seed the force-matrix row for `type`.
+    // Safe to call at any time; changes are picked up by upload_dynamic_data next frame.
+    void apply_preset_default(uint32_t type);
+    void apply_preset_repeller(uint32_t type);
+    void apply_preset_polar(uint32_t type, uint32_t active_types);
+    void apply_preset_heavy(uint32_t type);
+    void apply_preset_catalyst(uint32_t type);
+    void apply_preset_membrane(uint32_t type);
+    void apply_preset_viral(uint32_t type, uint32_t active_types);
 
 private:
     std::mt19937 rng_;

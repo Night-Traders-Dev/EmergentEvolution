@@ -31,6 +31,9 @@ public:
     bool  reset_colors_check     = false;
     bool  reset_forces_check     = true;
 
+    // Per-type archetype selection: 0=Default,1=Repeller,2=Polar,3=Heavy,4=Catalyst,5=Membrane,6=Viral
+    int archetype_selection[MAX_PARTICLE_TYPES] = {};
+
     // Initialise with a random seed
     void init();
 
@@ -47,6 +50,8 @@ private:
     void draw_organism_panel(OrganismManager& org_manager,
                              const Particles& particles,
                              const SimConfig& cfg);
+
+    void draw_archetype_panel(Particles& particles, const SimConfig& cfg);
 
     static ImVec4 force_to_color(float f);
 };

@@ -88,6 +88,50 @@ std::vector<int> OrganismManager::build_clusters(
     return parent;
 }
 
+// ── Viral infection ───────────────────────────────────────────────────────────
+
+void OrganismManager::apply_viral_infections(
+    const std::vector<glm::vec2>& positions,
+    Particles& particles)
+{
+    uint32_t n = static_cast<uint32_t>(positions.size());
+    float viral_radius = cluster_radius * 0.5f;
+    float vr2          = viral_radius * viral_radius;
+    float cell_sz      = viral_radius;
+
+    std::unordered_map<int64_t, std::vector<uint32_t>> grid;
+    grid.reserve(n / 4 + 1);
+
+    for (uint32_t i = 0; i < n; ++i) {
+        int cx = static_cast<int>(positions[i].x / cell_sz);
+        int cy = static_cast<int>(positions[i].y / cell_sz);
+        grid[cell_key(cx, cy)].push_back(i);
+    }
+
+    for (uint32_t i = 0; i < n; ++i) {
+        uint32_t ti = particles.types[i];
+        if (!(particles.behavior_flags[ti] & BEHAVIOR_VIRAL)) continue;
+
+        int cx = static_cast<int>(positions[i].x / cell_sz);
+        int cy = static_cast<int>(positions[i].y / cell_sz);
+
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                auto it = grid.find(cell_key(cx + dx, cy + dy));
+                if (it == grid.end()) continue;
+                for (uint32_t j : it->second) {
+                    if (j == i) continue;
+                    uint32_t tj = particles.types[j];
+                    if (particles.behavior_flags[tj] & BEHAVIOR_VIRAL) continue;
+                    glm::vec2 d = positions[j] - positions[i];
+                    if (glm::dot(d, d) < vr2)
+                        particles.types[j] = ti;
+                }
+            }
+        }
+    }
+}
+
 // ── Trait feedback ────────────────────────────────────────────────────────────
 
 void OrganismManager::apply_trait_feedback(Particles& particles) {
@@ -270,5 +314,6 @@ void OrganismManager::update(
     organisms      = std::move(new_orgs);
     prev_organisms_ = organisms;
 
+    apply_viral_infections(positions, particles);
     apply_trait_feedback(particles);
 }
