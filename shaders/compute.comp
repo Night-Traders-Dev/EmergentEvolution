@@ -25,6 +25,11 @@ layout(set = 0, binding = 12, std430) buffer AngVelOut          { float data[]; 
 layout(set = 0, binding = 13, std430) buffer EnergyIn  { float data[]; } in_energy_buffer;
 layout(set = 0, binding = 14, std430) buffer EnergyOut { float data[]; } out_energy_buffer;
 
+// ── Per-particle genome (readonly, CPU-managed) ───────────────────────────────
+// Layout per particle i: [i*4+0]=photo_eff  [i*4+1]=hunt_str
+//                        [i*4+2]=repro_drive [i*4+3]=social_bias
+layout(set = 0, binding = 15, std430) readonly buffer Genomes { float data[]; } genome_buffer;
+
 // ── Push Constants ────────────────────────────────────────────────────────────
 layout(push_constant, std430) uniform Params {
     vec2  region_size;        // 0
@@ -80,6 +85,11 @@ void apply_physics(uint i) {
     float density_factor = 1.0 - min(local_density / params.local_density_cap, 1.0);
     float energy         = in_energy_buffer.data[i];
     float interaction_energy_gain = 0.0;
+
+    // Read this particle's genome traits
+    float photo_eff   = genome_buffer.data[i * 4u + 0u]; // photosynthesis efficiency
+    float hunt_str    = genome_buffer.data[i * 4u + 1u]; // predator hunt strength
+    float social_bias = genome_buffer.data[i * 4u + 3u]; // same-type cohesion bias
 
     bool is_repel    = (flags_a & BEHAVIOR_REPEL)    != 0u;
     bool is_polar    = (flags_a & BEHAVIOR_POLAR)    != 0u;
@@ -171,25 +181,31 @@ void apply_physics(uint i) {
                 total_force += normal * field * 5.0f;
             }
 
-            // PREDATOR — chase other types
+            // PREDATOR — chase other types (hunt_str scales chase force and energy gain)
             if ((flags_a & BEHAVIOR_PREDATOR) != 0u && type_b != type_a) {
                 float chase = 1.0f - dist / params.interaction_radius;
-                total_force += normal * chase * 30.0f;
-                // Predator gains energy when close to prey
+                total_force += normal * chase * 30.0f * hunt_str;
+                // Predator gains energy proportional to its hunt strength
                 if (dist < params.repulsion_radius * 2.0f)
-                    interaction_energy_gain += 0.006f;
+                    interaction_energy_gain += 0.006f * hunt_str;
             }
 
-            // Prey energy drain: being hunted by a nearby predator costs energy
+            // Prey energy drain: use predator j's hunt strength for the drain
             if ((flags_b & BEHAVIOR_PREDATOR) != 0u && type_b != type_a
                 && dist < params.repulsion_radius * 2.0f) {
-                interaction_energy_gain -= 0.006f;
+                float pred_hunt = genome_buffer.data[j * 4u + 1u];
+                interaction_energy_gain -= 0.006f * pred_hunt;
             }
 
             // Symbiotic energy gain: attraction between different types transfers energy
             if (attraction > 0.0f && type_b != type_a) {
                 float proximity = 1.0f - dist / params.interaction_radius;
                 interaction_energy_gain += attraction * proximity * 0.005f;
+            }
+
+            // Social bias: positive → stronger same-type cohesion, negative → repulsion
+            if (type_a == type_b) {
+                attraction += social_bias * 0.5f;
             }
 
             // Apply density limiting to attraction

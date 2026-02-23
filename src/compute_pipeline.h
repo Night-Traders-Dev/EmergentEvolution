@@ -75,6 +75,9 @@ private:
     Buffer energy_buffer_a_{};
     Buffer energy_buffer_b_{};
 
+    // Per-particle genome (binding 15, readonly, single buffer — CPU-managed)
+    Buffer genome_buffer_{};
+
     // Descriptor sets: set_a uses (a→in, b→out), set_b uses (b→in, a→out)
     VkDescriptorSet desc_set_a_ = VK_NULL_HANDLE;
     VkDescriptorSet desc_set_b_ = VK_NULL_HANDLE;

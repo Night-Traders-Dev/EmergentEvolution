@@ -24,6 +24,7 @@ public:
     std::vector<float> angles;
     std::vector<float> angular_velocities;
     std::vector<float> energies;   // per-particle, 0.0–1.0
+    std::vector<float> genomes;    // GENOME_SIZE floats per particle: photo_eff, hunt_str, repro_drive, social_bias
 
     Particles();
     void gen_data(const SimConfig& cfg);

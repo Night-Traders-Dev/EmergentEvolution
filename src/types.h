@@ -10,6 +10,7 @@ static constexpr uint32_t REGION_W           = 2560;
 static constexpr uint32_t REGION_H           = 1440;
 static constexpr uint32_t MAX_PARTICLE_TYPES = 10;
 static constexpr uint32_t GROUP_DENSITY      = 256;
+static constexpr uint32_t GENOME_SIZE        = 4;   // floats per particle: photo_eff, hunt_str, repro_drive, social_bias
 
 enum ParticleBehavior : uint32_t {
     BEHAVIOR_NONE         = 0,

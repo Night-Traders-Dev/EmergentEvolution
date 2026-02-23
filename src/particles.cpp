@@ -47,6 +47,9 @@ void Particles::gen_particles(const SimConfig& cfg) {
         angles.assign(2, 0.0f);
         angular_velocities.assign(2, 0.0f);
         energies.assign(2, 1.0f);
+        // Neutral genome for 2-particle case
+        genomes.assign(2 * GENOME_SIZE, 1.0f);
+        genomes[3] = 0.0f; genomes[7] = 0.0f; // zero social_bias
         return;
     }
 
@@ -64,6 +67,25 @@ void Particles::gen_particles(const SimConfig& cfg) {
         angles[i] = rand_range_f(0.0f, 6.28318f);
 
     energies.assign(cfg.particle_count, 1.0f);
+
+    // Initialize per-particle genomes.
+    // Base traits per type index for the default ecosystem:
+    //   [0]=photo_eff  [1]=hunt_str  [2]=repro_drive  [3]=social_bias
+    // Type 0: dust (passive), Type 1: photosynth, Type 2: colonizer/reproductive,
+    // Type 3: predator, Type 4: catalyst, Types 5-9: balanced defaults
+    static const float base_photo_eff[MAX_PARTICLE_TYPES]   = {0.5f, 1.6f, 0.8f, 0.3f, 0.8f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+    static const float base_hunt_str[MAX_PARTICLE_TYPES]    = {0.3f, 0.3f, 0.3f, 1.6f, 0.5f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+    static const float base_repro[MAX_PARTICLE_TYPES]       = {0.5f, 0.8f, 1.6f, 0.8f, 0.8f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+    static const float base_social[MAX_PARTICLE_TYPES]      = {0.0f, 0.2f, 0.4f,-0.2f, 0.3f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+
+    genomes.resize(cfg.particle_count * GENOME_SIZE);
+    for (uint32_t i = 0; i < cfg.particle_count; ++i) {
+        uint32_t t = std::min(types[i], MAX_PARTICLE_TYPES - 1u);
+        genomes[i*4+0] = std::clamp(base_photo_eff[t] + rand_range_f(-0.1f, 0.1f), 0.2f, 2.0f);
+        genomes[i*4+1] = std::clamp(base_hunt_str[t]  + rand_range_f(-0.1f, 0.1f), 0.2f, 2.0f);
+        genomes[i*4+2] = std::clamp(base_repro[t]     + rand_range_f(-0.1f, 0.1f), 0.2f, 2.0f);
+        genomes[i*4+3] = std::clamp(base_social[t]    + rand_range_f(-0.05f, 0.05f), -0.5f, 0.5f);
+    }
 }
 
 void Particles::add_particle(glm::vec2 pos, glm::vec2 vel, uint32_t type) {
