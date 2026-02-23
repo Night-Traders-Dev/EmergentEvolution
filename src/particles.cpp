@@ -21,6 +21,10 @@ void Particles::gen_data(const SimConfig& cfg) {
     if (cfg.reset_colors)
         gen_default_colors();
 
+    // Always overlay the default ecosystem so births/evolution can begin immediately.
+    // Users can override individual types via the preset UI afterwards.
+    apply_default_ecosystem(cfg.particle_types);
+
     gen_particles(cfg);
 }
 
@@ -201,4 +205,57 @@ void Particles::apply_preset_reproductive(uint32_t type) {
     behavior_flags[type] = BEHAVIOR_REPRODUCTIVE;
     // Neutral-ish forces; reproduction is signaled via velocity in the shader
     set_row(forces, type, 0.1f, 0.1f);
+}
+
+// ── Default ecosystem ─────────────────────────────────────────────────────────
+// Assigns viable archetypes + force rows so the ecological loop fires immediately.
+// Overwrites behavior flags and seeds the most critical force-matrix entries;
+// the rest of the matrix (from gen_random_force_matrix) is left intact.
+//
+// Food web:
+//   Type 0  Dust          — passive resource (energy recovers in shader)
+//   Type 1  Photosynthesizer — primary producer; thrives in low-density space
+//   Type 2  Colonizer     — adhesive colony builder; reproduces into dust
+//   Type 3  Predator      — hunts types 1 & 2 for energy
+//   Type 4  Catalyst      — boosts metabolism of nearby particles
+//
+void Particles::apply_default_ecosystem(uint32_t active_types) {
+    if (active_types < 2) return;
+
+    // Type 0: Dust — no special flags; shader gives it energy recovery already
+    behavior_flags[0] = BEHAVIOR_NONE;
+
+    // Type 1: Photosynthesizer
+    if (active_types > 1) {
+        behavior_flags[1] = BEHAVIOR_PHOTOSYNTH;
+        set_row(forces, 1, 0.35f, 0.15f);
+        forces[1 + 0 * MAX_PARTICLE_TYPES] = 0.5f;   // attracted to dust/food
+        if (active_types > 3)
+            forces[1 + 3 * MAX_PARTICLE_TYPES] = -0.5f; // flee predators
+    }
+
+    // Type 2: Colonizer — adhesive colony + reproduces into nearby recovered dust
+    if (active_types > 2) {
+        behavior_flags[2] = BEHAVIOR_ADHESIVE | BEHAVIOR_REPRODUCTIVE;
+        set_row(forces, 2, 0.75f, 0.25f);
+        forces[2 + 0 * MAX_PARTICLE_TYPES] = 0.65f;  // strongly toward dust (birth target)
+        if (active_types > 1)
+            forces[2 + 1 * MAX_PARTICLE_TYPES] = 0.45f; // symbiosis with photosynth
+        if (active_types > 3)
+            forces[2 + 3 * MAX_PARTICLE_TYPES] = -0.45f; // flee predators
+    }
+
+    // Type 3: Predator — hunts non-self types, avoids its own kind
+    if (active_types > 3) {
+        behavior_flags[3] = BEHAVIOR_PREDATOR;
+        set_row(forces, 3, -0.35f, 0.65f);
+        forces[3 + 0 * MAX_PARTICLE_TYPES] = 0.0f;   // ignore dust
+        forces[3 + 3 * MAX_PARTICLE_TYPES] = -0.4f;  // territorial — avoid own kind
+    }
+
+    // Type 4: Catalyst — gentle all-around cohesion, boosts everyone's metabolism
+    if (active_types > 4) {
+        behavior_flags[4] = BEHAVIOR_CATALYST;
+        set_row(forces, 4, 0.2f, 0.2f);
+    }
 }

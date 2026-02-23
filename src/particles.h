@@ -45,6 +45,10 @@ public:
     void apply_preset_predator(uint32_t type, uint32_t active_types);
     void apply_preset_reproductive(uint32_t type);
 
+    // Applies a viable default food-web so emergent behaviour can start immediately.
+    // Called automatically from gen_data(); can also be called from the UI.
+    void apply_default_ecosystem(uint32_t active_types);
+
 private:
     std::mt19937 rng_;
 

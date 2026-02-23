@@ -188,8 +188,8 @@ uint32_t OrganismManager::apply_reproductive_birth(
     const std::vector<float>&     energies,
     Particles& particles)
 {
-    constexpr float energy_threshold = 0.75f;  // parent must be well-fed
-    constexpr float dust_min_energy  = 0.15f;  // dust must have recovered some energy
+    constexpr float energy_threshold = 0.55f;  // parent must be reasonably fed
+    constexpr float dust_min_energy  = 0.10f;  // dust only needs minimal recovery
     constexpr int   max_births       = 20;     // cap births per update cycle
 
     uint32_t n       = static_cast<uint32_t>(positions.size());
