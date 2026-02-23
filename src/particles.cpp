@@ -249,7 +249,7 @@ void Particles::apply_default_ecosystem(uint32_t active_types) {
 
     // Type 1: Photosynthesizer
     if (active_types > 1) {
-        behavior_flags[1] = BEHAVIOR_PHOTOSYNTH;
+        behavior_flags[1] = BEHAVIOR_PHOTOSYNTH | BEHAVIOR_REPRODUCTIVE;
         set_row(forces, 1, 0.35f, 0.15f);
         forces[1 + 0 * MAX_PARTICLE_TYPES] = 0.5f;   // attracted to dust/food
         if (active_types > 3)
@@ -258,7 +258,7 @@ void Particles::apply_default_ecosystem(uint32_t active_types) {
 
     // Type 2: Colonizer — adhesive colony + reproduces into nearby recovered dust
     if (active_types > 2) {
-        behavior_flags[2] = BEHAVIOR_ADHESIVE | BEHAVIOR_REPRODUCTIVE;
+        behavior_flags[2] = BEHAVIOR_ADHESIVE | BEHAVIOR_PREDATOR;
         set_row(forces, 2, 0.75f, 0.25f);
         forces[2 + 0 * MAX_PARTICLE_TYPES] = 0.65f;  // strongly toward dust (birth target)
         if (active_types > 1)
@@ -269,7 +269,7 @@ void Particles::apply_default_ecosystem(uint32_t active_types) {
 
     // Type 3: Predator — hunts non-self types, avoids its own kind
     if (active_types > 3) {
-        behavior_flags[3] = BEHAVIOR_PREDATOR;
+        behavior_flags[3] = BEHAVIOR_PREDATOR | BEHAVIOR_REPRODUCTIVE;
         set_row(forces, 3, -0.35f, 0.65f);
         forces[3 + 0 * MAX_PARTICLE_TYPES] = 0.0f;   // ignore dust
         forces[3 + 3 * MAX_PARTICLE_TYPES] = -0.4f;  // territorial — avoid own kind
