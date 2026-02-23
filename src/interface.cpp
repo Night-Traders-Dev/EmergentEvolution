@@ -340,32 +340,31 @@ void Interface::draw_archetype_panel(Particles& particles, const SimConfig& cfg)
 // ── Organism panel ────────────────────────────────────────────────────────────
 
 void Interface::draw_organism_panel(OrganismManager& org_manager,
-                                     const Particles& particles,
-                                     const SimConfig& cfg)
+                                    const Particles& particles,
+                                    const SimConfig& cfg)
 {
     if (!ImGui::CollapsingHeader("Organisms"))
         return;
 
-    // Cluster radius slider
     ImGui::SliderFloat("Cluster Radius", &org_manager.cluster_radius, 10.0f, 200.0f, "%.0f");
 
     uint32_t org_count = static_cast<uint32_t>(org_manager.organisms.size());
     ImGui::Text("Active Organisms: %u", org_count);
 
-    // Trait scales bar (per active type)
     uint32_t pt = cfg.particle_types;
     if (pt > MAX_PARTICLE_TYPES) pt = MAX_PARTICLE_TYPES;
+
     ImGui::TextDisabled("Force Scales (trait feedback):");
     for (uint32_t t = 0; t < pt; ++t) {
         ImGui::PushID(static_cast<int>(t));
         const glm::vec4& c = particles.colors[t];
         ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(c.r, c.g, c.b, 1.0f));
-        char label[32];
-        std::snprintf(label, sizeof(label), "%.2fx##scale%u", particles.trait_scales[t], t);
-        float frac = (particles.trait_scales[t] - 1.0f) / 0.8f; // 1.0–1.8 → 0–1
+
+        float frac = (particles.trait_scales[t] - 1.0f) / 0.8f;
         ImGui::ProgressBar(frac, ImVec2(-1.0f, 6.0f), "");
         ImGui::SameLine();
         ImGui::Text("%.2fx", particles.trait_scales[t]);
+
         ImGui::PopStyleColor();
         ImGui::PopID();
     }
@@ -375,11 +374,12 @@ void Interface::draw_organism_panel(OrganismManager& org_manager,
         return;
     }
 
-    // Sort top 8 organisms by size (descending), without modifying the vector
+    // Sort by size
     std::vector<const Organism*> sorted;
     sorted.reserve(org_count);
     for (const auto& o : org_manager.organisms)
         sorted.push_back(&o);
+
     std::sort(sorted.begin(), sorted.end(),
               [](const Organism* a, const Organism* b) {
                   return a->traits.size > b->traits.size;
@@ -388,8 +388,9 @@ void Interface::draw_organism_panel(OrganismManager& org_manager,
     uint32_t show = std::min(org_count, 8u);
     ImGui::TextDisabled("Top organisms (by size):");
 
-    if (ImGui::BeginTable("orgtable", 6,
-                          ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH))
+    if (ImGui::BeginTable("orgtable", 7,
+                          ImGuiTableFlags_RowBg |
+                          ImGuiTableFlags_BordersInnerH))
     {
         ImGui::TableSetupColumn("Type",  ImGuiTableColumnFlags_WidthFixed, 28.0f);
         ImGui::TableSetupColumn("Size",  ImGuiTableColumnFlags_WidthFixed, 40.0f);
@@ -397,6 +398,7 @@ void Interface::draw_organism_panel(OrganismManager& org_manager,
         ImGui::TableSetupColumn("Gen",   ImGuiTableColumnFlags_WidthFixed, 30.0f);
         ImGui::TableSetupColumn("Kills", ImGuiTableColumnFlags_WidthFixed, 36.0f);
         ImGui::TableSetupColumn("Divs",  ImGuiTableColumnFlags_WidthFixed, 36.0f);
+        ImGui::TableSetupColumn("Energy",ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableHeadersRow();
 
         for (uint32_t i = 0; i < show; ++i) {
@@ -407,20 +409,42 @@ void Interface::draw_organism_panel(OrganismManager& org_manager,
                                   : glm::vec4(1.0f);
 
             ImGui::TableNextRow();
+
+            // Type color
             ImGui::TableSetColumnIndex(0);
             ImGui::ColorButton("##tc", ImVec4(c.r, c.g, c.b, 1.0f),
                                ImGuiColorEditFlags_NoTooltip, ImVec2(16, 14));
+
+            // Size
             ImGui::TableSetColumnIndex(1);
             ImGui::Text("%u", o.traits.size);
+
+            // Speed
             ImGui::TableSetColumnIndex(2);
             ImGui::Text("%.1f", o.traits.avg_speed);
+
+            // Generation
             ImGui::TableSetColumnIndex(3);
             ImGui::Text("%u", o.traits.generation);
+
+            // Kills
             ImGui::TableSetColumnIndex(4);
             ImGui::Text("%u", o.traits.kills);
+
+            // Divisions
             ImGui::TableSetColumnIndex(5);
             ImGui::Text("%u", o.traits.divisions);
+
+            // Energy bar
+            ImGui::TableSetColumnIndex(6);
+            float e = o.traits.energy;
+            ImVec4 ecolor = ImVec4(1.0f - e, e, 0.0f, 1.0f); // red→green
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ecolor);
+            ImGui::ProgressBar(e, ImVec2(-1.0f, 12.0f), "");
+            ImGui::PopStyleColor();
         }
+
         ImGui::EndTable();
     }
 }
+
