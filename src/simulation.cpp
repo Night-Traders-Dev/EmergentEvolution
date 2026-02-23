@@ -38,6 +38,8 @@ void Simulation::reset() {
     particles.gen_data(cfg);
     compute.clear_buffers(vk);
     compute.create_buffers(vk, particles);
+    organism_manager.reset();
+    organism_tick_counter_ = 0;
 }
 
 // ── Per-frame tick ────────────────────────────────────────────────────────────
@@ -52,7 +54,7 @@ void Simulation::tick(GLFWwindow* window, double dt) {
 
     // ── ImGui ──────────────────────────────────────────────────────────────────
     bool request_reset = false;
-    iface.render_imgui(cfg, particles, request_reset);
+    iface.render_imgui(cfg, particles, organism_manager, request_reset);
 
     if (request_reset)
         reset();
@@ -68,6 +70,16 @@ void Simulation::tick(GLFWwindow* window, double dt) {
         compute.record(compute_cmd, cfg, scaled_dt);
 
         vk.end_single_command(compute_cmd);
+
+        // Organism detection (every N frames)
+        organism_tick_counter_++;
+        if (organism_tick_counter_ % ORGANISM_UPDATE_INTERVAL == 0) {
+            readback_positions_.resize(cfg.particle_count);
+            readback_velocities_.resize(cfg.particle_count);
+            compute.read_current_state(vk, readback_positions_, readback_velocities_);
+            organism_manager.update(readback_positions_, readback_velocities_,
+                                    particles.types, particles);
+        }
     }
 
     // ── Draw frame (fullscreen quad + ImGui) ──────────────────────────────────

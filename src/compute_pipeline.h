@@ -40,6 +40,12 @@ public:
 
     bool is_ready() const { return pos_buffer_a_.handle != VK_NULL_HANDLE; }
 
+    // Read current particle positions and velocities back to CPU.
+    // Safe to call after end_single_command() (queue is idle).
+    void read_current_state(VulkanContext& ctx,
+                            std::vector<glm::vec2>& out_positions,
+                            std::vector<glm::vec2>& out_velocities) const;
+
 private:
     VkPipeline            pipeline_             = VK_NULL_HANDLE;
     VkPipelineLayout      pipeline_layout_      = VK_NULL_HANDLE;

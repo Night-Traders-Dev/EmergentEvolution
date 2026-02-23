@@ -18,6 +18,9 @@ public:
     std::vector<float>     forces;   // MAX_PARTICLE_TYPES² elements
     std::vector<glm::vec4> colors;   // MAX_PARTICLE_TYPES elements
 
+    // Per-type force multipliers set by OrganismManager (1.0 = no effect)
+    float trait_scales[MAX_PARTICLE_TYPES];
+
     Particles();
 
     // Called once at startup and on every reset (F2).

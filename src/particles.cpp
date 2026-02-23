@@ -11,6 +11,7 @@ Particles::Particles() {
 
 void Particles::gen_data(const SimConfig& cfg) {
     rng_.seed(cfg.generation_seed);
+    for (float& s : trait_scales) s = 1.0f;
 
     if (cfg.reset_forces)
         gen_random_force_matrix();

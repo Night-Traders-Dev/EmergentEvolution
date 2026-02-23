@@ -6,6 +6,7 @@
 #include <random>
 #include <algorithm>
 #include <string>
+#include <vector>
 #include "backends/imgui_impl_vulkan.h"
 #include "backends/imgui_impl_glfw.h"
 
@@ -25,9 +26,10 @@ ImVec4 Interface::force_to_color(float f) {
 
 // ── Main ImGui render ─────────────────────────────────────────────────────────
 
-void Interface::render_imgui(SimConfig& cfg,
-                              Particles& particles,
-                              bool&      request_reset)
+void Interface::render_imgui(SimConfig&       cfg,
+                              Particles&       particles,
+                              OrganismManager& org_manager,
+                              bool&            request_reset)
 {
     request_reset = false;
 
@@ -109,6 +111,9 @@ void Interface::render_imgui(SimConfig& cfg,
     ImGui::SeparatorText("Particle Values");
     ImGui::TextDisabled("Hover + scroll: change force | Right-click: zero force");
     draw_particle_grid(cfg, particles);
+
+    // ── Organism panel ────────────────────────────────────────────────────────
+    draw_organism_panel(org_manager, particles, cfg);
 
     ImGui::Separator();
     ImGui::TextDisabled("F1: toggle UI  |  F2: reset  |  Space: pause");
@@ -218,5 +223,93 @@ void Interface::draw_particle_grid(SimConfig& cfg, Particles& particles) {
             if (col < pt)
                 ImGui::SameLine(0, 0);
         }
+    }
+}
+
+// ── Organism panel ────────────────────────────────────────────────────────────
+
+void Interface::draw_organism_panel(OrganismManager& org_manager,
+                                     const Particles& particles,
+                                     const SimConfig& cfg)
+{
+    if (!ImGui::CollapsingHeader("Organisms"))
+        return;
+
+    // Cluster radius slider
+    ImGui::SliderFloat("Cluster Radius", &org_manager.cluster_radius, 10.0f, 200.0f, "%.0f");
+
+    uint32_t org_count = static_cast<uint32_t>(org_manager.organisms.size());
+    ImGui::Text("Active Organisms: %u", org_count);
+
+    // Trait scales bar (per active type)
+    uint32_t pt = cfg.particle_types;
+    if (pt > MAX_PARTICLE_TYPES) pt = MAX_PARTICLE_TYPES;
+    ImGui::TextDisabled("Force Scales (trait feedback):");
+    for (uint32_t t = 0; t < pt; ++t) {
+        ImGui::PushID(static_cast<int>(t));
+        const glm::vec4& c = particles.colors[t];
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(c.r, c.g, c.b, 1.0f));
+        char label[32];
+        std::snprintf(label, sizeof(label), "%.2fx##scale%u", particles.trait_scales[t], t);
+        float frac = (particles.trait_scales[t] - 1.0f) / 0.8f; // 1.0–1.8 → 0–1
+        ImGui::ProgressBar(frac, ImVec2(-1.0f, 6.0f), "");
+        ImGui::SameLine();
+        ImGui::Text("%.2fx", particles.trait_scales[t]);
+        ImGui::PopStyleColor();
+        ImGui::PopID();
+    }
+
+    if (org_count == 0) {
+        ImGui::TextDisabled("(no organisms detected yet)");
+        return;
+    }
+
+    // Sort top 8 organisms by size (descending), without modifying the vector
+    std::vector<const Organism*> sorted;
+    sorted.reserve(org_count);
+    for (const auto& o : org_manager.organisms)
+        sorted.push_back(&o);
+    std::sort(sorted.begin(), sorted.end(),
+              [](const Organism* a, const Organism* b) {
+                  return a->traits.size > b->traits.size;
+              });
+
+    uint32_t show = std::min(org_count, 8u);
+    ImGui::TextDisabled("Top organisms (by size):");
+
+    if (ImGui::BeginTable("orgtable", 6,
+                          ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH))
+    {
+        ImGui::TableSetupColumn("Type",  ImGuiTableColumnFlags_WidthFixed, 28.0f);
+        ImGui::TableSetupColumn("Size",  ImGuiTableColumnFlags_WidthFixed, 40.0f);
+        ImGui::TableSetupColumn("Speed", ImGuiTableColumnFlags_WidthFixed, 44.0f);
+        ImGui::TableSetupColumn("Gen",   ImGuiTableColumnFlags_WidthFixed, 30.0f);
+        ImGui::TableSetupColumn("Kills", ImGuiTableColumnFlags_WidthFixed, 36.0f);
+        ImGui::TableSetupColumn("Divs",  ImGuiTableColumnFlags_WidthFixed, 36.0f);
+        ImGui::TableHeadersRow();
+
+        for (uint32_t i = 0; i < show; ++i) {
+            const Organism& o = *sorted[i];
+            uint32_t dt = o.traits.dominant_type;
+            const glm::vec4& c = (dt < MAX_PARTICLE_TYPES)
+                                  ? particles.colors[dt]
+                                  : glm::vec4(1.0f);
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::ColorButton("##tc", ImVec4(c.r, c.g, c.b, 1.0f),
+                               ImGuiColorEditFlags_NoTooltip, ImVec2(16, 14));
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%u", o.traits.size);
+            ImGui::TableSetColumnIndex(2);
+            ImGui::Text("%.1f", o.traits.avg_speed);
+            ImGui::TableSetColumnIndex(3);
+            ImGui::Text("%u", o.traits.generation);
+            ImGui::TableSetColumnIndex(4);
+            ImGui::Text("%u", o.traits.kills);
+            ImGui::TableSetColumnIndex(5);
+            ImGui::Text("%u", o.traits.divisions);
+        }
+        ImGui::EndTable();
     }
 }

@@ -281,10 +281,44 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
 void ComputePipeline::upload_dynamic_data(VulkanContext& ctx, const Particles& particles) {
     if (force_buffer_.handle == VK_NULL_HANDLE) return;
 
+    // Apply per-type trait scales before uploading forces.
+    // The UI edits particles.forces (base values); GPU receives the scaled version.
+    float effective_forces[MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES];
+    for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b)
+        for (uint32_t a = 0; a < MAX_PARTICLE_TYPES; ++a) {
+            uint32_t fi = a + b * MAX_PARTICLE_TYPES;
+            effective_forces[fi] = particles.forces[fi] * particles.trait_scales[a];
+        }
+
     VkDeviceSize force_size = particles.forces.size() * sizeof(float);
     VkDeviceSize color_size = particles.colors.size() * sizeof(glm::vec4);
-    ctx.update_buffer(force_buffer_, particles.forces.data(), force_size);
+    ctx.update_buffer(force_buffer_, effective_forces, force_size);
     ctx.update_buffer(color_buffer_, particles.colors.data(), color_size);
+}
+
+void ComputePipeline::read_current_state(VulkanContext& ctx,
+                                          std::vector<glm::vec2>& out_positions,
+                                          std::vector<glm::vec2>& out_velocities) const
+{
+    if (pos_buffer_a_.handle == VK_NULL_HANDLE) return;
+
+    // After tick is incremented in record(), the output buffer is:
+    //   tick odd  → desc_set_a was used (input=a, output=b) → read pos_buffer_b_
+    //   tick even → desc_set_b was used (input=b, output=a) → read pos_buffer_a_
+    const Buffer& cur_pos = (tick % 2 == 1) ? pos_buffer_b_ : pos_buffer_a_;
+    const Buffer& cur_vel = (tick % 2 == 1) ? vel_buffer_b_ : vel_buffer_a_;
+
+    uint32_t n = static_cast<uint32_t>(out_positions.size());
+    VkDeviceSize bytes = n * sizeof(glm::vec2);
+
+    void* mapped = nullptr;
+    vkMapMemory(ctx.device, cur_pos.memory, 0, bytes, 0, &mapped);
+    std::memcpy(out_positions.data(), mapped, bytes);
+    vkUnmapMemory(ctx.device, cur_pos.memory);
+
+    vkMapMemory(ctx.device, cur_vel.memory, 0, bytes, 0, &mapped);
+    std::memcpy(out_velocities.data(), mapped, bytes);
+    vkUnmapMemory(ctx.device, cur_vel.memory);
 }
 
 // ── Record (called per frame while simulation is active) ──────────────────────

@@ -6,7 +6,9 @@
 #include "compute_pipeline.h"
 #include "renderer.h"
 #include "interface.h"
+#include "organism.h"
 #include <GLFW/glfw3.h>
+#include <vector>
 
 class Simulation;
 // Call once after init() to hook the GLFW scroll callback
@@ -32,6 +34,7 @@ public:
     ComputePipeline compute{};
     Renderer        renderer{};
     Interface       iface{};
+    OrganismManager organism_manager{};
 
 private:
     // Input state
@@ -40,6 +43,11 @@ private:
     glm::vec2 smooth_mouse_change_ = {};
     bool      lmb_down_          = false;
     float     target_zoom_       = 1.0f;
+
+    // Organism tracking
+    int                    organism_tick_counter_ = 0;
+    std::vector<glm::vec2> readback_positions_;
+    std::vector<glm::vec2> readback_velocities_;
 
     // Shader SPIRV paths (relative to working directory = build dir)
     static constexpr const char* COMPUTE_SPV  = "shaders/compute.spv";

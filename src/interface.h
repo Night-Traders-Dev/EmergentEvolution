@@ -5,6 +5,7 @@
 #include "backends/imgui_impl_glfw.h"
 #include "types.h"
 #include "particles.h"
+#include "organism.h"
 #include <vector>
 #include <array>
 #include <glm/glm.hpp>
@@ -36,15 +37,16 @@ public:
     // Draw all ImGui windows and return updated config.
     // Call once per frame BEFORE ImGui::Render().
     // `request_reset` is set to true if the user clicks the Reset button.
-    void render_imgui(SimConfig& cfg,
-                      Particles& particles,
-                      bool&      request_reset);
+    void render_imgui(SimConfig&       cfg,
+                      Particles&       particles,
+                      OrganismManager& org_manager,
+                      bool&            request_reset);
 
 private:
-    // Force grid state – one float per MAX_PARTICLE_TYPES² entry
-    // We write directly into particles.forces; this just tracks colors.
     void draw_particle_grid(SimConfig& cfg, Particles& particles);
+    void draw_organism_panel(OrganismManager& org_manager,
+                             const Particles& particles,
+                             const SimConfig& cfg);
 
-    // Convert force value to an ImVec4 colour
     static ImVec4 force_to_color(float f);
 };

@@ -29,6 +29,7 @@ add_executable(particle_life
     src/renderer.cpp
     src/interface.cpp
     src/simulation.cpp
+    src/organism.cpp
 
     # ImGui core
     ${imgui_SOURCE_DIR}/imgui.cpp
