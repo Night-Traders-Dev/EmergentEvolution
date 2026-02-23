@@ -36,9 +36,11 @@ struct PushConstants {
     float     viscosity_strength; // 56
     float     pressure_resistance;// 60
     float     local_density_cap;  // 64
+    float     metabolic_rate;     // 68 (New: Base energy decay)
+    float     energy_gain_rate;   // 72 (New: Feeding/Catalyst gain)
 };
-// Size is 68 bytes
-static_assert(sizeof(PushConstants) == 68, "PushConstants layout mismatch");
+
+static_assert(sizeof(PushConstants) == 76, "PushConstants layout mismatch");
 
 struct SimConfig {
     uint32_t particle_count     = 22500;
@@ -57,6 +59,10 @@ struct SimConfig {
     float viscosity_strength  = 0.15f;
     float pressure_resistance = 25.0f;
     float local_density_cap   = 1.0f;
+
+    // Metabolism Defaults
+    float metabolic_rate    = 0.05f; // Energy lost per second
+    float energy_gain_rate  = 0.20f; // Energy gained from catalysts
 
     glm::vec2 camera_origin      = { REGION_W / 2.0f, REGION_H / 2.0f };
     float     camera_zoom        = 1.0f;

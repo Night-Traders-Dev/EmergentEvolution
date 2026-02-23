@@ -14,6 +14,9 @@ void Particles::gen_data(const SimConfig& cfg) {
     rng_.seed(cfg.generation_seed);
     for (float& s : trait_scales) s = 1.0f;
     for (auto& f : behavior_flags) f = BEHAVIOR_NONE;
+    for (auto& e : energy) {
+    e = 1.0f; // Start with full health!
+}
 
     if (cfg.reset_forces)
         gen_random_force_matrix();
@@ -28,6 +31,7 @@ void Particles::gen_particles(const SimConfig& cfg) {
     positions.clear();
     velocities.clear();
     types.clear();
+    energy.clear();
 
     const float rw = static_cast<float>(REGION_W);
     const float rh = static_cast<float>(REGION_H);
@@ -50,6 +54,7 @@ void Particles::gen_particles(const SimConfig& cfg) {
                       rand_range_f(0.0f, rh));
         uint32_t t = static_cast<uint32_t>(rand_range_i(0, (int)cfg.particle_types - 1));
         add_particle(pos, glm::vec2(0.0f), t);
+        energy.push_back(1.0f);
     }
 
     // Random initial orientations for all particles (used by POLAR types)

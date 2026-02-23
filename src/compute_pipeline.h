@@ -18,6 +18,12 @@ public:
     VkImageView   particle_texture_view = VK_NULL_HANDLE; // same as particle_texture.view
     VkSampler     sampler               = VK_NULL_HANDLE;
 
+    VkBuffer energy_buffer_a = VK_NULL_HANDLE;
+    VkDeviceMemory energy_mem_a = VK_NULL_HANDLE;
+    
+    VkBuffer energy_buffer_b = VK_NULL_HANDLE;
+    VkDeviceMemory energy_mem_b = VK_NULL_HANDLE;
+
     int tick = 0;
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -63,6 +69,10 @@ private:
 
     // Behavior flags (shared, static per reset)
     Buffer behavior_buffer_{};
+
+    // Double-buffered metabolism energy
+    Buffer energy_buffer_a_{}; // Changed to Buffer struct with underscore
+    Buffer energy_buffer_b_{}; // Changed to Buffer struct with underscore
 
     // Double-buffered polar orientation (angle + angular velocity)
     Buffer angle_buffer_a_{};

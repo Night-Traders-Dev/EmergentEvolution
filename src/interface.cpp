@@ -49,7 +49,15 @@ void Interface::render_imgui(SimConfig&       cfg,
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
+    if (ImGui::CollapsingHeader("Metabolism & Life", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::SliderFloat("Energy Decay", &cfg.metabolic_rate, 0.0f, 0.2f, "%.3f");
+        ImGui::SameLine(); HelpMarker("Base energy lost per second.");
 
+        ImGui::SliderFloat("Feeding Rate", &cfg.energy_gain_rate, 0.0f, 1.0f, "%.2f");
+        ImGui::SameLine(); HelpMarker("Energy gained when near Catalyst particles.");
+    }
+
+    
     if (ImGui::CollapsingHeader("Soft-Body Physics", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::SliderFloat("Viscosity (Drag)", &cfg.viscosity_strength, 0.0f, 0.5f, "%.3f");
         ImGui::SameLine(); HelpMarker("Higher values make clusters move like thick liquid.");

@@ -16,6 +16,7 @@ public:
     std::vector<uint32_t>  types;
     std::vector<float>     forces;
     std::vector<glm::vec4> colors;
+    std::vector<float> energy;
 
     float trait_scales[MAX_PARTICLE_TYPES];
     float structure_integrity[MAX_PARTICLE_TYPES]; // Added this
