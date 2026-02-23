@@ -1,0 +1,163 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+// Input buffers
+layout(set = 0, binding = 0, std430) buffer InPosBuffer  { vec2  data[]; } in_pos_buffer;
+layout(set = 0, binding = 1, std430) buffer InVelBuffer  { vec2  data[]; } in_vel_buffer;
+layout(set = 0, binding = 2, std430) readonly buffer Types  { uint  data[]; } type_buffer;
+layout(set = 0, binding = 3, std430) buffer Forces       { float data[]; } force_buffer;
+layout(set = 0, binding = 4, std430) buffer Colors       { vec4  data[]; } color_buffer;
+
+// Output buffers
+layout(set = 0, binding = 5, std430) buffer OutPosBuffer { vec2  data[]; } out_pos_buffer;
+layout(set = 0, binding = 6, std430) buffer OutVelBuffer { vec2  data[]; } out_vel_buffer;
+layout(set = 0, binding = 7, rgba32f) uniform image2D out_render_texture;
+
+// Push constants
+layout(push_constant, std430) uniform Params {
+    vec2  region_size;
+    vec2  camera_origin;
+    uint  particle_count;
+    uint  particle_types;
+    uint  step;
+    float dt;
+    float camera_zoom;
+    float radius;
+    float dampening;
+    float repulsion_radius;
+    float interaction_radius;
+    float density_limit;
+} params;
+
+
+// https://stackoverflow.com/questions/4200224/random-noise-functions-for-glsl
+float random(float v) {
+    return fract(sin(dot(vec2(v, v / 10.0f), vec2(12.9898f, 78.233f))) * 43758.5453f);
+}
+
+
+void apply_physics(uint i) {
+    const float MAX_RADIUS = params.interaction_radius * params.interaction_radius;
+
+    vec2  pos_a        = in_pos_buffer.data[i];
+    vec2  vel_a        = in_vel_buffer.data[i];
+    uint  type_a       = type_buffer.data[i];
+    vec2  total_force  = vec2(0.0f);
+    float local_density = 0.0f;
+
+    // --- density pass ---
+    for (int j = 0; j < int(params.particle_count); j++) {
+        if (i == uint(j)) continue;
+
+        vec2  pos_b = in_pos_buffer.data[j];
+        vec2  delta = pos_a - pos_b;
+
+        delta.x -= round(delta.x / params.region_size.x) * params.region_size.x;
+        delta.y -= round(delta.y / params.region_size.y) * params.region_size.y;
+
+        float dist_sq = dot(delta, delta);
+        if (dist_sq > MAX_RADIUS) continue;
+
+        float dist = sqrt(dist_sq);
+        if (dist > 0.0f) {
+            uint type_b = type_buffer.data[j];
+            if (type_a == type_b)
+                local_density += 1.0f - dist / params.interaction_radius;
+            else
+                local_density += (1.0f - dist / params.interaction_radius) * 0.5f;
+        }
+    }
+
+    // --- force pass ---
+    for (int j = 0; j < int(params.particle_count); j++) {
+        if (i == uint(j)) continue;
+
+        vec2  pos_b   = in_pos_buffer.data[j];
+        vec2  delta   = pos_a - pos_b;
+
+        delta.x -= round(delta.x / params.region_size.x) * params.region_size.x;
+        delta.y -= round(delta.y / params.region_size.y) * params.region_size.y;
+
+        float dist_sq = dot(delta, delta);
+        if (dist_sq > MAX_RADIUS) continue;
+
+        float dist = sqrt(dist_sq);
+
+        if (dist > 0.0f) {
+            uint  type_b     = type_buffer.data[j];
+            float attraction = force_buffer.data[type_a + type_b * params.particle_types];
+            vec2  normal     = normalize(delta);
+            float force;
+
+            if (attraction > 0.0f) {
+                float density_factor = 1.0f - min(max(0.0f, local_density - params.density_limit), 1.005f);
+                attraction *= density_factor;
+            }
+
+            if (dist < params.repulsion_radius) {
+                force = (dist / params.repulsion_radius - 1.0f) * 2.0f;
+            } else {
+                float width    = params.interaction_radius - params.repulsion_radius;
+                float midpoint = (params.repulsion_radius + params.interaction_radius) * 0.5f;
+                force = attraction * (1.0f - abs(dist - midpoint) / (width * 0.5f));
+            }
+
+            total_force += normal * force * -50.0f;
+        } else {
+            total_force += vec2(
+                random(float(i) + pos_a.x) - 0.5f,
+                random(float(i) + pos_a.y) - 0.5f
+            );
+        }
+    }
+
+    const float MAX_FORCE = 100.0f;
+    float dist_sq = dot(total_force, total_force);
+    if (dist_sq > MAX_FORCE * MAX_FORCE)
+        total_force = normalize(total_force) * MAX_FORCE;
+
+    vel_a += total_force * params.dt;
+    vel_a *= params.dampening;
+    pos_a += vel_a * params.dt;
+    pos_a  = mod(pos_a + params.region_size, params.region_size);
+
+    out_pos_buffer.data[i] = pos_a;
+    out_vel_buffer.data[i] = vel_a;
+}
+
+
+void render_particle(uint i) {
+    vec2 pos  = in_pos_buffer.data[i];
+    uint type = type_buffer.data[i];
+
+    vec2 region_size   = params.region_size;
+    vec2 region_center = region_size * 0.5f;
+    vec2 delta         = pos + params.camera_origin;
+
+    delta = mod(delta + region_center + vec2(params.radius, params.radius), region_size) - region_center;
+
+    float radius = params.radius * params.camera_zoom;
+    int   range  = int(ceil(radius));
+    vec2  screen_pos = region_center + (delta * params.camera_zoom) - vec2(range, range);
+
+    for (int x = -range; x <= range; x++) {
+        for (int y = -range; y <= range; y++) {
+            ivec2 pixel_pos = ivec2(floor(screen_pos)) + ivec2(x, y);
+            float dist      = distance(vec2(pixel_pos) + 0.5f, screen_pos);
+            if (dist < radius)
+                imageStore(out_render_texture, pixel_pos, color_buffer.data[type]);
+        }
+    }
+}
+
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= params.particle_count) return;
+
+    switch (params.step) {
+    case 0: apply_physics(i);   break;
+    case 1: render_particle(i); break;
+    }
+}
