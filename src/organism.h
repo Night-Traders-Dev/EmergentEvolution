@@ -33,6 +33,8 @@ struct Organism {
     std::vector<uint32_t> particle_indices;
 };
 
+static constexpr uint32_t POP_HISTORY_LEN = 300;
+
 class OrganismManager {
 public:
     std::vector<Organism> organisms;
@@ -41,6 +43,20 @@ public:
     // DBSCAN parameters
     uint32_t min_pts = 4;      // minimum neighbors to be a core point
     float eps_scale = 1.0f;    // eps = eps_scale * cluster_radius
+
+    // Population statistics (updated each organism tick)
+    uint32_t last_births    = 0;
+    uint32_t last_deaths    = 0;
+    uint32_t dust_count     = 0;
+    uint32_t alive_count    = 0;  // non-dust particles
+
+    // Per-type particle counts (updated each organism tick)
+    uint32_t type_populations[MAX_PARTICLE_TYPES] = {};
+
+    // Rolling population history for plotting (ring buffer)
+    float    pop_history[POP_HISTORY_LEN] = {};
+    uint32_t pop_history_idx   = 0;
+    uint32_t pop_history_count = 0;  // how many entries are valid
 
     void reset();
 
@@ -58,6 +74,10 @@ private:
 
     void apply_viral_infections(const std::vector<glm::vec2>& positions,
                                 Particles& particles);
+
+    uint32_t apply_reproductive_birth(const std::vector<glm::vec2>& positions,
+                                      const std::vector<float>&     energies,
+                                      Particles& particles);
 
     void apply_trait_feedback(Particles& particles);
 };

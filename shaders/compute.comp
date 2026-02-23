@@ -57,6 +57,10 @@ const uint BEHAVIOR_PHOTOSYNTH   = 128u;
 const uint BEHAVIOR_PREDATOR     = 256u;
 const uint BEHAVIOR_REPRODUCTIVE = 512u;
 
+// World dimensions (toroidal)
+const float WORLD_W = 2560.0f;
+const float WORLD_H = 1440.0f;
+
 float random(float v) {
     return fract(sin(dot(vec2(v, v / 10.0f), vec2(12.9898f, 78.233f))) * 43758.5453f);
 }
@@ -91,6 +95,11 @@ void apply_physics(uint i) {
     for (int j = 0; j < int(params.particle_count); j++) {
         if (i == uint(j)) continue;
         vec2 delta = in_pos_buffer.data[j] - pos_a;
+        // Toroidal shortest-path correction
+        if (delta.x >  WORLD_W * 0.5f) delta.x -= WORLD_W;
+        if (delta.x < -WORLD_W * 0.5f) delta.x += WORLD_W;
+        if (delta.y >  WORLD_H * 0.5f) delta.y -= WORLD_H;
+        if (delta.y < -WORLD_H * 0.5f) delta.y += WORLD_H;
         float dist_sq = dot(delta, delta);
         if (dist_sq > 0.0f && dist_sq < MAX_RADIUS_SQ) {
             float dist = sqrt(dist_sq);
@@ -103,7 +112,12 @@ void apply_physics(uint i) {
         if (i == uint(j)) continue;
 
         vec2  pos_b   = in_pos_buffer.data[j];
-        vec2  delta   = pos_b - pos_a; 
+        vec2  delta   = pos_b - pos_a;
+        // Toroidal shortest-path correction
+        if (delta.x >  WORLD_W * 0.5f) delta.x -= WORLD_W;
+        if (delta.x < -WORLD_W * 0.5f) delta.x += WORLD_W;
+        if (delta.y >  WORLD_H * 0.5f) delta.y -= WORLD_H;
+        if (delta.y < -WORLD_H * 0.5f) delta.y += WORLD_H;
         float dist_sq = dot(delta, delta);
 
         if (dist_sq > 0.0f && dist_sq < MAX_RADIUS_SQ) {
@@ -166,6 +180,12 @@ void apply_physics(uint i) {
                     interaction_energy_gain += 0.003f;
             }
 
+            // Prey energy drain: being hunted by a nearby predator costs energy
+            if ((flags_b & BEHAVIOR_PREDATOR) != 0u && type_b != type_a
+                && dist < params.repulsion_radius * 2.0f) {
+                interaction_energy_gain -= 0.003f;
+            }
+
             // Symbiotic energy gain: attraction between different types transfers energy
             if (attraction > 0.0f && type_b != type_a) {
                 float proximity = 1.0f - dist / params.interaction_radius;
@@ -200,12 +220,18 @@ void apply_physics(uint i) {
     {
         float spd   = length(vel_a);
         float delta = 0.0f;
-        delta -= 0.04f * params.dt;                               // passive metabolic drain
-        delta -= spd   * 0.001f * params.dt;                     // movement cost
-        if (local_density > params.density_limit)
-            delta -= (local_density - params.density_limit) * 0.008f * params.dt; // crowding
-        delta += interaction_energy_gain * params.dt;
-        delta += catalyst_boost * 0.004f * params.dt;            // catalyst neighbour boost
+
+        if (type_a == 0u) {
+            // Dust particles: slow recovery so they can be claimed by reproductive types
+            delta += 0.06f * params.dt;
+        } else {
+            delta -= 0.04f * params.dt;                              // passive metabolic drain
+            delta -= spd   * 0.001f * params.dt;                    // movement cost
+            if (local_density > params.density_limit)
+                delta -= (local_density - params.density_limit) * 0.008f * params.dt; // crowding
+            delta += interaction_energy_gain * params.dt;
+            delta += catalyst_boost * 0.004f * params.dt;           // catalyst neighbour boost
+        }
         energy = clamp(energy + delta, 0.0f, 1.0f);
     }
     out_energy_buffer.data[i] = energy;
@@ -231,16 +257,8 @@ void apply_physics(uint i) {
     float speed = length(vel_a);
     if (speed > max_speed) vel_a = (vel_a / speed) * max_speed;
 
-    // REPRODUCTIVE — signal CPU for division via tiny velocity marker
-    if ((flags_a & BEHAVIOR_REPRODUCTIVE) != 0u) {
-        if (local_density < params.density_limit * 0.5f) {
-            // Small, detectable nudge in x-velocity for CPU-side logic
-            vel_a.x += 0.00001f;
-        }
-    }
-
-    // Movement update (Unbounded world)
-    pos_a += vel_a * params.dt;
+    // Movement update (Toroidal world)
+    pos_a = mod(pos_a + vel_a * params.dt, vec2(WORLD_W, WORLD_H));
 
     out_pos_buffer.data[i] = pos_a;
     out_vel_buffer.data[i] = vel_a;

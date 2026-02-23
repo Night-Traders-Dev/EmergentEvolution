@@ -351,6 +351,39 @@ void Interface::draw_organism_panel(OrganismManager& org_manager,
     uint32_t org_count = static_cast<uint32_t>(org_manager.organisms.size());
     ImGui::Text("Active Organisms: %u", org_count);
 
+    // Population statistics
+    ImGui::Columns(2, "popstats", false);
+    ImGui::TextDisabled("Alive");  ImGui::NextColumn();
+    ImGui::TextDisabled("Dust");   ImGui::NextColumn();
+    ImGui::Text("%u", org_manager.alive_count); ImGui::NextColumn();
+    ImGui::Text("%u", org_manager.dust_count);  ImGui::NextColumn();
+    ImGui::TextDisabled("Births"); ImGui::NextColumn();
+    ImGui::TextDisabled("Deaths"); ImGui::NextColumn();
+    ImGui::Text("%u", org_manager.last_births); ImGui::NextColumn();
+    ImGui::Text("%u", org_manager.last_deaths); ImGui::NextColumn();
+    ImGui::Columns(1);
+
+    // Population history graph
+    if (org_manager.pop_history_count > 0) {
+        int hist_count  = static_cast<int>(
+            std::min(org_manager.pop_history_count,
+                     static_cast<uint32_t>(POP_HISTORY_LEN)));
+        int hist_offset = (org_manager.pop_history_count < POP_HISTORY_LEN)
+                          ? 0
+                          : static_cast<int>(org_manager.pop_history_idx);
+        ImGui::TextDisabled("Population history:");
+        ImGui::PushStyleColor(ImGuiCol_PlotLines, ImVec4(0.4f, 0.9f, 0.4f, 1.0f));
+        ImGui::PlotLines("##pophist",
+                         org_manager.pop_history,
+                         hist_count,
+                         hist_offset,
+                         nullptr,
+                         0.0f,
+                         static_cast<float>(cfg.particle_count),
+                         ImVec2(-1.0f, 48.0f));
+        ImGui::PopStyleColor();
+    }
+
     uint32_t pt = cfg.particle_types;
     if (pt > MAX_PARTICLE_TYPES) pt = MAX_PARTICLE_TYPES;
 
@@ -367,6 +400,48 @@ void Interface::draw_organism_panel(OrganismManager& org_manager,
 
         ImGui::PopStyleColor();
         ImGui::PopID();
+    }
+
+    // Per-type population bar chart (shows even with no detected organisms)
+    {
+        uint32_t total = org_manager.alive_count + org_manager.dust_count;
+        if (total > 0) {
+            ImGui::TextDisabled("Population by type:");
+            float bar_w = ImGui::GetContentRegionAvail().x;
+            float bar_h = 14.0f;
+            ImVec2 cursor = ImGui::GetCursorScreenPos();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+
+            float x = cursor.x;
+            for (uint32_t t = 0; t < pt; ++t) {
+                float frac = static_cast<float>(org_manager.type_populations[t]) /
+                             static_cast<float>(total);
+                if (frac <= 0.0f) continue;
+                float w = frac * bar_w;
+                const glm::vec4& c = particles.colors[t];
+                ImU32 col = IM_COL32(static_cast<int>(c.r * 255),
+                                     static_cast<int>(c.g * 255),
+                                     static_cast<int>(c.b * 255), 220);
+                dl->AddRectFilled(ImVec2(x, cursor.y),
+                                  ImVec2(x + w, cursor.y + bar_h), col);
+                x += w;
+            }
+            ImGui::Dummy(ImVec2(bar_w, bar_h));
+
+            // Legend row
+            for (uint32_t t = 0; t < pt; ++t) {
+                if (org_manager.type_populations[t] == 0) continue;
+                ImGui::PushID(static_cast<int>(t) + 100);
+                const glm::vec4& c = particles.colors[t];
+                ImGui::ColorButton("##lc", ImVec4(c.r, c.g, c.b, 1.0f),
+                                   ImGuiColorEditFlags_NoTooltip, ImVec2(10, 10));
+                ImGui::SameLine();
+                ImGui::Text("%u", org_manager.type_populations[t]);
+                ImGui::SameLine(0.0f, 10.0f);
+                ImGui::PopID();
+            }
+            ImGui::NewLine();
+        }
     }
 
     if (org_count == 0) {
