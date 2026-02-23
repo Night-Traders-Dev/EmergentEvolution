@@ -16,7 +16,24 @@ Written in C++20 with Vulkan compute shaders and Dear ImGui.
 - O(n²) pairwise force calculation in a GLSL compute shader
 - Toroidal world wrapping (2560 × 1440 simulation region)
 - Configurable repulsion radius, interaction radius, dampening, and density limiting
-- Double-buffered ping-pong position/velocity buffers for data-race-free updates
+- **Energy-based metabolism system** (passive drain, movement cost, feeding gain)
+- Double-buffered ping-pong position/velocity/energy buffers for data-race-free updates
+
+### Metabolism & Energy System
+Each particle maintains an energy value in the range **0.0 → 1.0**, updated entirely on the GPU:
+
+- **Passive metabolic drain** every frame  
+- **Movement cost** proportional to velocity  
+- **Density penalty** in overcrowded regions  
+- **Energy gain from interactions**:
+  - Attraction-based feeding (symbiosis)
+  - Scavenging dead particles
+  - Predation on nearby different types  
+- Particles with zero energy become “dust” (type 0) and drift until consumed  
+- Particle colour brightness reflects current energy
+
+This system creates natural ecological pressures, enabling stable food webs, predator–prey
+dynamics, scavengers, and energy-driven clustering.
 
 ### Force Matrix
 - Up to 10 particle types, each pair with an independent attraction/repulsion scalar
@@ -33,11 +50,11 @@ Six behaviours selectable per type from the **Particle Archetypes** panel:
 | **Repeller** | `REPEL` | Overrides force matrix — always repels all types; models toxins or charged ions |
 | **Polar** | `POLAR` | Magnetic dipole: attraction modulated by relative dipole alignment; chains form; north pole rendered as yellow dot, south hemisphere tinted blue |
 | **Heavy** | `HEAVY` | Force response scaled to 0.25×; acts as a structural nucleus that barely moves |
-| **Catalyst** | `CATALYST` | Nearby particles near a catalyst lose less energy each step; models enzymes |
+| **Catalyst** | `CATALYST` | Nearby particles lose less energy each step; models enzymes or metabolic boosters |
 | **Membrane** | — | Force matrix preset only: strong self-attraction (+0.7), repels others (−0.4); spontaneously forms rings and bilayer sheets |
 | **Viral** | `VIRAL` (CPU) | Converts the type of adjacent non-viral particles every 5 frames; infection spreads |
 
-Each archetype preset also seeds sensible force-matrix row defaults, which the user can then hand-edit.
+Archetype presets also seed sensible force-matrix defaults, which the user can then hand-edit.
 
 ### Organism System
 Particles are clustered into organisms every 5 frames using a spatial hash + union-find algorithm:
@@ -60,15 +77,8 @@ The **Organisms** panel shows active organism count, per-type force-scale bars, 
 ### Linux (Ubuntu / Debian)
 
 ```bash
-# LunarG Vulkan SDK (includes glslc)
-# https://vulkan.lunarg.com/sdk/home#linux
-# or:
 sudo apt install libvulkan-dev vulkan-tools glslang-tools
-
-# GLFW + GLM
 sudo apt install libglfw3-dev libglm-dev
-
-# CMake 3.20+ and a C++20 compiler
 sudo apt install cmake g++
 ```
 
@@ -77,7 +87,6 @@ sudo apt install cmake g++
 ## Build
 
 ```bash
-# If using the LunarG SDK tarball, source the environment first:
 source ~/vulkan/<version>/setup-env.sh
 
 mkdir -p build
@@ -119,7 +128,7 @@ src/
   types.h               — Constants, PushConstants, SimConfig, ParticleBehavior flags
   particles.h/.cpp      — CPU particle arrays, random generation, archetype presets
   vulkan_context.h/.cpp — Vulkan instance, device, swapchain, buffer/image helpers
-  compute_pipeline.h/.cpp — Compute pipeline, 13-binding descriptor layout, buffer lifecycle
+  compute_pipeline.h/.cpp — Compute pipeline, 15-binding descriptor layout, buffer lifecycle
   renderer.h/.cpp       — Fullscreen-quad graphics pipeline, ImGui, swapchain sync
   interface.h/.cpp      — Dear ImGui panel: force grid, archetypes, organism monitor
   organism.h/.cpp       — Spatial-hash clustering, trait tracking, viral infection
@@ -127,7 +136,7 @@ src/
   main.cpp              — Entry point, GLFW window
 
 shaders/
-  compute.comp          — GPU physics (forces, REPEL/POLAR/HEAVY/CATALYST) + particle render
+  compute.comp          — GPU physics (forces, metabolism, archetypes) + particle render
   fullscreen.vert       — Fullscreen triangle
   fullscreen.frag       — Samples particle texture → swapchain
 ```
@@ -138,21 +147,22 @@ shaders/
 |---------|--------|-----------|
 | 0 | position (ping) | in |
 | 1 | velocity (ping) | in |
-| 2 | type | in (readonly) |
+| 2 | type | in |
 | 3 | force matrix | in |
 | 4 | colour table | in |
 | 5 | position (pong) | out |
 | 6 | velocity (pong) | out |
 | 7 | render texture | image write |
-| 8 | behavior flags | in (shared) |
+| 8 | behavior flags | in |
 | 9 | angle (ping) | in |
 | 10 | angular velocity (ping) | in |
 | 11 | angle (pong) | out |
 | 12 | angular velocity (pong) | out |
+| 13 | energy (ping) | in |
+| 14 | energy (pong) | out |
 
-Position, velocity, angle, and angular-velocity buffers are double-buffered (A/B ping-pong).
-Behavior flags and the force matrix are shared (not ping-ponged) and reuploaded each frame
-to pick up archetype changes and viral type mutations.
+Position, velocity, angle, angular velocity, and energy buffers are double-buffered (A/B ping-pong).
+Behavior flags and the force matrix are shared and reuploaded each frame.
 
 ---
 
