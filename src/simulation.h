@@ -52,10 +52,16 @@ private:
     std::vector<glm::vec2> readback_velocities_;
     std::vector<float>     readback_energies_;
 
+    // Periodic particle spawn
+    double                 spawn_timer_ = 0.0;
+
     // Shader SPIRV paths (relative to working directory = build dir)
     static constexpr const char* COMPUTE_SPV  = "shaders/compute.spv";
     static constexpr const char* VERT_SPV     = "shaders/fullscreen.vert.spv";
     static constexpr const char* FRAG_SPV     = "shaders/fullscreen.frag.spv";
 
     void handle_input(GLFWwindow* window, double dt);
+    void do_particle_spawn();
+    void inject_photons(const std::vector<PhotonEvent>& events);
+    void do_spawn_at_world(glm::vec2 world_pos);
 };

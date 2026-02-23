@@ -3,6 +3,7 @@
 #include "types.h"
 #include <cstdint>
 #include <vector>
+#include <cmath>
 #include <glm/glm.hpp>
 
 // Forward declaration to avoid circular include
@@ -22,6 +23,13 @@ static constexpr uint32_t BOND_COMPAT[ATOM_COUNT] = {
     0b01000001u, // Cl — Na H       (bits 0,6)
 };
 
+// Photon emission event — populated by BondManager, drained by Simulation.
+struct PhotonEvent {
+    glm::vec2 position;   // world position of emission
+    glm::vec2 direction;  // unit vector
+    float     energy;     // initial photon energy (0-1)
+};
+
 class BondManager {
 public:
     // Flat bond array: bond_partners[i * MAX_BONDS_PER_PARTICLE + slot] = partner index
@@ -31,18 +39,35 @@ public:
     // Current bond count per particle (derived; not stored on GPU).
     std::vector<uint32_t> bond_counts;
 
+    // Cooldown ticks remaining before atom may form a new bond (set on break).
+    std::vector<uint8_t> bond_cooldown;
+    static constexpr uint8_t BOND_COOLDOWN_TICKS = 5;
+
+    // Photon emission queue — cleared each update(), drained by Simulation after bond update.
+    std::vector<PhotonEvent> pending_photons;
+
     // ── Lifecycle ─────────────────────────────────────────────────────────────
     void reset(uint32_t particle_count);
 
     // Form new bonds and break stretched bonds.
     // Call every bond_update_interval frames from Simulation::tick() after readback.
     void update(const std::vector<glm::vec2>& positions,
+                const std::vector<glm::vec2>& velocities,
                 const std::vector<uint32_t>&  types,
                 float bond_form_radius,
                 float bond_rest_length,
-                float bond_break_factor);
+                float bond_break_factor,
+                float bond_activation_energy = 0.0f);
 
     bool are_bonded(uint32_t i, uint32_t j) const;
+
+    // Directly form a bond between i and j regardless of cooldown/compatibility.
+    // Returns false if either particle's bond slots are full.
+    // Use for scripted molecule placement (spawn picker, templates).
+    bool force_bond(uint32_t i, uint32_t j) { return add_bond(i, j); }
+
+    // Remove all bonds for particle idx (used when recycling a dead particle for spawn).
+    void clear_particle_bonds(uint32_t idx);
 
 private:
     uint32_t n_particles_ = 0;
@@ -53,10 +78,14 @@ private:
                                float rest_length, float break_factor);
 
     void form_new_bonds(const std::vector<glm::vec2>& positions,
+                        const std::vector<glm::vec2>& velocities,
                         const std::vector<uint32_t>&  types,
-                        float form_radius);
+                        float form_radius,
+                        float activation_energy);
 
     bool can_bond(uint32_t ta, uint32_t tb) const;
     bool add_bond(uint32_t i, uint32_t j);
     void remove_bond(uint32_t i, uint32_t j);
+
+    static glm::vec2 random_unit_vec();   // fast LCG for emission direction
 };

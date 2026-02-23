@@ -38,6 +38,10 @@ public:
     // Called automatically from gen_data(); can also be called from the UI.
     void apply_atom_defaults(uint32_t active_types);
 
+    // Sets photon color and behavior flag for type index PHOTON_TYPE (8).
+    // Called at the end of apply_atom_defaults() and before photon injection.
+    void setup_photon_type();
+
     // Individual atom preset: set flags + seed force row for one type index.
     void apply_preset_atom(uint32_t type, uint32_t active_types);
 

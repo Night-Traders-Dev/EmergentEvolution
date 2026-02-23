@@ -110,6 +110,8 @@ void Interface::render_imgui(SimConfig&       cfg,
     ImGui::Text("Dampening:  %.2f", dampening_slider);
     cfg.dampening = dampening_slider;
 
+    ImGui::SliderFloat("Temperature", &cfg.temperature, 0.0f, 1.0f, "%.3f");
+
     ImGui::SliderFloat("Repulsion Radius", &repulsion_slider, 1.0f, 400.0f);
     ImGui::Text("Repulsion Radius:  %d", static_cast<int>(repulsion_slider));
     cfg.repulsion_radius = repulsion_slider;
@@ -128,10 +130,18 @@ void Interface::render_imgui(SimConfig&       cfg,
 
     // ── Bond parameters ───────────────────────────────────────────────────────
     ImGui::SeparatorText("Chemical Bonds");
-    ImGui::SliderFloat("Bond Form Radius",   &cfg.bond_form_radius,   5.0f,  80.0f, "%.1f");
-    ImGui::SliderFloat("Bond Rest Length",   &cfg.bond_rest_length,   5.0f,  60.0f, "%.1f");
-    ImGui::SliderFloat("Bond Break Factor",  &cfg.bond_break_factor,  1.1f,   4.0f, "%.2f");
-    ImGui::SliderFloat("Bond Spring k",      &cfg.bond_spring_k,      10.0f, 200.0f, "%.0f");
+    ImGui::SliderFloat("Bond Form Radius",    &cfg.bond_form_radius,       5.0f,  80.0f, "%.1f");
+    ImGui::SliderFloat("Bond Rest Length",    &cfg.bond_rest_length,       5.0f,  60.0f, "%.1f");
+    ImGui::SliderFloat("Bond Break Factor",   &cfg.bond_break_factor,      1.1f,   4.0f, "%.2f");
+    ImGui::SliderFloat("Bond Spring k",       &cfg.bond_spring_k,         10.0f, 200.0f, "%.0f");
+    ImGui::SliderFloat("Activation Energy",   &cfg.bond_activation_energy, 0.0f,   0.5f, "%.3f");
+
+    // ── Periodic particle spawn ───────────────────────────────────────────────
+    ImGui::SeparatorText("Particle Spawn");
+    ImGui::Checkbox("Enable Periodic Spawn", &cfg.spawn_enabled);
+    ImGui::SliderFloat("Spawn Interval (s)", &cfg.spawn_interval,  1.0f,  30.0f, "%.1f");
+    ImGui::SliderInt ("Spawn Min",  reinterpret_cast<int*>(&cfg.spawn_min),  10,  500);
+    ImGui::SliderInt ("Spawn Max",  reinterpret_cast<int*>(&cfg.spawn_max),  10, 1000);
 
     // ── Glow ──────────────────────────────────────────────────────────────────
     ImGui::Checkbox("Glow Enabled (visual hint only)", &glow_enabled);
@@ -148,11 +158,15 @@ void Interface::render_imgui(SimConfig&       cfg,
     draw_organism_panel(org_manager, bond_manager, particles, cfg);
 
     ImGui::Separator();
-    ImGui::TextDisabled("F1: toggle UI  |  F2: reset  |  Space: pause");
+    ImGui::TextDisabled("F1: toggle UI  |  F2: reset  |  F3: spawn picker  |  Space: pause");
     ImGui::TextDisabled("Drag: pan  |  Scroll: zoom  |  ESC: quit");
     ImGui::TextDisabled("Night-Traders-Dev 2026");
 
     ImGui::End();
+
+    // ── F3 Spawn Picker (separate floating window) ────────────────────────────
+    if (spawn_menu_visible)
+        draw_spawn_menu(org_manager, particles, cfg);
 
     ImGui::Render();
 }
@@ -591,5 +605,246 @@ void Interface::draw_organism_panel(OrganismManager& org_manager,
 
         ImGui::EndTable();
     }
+}
+
+// ── F3 Spawn Picker ───────────────────────────────────────────────────────────
+
+void Interface::draw_spawn_menu(const OrganismManager& org_manager,
+                                 const Particles&       particles,
+                                 const SimConfig&       cfg)
+{
+    ImGuiIO& io  = ImGui::GetIO();
+    ImVec2 center = { io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f };
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, { 0.5f, 0.5f });
+    ImGui::SetNextWindowSize({ 520.0f, 580.0f }, ImGuiCond_Appearing);
+
+    if (!ImGui::Begin("Spawn Picker [F3]", &spawn_menu_visible,
+                      ImGuiWindowFlags_NoCollapse)) {
+        ImGui::End();
+        return;
+    }
+
+    // Prevent world clicks from passing through this window
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow))
+        mouse_within = true;
+
+    // Status line
+    if (pending_spawn)
+        ImGui::TextColored({ 0.3f, 1.0f, 0.3f, 1.0f },
+                           ">> Left-click in world to place <<");
+    else
+        ImGui::TextDisabled(
+            "Select an item below, then left-click in the world to place it");
+    ImGui::Separator();
+
+    if (ImGui::BeginTabBar("SpawnTabs")) {
+
+        // ── Atoms tab ─────────────────────────────────────────────────────────
+        if (ImGui::BeginTabItem("Atoms")) {
+            ImGui::TextDisabled("Choose atom type:");
+            ImGui::Spacing();
+
+            static const char* ATOM_LABELS[ATOM_COUNT] = {
+                "H", "C", "N", "O", "P", "S", "Na", "Cl"
+            };
+            static const char* ATOM_FULL[ATOM_COUNT] = {
+                "Hydrogen", "Carbon", "Nitrogen", "Oxygen",
+                "Phosphorus", "Sulfur", "Sodium", "Chlorine"
+            };
+
+            for (int t = 0; t < static_cast<int>(ATOM_COUNT); ++t) {
+                ImGui::PushID(t);
+                const glm::vec4& col = particles.colors[t];
+                bool sel = (spawn_atom_type == t && spawn_tab == 0);
+                float bright = sel ? 1.25f : 0.72f;
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                    ImVec4(col.r * bright, col.g * bright, col.b * bright, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                    ImVec4(col.r, col.g, col.b, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                    ImVec4(col.r * 1.35f, col.g * 1.35f, col.b * 1.35f, 1.0f));
+
+                if (ImGui::Button(ATOM_LABELS[t], { 58.0f, 44.0f })) {
+                    spawn_atom_type = t;
+                    spawn_tab       = 0;
+                    pending_spawn   = true;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s  (valence %u)", ATOM_FULL[t], ATOM_VALENCE[t]);
+
+                ImGui::PopStyleColor(3);
+                ImGui::PopID();
+                if ((t + 1) % 4 != 0)
+                    ImGui::SameLine();
+            }
+
+            ImGui::EndTabItem();
+        }
+
+        // ── Groups tab ────────────────────────────────────────────────────────
+        if (ImGui::BeginTabItem("Groups")) {
+            ImGui::TextDisabled("Choose molecule template:");
+            ImGui::Spacing();
+
+            struct MolTemplate { const char* label; const char* desc; };
+            static const MolTemplate TEMPLATES[6] = {
+                { "H2O",  "Water: 1 O + 2 H  (bent, ~105 deg)"        },
+                { "CH4",  "Methane: 1 C + 4 H  (tetrahedral)"         },
+                { "NaCl", "Salt: Na-Cl ionic pair"                     },
+                { "NH3",  "Ammonia: 1 N + 3 H  (trigonal pyramidal)"  },
+                { "CO2",  "Carbon dioxide: O=C=O  (linear)"            },
+                { "Gly",  "Glycine: N-C-C(=O)  amino acid backbone"   },
+            };
+
+            for (int i = 0; i < 6; ++i) {
+                ImGui::PushID(i + 100);
+                bool sel = (spawn_group_idx == i && spawn_tab == 1);
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                    sel ? ImVec4(0.18f, 0.52f, 0.18f, 1.0f)
+                        : ImVec4(0.22f, 0.28f, 0.38f, 1.0f));
+
+                if (ImGui::Button(TEMPLATES[i].label, { 80.0f, 44.0f })) {
+                    spawn_group_idx = i;
+                    spawn_tab       = 1;
+                    pending_spawn   = true;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", TEMPLATES[i].desc);
+
+                ImGui::PopStyleColor();
+                ImGui::PopID();
+                if ((i + 1) % 3 != 0)
+                    ImGui::SameLine();
+            }
+
+            ImGui::EndTabItem();
+        }
+
+        // ── Organisms tab ─────────────────────────────────────────────────────
+        if (ImGui::BeginTabItem("Organisms")) {
+            ImGui::SeparatorText("Live Organisms");
+
+            const auto& orgs   = org_manager.organisms;
+            auto org_count = static_cast<uint32_t>(orgs.size());
+
+            if (org_count == 0) {
+                ImGui::TextDisabled("(no organisms detected yet)");
+            } else {
+                // Sort by size descending
+                std::vector<const Organism*> sorted;
+                sorted.reserve(org_count);
+                for (const auto& o : orgs) sorted.push_back(&o);
+                std::sort(sorted.begin(), sorted.end(),
+                          [](const Organism* a, const Organism* b) {
+                              return a->traits.size > b->traits.size;
+                          });
+
+                static const char* MOL_LBL[] = {
+                    "INRG", "H2O ", "LIPD", "AACD", "NUCL", "RAD!", "POLY"
+                };
+                uint32_t show = std::min(org_count, 8u);
+
+                if (ImGui::BeginTable("spawn_orgtbl", 5,
+                                      ImGuiTableFlags_RowBg |
+                                      ImGuiTableFlags_BordersInnerH |
+                                      ImGuiTableFlags_ScrollY,
+                                      ImVec2(0.0f, 180.0f)))
+                {
+                    ImGui::TableSetupColumn("",     ImGuiTableColumnFlags_WidthFixed, 16.0f);
+                    ImGui::TableSetupColumn("Mol",  ImGuiTableColumnFlags_WidthFixed, 38.0f);
+                    ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+                    ImGui::TableSetupColumn("Spd",  ImGuiTableColumnFlags_WidthFixed, 44.0f);
+                    ImGui::TableSetupColumn("",     ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableHeadersRow();
+
+                    for (uint32_t i = 0; i < show; ++i) {
+                        const Organism& o  = *sorted[i];
+                        auto live_idx      = static_cast<int>(sorted[i] - orgs.data());
+                        uint32_t dt        = o.traits.dominant_type;
+                        const glm::vec4& c = (dt < MAX_PARTICLE_TYPES)
+                                              ? particles.colors[dt] : glm::vec4(1.0f);
+
+                        ImGui::TableNextRow();
+
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::ColorButton("##tc",
+                            ImVec4(c.r, c.g, c.b, 1.0f),
+                            ImGuiColorEditFlags_NoTooltip, ImVec2(12, 12));
+
+                        ImGui::TableSetColumnIndex(1);
+                        auto mc = static_cast<uint8_t>(o.traits.mol_class);
+                        ImGui::TextUnformatted(mc < 7 ? MOL_LBL[mc] : "???");
+
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::Text("%u", o.traits.size);
+
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::Text("%.1f", o.traits.avg_speed);
+
+                        ImGui::TableSetColumnIndex(4);
+                        ImGui::PushID(static_cast<int>(i) + 200);
+                        bool sel = (spawn_organism_idx == live_idx && spawn_tab == 2);
+                        if (sel)
+                            ImGui::PushStyleColor(ImGuiCol_Button,
+                                ImVec4(0.18f, 0.52f, 0.18f, 1.0f));
+                        if (ImGui::SmallButton(sel ? "Place " : "Select")) {
+                            spawn_organism_idx = live_idx;
+                            spawn_tab          = 2;
+                            pending_spawn      = true;
+                        }
+                        if (sel) ImGui::PopStyleColor();
+                        ImGui::PopID();
+                    }
+                    ImGui::EndTable();
+                }
+            }
+
+            // Predefined templates
+            ImGui::Spacing();
+            ImGui::SeparatorText("Predefined Templates");
+
+            struct OrgTemplate { const char* label; const char* desc; int tidx; };
+            static const OrgTemplate ORG_TMPL[3] = {
+                { "Water Cluster", "5x H2O arranged in a pentagon ring",    -10 },
+                { "Salt Lattice",  "4x NaCl ionic crystal 2x2 fragment",   -11 },
+                { "Lipid Stub",    "C6H12O2 short fatty acid chain",        -12 },
+            };
+
+            for (int i = 0; i < 3; ++i) {
+                ImGui::PushID(i + 300);
+                bool sel = (spawn_organism_idx == ORG_TMPL[i].tidx && spawn_tab == 2);
+                if (sel)
+                    ImGui::PushStyleColor(ImGuiCol_Button,
+                        ImVec4(0.18f, 0.52f, 0.18f, 1.0f));
+                if (ImGui::Button(ORG_TMPL[i].label, { 145.0f, 36.0f })) {
+                    spawn_organism_idx = ORG_TMPL[i].tidx;
+                    spawn_tab          = 2;
+                    pending_spawn      = true;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", ORG_TMPL[i].desc);
+                if (sel) ImGui::PopStyleColor();
+                ImGui::PopID();
+                if (i < 2) ImGui::SameLine();
+            }
+
+            ImGui::EndTabItem();
+        }
+
+        ImGui::EndTabBar();
+    }
+
+    // Cancel / status footer
+    ImGui::Separator();
+    if (pending_spawn) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.48f, 0.1f, 0.1f, 1.0f));
+        if (ImGui::Button("Cancel Placement", { -1.0f, 0.0f }))
+            pending_spawn = false;
+        ImGui::PopStyleColor();
+    } else {
+        ImGui::TextDisabled("(nothing selected)");
+    }
+
+    ImGui::End();
 }
 

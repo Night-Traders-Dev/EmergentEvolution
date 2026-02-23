@@ -47,6 +47,13 @@ public:
                             std::vector<glm::vec2>& out_velocities,
                             std::vector<float>&     out_energies) const;
 
+    // Write modified positions, velocities, and energies into both ping-pong buffers.
+    // Used for particle injection (spawn). Queue must be idle when called.
+    void write_particle_state(VulkanContext& ctx,
+                              const std::vector<glm::vec2>& positions,
+                              const std::vector<glm::vec2>& velocities,
+                              const std::vector<float>&     energies);
+
 private:
     VkPipeline            pipeline_             = VK_NULL_HANDLE;
     VkPipelineLayout      pipeline_layout_      = VK_NULL_HANDLE;

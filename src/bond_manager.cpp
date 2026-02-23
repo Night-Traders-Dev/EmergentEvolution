@@ -9,6 +9,13 @@ int64_t BondManager::cell_key(int cx, int cy) {
     return (static_cast<int64_t>(cx) << 32) | static_cast<uint32_t>(cy);
 }
 
+glm::vec2 BondManager::random_unit_vec() {
+    static uint32_t lcg = 12345u;
+    lcg = lcg * 1664525u + 1013904223u;
+    float angle = static_cast<float>(lcg & 0xFFFFu) / 65535.0f * 6.28318f;
+    return { std::cos(angle), std::sin(angle) };
+}
+
 bool BondManager::can_bond(uint32_t ta, uint32_t tb) const {
     if (ta >= ATOM_COUNT || tb >= ATOM_COUNT) return false;
     return (BOND_COMPAT[ta] & (1u << tb)) != 0u;
@@ -59,6 +66,19 @@ void BondManager::remove_bond(uint32_t i, uint32_t j) {
     };
     clear_slot(i, j);
     clear_slot(j, i);
+    // Set cooldown so these atoms don't immediately re-bond
+    if (i < bond_cooldown.size()) bond_cooldown[i] = BOND_COOLDOWN_TICKS;
+    if (j < bond_cooldown.size()) bond_cooldown[j] = BOND_COOLDOWN_TICKS;
+}
+
+void BondManager::clear_particle_bonds(uint32_t idx) {
+    if (idx >= n_particles_) return;
+    uint32_t base = idx * MAX_BONDS_PER_PARTICLE;
+    for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+        uint32_t partner = bond_partners[base + s];
+        if (partner != 0xFFFFFFFFu && partner < n_particles_)
+            remove_bond(idx, partner);
+    }
 }
 
 // ── reset ─────────────────────────────────────────────────────────────────────
@@ -67,6 +87,7 @@ void BondManager::reset(uint32_t n) {
     n_particles_ = n;
     bond_partners.assign(static_cast<size_t>(n) * MAX_BONDS_PER_PARTICLE, 0xFFFFFFFFu);
     bond_counts.assign(n, 0u);
+    bond_cooldown.assign(n, 0u);
 }
 
 // ── break_stretched_bonds ─────────────────────────────────────────────────────
@@ -86,8 +107,15 @@ void BondManager::break_stretched_bonds(
 
             glm::vec2 d = positions[j] - positions[i];
             float d2 = glm::dot(d, d);
-            if (d2 > break_dist_sq)
+            if (d2 > break_dist_sq) {
                 remove_bond(i, j);
+                // Bond break → UV/visible photon emitted (higher energy)
+                pending_photons.push_back({
+                    (positions[i] + positions[j]) * 0.5f,
+                    random_unit_vec(),
+                    0.60f
+                });
+            }
         }
     }
 }
@@ -96,8 +124,10 @@ void BondManager::break_stretched_bonds(
 
 void BondManager::form_new_bonds(
     const std::vector<glm::vec2>& positions,
+    const std::vector<glm::vec2>& velocities,
     const std::vector<uint32_t>&  types,
-    float form_radius)
+    float form_radius,
+    float activation_energy)
 {
     float form_r2   = form_radius * form_radius;
     float cell_size = form_radius;
@@ -142,10 +172,26 @@ void BondManager::form_new_bonds(
 
                     if (are_bonded(i, j)) continue;
                     if (!can_bond(ti, tj))  continue;
+                    if (bond_cooldown[i] > 0 || bond_cooldown[j] > 0) continue;
 
                     glm::vec2 d = positions[j] - positions[i];
-                    if (glm::dot(d, d) < form_r2)
-                        add_bond(i, j);
+                    if (glm::dot(d, d) >= form_r2) continue;
+
+                    // Activation energy: require minimum relative kinetic energy
+                    if (activation_energy > 0.0f && i < velocities.size() && j < velocities.size()) {
+                        glm::vec2 dv  = velocities[i] - velocities[j];
+                        float     rke = 0.5f * glm::dot(dv, dv);
+                        if (rke < activation_energy) continue;
+                    }
+
+                    if (add_bond(i, j)) {
+                        // Bond formation → IR photon emitted (exothermic)
+                        pending_photons.push_back({
+                            (positions[i] + positions[j]) * 0.5f,
+                            random_unit_vec(),
+                            0.30f
+                        });
+                    }
                 }
             }
         }
@@ -156,10 +202,12 @@ void BondManager::form_new_bonds(
 
 void BondManager::update(
     const std::vector<glm::vec2>& positions,
+    const std::vector<glm::vec2>& velocities,
     const std::vector<uint32_t>&  types,
     float bond_form_radius,
     float bond_rest_length,
-    float bond_break_factor)
+    float bond_break_factor,
+    float bond_activation_energy)
 {
     if (n_particles_ == 0) return;
     // Resize if particle count changed (e.g. after reset)
@@ -167,6 +215,13 @@ void BondManager::update(
         reset(static_cast<uint32_t>(positions.size()));
     }
 
+    // Clear stale photon events from previous tick
+    pending_photons.clear();
+
+    // Tick down cooldowns
+    for (auto& cd : bond_cooldown)
+        if (cd > 0) --cd;
+
     break_stretched_bonds(positions, bond_rest_length, bond_break_factor);
-    form_new_bonds(positions, types, bond_form_radius);
+    form_new_bonds(positions, velocities, types, bond_form_radius, bond_activation_energy);
 }

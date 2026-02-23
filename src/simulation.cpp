@@ -6,7 +6,10 @@
 #include <stdexcept>
 #include <cmath>
 #include <algorithm>
+#include <numeric>
+#include <random>
 #include <iostream>
+#include <unordered_map>
 
 // ── Init / Destroy ────────────────────────────────────────────────────────────
 
@@ -53,6 +56,15 @@ void Simulation::tick(GLFWwindow* window, double dt) {
     // ── Input ──────────────────────────────────────────────────────────────────
     handle_input(window, dt);
 
+    // ── Periodic particle spawn ────────────────────────────────────────────────
+    if (cfg.spawn_enabled && is_active) {
+        spawn_timer_ += dt;
+        if (spawn_timer_ >= cfg.spawn_interval) {
+            spawn_timer_ = 0.0;
+            do_particle_spawn();
+        }
+    }
+
     // ── Upload dynamic GPU data ────────────────────────────────────────────────
     if (is_active)
         compute.upload_dynamic_data(vk, particles);
@@ -91,13 +103,19 @@ void Simulation::tick(GLFWwindow* window, double dt) {
                                        readback_energies_);
 
             if (need_bond) {
-                bond_manager.update(readback_positions_, particles.types,
+                bond_manager.update(readback_positions_, readback_velocities_,
+                                    particles.types,
                                     cfg.bond_form_radius,
                                     cfg.bond_rest_length,
-                                    cfg.bond_break_factor);
+                                    cfg.bond_break_factor,
+                                    cfg.bond_activation_energy);
                 // Pointer is stable (vector data doesn't move without resize)
                 particles.bond_partners_ptr   = bond_manager.bond_partners.data();
                 particles.bond_partners_count = static_cast<uint32_t>(bond_manager.bond_partners.size());
+
+                // Inject photons emitted by bond events (capped at 20 per tick)
+                if (!bond_manager.pending_photons.empty())
+                    inject_photons(bond_manager.pending_photons);
             }
 
             if (need_organism) {
@@ -145,6 +163,15 @@ void Simulation::handle_input(GLFWwindow* window, double dt) {
         reset();
     f2_prev = f2_cur;
 
+    // F3: spawn picker
+    static bool f3_prev = false;
+    bool f3_cur = (glfwGetKey(window, GLFW_KEY_F3) == GLFW_PRESS);
+    if (f3_cur && !f3_prev) {
+        iface.spawn_menu_visible = !iface.spawn_menu_visible;
+        if (!iface.spawn_menu_visible) iface.pending_spawn = false;
+    }
+    f3_prev = f3_cur;
+
     // F11: toggle fullscreen
     static bool f11_prev = false;
     bool f11_cur = (glfwGetKey(window, GLFW_KEY_F11) == GLFW_PRESS);
@@ -173,7 +200,19 @@ void Simulation::handle_input(GLFWwindow* window, double dt) {
 
     bool lmb = (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS);
 
-    if (!iface.mouse_within || !iface.settings_visible) {
+    // ── Spawn picker: intercept LMB click before camera pan ───────────────────
+    bool lmb_clicked = lmb && !lmb_down_;
+    if (iface.pending_spawn && lmb_clicked && !iface.mouse_within) {
+        int win_w = 0, win_h = 0;
+        glfwGetWindowSize(window, &win_w, &win_h);
+        glm::vec2 screen_center = { win_w * 0.5f, win_h * 0.5f };
+        glm::vec2 world_pos = cfg.camera_origin
+                            + (mouse_pos - screen_center) / cfg.current_camera_zoom;
+        do_spawn_at_world(world_pos);
+        iface.pending_spawn = false;
+    }
+
+    if ((!iface.mouse_within || !iface.settings_visible) && !iface.pending_spawn) {
         if (lmb) {
             smooth_mouse_change_ += raw_change * static_cast<float>(dt);
             cfg.camera_origin    -= smooth_mouse_change_ / cfg.current_camera_zoom;
@@ -194,6 +233,392 @@ void Simulation::handle_input(GLFWwindow* window, double dt) {
                                        static_cast<float>(dt) * 8.0f);
 
     lmb_down_ = lmb;
+}
+
+// ── Periodic particle spawn ───────────────────────────────────────────────────
+
+void Simulation::do_particle_spawn() {
+    if (!compute.is_ready()) return;
+
+    const uint32_t n = cfg.particle_count;
+    if (n == 0) return;
+
+    // Read current state so we can find the lowest-energy candidates
+    std::vector<glm::vec2> cur_pos(n), cur_vel(n);
+    std::vector<float>     cur_nrg(n);
+    compute.read_current_state(vk, cur_pos, cur_vel, cur_nrg);
+
+    // How many particles to spawn this event
+    static std::mt19937 spawn_rng{ std::random_device{}() };
+    uint32_t spawn_count = std::uniform_int_distribution<uint32_t>(
+        cfg.spawn_min, std::min(cfg.spawn_max, n))(spawn_rng);
+
+    // Choose target indices — sort by energy ascending, pick the lowest
+    std::vector<uint32_t> sorted(n);
+    std::iota(sorted.begin(), sorted.end(), 0u);
+    std::partial_sort(sorted.begin(), sorted.begin() + spawn_count, sorted.end(),
+        [&](uint32_t a, uint32_t b){ return cur_nrg[a] < cur_nrg[b]; });
+
+    // Pick a random world position for the spawn cluster
+    float view_w = static_cast<float>(REGION_W) / cfg.current_camera_zoom;
+    float view_h = static_cast<float>(REGION_H) / cfg.current_camera_zoom;
+    float cx = cfg.camera_origin.x + std::uniform_real_distribution<float>(-view_w * 0.4f, view_w * 0.4f)(spawn_rng);
+    float cy = cfg.camera_origin.y + std::uniform_real_distribution<float>(-view_h * 0.4f, view_h * 0.4f)(spawn_rng);
+    float scatter = cfg.interaction_radius * 3.0f;
+
+    // Atom abundance weights for type selection
+    static const float RAW_ABUNDANCE[ATOM_COUNT] = {
+        0.40f, 0.25f, 0.10f, 0.15f, 0.02f, 0.02f, 0.03f, 0.03f
+    };
+    uint32_t n_active = std::min(cfg.particle_types, static_cast<uint32_t>(ATOM_COUNT));
+    float cum[ATOM_COUNT + 1]; cum[0] = 0.0f;
+    float total = 0.0f;
+    for (uint32_t i = 0; i < n_active; ++i) total += RAW_ABUNDANCE[i];
+    for (uint32_t i = 0; i < n_active; ++i) cum[i+1] = cum[i] + RAW_ABUNDANCE[i] / total;
+    cum[n_active] = 1.0f;
+
+    // Genome defaults per atom type
+    static const float BASE_CHARGE[ATOM_COUNT]    = { 0.3f, 0.0f,-0.1f,-0.4f,-0.1f,-0.2f, 0.8f,-0.8f };
+    static const float BASE_ELECTRONEG[ATOM_COUNT] = { 0.6f, 0.6f, 0.9f, 1.6f, 0.8f, 0.9f, 0.3f, 1.1f };
+    static const float BASE_REACTIVITY[ATOM_COUNT] = { 1.0f, 0.8f, 1.2f, 1.4f, 1.0f, 1.1f, 0.6f, 0.8f };
+    static const float BASE_BOND_STR[ATOM_COUNT]   = { 0.3f, 0.5f, 0.4f, 0.4f, 0.6f, 0.5f, 0.2f, 0.2f };
+
+    std::uniform_real_distribution<float> jitter(-0.05f, 0.05f);
+    std::uniform_real_distribution<float> scat(-scatter, scatter);
+    std::uniform_real_distribution<float> uni01(0.0f, 1.0f);
+
+    for (uint32_t s = 0; s < spawn_count; ++s) {
+        uint32_t idx = sorted[s];
+
+        // Position: cluster near cx,cy with scatter
+        cur_pos[idx] = { cx + scat(spawn_rng), cy + scat(spawn_rng) };
+        cur_vel[idx] = { 0.0f, 0.0f };
+        cur_nrg[idx] = 0.8f;
+
+        // Sample atom type from abundance
+        float r = uni01(spawn_rng);
+        uint32_t t = 0;
+        for (uint32_t k = 0; k < n_active; ++k)
+            if (r >= cum[k] && r < cum[k+1]) { t = k; break; }
+
+        particles.types[idx] = t;
+
+        uint32_t tc = std::min(t, static_cast<uint32_t>(ATOM_COUNT - 1));
+        particles.genomes[idx*4+0] = std::clamp(BASE_CHARGE[tc]    + jitter(spawn_rng), -1.0f, 1.0f);
+        particles.genomes[idx*4+1] = std::clamp(BASE_ELECTRONEG[tc] + jitter(spawn_rng),  0.2f, 2.0f);
+        particles.genomes[idx*4+2] = std::clamp(BASE_REACTIVITY[tc] + jitter(spawn_rng),  0.2f, 2.0f);
+        particles.genomes[idx*4+3] = std::clamp(BASE_BOND_STR[tc]   + jitter(spawn_rng), -0.5f, 0.5f);
+
+        // Clear any existing bonds for the recycled particle
+        bond_manager.clear_particle_bonds(idx);
+    }
+
+    // Push the new positions/velocities/energies to both ping-pong GPU buffers
+    compute.write_particle_state(vk, cur_pos, cur_vel, cur_nrg);
+    // Push updated types + genomes (handled by upload_dynamic_data on next frame)
+    // But we call it now to avoid a one-frame flicker of old type colors
+    compute.upload_dynamic_data(vk, particles);
+}
+
+// ── Photon injection ──────────────────────────────────────────────────────────
+
+void Simulation::inject_photons(const std::vector<PhotonEvent>& events) {
+    if (!compute.is_ready() || events.empty()) return;
+
+    const uint32_t n = cfg.particle_count;
+    if (n == 0) return;
+
+    // Use the already-fresh readback buffers (called from within the bond-update block)
+    auto& cur_pos = readback_positions_;
+    auto& cur_vel = readback_velocities_;
+    auto& cur_nrg = readback_energies_;
+    if (cur_pos.size() != n) return;
+
+    // Sort indices by energy ascending (candidates for recycling)
+    std::vector<uint32_t> sorted(n);
+    std::iota(sorted.begin(), sorted.end(), 0u);
+    std::partial_sort(sorted.begin(), sorted.begin() + std::min<uint32_t>(20, n),
+        sorted.end(), [&](uint32_t a, uint32_t b){ return cur_nrg[a] < cur_nrg[b]; });
+
+    // Emit up to 20 photons per tick, skipping already-photon particles
+    uint32_t injected = 0;
+    static constexpr float PHOTON_SPEED = 800.0f;
+    for (const auto& ev : events) {
+        if (injected >= 20) break;
+
+        // Find a suitable recycling candidate (non-photon, low energy)
+        uint32_t idx = n; // sentinel
+        for (uint32_t s = injected; s < std::min<uint32_t>(40, n); ++s) {
+            uint32_t cand = sorted[s];
+            if (particles.types[cand] == PHOTON_TYPE) continue; // already a photon
+            if (cur_nrg[cand] > 0.1f) break;  // sorted ascending; if >0.1 then none below
+            idx = cand;
+            break;
+        }
+        if (idx == n) break;  // no suitable low-energy particle found
+
+        cur_pos[idx] = ev.position;
+        cur_vel[idx] = ev.direction * PHOTON_SPEED;
+        cur_nrg[idx] = ev.energy;
+
+        particles.types[idx]           = PHOTON_TYPE;
+        particles.genomes[idx*4+0]     = 0.0f;
+        particles.genomes[idx*4+1]     = 0.0f;
+        particles.genomes[idx*4+2]     = 0.0f;
+        particles.genomes[idx*4+3]     = 0.0f;
+
+        // Clear any bonds on the recycled particle
+        bond_manager.clear_particle_bonds(idx);
+
+        ++injected;
+    }
+
+    if (injected > 0) {
+        particles.setup_photon_type();  // ensure color/flags are set
+        compute.write_particle_state(vk, cur_pos, cur_vel, cur_nrg);
+        compute.upload_dynamic_data(vk, particles);
+    }
+}
+
+// ── Spawn at world position (F3 picker) ──────────────────────────────────────
+
+void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
+    if (!compute.is_ready()) return;
+    const uint32_t n = cfg.particle_count;
+    if (n == 0) return;
+
+    // Genome defaults shared with do_particle_spawn
+    static const float BASE_CHARGE[ATOM_COUNT]     = {  0.3f, 0.0f,-0.1f,-0.4f,-0.1f,-0.2f, 0.8f,-0.8f };
+    static const float BASE_ELECTRONEG[ATOM_COUNT] = {  0.6f, 0.6f, 0.9f, 1.6f, 0.8f, 0.9f, 0.3f, 1.1f };
+    static const float BASE_REACTIVITY[ATOM_COUNT] = {  1.0f, 0.8f, 1.2f, 1.4f, 1.0f, 1.1f, 0.6f, 0.8f };
+    static const float BASE_BOND_STR[ATOM_COUNT]   = {  0.3f, 0.5f, 0.4f, 0.4f, 0.6f, 0.5f, 0.2f, 0.2f };
+
+    // Read current GPU state
+    std::vector<glm::vec2> cur_pos(n), cur_vel(n);
+    std::vector<float>     cur_nrg(n);
+    compute.read_current_state(vk, cur_pos, cur_vel, cur_nrg);
+
+    // Helper: overwrite one particle slot
+    auto set_atom = [&](uint32_t idx, uint32_t type, glm::vec2 pos) {
+        uint32_t t = std::min(type, static_cast<uint32_t>(ATOM_COUNT - 1u));
+        cur_pos[idx]                = pos;
+        cur_vel[idx]                = { 0.0f, 0.0f };
+        cur_nrg[idx]                = 0.7f;
+        particles.types[idx]        = t;
+        particles.genomes[idx*4+0]  = BASE_CHARGE[t];
+        particles.genomes[idx*4+1]  = BASE_ELECTRONEG[t];
+        particles.genomes[idx*4+2]  = BASE_REACTIVITY[t];
+        particles.genomes[idx*4+3]  = BASE_BOND_STR[t];
+        bond_manager.clear_particle_bonds(idx);
+    };
+
+    // Find low-energy non-photon candidates for recycling
+    std::vector<uint32_t> sorted(n);
+    std::iota(sorted.begin(), sorted.end(), 0u);
+    std::sort(sorted.begin(), sorted.end(),
+              [&](uint32_t a, uint32_t b){ return cur_nrg[a] < cur_nrg[b]; });
+
+    std::vector<uint32_t> candidates;
+    candidates.reserve(64);
+    for (uint32_t idx : sorted) {
+        if (particles.types[idx] == PHOTON_TYPE) continue;
+        candidates.push_back(idx);
+        if (candidates.size() >= 64) break;
+    }
+
+    // ── Molecule template definitions (Groups tab) ────────────────────────────
+    struct AtomSpec { float rx, ry; uint32_t type; };
+    struct BondSpec { int ai, bi; };
+    struct MolSpec  { std::vector<AtomSpec> atoms; std::vector<BondSpec> bonds; };
+
+    static const MolSpec MOLECULES[6] = {
+        // 0: H2O — O + 2H, bent ~105°
+        { {{0,0,3},{-14,12,0},{14,12,0}},
+          {{0,1},{0,2}} },
+        // 1: CH4 — C + 4H, tetrahedral
+        { {{0,0,1},{0,-20,0},{20,0,0},{0,20,0},{-20,0,0}},
+          {{0,1},{0,2},{0,3},{0,4}} },
+        // 2: NaCl — Na + Cl, ionic pair
+        { {{-13,0,6},{13,0,7}},
+          {{0,1}} },
+        // 3: NH3 — N + 3H, trigonal pyramidal
+        { {{0,0,2},{0,-18,0},{15,10,0},{-15,10,0}},
+          {{0,1},{0,2},{0,3}} },
+        // 4: CO2 — C + 2O, linear
+        { {{0,0,1},{-22,0,3},{22,0,3}},
+          {{0,1},{0,2}} },
+        // 5: Gly — simplified glycine backbone (8 atoms)
+        { {{-28,0,2},{-8,0,1},{12,0,1},{26,10,3},{26,-10,3},{-36,12,0},{-36,-12,0},{-8,-16,0}},
+          {{0,1},{1,2},{2,3},{2,4},{0,5},{0,6},{1,7}} },
+    };
+
+    // ── Case: Single atom ─────────────────────────────────────────────────────
+    if (iface.spawn_tab == 0) {
+        if (candidates.empty()) return;
+        set_atom(candidates[0], static_cast<uint32_t>(iface.spawn_atom_type), world_pos);
+        compute.write_particle_state(vk, cur_pos, cur_vel, cur_nrg);
+        compute.upload_dynamic_data(vk, particles);
+        return;
+    }
+
+    // ── Case: Molecule template ───────────────────────────────────────────────
+    if (iface.spawn_tab == 1) {
+        int gi = std::clamp(iface.spawn_group_idx, 0, 5);
+        const MolSpec& mol = MOLECULES[gi];
+        uint32_t need = static_cast<uint32_t>(mol.atoms.size());
+        if (candidates.size() < need) return;
+
+        std::vector<uint32_t> placed;
+        placed.reserve(need);
+        for (uint32_t i = 0; i < need; ++i) {
+            uint32_t idx = candidates[i];
+            set_atom(idx, mol.atoms[i].type,
+                     world_pos + glm::vec2(mol.atoms[i].rx, mol.atoms[i].ry));
+            placed.push_back(idx);
+        }
+        for (const auto& b : mol.bonds) {
+            if (b.ai < static_cast<int>(placed.size()) &&
+                b.bi < static_cast<int>(placed.size()))
+                bond_manager.force_bond(placed[b.ai], placed[b.bi]);
+        }
+
+        compute.write_particle_state(vk, cur_pos, cur_vel, cur_nrg);
+        compute.upload_dynamic_data(vk, particles);
+        return;
+    }
+
+    // ── Case: Organism ────────────────────────────────────────────────────────
+    if (iface.spawn_tab == 2) {
+        int oi = iface.spawn_organism_idx;
+
+        if (oi >= 0) {
+            // Clone a live organism
+            const auto& orgs = organism_manager.organisms;
+            if (oi >= static_cast<int>(orgs.size())) return;
+            const Organism& org = orgs[static_cast<uint32_t>(oi)];
+            const auto& members = org.particle_indices;
+            uint32_t m = static_cast<uint32_t>(members.size());
+            if (m == 0 || candidates.size() < m) return;
+
+            // Compute centroid
+            glm::vec2 centroid = {};
+            for (uint32_t mi : members)
+                centroid += (mi < readback_positions_.size()) ? readback_positions_[mi] : glm::vec2{};
+            centroid /= static_cast<float>(m);
+            glm::vec2 offset = world_pos - centroid;
+
+            std::unordered_map<uint32_t,uint32_t> old_to_new;
+            old_to_new.reserve(m);
+
+            for (uint32_t s = 0; s < m; ++s) {
+                uint32_t old_idx = members[s];
+                uint32_t new_idx = candidates[s];
+                old_to_new[old_idx] = new_idx;
+                glm::vec2 orig = (old_idx < readback_positions_.size())
+                                  ? readback_positions_[old_idx] : centroid;
+                set_atom(new_idx, particles.types[old_idx], orig + offset);
+                cur_nrg[new_idx] = (old_idx < readback_energies_.size())
+                                    ? readback_energies_[old_idx] : 0.7f;
+            }
+            // Re-create internal bonds
+            for (uint32_t s = 0; s < m; ++s) {
+                uint32_t old_i = members[s];
+                uint32_t new_i = old_to_new.at(old_i);
+                uint32_t base  = old_i * MAX_BONDS_PER_PARTICLE;
+                for (uint32_t slot = 0; slot < MAX_BONDS_PER_PARTICLE; ++slot) {
+                    uint32_t old_j = bond_manager.bond_partners[base + slot];
+                    if (old_j == 0xFFFFFFFFu) continue;
+                    auto it = old_to_new.find(old_j);
+                    if (it == old_to_new.end()) continue;
+                    uint32_t new_j = it->second;
+                    if (new_i < new_j)
+                        bond_manager.force_bond(new_i, new_j);
+                }
+            }
+
+            compute.write_particle_state(vk, cur_pos, cur_vel, cur_nrg);
+            compute.upload_dynamic_data(vk, particles);
+            return;
+        }
+
+        // Predefined organism templates
+        struct OrgAtomSpec { float rx, ry; uint32_t type; };
+        std::vector<OrgAtomSpec> tmpl_atoms;
+        std::vector<BondSpec>    tmpl_bonds;
+
+        if (oi == -10) {
+            // 5× H2O in a pentagon ring, radius 50
+            for (int w = 0; w < 5; ++w) {
+                float ang = w * 1.25664f;  // 2π/5
+                float px  = std::cos(ang) * 50.0f;
+                float py  = std::sin(ang) * 50.0f;
+                int base  = static_cast<int>(tmpl_atoms.size());
+                tmpl_atoms.push_back({px,        py,        3u}); // O
+                tmpl_atoms.push_back({px - 13.f, py + 10.f, 0u}); // H
+                tmpl_atoms.push_back({px + 13.f, py + 10.f, 0u}); // H
+                tmpl_bonds.push_back({base, base+1});
+                tmpl_bonds.push_back({base, base+2});
+            }
+        } else if (oi == -11) {
+            // 4× NaCl in a 2×2 ionic grid
+            for (int row = 0; row < 2; ++row) {
+                for (int col = 0; col < 2; ++col) {
+                    float px   = (col - 0.5f) * 32.0f;
+                    float py   = (row - 0.5f) * 32.0f;
+                    int   base = static_cast<int>(tmpl_atoms.size());
+                    uint32_t ta = ((row + col) % 2 == 0) ? 6u : 7u;
+                    uint32_t tb = (ta == 6u) ? 7u : 6u;
+                    tmpl_atoms.push_back({px - 13.f, py, ta});
+                    tmpl_atoms.push_back({px + 13.f, py, tb});
+                    tmpl_bonds.push_back({base, base+1});
+                }
+            }
+        } else if (oi == -12) {
+            // C6H12O2: 6-carbon fatty acid chain stub
+            for (int c = 0; c < 6; ++c) {
+                float px  = (c - 2.5f) * 24.0f;
+                int   ci  = static_cast<int>(tmpl_atoms.size());
+                if (c < 5) {
+                    tmpl_atoms.push_back({px,    0.f, 1u}); // C
+                    tmpl_atoms.push_back({px, -18.f, 0u}); // H
+                    tmpl_atoms.push_back({px,  18.f, 0u}); // H
+                    tmpl_bonds.push_back({ci, ci+1});
+                    tmpl_bonds.push_back({ci, ci+2});
+                    if (c > 0) tmpl_bonds.push_back({ci - 3, ci}); // C-C chain
+                } else {
+                    tmpl_atoms.push_back({px,      0.f, 1u}); // C (carboxyl)
+                    tmpl_atoms.push_back({px,    -18.f, 3u}); // =O
+                    tmpl_atoms.push_back({px+16.f, 12.f, 3u}); // -OH
+                    tmpl_bonds.push_back({ci, ci+1});
+                    tmpl_bonds.push_back({ci, ci+2});
+                    tmpl_bonds.push_back({ci - 3, ci}); // C-C chain
+                }
+            }
+        } else {
+            return;
+        }
+
+        uint32_t need = static_cast<uint32_t>(tmpl_atoms.size());
+        if (candidates.size() < need) return;
+
+        std::vector<uint32_t> placed;
+        placed.reserve(need);
+        for (uint32_t i = 0; i < need; ++i) {
+            uint32_t idx = candidates[i];
+            set_atom(idx, tmpl_atoms[i].type,
+                     world_pos + glm::vec2(tmpl_atoms[i].rx, tmpl_atoms[i].ry));
+            placed.push_back(idx);
+        }
+        for (const auto& b : tmpl_bonds) {
+            if (b.ai < static_cast<int>(placed.size()) &&
+                b.bi < static_cast<int>(placed.size()))
+                bond_manager.force_bond(placed[b.ai], placed[b.bi]);
+        }
+
+        compute.write_particle_state(vk, cur_pos, cur_vel, cur_nrg);
+        compute.upload_dynamic_data(vk, particles);
+        return;
+    }
 }
 
 // ── Scroll callback (called from main.cpp) ────────────────────────────────────

@@ -54,6 +54,7 @@ layout(push_constant, std430) uniform Params {
     float viscosity_strength; // 56
     float pressure_resistance;// 60
     float local_density_cap;  // 64
+    float temperature;        // 68 — thermal noise strength
 } params;
 
 const uint BEHAVIOR_REPEL     = 1u;    // same-charge ionic repulsion
@@ -66,6 +67,10 @@ const uint BEHAVIOR_DONOR     = 64u;   // electron donor (was SECRETOR)
 const uint BEHAVIOR_ACCEPTOR  = 128u;  // electron acceptor (was PHOTOSYNTH)
 const uint BEHAVIOR_IONIC_POS = 256u;  // positive ion Na (was PREDATOR)
 const uint BEHAVIOR_IONIC_NEG = 512u;  // negative ion Cl (was REPRODUCTIVE)
+const uint BEHAVIOR_PHOTON    = 1024u; // massless energy carrier; skips normal physics
+
+const uint  PHOTON_TYPE_IDX  = 8u;
+const float PHOTON_DRAIN     = 0.12f; // energy drained per second (finite lifetime ~8s at full energy)
 
 float random(float v) {
     return fract(sin(dot(vec2(v, v / 10.0f), vec2(12.9898f, 78.233f))) * 43758.5453f);
@@ -79,7 +84,19 @@ void apply_physics(uint i) {
     vec2  vel_a         = in_vel_buffer.data[i];
     uint  type_a        = type_buffer.data[i];
     uint  flags_a       = behavior_buffer.data[type_a];
-    
+
+    // ── Photon fast-path ──────────────────────────────────────────────────────
+    // Photons travel ballistic (no forces, no dampening).
+    // They drain their own energy over time; atoms absorb from them in the j-loop below.
+    if ((flags_a & BEHAVIOR_PHOTON) != 0u) {
+        float ph_energy = in_energy_buffer.data[i];
+        ph_energy = max(ph_energy - PHOTON_DRAIN * params.dt, 0.0f);
+        out_energy_buffer.data[i] = ph_energy;
+        out_pos_buffer.data[i]    = pos_a + vel_a * params.dt;
+        out_vel_buffer.data[i]    = vel_a;  // no dampening — photon coasts
+        return;                              // skip all normal physics
+    }
+
     vec2  total_force    = vec2(0.0f);
     vec2  pressure_force = vec2(0.0f);
     float local_density  = 0.0f;
@@ -126,6 +143,19 @@ void apply_physics(uint i) {
             vec2  normal = delta / dist;
             uint  type_b = type_buffer.data[j];
             uint  flags_b = behavior_buffer.data[type_b];
+
+            // ── Photon absorption ─────────────────────────────────────────────
+            // If neighbor j is a photon, atom i absorbs energy from it.
+            // The photon drains autonomously; atom claims its field energy.
+            if ((flags_b & BEHAVIOR_PHOTON) != 0u) {
+                float ph_energy = in_energy_buffer.data[j];
+                if (ph_energy > 0.04f && dist < params.repulsion_radius * 2.5f) {
+                    float deficit = max(0.0f, 1.0f - energy);
+                    float absorb  = deficit * 0.35f * clamp(electroneg, 0.2f, 2.0f) * params.dt;
+                    interaction_energy_gain += ph_energy * absorb;
+                }
+                continue;  // no force from photon
+            }
 
             // 1. Soft-Body Pressure Force (Repulsion)
             // Keeps organisms from collapsing into a single point
@@ -248,6 +278,39 @@ void apply_physics(uint i) {
         }
     }
 
+    // ── Bond angle constraints (harmonic angular spring) ─────────────────────
+    // For each pair of bonds on atom i, apply a restoring force toward the
+    // ideal bond angle for that atom type.  Uses the bisector formula to avoid
+    // trig singularities at θ=0 and θ=π.
+    {
+        const float k_angle = 20.0f;
+        // Ideal bond angles by atom type (radians):
+        //   H=180°  C=120°  N=120°  O=105°  P=108°  S=100°  Na=180°  Cl=180°
+        const float IDEAL_ANGLE[8] = {
+            3.14159f, 2.09440f, 2.09440f, 1.83260f,
+            1.88496f, 1.74533f, 3.14159f, 3.14159f
+        };
+        uint  type_i = type_buffer.data[i];
+        float theta0 = (type_i < 8u) ? IDEAL_ANGLE[type_i] : 2.09440f;
+
+        for (uint s1 = 0u; s1 < MAX_BONDS; ++s1) {
+            uint j = bond_buffer.data[i * MAX_BONDS + s1];
+            if (j == BOND_EMPTY || j >= params.particle_count) continue;
+            for (uint s2 = s1 + 1u; s2 < MAX_BONDS; ++s2) {
+                uint k = bond_buffer.data[i * MAX_BONDS + s2];
+                if (k == BOND_EMPTY || k >= params.particle_count) continue;
+                vec2  rj    = normalize(in_pos_buffer.data[j] - pos_a);
+                vec2  rk    = normalize(in_pos_buffer.data[k] - pos_a);
+                float cos_t = clamp(dot(rj, rk), -1.0f, 1.0f);
+                float theta = acos(cos_t);
+                float err   = theta - theta0;
+                // Bisector restoring force
+                vec2  bisect = normalize(rj + rk + vec2(1e-6f));
+                total_force -= bisect * k_angle * err;
+            }
+        }
+    }
+
     // --- Energy Metabolism ---
     {
         float spd   = length(vel_a);
@@ -285,6 +348,14 @@ void apply_physics(uint i) {
     float max_speed = 300.0f / (1.0f + local_density * 0.15f);
     float speed = length(vel_a);
     if (speed > max_speed) vel_a = (vel_a / speed) * max_speed;
+
+    // Thermal noise (Brownian motion)
+    if (params.temperature > 0.001f) {
+        // Deterministic pseudo-random angle per particle per frame
+        float rng_angle = float(i) * 2.3999632f + params.dt * 137.508f;
+        vec2  noise_dir = vec2(cos(rng_angle), sin(rng_angle));
+        vel_a += noise_dir * params.temperature * 0.3f;
+    }
 
     // Movement update (infinite world)
     pos_a = pos_a + vel_a * params.dt;

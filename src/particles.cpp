@@ -108,6 +108,24 @@ void Particles::apply_atom_defaults(uint32_t active_types) {
     for (uint32_t a = 0; a < n; ++a)
         for (uint32_t b = 0; b < n; ++b)
             forces[a + b * MAX_PARTICLE_TYPES] = CHEM_FORCE[a][b];
+
+    // Always set up photon type (type index 8) — zero forces, BEHAVIOR_PHOTON flag
+    setup_photon_type();
+}
+
+// ── setup_photon_type ─────────────────────────────────────────────────────────
+
+void Particles::setup_photon_type() {
+    // Photons: bright yellow-white glow
+    if (colors.size() > PHOTON_TYPE)
+        colors[PHOTON_TYPE] = { 1.0f, 1.0f, 0.55f, 1.0f };
+    // Zero mass (very light), no bonding, travels ballistic
+    behavior_flags[PHOTON_TYPE] = static_cast<uint32_t>(BEHAVIOR_PHOTON);
+    // Zero force row/column (photons don't interact via force matrix)
+    for (uint32_t k = 0; k < MAX_PARTICLE_TYPES; ++k) {
+        forces[PHOTON_TYPE + k * MAX_PARTICLE_TYPES] = 0.0f;
+        forces[k + PHOTON_TYPE * MAX_PARTICLE_TYPES] = 0.0f;
+    }
 }
 
 // ── gen_particles ─────────────────────────────────────────────────────────────
@@ -158,9 +176,36 @@ void Particles::gen_particles(const SimConfig& cfg) {
     for (uint32_t i = 0; i < n_active; ++i) cum[i+1] = cum[i] + RAW_ABUNDANCE[i] / total;
     cum[n_active] = 1.0f; // clamp
 
+    // ── Non-uniform clustered spawn ───────────────────────────────────────────
+    // Generate 4-8 random cluster centres so matter starts as separated blobs.
+    int n_clusters = 4 + static_cast<int>(rng_() % 5);
+    std::vector<glm::vec2> cluster_centers(n_clusters);
+    for (auto& c : cluster_centers)
+        c = { rand_range_f(rw * 0.08f, rw * 0.92f),
+              rand_range_f(rh * 0.08f, rh * 0.92f) };
+
+    // Each cluster has its own sigma (spread) for variety
+    std::vector<float> cluster_sigma(n_clusters);
+    for (auto& s : cluster_sigma)
+        s = rand_range_f(rh * 0.06f, rh * 0.22f);
+
+    std::normal_distribution<float> gauss(0.0f, 1.0f);
+
     for (uint32_t i = 0; i < cfg.particle_count; ++i) {
-        glm::vec2 pos(rand_range_f(0.0f, rw),
-                      rand_range_f(0.0f, rh));
+        // Assign to a random cluster
+        int ci = static_cast<int>(rng_() % n_clusters);
+        glm::vec2 pos;
+        // Rejection-sample to keep within world bounds
+        int tries = 0;
+        do {
+            float sig = cluster_sigma[ci];
+            pos = { cluster_centers[ci].x + gauss(rng_) * sig,
+                    cluster_centers[ci].y + gauss(rng_) * sig };
+            ++tries;
+        } while ((pos.x < 0.0f || pos.x >= rw || pos.y < 0.0f || pos.y >= rh) && tries < 20);
+        pos.x = std::clamp(pos.x, 0.0f, rw - 1.0f);
+        pos.y = std::clamp(pos.y, 0.0f, rh - 1.0f);
+
         // Sample type from abundance distribution
         float r = rand_range_f(0.0f, 1.0f);
         uint32_t t = 0;

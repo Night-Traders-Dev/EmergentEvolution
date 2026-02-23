@@ -15,6 +15,7 @@ static constexpr uint32_t GENOME_SIZE        = 4;   // floats per particle: char
 // ── Atom system ───────────────────────────────────────────────────────────────
 static constexpr uint32_t ATOM_COUNT             = 8;   // H C N O P S Na Cl
 static constexpr uint32_t MAX_BONDS_PER_PARTICLE = 5;   // P has valence 5
+static constexpr uint32_t PHOTON_TYPE            = 8u;  // particle type index for photons
 
 // Max covalent bonds per atom type (indexed 0-7: H C N O P S Na Cl)
 static constexpr uint32_t ATOM_VALENCE[ATOM_COUNT] = {1, 4, 3, 2, 5, 2, 1, 1};
@@ -31,6 +32,7 @@ enum ParticleBehavior : uint32_t {
     BEHAVIOR_ACCEPTOR  = 1u << 7,  // electron acceptor (was PHOTOSYNTH)
     BEHAVIOR_IONIC_POS = 1u << 8,  // positive ion (Na) (was PREDATOR)
     BEHAVIOR_IONIC_NEG = 1u << 9,  // negative ion (Cl) (was REPRODUCTIVE)
+    BEHAVIOR_PHOTON    = 1u << 10, // massless energy carrier; skips normal physics
 };
 
 
@@ -50,9 +52,10 @@ struct PushConstants {
     float     viscosity_strength; // 56
     float     pressure_resistance;// 60
     float     local_density_cap;  // 64
+    float     temperature;        // 68  — thermal noise strength
 };
-// Size is 68 bytes
-static_assert(sizeof(PushConstants) == 68, "PushConstants layout mismatch");
+// Size is 72 bytes
+static_assert(sizeof(PushConstants) == 72, "PushConstants layout mismatch");
 
 struct SimConfig {
     uint32_t particle_count     = 22500;
@@ -73,11 +76,21 @@ struct SimConfig {
     float local_density_cap   = 1.0f;
 
     // Bond parameters
-    float    bond_spring_k        = 80.0f;
-    float    bond_rest_length     = 22.0f;  // pixels, approx repulsion_radius
-    float    bond_break_factor    = 2.2f;   // breaks when dist > rest * factor
-    float    bond_form_radius     = 28.0f;
-    uint32_t bond_update_interval = 2;      // update bonds every N frames
+    float    bond_spring_k            = 80.0f;
+    float    bond_rest_length         = 22.0f;  // pixels, approx repulsion_radius
+    float    bond_break_factor        = 2.2f;   // breaks when dist > rest * factor
+    float    bond_form_radius         = 28.0f;
+    uint32_t bond_update_interval     = 2;      // update bonds every N frames
+    float    bond_activation_energy   = 0.02f;  // min relative KE required to form a bond
+
+    // Thermal noise
+    float    temperature              = 0.05f;  // Brownian motion strength (0 = off)
+
+    // Periodic particle spawn
+    bool     spawn_enabled   = true;
+    float    spawn_interval  = 5.0f;   // seconds between spawn events
+    uint32_t spawn_min       = 100;
+    uint32_t spawn_max       = 500;
 
     glm::vec2 camera_origin      = { REGION_W / 2.0f, REGION_H / 2.0f };
     float     camera_zoom        = 1.0f;

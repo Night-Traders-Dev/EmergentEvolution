@@ -417,6 +417,42 @@ void ComputePipeline::read_current_state(VulkanContext& ctx,
     }
 }
 
+// ── Write particle state into both ping-pong buffers ─────────────────────────
+
+void ComputePipeline::write_particle_state(
+    VulkanContext& ctx,
+    const std::vector<glm::vec2>& positions,
+    const std::vector<glm::vec2>& velocities,
+    const std::vector<float>&     energies)
+{
+    if (pos_buffer_a_.handle == VK_NULL_HANDLE) return;
+
+    uint32_t     n        = static_cast<uint32_t>(positions.size());
+    VkDeviceSize pos_bytes = n * sizeof(glm::vec2);
+    VkDeviceSize nrg_bytes = n * sizeof(float);
+
+    // Write into BOTH ping-pong pairs so the data is present regardless of
+    // which buffer is "active" on the next tick.
+    void* mapped = nullptr;
+
+    auto write_buf = [&](const Buffer& buf, const void* data, VkDeviceSize sz) {
+        if (buf.handle == VK_NULL_HANDLE || sz == 0) return;
+        vkMapMemory(ctx.device, buf.memory, 0, sz, 0, &mapped);
+        std::memcpy(mapped, data, static_cast<size_t>(sz));
+        vkUnmapMemory(ctx.device, buf.memory);
+    };
+
+    write_buf(pos_buffer_a_, positions.data(),  pos_bytes);
+    write_buf(pos_buffer_b_, positions.data(),  pos_bytes);
+    write_buf(vel_buffer_a_, velocities.data(), pos_bytes);
+    write_buf(vel_buffer_b_, velocities.data(), pos_bytes);
+
+    if (!energies.empty()) {
+        write_buf(energy_buffer_a_, energies.data(), nrg_bytes);
+        write_buf(energy_buffer_b_, energies.data(), nrg_bytes);
+    }
+}
+
 // ── Record (called per frame while simulation is active) ──────────────────────
 
 void ComputePipeline::record(VkCommandBuffer cmd,
@@ -443,6 +479,10 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     pc.repulsion_radius   = cfg.repulsion_radius;
     pc.interaction_radius = cfg.interaction_radius;
     pc.density_limit      = cfg.density_limit;
+    pc.viscosity_strength   = cfg.viscosity_strength;
+    pc.pressure_resistance  = cfg.pressure_resistance;
+    pc.local_density_cap    = cfg.local_density_cap;
+    pc.temperature          = cfg.temperature;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,

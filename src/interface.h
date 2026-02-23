@@ -20,6 +20,14 @@ public:
     bool mouse_within     = false; // true when cursor is over the settings panel
     bool glow_enabled     = false;
 
+    // ── F3 Spawn Menu ─────────────────────────────────────────────────────────
+    bool spawn_menu_visible = false;
+    bool pending_spawn      = false;  // waiting for user to left-click in world
+    int  spawn_tab          = 0;      // 0=Atoms, 1=Groups, 2=Organisms
+    int  spawn_atom_type    = 1;      // 0=H..7=Cl (default C)
+    int  spawn_group_idx    = 0;      // which molecule template
+    int  spawn_organism_idx = -1;     // -1=predefined template, ≥0=live organism
+
     // ── Sliders (raw slider values, converted to actual params by render_imgui) ─
     float particle_count_slider  = 150.0f;  // particle_count = pow(value, 2)
     float particle_types_slider  = 5.0f;
@@ -55,6 +63,9 @@ private:
                              const SimConfig& cfg);
 
     void draw_archetype_panel(Particles& particles, const SimConfig& cfg);
+    void draw_spawn_menu(const OrganismManager& org_manager,
+                         const Particles& particles,
+                         const SimConfig& cfg);
 
     static ImVec4 force_to_color(float f);
 };
