@@ -10,24 +10,27 @@ static constexpr uint32_t REGION_W           = 2560;
 static constexpr uint32_t REGION_H           = 1440;
 static constexpr uint32_t MAX_PARTICLE_TYPES = 10;
 static constexpr uint32_t GROUP_DENSITY      = 256;
-static constexpr uint32_t GENOME_SIZE        = 4;   // floats per particle: photo_eff, hunt_str, repro_drive, social_bias
+static constexpr uint32_t GENOME_SIZE        = 4;   // floats per particle: charge, electronegativity, reactivity, bond_strength
+
+// ── Atom system ───────────────────────────────────────────────────────────────
+static constexpr uint32_t ATOM_COUNT             = 8;   // H C N O P S Na Cl
+static constexpr uint32_t MAX_BONDS_PER_PARTICLE = 5;   // P has valence 5
+
+// Max covalent bonds per atom type (indexed 0-7: H C N O P S Na Cl)
+static constexpr uint32_t ATOM_VALENCE[ATOM_COUNT] = {1, 4, 3, 2, 5, 2, 1, 1};
 
 enum ParticleBehavior : uint32_t {
-    BEHAVIOR_NONE         = 0,
-
-    // Existing
-    BEHAVIOR_REPEL        = 1u << 0,
-    BEHAVIOR_POLAR        = 1u << 1,
-    BEHAVIOR_HEAVY        = 1u << 2,
-    BEHAVIOR_CATALYST     = 1u << 3,
-    BEHAVIOR_VIRAL        = 1u << 4,
-
-    // New biological archetypes
-    BEHAVIOR_ADHESIVE     = 1u << 5,  // Strong cohesion to same-type or configured types
-    BEHAVIOR_SECRETOR     = 1u << 6,  // Emits a metabolic field (buff/debuff)
-    BEHAVIOR_PHOTOSYNTH   = 1u << 7,  // Gains energy in open/low-density areas
-    BEHAVIOR_PREDATOR     = 1u << 8,  // Moves toward nearby particles (chasing)
-    BEHAVIOR_REPRODUCTIVE = 1u << 9   // Divides when energy is high
+    BEHAVIOR_NONE      = 0,
+    BEHAVIOR_REPEL     = 1u << 0,  // same-charge ionic repulsion
+    BEHAVIOR_POLAR     = 1u << 1,  // dipole rotation (H, O)
+    BEHAVIOR_HEAVY     = 1u << 2,  // high-mass atom (P, S, Na, Cl)
+    BEHAVIOR_CATALYST  = 1u << 3,  // enzymatic / lowers activation energy (P)
+    BEHAVIOR_RADICAL   = 1u << 4,  // unpaired electron — aggressive bonding (was VIRAL)
+    BEHAVIOR_ADHESIVE  = 1u << 5,  // ionic pair adhesion (Na-Cl)
+    BEHAVIOR_DONOR     = 1u << 6,  // electron donor (was SECRETOR)
+    BEHAVIOR_ACCEPTOR  = 1u << 7,  // electron acceptor (was PHOTOSYNTH)
+    BEHAVIOR_IONIC_POS = 1u << 8,  // positive ion (Na) (was PREDATOR)
+    BEHAVIOR_IONIC_NEG = 1u << 9,  // negative ion (Cl) (was REPRODUCTIVE)
 };
 
 
@@ -64,10 +67,17 @@ struct SimConfig {
     float interaction_radius = 60.0f;
     float density_limit      = 60.0f;
 
-    // New Soft-Body Parameters
+    // Soft-Body Parameters
     float viscosity_strength  = 0.15f;
     float pressure_resistance = 25.0f;
     float local_density_cap   = 1.0f;
+
+    // Bond parameters
+    float    bond_spring_k        = 80.0f;
+    float    bond_rest_length     = 22.0f;  // pixels, approx repulsion_radius
+    float    bond_break_factor    = 2.2f;   // breaks when dist > rest * factor
+    float    bond_form_radius     = 28.0f;
+    uint32_t bond_update_interval = 2;      // update bonds every N frames
 
     glm::vec2 camera_origin      = { REGION_W / 2.0f, REGION_H / 2.0f };
     float     camera_zoom        = 1.0f;

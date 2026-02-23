@@ -13,6 +13,7 @@ Particles::Particles() {
 void Particles::gen_data(const SimConfig& cfg) {
     rng_.seed(cfg.generation_seed);
     for (float& s : trait_scales) s = 1.0f;
+    for (auto& f : structure_integrity) f = 1.0f;
     for (auto& f : behavior_flags) f = BEHAVIOR_NONE;
 
     if (cfg.reset_forces)
@@ -21,12 +22,95 @@ void Particles::gen_data(const SimConfig& cfg) {
     if (cfg.reset_colors)
         gen_default_colors();
 
-    // Always overlay the default ecosystem so births/evolution can begin immediately.
-    // Users can override individual types via the preset UI afterwards.
-    apply_default_ecosystem(cfg.particle_types);
+    // Set atom types, CPK colors, and chemistry force matrix
+    apply_atom_defaults(cfg.particle_types);
 
     gen_particles(cfg);
 }
+
+// ── CPK colors & chemistry force matrix ──────────────────────────────────────
+
+// CPK atom colors (standard chemistry palette), indexed 0-7: H C N O P S Na Cl
+static const glm::vec4 CPK_COLORS[ATOM_COUNT] = {
+    { 0.95f, 0.95f, 0.95f, 1.0f }, // H  — near-white
+    { 0.33f, 0.33f, 0.33f, 1.0f }, // C  — dark grey
+    { 0.18f, 0.31f, 0.97f, 1.0f }, // N  — blue
+    { 1.00f, 0.05f, 0.05f, 1.0f }, // O  — red
+    { 1.00f, 0.50f, 0.00f, 1.0f }, // P  — orange
+    { 1.00f, 1.00f, 0.19f, 1.0f }, // S  — yellow
+    { 0.67f, 0.36f, 0.95f, 1.0f }, // Na — violet
+    { 0.12f, 0.94f, 0.12f, 1.0f }, // Cl — green
+};
+
+// Electrochemistry force matrix seed:
+// forces[a][b] = how strongly type a is attracted to type b (+attraction, -repulsion)
+// Indexed: 0=H 1=C 2=N 3=O 4=P 5=S 6=Na 7=Cl
+static const float CHEM_FORCE[ATOM_COUNT][ATOM_COUNT] = {
+    //    H      C      N      O      P      S     Na     Cl
+    {  0.10f,  0.20f,  0.40f,  0.60f,  0.20f,  0.20f,  0.00f,  0.30f }, // H
+    {  0.20f,  0.50f,  0.20f,  0.10f,  0.30f,  0.30f, -0.20f, -0.20f }, // C
+    {  0.40f,  0.20f,  0.30f,  0.30f,  0.10f,  0.10f, -0.20f, -0.10f }, // N
+    {  0.60f,  0.10f,  0.30f,  0.20f, -0.10f,  0.00f, -0.30f, -0.10f }, // O
+    {  0.20f,  0.30f,  0.10f, -0.10f,  0.20f,  0.40f, -0.10f, -0.10f }, // P
+    {  0.20f,  0.30f,  0.10f,  0.00f,  0.40f,  0.40f, -0.10f, -0.10f }, // S
+    {  0.00f, -0.20f, -0.20f, -0.30f, -0.10f, -0.10f, -0.50f,  0.80f }, // Na
+    {  0.30f, -0.20f, -0.10f, -0.10f, -0.10f, -0.10f,  0.80f, -0.50f }, // Cl
+};
+
+void Particles::gen_default_colors() {
+    colors.resize(MAX_PARTICLE_TYPES, glm::vec4(1.0f));
+    for (uint32_t i = 0; i < MAX_PARTICLE_TYPES; ++i) {
+        if (i < ATOM_COUNT)
+            colors[i] = CPK_COLORS[i];
+    }
+}
+
+static void set_row(std::vector<float>& forces, uint32_t type, float self_val, float cross_val) {
+    for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b) {
+        forces[type + b * MAX_PARTICLE_TYPES] = (b == type) ? self_val : cross_val;
+    }
+}
+
+// ── apply_atom_defaults ───────────────────────────────────────────────────────
+// Sets CPK colors, chemistry behavior flags, and electrochemistry force matrix
+// for all active atom types. Called by gen_data() and the reset UI.
+
+void Particles::apply_atom_defaults(uint32_t active_types) {
+    uint32_t n = std::min(active_types, static_cast<uint32_t>(ATOM_COUNT));
+
+    // CPK colors
+    for (uint32_t t = 0; t < n; ++t)
+        colors[t] = CPK_COLORS[t];
+
+    // Chemistry behavior flags
+    //   H: POLAR (participates in hydrogen bonds)
+    //   C: NONE (neutral, nonpolar)
+    //   N: DONOR (electron lone pairs)
+    //   O: POLAR | ACCEPTOR (very electronegative)
+    //   P: HEAVY | CATALYST (enzymatic backbone)
+    //   S: HEAVY (disulfide bridges)
+    //   Na: HEAVY | IONIC_POS | ADHESIVE
+    //   Cl: HEAVY | IONIC_NEG | ADHESIVE
+    static const uint32_t ATOM_FLAGS[ATOM_COUNT] = {
+        BEHAVIOR_POLAR,
+        BEHAVIOR_NONE,
+        BEHAVIOR_DONOR,
+        BEHAVIOR_POLAR | BEHAVIOR_ACCEPTOR,
+        BEHAVIOR_HEAVY | BEHAVIOR_CATALYST,
+        BEHAVIOR_HEAVY,
+        BEHAVIOR_HEAVY | BEHAVIOR_IONIC_POS | BEHAVIOR_ADHESIVE,
+        BEHAVIOR_HEAVY | BEHAVIOR_IONIC_NEG | BEHAVIOR_ADHESIVE,
+    };
+    for (uint32_t t = 0; t < n; ++t)
+        behavior_flags[t] = ATOM_FLAGS[t];
+
+    // Electrochemistry force matrix
+    for (uint32_t a = 0; a < n; ++a)
+        for (uint32_t b = 0; b < n; ++b)
+            forces[a + b * MAX_PARTICLE_TYPES] = CHEM_FORCE[a][b];
+}
+
+// ── gen_particles ─────────────────────────────────────────────────────────────
 
 void Particles::gen_particles(const SimConfig& cfg) {
     positions.clear();
@@ -38,29 +122,53 @@ void Particles::gen_particles(const SimConfig& cfg) {
 
     if (cfg.particle_count == 2) {
         add_particle(glm::vec2(rw / 2.0f - 30.0f, rh / 2.0f),
-                     glm::vec2(0.0f),
-                     rand_range_i(0, (int)cfg.particle_types - 1));
+                     glm::vec2(0.0f), 0u);
         add_particle(glm::vec2(rw / 2.0f + 30.0f, rh / 2.0f),
-                     glm::vec2(0.0f),
-                     rand_range_i(0, (int)cfg.particle_types - 1));
-        // Init orientation arrays for 2-particle case
+                     glm::vec2(0.0f), 1u);
         angles.assign(2, 0.0f);
         angular_velocities.assign(2, 0.0f);
         energies.assign(2, 1.0f);
-        // Neutral genome for 2-particle case
-        genomes.assign(2 * GENOME_SIZE, 1.0f);
-        genomes[3] = 0.0f; genomes[7] = 0.0f; // zero social_bias
+        genomes.assign(2 * GENOME_SIZE, 0.0f);
+        // H defaults
+        genomes[0] =  0.3f; genomes[1] = 0.6f; genomes[2] = 1.0f; genomes[3] = 0.3f;
+        // C defaults
+        genomes[4] =  0.0f; genomes[5] = 0.6f; genomes[6] = 0.8f; genomes[7] = 0.5f;
         return;
     }
+
+    // ── Atom abundance ratios (cumulative) ───────────────────────────────────
+    // H=40%, C=25%, O=15%, N=10%, P=2%, S=2%, Na=3%, Cl=3%
+    // Renormalise to the number of active types so the user's type-count slider
+    // still determines which atoms appear.
+    static const float RAW_ABUNDANCE[ATOM_COUNT] = {
+        0.40f, // H
+        0.25f, // C
+        0.10f, // N
+        0.15f, // O
+        0.02f, // P
+        0.02f, // S
+        0.03f, // Na
+        0.03f, // Cl
+    };
+    uint32_t n_active = std::min(cfg.particle_types, static_cast<uint32_t>(ATOM_COUNT));
+    float cum[ATOM_COUNT + 1];
+    cum[0] = 0.0f;
+    float total = 0.0f;
+    for (uint32_t i = 0; i < n_active; ++i) total += RAW_ABUNDANCE[i];
+    for (uint32_t i = 0; i < n_active; ++i) cum[i+1] = cum[i] + RAW_ABUNDANCE[i] / total;
+    cum[n_active] = 1.0f; // clamp
 
     for (uint32_t i = 0; i < cfg.particle_count; ++i) {
         glm::vec2 pos(rand_range_f(0.0f, rw),
                       rand_range_f(0.0f, rh));
-        uint32_t t = static_cast<uint32_t>(rand_range_i(0, (int)cfg.particle_types - 1));
+        // Sample type from abundance distribution
+        float r = rand_range_f(0.0f, 1.0f);
+        uint32_t t = 0;
+        for (uint32_t k = 0; k < n_active; ++k)
+            if (r >= cum[k] && r < cum[k+1]) { t = k; break; }
         add_particle(pos, glm::vec2(0.0f), t);
     }
 
-    // Random initial orientations for all particles (used by POLAR types)
     angles.resize(cfg.particle_count);
     angular_velocities.assign(cfg.particle_count, 0.0f);
     for (uint32_t i = 0; i < cfg.particle_count; ++i)
@@ -68,23 +176,20 @@ void Particles::gen_particles(const SimConfig& cfg) {
 
     energies.assign(cfg.particle_count, 1.0f);
 
-    // Initialize per-particle genomes.
-    // Base traits per type index for the default ecosystem:
-    //   [0]=photo_eff  [1]=hunt_str  [2]=repro_drive  [3]=social_bias
-    // Type 0: dust (passive), Type 1: photosynth, Type 2: colonizer/reproductive,
-    // Type 3: predator, Type 4: catalyst, Types 5-9: balanced defaults
-    static const float base_photo_eff[MAX_PARTICLE_TYPES]   = {0.5f, 1.6f, 0.8f, 0.3f, 0.8f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
-    static const float base_hunt_str[MAX_PARTICLE_TYPES]    = {0.3f, 0.3f, 0.3f, 1.6f, 0.5f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
-    static const float base_repro[MAX_PARTICLE_TYPES]       = {0.5f, 0.8f, 1.6f, 0.8f, 0.8f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
-    static const float base_social[MAX_PARTICLE_TYPES]      = {0.0f, 0.2f, 0.4f,-0.2f, 0.3f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    // ── Chemistry genome defaults ─────────────────────────────────────────────
+    // Per atom: [0]=charge [1]=electronegativity [2]=reactivity [3]=bond_strength
+    static const float BASE_CHARGE[ATOM_COUNT]    = { 0.3f, 0.0f,-0.1f,-0.4f,-0.1f,-0.2f, 0.8f,-0.8f };
+    static const float BASE_ELECTRONEG[ATOM_COUNT] = { 0.6f, 0.6f, 0.9f, 1.6f, 0.8f, 0.9f, 0.3f, 1.1f };
+    static const float BASE_REACTIVITY[ATOM_COUNT] = { 1.0f, 0.8f, 1.2f, 1.4f, 1.0f, 1.1f, 0.6f, 0.8f };
+    static const float BASE_BOND_STR[ATOM_COUNT]   = { 0.3f, 0.5f, 0.4f, 0.4f, 0.6f, 0.5f, 0.2f, 0.2f };
 
     genomes.resize(cfg.particle_count * GENOME_SIZE);
     for (uint32_t i = 0; i < cfg.particle_count; ++i) {
-        uint32_t t = std::min(types[i], MAX_PARTICLE_TYPES - 1u);
-        genomes[i*4+0] = std::clamp(base_photo_eff[t] + rand_range_f(-0.1f, 0.1f), 0.2f, 2.0f);
-        genomes[i*4+1] = std::clamp(base_hunt_str[t]  + rand_range_f(-0.1f, 0.1f), 0.2f, 2.0f);
-        genomes[i*4+2] = std::clamp(base_repro[t]     + rand_range_f(-0.1f, 0.1f), 0.2f, 2.0f);
-        genomes[i*4+3] = std::clamp(base_social[t]    + rand_range_f(-0.05f, 0.05f), -0.5f, 0.5f);
+        uint32_t t = std::min(types[i], static_cast<uint32_t>(ATOM_COUNT - 1));
+        genomes[i*4+0] = std::clamp(BASE_CHARGE[t]    + rand_range_f(-0.05f, 0.05f), -1.0f, 1.0f);
+        genomes[i*4+1] = std::clamp(BASE_ELECTRONEG[t] + rand_range_f(-0.1f,  0.1f),  0.1f, 2.0f);
+        genomes[i*4+2] = std::clamp(BASE_REACTIVITY[t] + rand_range_f(-0.1f,  0.1f),  0.1f, 2.0f);
+        genomes[i*4+3] = std::clamp(BASE_BOND_STR[t]   + rand_range_f(-0.05f, 0.05f), -0.5f, 0.5f);
     }
 }
 
@@ -104,22 +209,6 @@ void Particles::gen_empty_force_matrix() {
     forces.assign(MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES, 0.0f);
 }
 
-void Particles::gen_default_colors() {
-    colors = {
-        glm::vec4(0.0f, 1.0f, 1.0f, 1.0f),  //  1 cyan
-        glm::vec4(1.0f, 0.0f, 0.0f, 1.0f),  //  2 red
-        glm::vec4(0.0f, 1.0f, 0.0f, 1.0f),  //  3 green
-        glm::vec4(1.0f, 0.0f, 1.0f, 1.0f),  //  4 magenta
-        glm::vec4(1.0f, 1.0f, 0.0f, 1.0f),  //  5 yellow
-        glm::vec4(0.0f, 0.0f, 1.0f, 1.0f),  //  6 blue
-        glm::vec4(1.0f, 0.5f, 0.0f, 1.0f),  //  7 orange
-        glm::vec4(0.5f, 0.0f, 1.0f, 1.0f),  //  8 violet
-        glm::vec4(0.0f, 1.0f, 0.5f, 1.0f),  //  9 spring green
-        glm::vec4(1.0f, 1.0f, 1.0f, 1.0f),  // 10 white
-    };
-    colors.resize(MAX_PARTICLE_TYPES, glm::vec4(1.0f));
-}
-
 int Particles::rand_range_i(int lo, int hi) {
     std::uniform_int_distribution<int> dist(lo, hi);
     return dist(rng_);
@@ -130,39 +219,47 @@ float Particles::rand_range_f(float lo, float hi) {
     return dist(rng_);
 }
 
-// ── Archetype presets ─────────────────────────────────────────────────────────
-// Each preset clears then sets behavior_flags for `type` and seeds the
-// corresponding row of the force matrix.  The UI can still hand-edit forces.
+// ── apply_preset_atom ─────────────────────────────────────────────────────────
+// Sets the flags and force row for one type to match its atom chemistry.
 
-static void set_row(std::vector<float>& forces, uint32_t type, float self_val, float cross_val) {
-    for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b) {
-        uint32_t fi = type + b * MAX_PARTICLE_TYPES;
-        forces[fi]  = (b == type) ? self_val : cross_val;
-    }
+void Particles::apply_preset_atom(uint32_t type, uint32_t active_types) {
+    if (type >= MAX_PARTICLE_TYPES || type >= ATOM_COUNT) return;
+    colors[type] = CPK_COLORS[type];
+    static const uint32_t ATOM_FLAGS[ATOM_COUNT] = {
+        BEHAVIOR_POLAR,
+        BEHAVIOR_NONE,
+        BEHAVIOR_DONOR,
+        BEHAVIOR_POLAR | BEHAVIOR_ACCEPTOR,
+        BEHAVIOR_HEAVY | BEHAVIOR_CATALYST,
+        BEHAVIOR_HEAVY,
+        BEHAVIOR_HEAVY | BEHAVIOR_IONIC_POS | BEHAVIOR_ADHESIVE,
+        BEHAVIOR_HEAVY | BEHAVIOR_IONIC_NEG | BEHAVIOR_ADHESIVE,
+    };
+    behavior_flags[type] = ATOM_FLAGS[type];
+    uint32_t n = std::min(active_types, static_cast<uint32_t>(ATOM_COUNT));
+    for (uint32_t b = 0; b < n; ++b)
+        forces[type + b * MAX_PARTICLE_TYPES] = CHEM_FORCE[type][b];
+    (void)active_types;
 }
+
+// ── Legacy/convenience presets (map to nearest chemistry analog) ─────────────
 
 void Particles::apply_preset_default(uint32_t type) {
     if (type >= MAX_PARTICLE_TYPES) return;
     behavior_flags[type] = BEHAVIOR_NONE;
-    // Leave force matrix as-is (user-controlled)
 }
 
 void Particles::apply_preset_repeller(uint32_t type) {
     if (type >= MAX_PARTICLE_TYPES) return;
     behavior_flags[type] = BEHAVIOR_REPEL;
-    set_row(forces, type, -0.8f, -0.8f);
+    set_row(forces, type, -0.5f, -0.5f);
 }
 
 void Particles::apply_preset_polar(uint32_t type, uint32_t active_types) {
     if (type >= MAX_PARTICLE_TYPES) return;
     behavior_flags[type] = BEHAVIOR_POLAR;
-    // Strong self-attraction to form chains; random-ish cross forces
-    set_row(forces, type, 0.4f, 0.0f);
-    // Give slight positive force toward all active types to mix into the soup
-    for (uint32_t b = 0; b < active_types; ++b) {
-        if (b == type) continue;
-        forces[type + b * MAX_PARTICLE_TYPES] = 0.15f;
-    }
+    set_row(forces, type, 0.4f, 0.15f);
+    (void)active_types;
 }
 
 void Particles::apply_preset_heavy(uint32_t type) {
@@ -177,107 +274,26 @@ void Particles::apply_preset_catalyst(uint32_t type) {
     set_row(forces, type, 0.1f, 0.2f);
 }
 
-void Particles::apply_preset_membrane(uint32_t type) {
-    if (type >= MAX_PARTICLE_TYPES) return;
-    behavior_flags[type] = BEHAVIOR_NONE;  // pure force-matrix behaviour
-    set_row(forces, type, 0.7f, -0.4f);
-}
-
-void Particles::apply_preset_viral(uint32_t type, uint32_t active_types) {
-    if (type >= MAX_PARTICLE_TYPES) return;
-    behavior_flags[type] = BEHAVIOR_VIRAL;
-    // Strong attraction toward all types to get close enough to infect
-    set_row(forces, type, 0.6f, 0.6f);
-    (void)active_types;  // unused, kept for API symmetry
-}
-
-// ── New archetype presets ─────────────────────────────────────────────────────
-
 void Particles::apply_preset_adhesive(uint32_t type) {
     if (type >= MAX_PARTICLE_TYPES) return;
     behavior_flags[type] = BEHAVIOR_ADHESIVE;
-    // Strong self-cohesion, mild attraction to others
     set_row(forces, type, 0.8f, 0.2f);
 }
 
-void Particles::apply_preset_secretor(uint32_t type) {
+void Particles::apply_preset_radical(uint32_t type) {
     if (type >= MAX_PARTICLE_TYPES) return;
-    behavior_flags[type] = BEHAVIOR_SECRETOR;
-    // Mild self-attraction, neutral cross; main effect is shader "halo" force
+    behavior_flags[type] = BEHAVIOR_RADICAL;
+    set_row(forces, type, 0.6f, 0.6f);
+}
+
+void Particles::apply_preset_donor(uint32_t type) {
+    if (type >= MAX_PARTICLE_TYPES) return;
+    behavior_flags[type] = BEHAVIOR_DONOR;
     set_row(forces, type, 0.2f, 0.0f);
 }
 
-void Particles::apply_preset_photosynth(uint32_t type) {
+void Particles::apply_preset_acceptor(uint32_t type) {
     if (type >= MAX_PARTICLE_TYPES) return;
-    behavior_flags[type] = BEHAVIOR_PHOTOSYNTH;
-    // Gentle cohesion; main effect is shader "light" drift in low density
+    behavior_flags[type] = BEHAVIOR_ACCEPTOR;
     set_row(forces, type, 0.3f, 0.1f);
-}
-
-void Particles::apply_preset_predator(uint32_t type, uint32_t active_types) {
-    if (type >= MAX_PARTICLE_TYPES) return;
-    behavior_flags[type] = BEHAVIOR_PREDATOR;
-    // Repel self, attract others strongly
-    set_row(forces, type, -0.2f, 0.6f);
-    (void)active_types;
-}
-
-void Particles::apply_preset_reproductive(uint32_t type) {
-    if (type >= MAX_PARTICLE_TYPES) return;
-    behavior_flags[type] = BEHAVIOR_REPRODUCTIVE;
-    // Neutral-ish forces; reproduction is signaled via velocity in the shader
-    set_row(forces, type, 0.1f, 0.1f);
-}
-
-// ── Default ecosystem ─────────────────────────────────────────────────────────
-// Assigns viable archetypes + force rows so the ecological loop fires immediately.
-// Overwrites behavior flags and seeds the most critical force-matrix entries;
-// the rest of the matrix (from gen_random_force_matrix) is left intact.
-//
-// Food web:
-//   Type 0  Dust          — passive resource (energy recovers in shader)
-//   Type 1  Photosynthesizer — primary producer; thrives in low-density space
-//   Type 2  Colonizer     — adhesive colony builder; reproduces into dust
-//   Type 3  Predator      — hunts types 1 & 2 for energy
-//   Type 4  Catalyst      — boosts metabolism of nearby particles
-//
-void Particles::apply_default_ecosystem(uint32_t active_types) {
-    if (active_types < 2) return;
-
-    // Type 0: Dust — no special flags; shader gives it energy recovery already
-    behavior_flags[0] = BEHAVIOR_NONE;
-
-    // Type 1: Photosynthesizer
-    if (active_types > 1) {
-        behavior_flags[1] = BEHAVIOR_PHOTOSYNTH | BEHAVIOR_REPRODUCTIVE;
-        set_row(forces, 1, 0.35f, 0.15f);
-        forces[1 + 0 * MAX_PARTICLE_TYPES] = 0.5f;   // attracted to dust/food
-        if (active_types > 3)
-            forces[1 + 3 * MAX_PARTICLE_TYPES] = -0.5f; // flee predators
-    }
-
-    // Type 2: Colonizer — adhesive colony + reproduces into nearby recovered dust
-    if (active_types > 2) {
-        behavior_flags[2] = BEHAVIOR_ADHESIVE | BEHAVIOR_PREDATOR;
-        set_row(forces, 2, 0.75f, 0.25f);
-        forces[2 + 0 * MAX_PARTICLE_TYPES] = 0.65f;  // strongly toward dust (birth target)
-        if (active_types > 1)
-            forces[2 + 1 * MAX_PARTICLE_TYPES] = 0.45f; // symbiosis with photosynth
-        if (active_types > 3)
-            forces[2 + 3 * MAX_PARTICLE_TYPES] = -0.45f; // flee predators
-    }
-
-    // Type 3: Predator — hunts non-self types, avoids its own kind
-    if (active_types > 3) {
-        behavior_flags[3] = BEHAVIOR_PREDATOR | BEHAVIOR_REPRODUCTIVE;
-        set_row(forces, 3, -0.35f, 0.65f);
-        forces[3 + 0 * MAX_PARTICLE_TYPES] = 0.0f;   // ignore dust
-        forces[3 + 3 * MAX_PARTICLE_TYPES] = -0.4f;  // territorial — avoid own kind
-    }
-
-    // Type 4: Catalyst — gentle all-around cohesion, boosts everyone's metabolism
-    if (active_types > 4) {
-        behavior_flags[4] = BEHAVIOR_CATALYST;
-        set_row(forces, 4, 0.2f, 0.2f);
-    }
 }

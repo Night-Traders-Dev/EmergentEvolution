@@ -41,6 +41,7 @@ ImVec4 Interface::force_to_color(float f) {
 void Interface::render_imgui(SimConfig&       cfg,
                               Particles&       particles,
                               OrganismManager& org_manager,
+                              BondManager&     bond_manager,
                               bool&            request_reset)
 {
     request_reset = false;
@@ -125,6 +126,13 @@ void Interface::render_imgui(SimConfig&       cfg,
     ImGui::Text("Particle Radius:  %d", static_cast<int>(particle_radius_slider));
     cfg.radius = particle_radius_slider;
 
+    // ── Bond parameters ───────────────────────────────────────────────────────
+    ImGui::SeparatorText("Chemical Bonds");
+    ImGui::SliderFloat("Bond Form Radius",   &cfg.bond_form_radius,   5.0f,  80.0f, "%.1f");
+    ImGui::SliderFloat("Bond Rest Length",   &cfg.bond_rest_length,   5.0f,  60.0f, "%.1f");
+    ImGui::SliderFloat("Bond Break Factor",  &cfg.bond_break_factor,  1.1f,   4.0f, "%.2f");
+    ImGui::SliderFloat("Bond Spring k",      &cfg.bond_spring_k,      10.0f, 200.0f, "%.0f");
+
     // ── Glow ──────────────────────────────────────────────────────────────────
     ImGui::Checkbox("Glow Enabled (visual hint only)", &glow_enabled);
 
@@ -137,7 +145,7 @@ void Interface::render_imgui(SimConfig&       cfg,
     draw_archetype_panel(particles, cfg);
 
     // ── Organism panel ────────────────────────────────────────────────────────
-    draw_organism_panel(org_manager, particles, cfg);
+    draw_organism_panel(org_manager, bond_manager, particles, cfg);
 
     ImGui::Separator();
     ImGui::TextDisabled("F1: toggle UI  |  F2: reset  |  Space: pause");
@@ -150,6 +158,9 @@ void Interface::render_imgui(SimConfig&       cfg,
 }
 
 // ── Particle grid ─────────────────────────────────────────────────────────────
+
+// Element symbol labels (indexed 0-7: H C N O P S Na Cl)
+static const char* ATOM_SYMBOLS[8] = { "H", "C", "N", "O", "P", "S", "Na", "Cl" };
 
 void Interface::draw_particle_grid(SimConfig& cfg, Particles& particles) {
     uint32_t pt = cfg.particle_types;
@@ -177,11 +188,23 @@ void Interface::draw_particle_grid(SimConfig& cfg, Particles& particles) {
                 glm::vec4& c      = particles.colors[type_idx];
                 float col_arr[4]  = { c.r, c.g, c.b, c.a };
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+                ImVec2 btn_pos = ImGui::GetCursorScreenPos();
                 if (ImGui::ColorButton("##col", ImVec4(c.r, c.g, c.b, c.a),
                                        ImGuiColorEditFlags_NoTooltip,
                                        ImVec2(cell_size, cell_size)))
                 {
                     // clicking opens the picker inline below
+                }
+                // Draw element symbol overlay
+                if (type_idx < ATOM_COUNT) {
+                    const char* sym = ATOM_SYMBOLS[type_idx];
+                    // Choose contrasting text color (dark on light, light on dark)
+                    float lum = c.r * 0.299f + c.g * 0.587f + c.b * 0.114f;
+                    ImU32 txt_col = (lum > 0.5f) ? IM_COL32(0,0,0,200) : IM_COL32(255,255,255,200);
+                    ImVec2 txt_size = ImGui::CalcTextSize(sym);
+                    ImVec2 txt_pos = ImVec2(btn_pos.x + (cell_size - txt_size.x) * 0.5f,
+                                            btn_pos.y + (cell_size - txt_size.y) * 0.5f);
+                    ImGui::GetWindowDrawList()->AddText(txt_pos, txt_col, sym);
                 }
                 if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(0)) {
                     ImGui::OpenPopup("color_pick");
@@ -198,13 +221,24 @@ void Interface::draw_particle_grid(SimConfig& cfg, Particles& particles) {
                 ImGui::PopStyleVar();
             }
             else if (col == 0) {
-                // Left column: row color swatch
+                // Left column: row color swatch with element symbol
                 uint32_t type_idx = row - 1;
                 glm::vec4& c      = particles.colors[type_idx];
+                ImVec2 btn_pos = ImGui::GetCursorScreenPos();
                 ImGui::ColorButton("##row_col",
                     ImVec4(c.r, c.g, c.b, c.a),
                     ImGuiColorEditFlags_NoTooltip,
                     ImVec2(cell_size, cell_size));
+                // Draw element symbol overlay
+                if (type_idx < ATOM_COUNT) {
+                    const char* sym = ATOM_SYMBOLS[type_idx];
+                    float lum = c.r * 0.299f + c.g * 0.587f + c.b * 0.114f;
+                    ImU32 txt_col = (lum > 0.5f) ? IM_COL32(0,0,0,200) : IM_COL32(255,255,255,200);
+                    ImVec2 txt_size = ImGui::CalcTextSize(sym);
+                    ImVec2 txt_pos = ImVec2(btn_pos.x + (cell_size - txt_size.x) * 0.5f,
+                                            btn_pos.y + (cell_size - txt_size.y) * 0.5f);
+                    ImGui::GetWindowDrawList()->AddText(txt_pos, txt_col, sym);
+                }
             }
             else {
                 // Force matrix cell: type_a = (col-1), type_b = (row-1)
@@ -262,26 +296,23 @@ void Interface::draw_archetype_panel(Particles& particles, const SimConfig& cfg)
         "Polar",
         "Heavy",
         "Catalyst",
-        "Membrane",
-        "Viral",
         "Adhesive",
-        "Secretor",
-        "Photosynth",
-        "Predator",
-        "Reproductive"
+        "Radical",
+        "Donor",
+        "Acceptor"
     };
 
     static const char* flag_names[] = {
-        "REPEL",        // bit 0
-        "POLAR",        // bit 1
-        "HEAVY",        // bit 2
-        "CATALYST",     // bit 3
-        "VIRAL",        // bit 4
-        "ADHESIVE",     // bit 5
-        "SECRETOR",     // bit 6
-        "PHOTOSYNTH",   // bit 7
-        "PREDATOR",     // bit 8
-        "REPRODUCTIVE"  // bit 9
+        "REPEL",    // bit 0
+        "POLAR",    // bit 1
+        "HEAVY",    // bit 2
+        "CATALYST", // bit 3
+        "RADICAL",  // bit 4
+        "ADHESIVE", // bit 5
+        "DONOR",    // bit 6
+        "ACCEPTOR", // bit 7
+        "ION+",     // bit 8
+        "ION-"      // bit 9
     };
 
     uint32_t pt = cfg.particle_types;
@@ -303,18 +334,15 @@ void Interface::draw_archetype_panel(Particles& particles, const SimConfig& cfg)
         ImGui::SetNextItemWidth(130.0f);
         if (ImGui::Combo("##arch", &archetype_selection[t], archetype_names, IM_ARRAYSIZE(archetype_names))) {
             switch (archetype_selection[t]) {
-            case 0:  particles.apply_preset_default(t);              break;
-            case 1:  particles.apply_preset_repeller(t);             break;
-            case 2:  particles.apply_preset_polar(t, pt);            break;
-            case 3:  particles.apply_preset_heavy(t);                break;
-            case 4:  particles.apply_preset_catalyst(t);             break;
-            case 5:  particles.apply_preset_membrane(t);             break;
-            case 6:  particles.apply_preset_viral(t, pt);            break;
-            case 7:  particles.apply_preset_adhesive(t);             break;
-            case 8:  particles.apply_preset_secretor(t);             break;
-            case 9:  particles.apply_preset_photosynth(t);           break;
-            case 10: particles.apply_preset_predator(t, pt);         break;
-            case 11: particles.apply_preset_reproductive(t);         break;
+            case 0:  particles.apply_preset_default(t);       break;
+            case 1:  particles.apply_preset_repeller(t);      break;
+            case 2:  particles.apply_preset_polar(t, pt);     break;
+            case 3:  particles.apply_preset_heavy(t);         break;
+            case 4:  particles.apply_preset_catalyst(t);      break;
+            case 5:  particles.apply_preset_adhesive(t);      break;
+            case 6:  particles.apply_preset_radical(t);       break;
+            case 7:  particles.apply_preset_donor(t);         break;
+            case 8:  particles.apply_preset_acceptor(t);      break;
             }
         }
 
@@ -340,6 +368,7 @@ void Interface::draw_archetype_panel(Particles& particles, const SimConfig& cfg)
 // ── Organism panel ────────────────────────────────────────────────────────────
 
 void Interface::draw_organism_panel(OrganismManager& org_manager,
+                                    const BondManager& bond_manager,
                                     const Particles& particles,
                                     const SimConfig& cfg)
 {
@@ -463,17 +492,43 @@ void Interface::draw_organism_panel(OrganismManager& org_manager,
     uint32_t show = std::min(org_count, 8u);
     ImGui::TextDisabled("Top organisms (by size):");
 
-    if (ImGui::BeginTable("orgtable", 7,
+    // MoleculeClass label/color helpers
+    auto mol_label = [](MoleculeClass m) -> const char* {
+        switch (m) {
+        case MoleculeClass::WATER:      return "H2O ";
+        case MoleculeClass::LIPID:      return "LIPD";
+        case MoleculeClass::AMINO_ACID: return "AACD";
+        case MoleculeClass::NUCLEOTIDE: return "NUCL";
+        case MoleculeClass::RADICAL:    return "RAD!";
+        case MoleculeClass::POLYMER:    return "POLY";
+        default:                        return "INRG";
+        }
+    };
+    auto mol_color = [](MoleculeClass m) -> ImVec4 {
+        switch (m) {
+        case MoleculeClass::WATER:      return ImVec4(0.4f, 0.7f, 1.0f, 1.0f);  // light blue
+        case MoleculeClass::LIPID:      return ImVec4(1.0f, 0.9f, 0.2f, 1.0f);  // yellow
+        case MoleculeClass::AMINO_ACID: return ImVec4(0.3f, 1.0f, 0.5f, 1.0f);  // green
+        case MoleculeClass::NUCLEOTIDE: return ImVec4(0.7f, 0.3f, 1.0f, 1.0f);  // violet
+        case MoleculeClass::RADICAL:    return ImVec4(1.0f, 0.3f, 0.3f, 1.0f);  // red
+        case MoleculeClass::POLYMER:    return ImVec4(1.0f, 0.6f, 0.2f, 1.0f);  // orange
+        default:                        return ImVec4(0.6f, 0.6f, 0.6f, 1.0f);  // grey
+        }
+    };
+
+    if (ImGui::BeginTable("orgtable", 9,
                           ImGuiTableFlags_RowBg |
                           ImGuiTableFlags_BordersInnerH))
     {
-        ImGui::TableSetupColumn("Type",  ImGuiTableColumnFlags_WidthFixed, 28.0f);
-        ImGui::TableSetupColumn("Size",  ImGuiTableColumnFlags_WidthFixed, 40.0f);
-        ImGui::TableSetupColumn("Speed", ImGuiTableColumnFlags_WidthFixed, 44.0f);
-        ImGui::TableSetupColumn("Gen",   ImGuiTableColumnFlags_WidthFixed, 30.0f);
-        ImGui::TableSetupColumn("Kills", ImGuiTableColumnFlags_WidthFixed, 36.0f);
-        ImGui::TableSetupColumn("Divs",  ImGuiTableColumnFlags_WidthFixed, 36.0f);
-        ImGui::TableSetupColumn("Energy",ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("",     ImGuiTableColumnFlags_WidthFixed, 18.0f);  // type swatch
+        ImGui::TableSetupColumn("Mol",  ImGuiTableColumnFlags_WidthFixed, 36.0f);
+        ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 32.0f);
+        ImGui::TableSetupColumn("Bnds", ImGuiTableColumnFlags_WidthFixed, 32.0f);
+        ImGui::TableSetupColumn("Spd",  ImGuiTableColumnFlags_WidthFixed, 36.0f);
+        ImGui::TableSetupColumn("Gen",  ImGuiTableColumnFlags_WidthFixed, 26.0f);
+        ImGui::TableSetupColumn("Kll",  ImGuiTableColumnFlags_WidthFixed, 26.0f);
+        ImGui::TableSetupColumn("Div",  ImGuiTableColumnFlags_WidthFixed, 26.0f);
+        ImGui::TableSetupColumn("Energy", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableHeadersRow();
 
         for (uint32_t i = 0; i < show; ++i) {
@@ -485,35 +540,50 @@ void Interface::draw_organism_panel(OrganismManager& org_manager,
 
             ImGui::TableNextRow();
 
-            // Type color
+            // Type color swatch
             ImGui::TableSetColumnIndex(0);
             ImGui::ColorButton("##tc", ImVec4(c.r, c.g, c.b, 1.0f),
-                               ImGuiColorEditFlags_NoTooltip, ImVec2(16, 14));
+                               ImGuiColorEditFlags_NoTooltip, ImVec2(14, 12));
+
+            // Molecule class label
+            ImGui::TableSetColumnIndex(1);
+            ImGui::PushStyleColor(ImGuiCol_Text, mol_color(o.traits.mol_class));
+            ImGui::TextUnformatted(mol_label(o.traits.mol_class));
+            ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Charge:%.2f  Electroneg:%.2f\nReactivity:%.2f  BondStr:%.2f",
+                    o.traits.avg_charge, o.traits.avg_electroneg,
+                    o.traits.avg_reactivity, o.traits.avg_bond_strength);
+            }
 
             // Size
-            ImGui::TableSetColumnIndex(1);
+            ImGui::TableSetColumnIndex(2);
             ImGui::Text("%u", o.traits.size);
 
+            // Bond count
+            ImGui::TableSetColumnIndex(3);
+            ImGui::Text("%u", o.traits.bond_count);
+
             // Speed
-            ImGui::TableSetColumnIndex(2);
+            ImGui::TableSetColumnIndex(4);
             ImGui::Text("%.1f", o.traits.avg_speed);
 
             // Generation
-            ImGui::TableSetColumnIndex(3);
+            ImGui::TableSetColumnIndex(5);
             ImGui::Text("%u", o.traits.generation);
 
             // Kills
-            ImGui::TableSetColumnIndex(4);
+            ImGui::TableSetColumnIndex(6);
             ImGui::Text("%u", o.traits.kills);
 
             // Divisions
-            ImGui::TableSetColumnIndex(5);
+            ImGui::TableSetColumnIndex(7);
             ImGui::Text("%u", o.traits.divisions);
 
             // Energy bar
-            ImGui::TableSetColumnIndex(6);
+            ImGui::TableSetColumnIndex(8);
             float e = o.traits.energy;
-            ImVec4 ecolor = ImVec4(1.0f - e, e, 0.0f, 1.0f); // red→green
+            ImVec4 ecolor = ImVec4(1.0f - e, e, 0.0f, 1.0f);
             ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ecolor);
             ImGui::ProgressBar(e, ImVec2(-1.0f, 12.0f), "");
             ImGui::PopStyleColor();

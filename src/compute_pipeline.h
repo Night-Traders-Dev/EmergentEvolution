@@ -78,6 +78,10 @@ private:
     // Per-particle genome (binding 15, readonly, single buffer — CPU-managed)
     Buffer genome_buffer_{};
 
+    // Bond partners (binding 16, readonly, CPU-managed by BondManager)
+    // Layout: bond_partners[i * MAX_BONDS_PER_PARTICLE + slot] = partner index
+    Buffer bond_buffer_{};
+
     // Descriptor sets: set_a uses (a→in, b→out), set_b uses (b→in, a→out)
     VkDescriptorSet desc_set_a_ = VK_NULL_HANDLE;
     VkDescriptorSet desc_set_b_ = VK_NULL_HANDLE;

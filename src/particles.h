@@ -24,31 +24,33 @@ public:
     std::vector<float> angles;
     std::vector<float> angular_velocities;
     std::vector<float> energies;   // per-particle, 0.0–1.0
-    std::vector<float> genomes;    // GENOME_SIZE floats per particle: photo_eff, hunt_str, repro_drive, social_bias
+    std::vector<float> genomes;    // GENOME_SIZE floats per particle: charge, electronegativity, reactivity, bond_strength
+
+    // Bond data: pointer into BondManager.bond_partners — set by Simulation after BondManager::update()
+    const uint32_t* bond_partners_ptr   = nullptr;
+    uint32_t        bond_partners_count = 0;
 
     Particles();
     void gen_data(const SimConfig& cfg);
 
-    // Archetype presets: set behavior_flags AND seed the force-matrix row for `type`.
-    // Safe to call at any time; changes are picked up by upload_dynamic_data next frame.
+    // Sets CPK colors, chemistry behavior flags, and electrochemistry force matrix
+    // for all active atom types (H C N O P S Na Cl).
+    // Called automatically from gen_data(); can also be called from the UI.
+    void apply_atom_defaults(uint32_t active_types);
+
+    // Individual atom preset: set flags + seed force row for one type index.
+    void apply_preset_atom(uint32_t type, uint32_t active_types);
+
+    // Legacy presets kept for UI compatibility (map to nearest atom behavior)
     void apply_preset_default(uint32_t type);
     void apply_preset_repeller(uint32_t type);
     void apply_preset_polar(uint32_t type, uint32_t active_types);
     void apply_preset_heavy(uint32_t type);
     void apply_preset_catalyst(uint32_t type);
-    void apply_preset_membrane(uint32_t type);
-    void apply_preset_viral(uint32_t type, uint32_t active_types);
-
-    // New archetype presets
     void apply_preset_adhesive(uint32_t type);
-    void apply_preset_secretor(uint32_t type);
-    void apply_preset_photosynth(uint32_t type);
-    void apply_preset_predator(uint32_t type, uint32_t active_types);
-    void apply_preset_reproductive(uint32_t type);
-
-    // Applies a viable default food-web so emergent behaviour can start immediately.
-    // Called automatically from gen_data(); can also be called from the UI.
-    void apply_default_ecosystem(uint32_t active_types);
+    void apply_preset_radical(uint32_t type);
+    void apply_preset_donor(uint32_t type);
+    void apply_preset_acceptor(uint32_t type);
 
 private:
     std::mt19937 rng_;

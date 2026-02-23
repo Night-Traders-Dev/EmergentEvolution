@@ -52,16 +52,16 @@ void ComputePipeline::destroy(VulkanContext& ctx) {
 // Bindings 9-12: polar angle/angular-velocity (double-buffered)
 
 void ComputePipeline::create_descriptor_set_layout(VkDevice device) {
-    std::array<VkDescriptorSetLayoutBinding, 16> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 17> bindings{};
 
-    // Bindings 0-6 and 8-15: storage buffers
+    // Bindings 0-6 and 8-16: storage buffers
     for (uint32_t i = 0; i < 7; ++i) {
         bindings[i].binding         = i;
         bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[i].descriptorCount = 1;
         bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
     }
-    for (uint32_t i = 8; i < 16; ++i) {
+    for (uint32_t i = 8; i < 17; ++i) {
         bindings[i].binding         = i;
         bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[i].descriptorCount = 1;
@@ -128,10 +128,10 @@ void ComputePipeline::create_compute_pipeline(VulkanContext& ctx,
 // ── Descriptor pool ───────────────────────────────────────────────────────────
 
 void ComputePipeline::create_descriptor_pool(VkDevice device) {
-    // 2 sets × 15 storage buffers (7 orig + 1 behavior + 4 angle/avel + 2 energy + 1 genome) = 30
+    // 2 sets × 16 storage buffers (7 orig + 1 behavior + 4 angle/avel + 2 energy + 1 genome + 1 bond) = 32
     // 2 sets × 1 storage image = 2
     std::array<VkDescriptorPoolSize, 2> pool_sizes{};
-    pool_sizes[0] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 30 };
+    pool_sizes[0] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 32 };
     pool_sizes[1] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,   2 };
 
     VkDescriptorPoolCreateInfo ci{};
@@ -196,6 +196,15 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
     genome_buffer_ = ctx.create_buffer(genome_size, BUF_USAGE, MEM_PROPS);
     ctx.update_buffer(genome_buffer_, particles.genomes.data(), genome_size);
 
+    // Bond buffer: particle_count × MAX_BONDS_PER_PARTICLE uint32_t, all EMPTY
+    VkDeviceSize bond_size = static_cast<VkDeviceSize>(particles.positions.size())
+                             * MAX_BONDS_PER_PARTICLE * sizeof(uint32_t);
+    bond_buffer_ = ctx.create_buffer(bond_size, BUF_USAGE, MEM_PROPS);
+    {
+        std::vector<uint32_t> empty_bonds(particles.positions.size() * MAX_BONDS_PER_PARTICLE, 0xFFFFFFFFu);
+        ctx.update_buffer(bond_buffer_, empty_bonds.data(), bond_size);
+    }
+
     allocate_and_write_descriptor_sets(ctx);
 
     tick = 0;
@@ -226,6 +235,7 @@ void ComputePipeline::clear_buffers(VulkanContext& ctx) {
     ctx.destroy_buffer(energy_buffer_a_);
     ctx.destroy_buffer(energy_buffer_b_);
     ctx.destroy_buffer(genome_buffer_);
+    ctx.destroy_buffer(bond_buffer_);
 }
 
 // ── Write descriptor sets ─────────────────────────────────────────────────────
@@ -280,8 +290,8 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     std::vector<VkWriteDescriptorSet>    writes;
     std::vector<VkDescriptorBufferInfo>  buf_infos;
     std::vector<VkDescriptorImageInfo>   img_infos;
-    writes.reserve(32);
-    buf_infos.reserve(30);
+    writes.reserve(34);
+    buf_infos.reserve(32);
     img_infos.reserve(2);
 
     auto pos_sz  = pos_buffer_a_.size;
@@ -293,6 +303,7 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     auto ang_sz  = angle_buffer_a_.size;
     auto nrg_sz  = energy_buffer_a_.size;
     auto gnm_sz  = genome_buffer_.size;
+    auto bnd_sz  = bond_buffer_.size;
 
     // ── Set A: in=a, out=b ────────────────────────────────────────────────────
     write_storage_buffer(writes, buf_infos, desc_set_a_,  0, pos_buffer_a_.handle,         pos_sz);
@@ -311,6 +322,7 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     write_storage_buffer(writes, buf_infos, desc_set_a_, 13, energy_buffer_a_.handle,      nrg_sz);
     write_storage_buffer(writes, buf_infos, desc_set_a_, 14, energy_buffer_b_.handle,      nrg_sz);
     write_storage_buffer(writes, buf_infos, desc_set_a_, 15, genome_buffer_.handle,        gnm_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_, 16, bond_buffer_.handle,          bnd_sz);
 
     // ── Set B: in=b, out=a ────────────────────────────────────────────────────
     write_storage_buffer(writes, buf_infos, desc_set_b_,  0, pos_buffer_b_.handle,         pos_sz);
@@ -329,6 +341,7 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     write_storage_buffer(writes, buf_infos, desc_set_b_, 13, energy_buffer_b_.handle,      nrg_sz);
     write_storage_buffer(writes, buf_infos, desc_set_b_, 14, energy_buffer_a_.handle,      nrg_sz);
     write_storage_buffer(writes, buf_infos, desc_set_b_, 15, genome_buffer_.handle,        gnm_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_, 16, bond_buffer_.handle,          bnd_sz);
 
     vkUpdateDescriptorSets(ctx.device,
                            static_cast<uint32_t>(writes.size()),
@@ -362,6 +375,11 @@ void ComputePipeline::upload_dynamic_data(VulkanContext& ctx, const Particles& p
     if (genome_buffer_.handle != VK_NULL_HANDLE && !particles.genomes.empty()) {
         VkDeviceSize genome_size = particles.genomes.size() * sizeof(float);
         ctx.update_buffer(genome_buffer_, particles.genomes.data(), genome_size);
+    }
+
+    if (bond_buffer_.handle != VK_NULL_HANDLE && particles.bond_partners_ptr != nullptr) {
+        VkDeviceSize bond_size = static_cast<VkDeviceSize>(particles.bond_partners_count) * sizeof(uint32_t);
+        ctx.update_buffer(bond_buffer_, particles.bond_partners_ptr, bond_size);
     }
 }
 

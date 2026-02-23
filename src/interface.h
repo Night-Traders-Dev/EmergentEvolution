@@ -6,6 +6,7 @@
 #include "types.h"
 #include "particles.h"
 #include "organism.h"
+#include "bond_manager.h"
 #include <vector>
 #include <array>
 #include <glm/glm.hpp>
@@ -31,7 +32,7 @@ public:
     bool  reset_colors_check     = false;
     bool  reset_forces_check     = true;
 
-    // Per-type archetype selection: 0=Default,1=Repeller,2=Polar,3=Heavy,4=Catalyst,5=Membrane,6=Viral
+    // Per-type archetype selection: 0=Default,1=Repeller,2=Polar,3=Heavy,4=Catalyst,5=Adhesive,6=Radical,7=Donor,8=Acceptor
     int archetype_selection[MAX_PARTICLE_TYPES] = {};
 
     // Initialise with a random seed
@@ -43,11 +44,13 @@ public:
     void render_imgui(SimConfig&       cfg,
                       Particles&       particles,
                       OrganismManager& org_manager,
+                      BondManager&     bond_manager,
                       bool&            request_reset);
 
 private:
     void draw_particle_grid(SimConfig& cfg, Particles& particles);
     void draw_organism_panel(OrganismManager& org_manager,
+                             const BondManager& bond_manager,
                              const Particles& particles,
                              const SimConfig& cfg);
 

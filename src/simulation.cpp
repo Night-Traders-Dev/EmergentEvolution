@@ -40,6 +40,11 @@ void Simulation::reset() {
     compute.create_buffers(vk, particles);
     organism_manager.reset();
     organism_tick_counter_ = 0;
+
+    bond_manager.reset(cfg.particle_count);
+    particles.bond_partners_ptr   = bond_manager.bond_partners.data();
+    particles.bond_partners_count = static_cast<uint32_t>(bond_manager.bond_partners.size());
+    bond_tick_counter_ = 0;
 }
 
 // ── Per-frame tick ────────────────────────────────────────────────────────────
@@ -54,7 +59,7 @@ void Simulation::tick(GLFWwindow* window, double dt) {
 
     // ── ImGui ──────────────────────────────────────────────────────────────────
     bool request_reset = false;
-    iface.render_imgui(cfg, particles, organism_manager, request_reset);
+    iface.render_imgui(cfg, particles, organism_manager, bond_manager, request_reset);
 
     if (request_reset)
         reset();
@@ -71,16 +76,35 @@ void Simulation::tick(GLFWwindow* window, double dt) {
 
         vk.end_single_command(compute_cmd);
 
-        // Organism detection (every N frames)
+        // Shared readback for bond + organism updates
         organism_tick_counter_++;
-        if (organism_tick_counter_ % ORGANISM_UPDATE_INTERVAL == 0) {
+        bond_tick_counter_++;
+
+        bool need_bond     = (bond_tick_counter_     % static_cast<int>(cfg.bond_update_interval) == 0);
+        bool need_organism = (organism_tick_counter_  % ORGANISM_UPDATE_INTERVAL == 0);
+
+        if (need_bond || need_organism) {
             readback_positions_.resize(cfg.particle_count);
             readback_velocities_.resize(cfg.particle_count);
             readback_energies_.resize(cfg.particle_count);
             compute.read_current_state(vk, readback_positions_, readback_velocities_,
                                        readback_energies_);
-            organism_manager.update(readback_positions_, readback_velocities_,
-                                    readback_energies_, particles.types, particles);
+
+            if (need_bond) {
+                bond_manager.update(readback_positions_, particles.types,
+                                    cfg.bond_form_radius,
+                                    cfg.bond_rest_length,
+                                    cfg.bond_break_factor);
+                // Pointer is stable (vector data doesn't move without resize)
+                particles.bond_partners_ptr   = bond_manager.bond_partners.data();
+                particles.bond_partners_count = static_cast<uint32_t>(bond_manager.bond_partners.size());
+            }
+
+            if (need_organism) {
+                organism_manager.update(readback_positions_, readback_velocities_,
+                                        readback_energies_, particles.types, particles,
+                                        bond_manager);
+            }
         }
     }
 

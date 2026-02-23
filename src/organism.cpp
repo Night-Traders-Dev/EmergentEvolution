@@ -11,15 +11,10 @@ static inline int64_t cell_key(int cx, int cy) {
     return (static_cast<int64_t>(cx) << 32) | static_cast<uint32_t>(cy);
 }
 
-// Shortest-path squared distance on a toroidal world
-static inline float toroidal_dist2(const glm::vec2& a, const glm::vec2& b) {
-    float dx = b.x - a.x;
-    float dy = b.y - a.y;
-    if (dx >  static_cast<float>(REGION_W) * 0.5f) dx -= static_cast<float>(REGION_W);
-    if (dx < -static_cast<float>(REGION_W) * 0.5f) dx += static_cast<float>(REGION_W);
-    if (dy >  static_cast<float>(REGION_H) * 0.5f) dy -= static_cast<float>(REGION_H);
-    if (dy < -static_cast<float>(REGION_H) * 0.5f) dy += static_cast<float>(REGION_H);
-    return dx * dx + dy * dy;
+// Plain squared distance (infinite world — no wrapping)
+static inline float dist2(const glm::vec2& a, const glm::vec2& b) {
+    glm::vec2 d = b - a;
+    return glm::dot(d, d);
 }
 
 // ── OrganismManager::reset ────────────────────────────────────────────────────
@@ -49,40 +44,29 @@ std::vector<int> OrganismManager::build_clusters(
     float eps  = cluster_radius * eps_scale;
     float eps2 = eps * eps;
 
-    // Grid dimensions — used for toroidal cell wrapping
-    int grid_w = std::max(1, static_cast<int>(std::ceil(static_cast<float>(REGION_W) / eps)));
-    int grid_h = std::max(1, static_cast<int>(std::ceil(static_cast<float>(REGION_H) / eps)));
-
-    // Cell key with toroidal modular cell coordinates
-    auto tkey = [&](int cx, int cy) -> int64_t {
-        cx = ((cx % grid_w) + grid_w) % grid_w;
-        cy = ((cy % grid_h) + grid_h) % grid_h;
-        return (static_cast<int64_t>(cx) << 32) | static_cast<uint32_t>(cy);
-    };
-
-    // Spatial hash
+    // Spatial hash (infinite world — no cell-coordinate wrapping)
     std::unordered_map<int64_t, std::vector<uint32_t>> grid;
     grid.reserve(n / 4 + 1);
 
     for (uint32_t i = 0; i < n; ++i) {
-        int cx = static_cast<int>(positions[i].x / eps);
-        int cy = static_cast<int>(positions[i].y / eps);
-        grid[tkey(cx, cy)].push_back(i);
+        int cx = static_cast<int>(std::floor(positions[i].x / eps));
+        int cy = static_cast<int>(std::floor(positions[i].y / eps));
+        grid[cell_key(cx, cy)].push_back(i);
     }
 
-    // Neighbor lookup — toroidal cell search + shortest-path distance
+    // Neighbor lookup — plain squared distance
     auto neighbors = [&](uint32_t i, std::vector<uint32_t>& out) {
         out.clear();
-        int cx = static_cast<int>(positions[i].x / eps);
-        int cy = static_cast<int>(positions[i].y / eps);
+        int cx = static_cast<int>(std::floor(positions[i].x / eps));
+        int cy = static_cast<int>(std::floor(positions[i].y / eps));
 
         for (int dy = -1; dy <= 1; ++dy) {
             for (int dx = -1; dx <= 1; ++dx) {
-                auto it = grid.find(tkey(cx + dx, cy + dy));
+                auto it = grid.find(cell_key(cx + dx, cy + dy));
                 if (it == grid.end()) continue;
 
                 for (uint32_t j : it->second) {
-                    if (toroidal_dist2(positions[i], positions[j]) <= eps2)
+                    if (dist2(positions[i], positions[j]) <= eps2)
                         out.push_back(j);
                 }
             }
@@ -136,150 +120,121 @@ std::vector<int> OrganismManager::build_clusters(
     return cluster_id;
 }
 
-// ── Viral infection ───────────────────────────────────────────────────────────
+// ── Classify molecular aggregate from atom composition ────────────────────────
+// Atom type indices: H=0 C=1 N=2 O=3 P=4 S=5 Na=6 Cl=7
 
-void OrganismManager::apply_viral_infections(
-    const std::vector<glm::vec2>& positions,
-    Particles& particles)
+static MoleculeClass classify_molecule(const uint32_t* type_counts,
+                                       uint32_t size,
+                                       bool has_radical)
 {
-    uint32_t n        = static_cast<uint32_t>(positions.size());
-    float    viral_radius = cluster_radius * 0.5f;
-    float    vr2          = viral_radius * viral_radius;
-    float    cell_sz      = viral_radius;
+    if (size == 0) return MoleculeClass::INORGANIC;
+    if (has_radical) return MoleculeClass::RADICAL;
 
-    std::unordered_map<int64_t, std::vector<uint32_t>> grid;
-    grid.reserve(n / 4 + 1);
+    uint32_t H  = type_counts[0];
+    uint32_t C  = type_counts[1];
+    uint32_t N  = type_counts[2];
+    uint32_t O  = type_counts[3];
+    uint32_t P  = type_counts[4];
 
-    for (uint32_t i = 0; i < n; ++i) {
-        int cx = static_cast<int>(positions[i].x / cell_sz);
-        int cy = static_cast<int>(positions[i].y / cell_sz);
-        grid[cell_key(cx, cy)].push_back(i);
-    }
+    // NUCLEOTIDE: phosphorus-rich (P * 3 > total size)
+    if (P * 3u > size)
+        return MoleculeClass::NUCLEOTIDE;
 
-    for (uint32_t i = 0; i < n; ++i) {
-        uint32_t ti = particles.types[i];
-        if (!(particles.behavior_flags[ti] & BEHAVIOR_VIRAL)) continue;
+    // AMINO_ACID: nitrogen + oxygen dominant with carbon backbone
+    if ((N + O) * 2u > size && C > 0)
+        return MoleculeClass::AMINO_ACID;
 
-        int cx = static_cast<int>(positions[i].x / cell_sz);
-        int cy = static_cast<int>(positions[i].y / cell_sz);
+    // WATER: mostly hydrogen with some oxygen
+    if (H * 4u > size * 3u && O > 1u)
+        return MoleculeClass::WATER;
 
-        for (int dy = -1; dy <= 1; ++dy) {
-            for (int dx = -1; dx <= 1; ++dx) {
-                auto it = grid.find(cell_key(cx + dx, cy + dy));
-                if (it == grid.end()) continue;
-                for (uint32_t j : it->second) {
-                    if (j == i) continue;
-                    uint32_t tj = particles.types[j];
-                    if (particles.behavior_flags[tj] & BEHAVIOR_VIRAL) continue;
-                    if (toroidal_dist2(positions[i], positions[j]) < vr2)
-                        particles.types[j] = ti;
-                }
-            }
-        }
-    }
+    // POLYMER: carbon-heavy, large aggregate
+    if (C * 2u > size && size > 20u)
+        return MoleculeClass::POLYMER;
+
+    // LIPID: carbon + hydrogen make up bulk
+    if ((C + H) * 3u > size * 2u)
+        return MoleculeClass::LIPID;
+
+    return MoleculeClass::INORGANIC;
 }
 
-// ── Reproductive birth ────────────────────────────────────────────────────────
-// REPRODUCTIVE particles with high energy convert nearby recovered dust (type 0)
-// into copies of themselves, closing the birth-from-death cycle.
-
-uint32_t OrganismManager::apply_reproductive_birth(
-    const std::vector<glm::vec2>& positions,
-    const std::vector<float>&     energies,
-    Particles& particles)
-{
-    constexpr float energy_threshold = 0.55f;  // parent must be reasonably fed
-    constexpr float dust_min_energy  = 0.10f;  // dust only needs minimal recovery
-    constexpr int   max_births       = 20;     // cap births per update cycle
-
-    uint32_t n       = static_cast<uint32_t>(positions.size());
-    float    cell_sz = cluster_radius;
-    float    birth_r2 = (cluster_radius * 2.0f) * (cluster_radius * 2.0f);
-
-    // Spatial hash of eligible dust particles
-    std::unordered_map<int64_t, std::vector<uint32_t>> dust_grid;
-    dust_grid.reserve(n / 8 + 1);
-    for (uint32_t i = 0; i < n; ++i) {
-        if (particles.types[i] == 0 && energies[i] >= dust_min_energy) {
-            int cx = static_cast<int>(positions[i].x / cell_sz);
-            int cy = static_cast<int>(positions[i].y / cell_sz);
-            dust_grid[cell_key(cx, cy)].push_back(i);
-        }
-    }
-    if (dust_grid.empty()) return 0;
-
-    uint32_t births = 0;
-    for (uint32_t i = 0; i < n && static_cast<int>(births) < max_births; ++i) {
-        uint32_t ti = particles.types[i];
-        if (!(particles.behavior_flags[ti] & BEHAVIOR_REPRODUCTIVE)) continue;
-        if (energies[i] < energy_threshold) continue;
-
-        // Find nearest eligible dust particle within birth radius
-        int cx = static_cast<int>(positions[i].x / cell_sz);
-        int cy = static_cast<int>(positions[i].y / cell_sz);
-
-        uint32_t best_j = UINT32_MAX;
-        float    best_d2 = birth_r2;
-
-        for (int dy = -2; dy <= 2; ++dy) {
-            for (int dx = -2; dx <= 2; ++dx) {
-                auto it = dust_grid.find(cell_key(cx + dx, cy + dy));
-                if (it == dust_grid.end()) continue;
-                for (uint32_t j : it->second) {
-                    float d2 = toroidal_dist2(positions[i], positions[j]);
-                    if (d2 < best_d2) { best_d2 = d2; best_j = j; }
-                }
-            }
-        }
-
-        if (best_j != UINT32_MAX) {
-            // 8% mutation chance: offspring gets a random non-dust type
-            uint32_t new_type = ti;
-            uint32_t hash = (best_j * 2654435761u) ^
-                            static_cast<uint32_t>(positions[best_j].x * 100.0f) ^
-                            static_cast<uint32_t>(positions[best_j].y * 100.0f);
-            bool mutated = (MAX_PARTICLE_TYPES > 1 && (hash % 100u) < 8u);
-            if (mutated) {
-                new_type = 1u + (hash / 100u) % (MAX_PARTICLE_TYPES - 1u);
-
-                // Force row mutation: drift new_type's interaction strengths slightly
-                // Each birth-via-mutation nudges the type's force row by ±0.05
-                uint32_t h = hash;
-                for (uint32_t k = 0; k < MAX_PARTICLE_TYPES; ++k) {
-                    h = h * 1664525u + 1013904223u;  // LCG step
-                    float delta = (static_cast<float>(h & 0xFFFF) / 32767.5f - 1.0f) * 0.05f;
-                    uint32_t fidx = new_type + k * MAX_PARTICLE_TYPES;
-                    if (fidx < static_cast<uint32_t>(particles.forces.size()))
-                        particles.forces[fidx] = std::clamp(particles.forces[fidx] + delta, -1.0f, 1.0f);
-                }
-            }
-            particles.types[best_j] = new_type;
-
-            // Remove from grid so it isn't double-converted
-            int jcx = static_cast<int>(positions[best_j].x / cell_sz);
-            int jcy = static_cast<int>(positions[best_j].y / cell_sz);
-            auto it = dust_grid.find(cell_key(jcx, jcy));
-            if (it != dust_grid.end()) {
-                auto& vec = it->second;
-                vec.erase(std::remove(vec.begin(), vec.end(), best_j), vec.end());
-            }
-            ++births;
-        }
-    }
-    return births;
-}
-
-// ── Trait feedback ────────────────────────────────────────────────────────────
+// ── Trait feedback — chemistry-appropriate genome nudging ─────────────────────
 
 void OrganismManager::apply_trait_feedback(Particles& particles) {
+    // Reset all scales so extinct types don't retain stale boosts
+    for (float& s : particles.trait_scales) s = 1.0f;
+
+    constexpr float nudge = 0.002f;
+
     for (auto& org : organisms) {
         uint32_t type = org.traits.dominant_type;
 
-        float kill_bonus = std::min(org.traits.kills * 0.1f, 0.5f);
-        particles.trait_scales[type] = 1.0f + kill_bonus;
+        // Force-row scale: bonds + size, capped at 1.8×
+        float bond_bonus = std::min(org.traits.bond_count * 0.005f, 0.4f);
+        float size_bonus = std::min(org.traits.size       * 0.001f, 0.3f);
+        float new_scale  = std::clamp(1.0f + bond_bonus + size_bonus, 1.0f, 1.8f);
+        particles.trait_scales[type] = std::max(particles.trait_scales[type], new_scale);
 
         particles.structure_integrity[type] =
             1.0f + (org.traits.generation * 0.05f);
+
+        // Per-particle genome nudging toward molecular role
+        for (uint32_t idx : org.particle_indices) {
+            uint32_t base = idx * GENOME_SIZE;
+            if (base + 3 >= static_cast<uint32_t>(particles.genomes.size())) continue;
+
+            float& charge   = particles.genomes[base + 0];
+            float& electroneg = particles.genomes[base + 1];
+            float& reactivity = particles.genomes[base + 2];
+            float& bond_str   = particles.genomes[base + 3];
+
+            switch (org.traits.mol_class) {
+            case MoleculeClass::WATER:
+                // Water: pull toward high electronegativity, polar charge
+                electroneg = std::min(electroneg + nudge,        2.0f);
+                charge     += (0.0f - charge) * nudge * 0.5f;
+                break;
+
+            case MoleculeClass::LIPID:
+                // Lipids: stronger bonds, low charge (non-polar)
+                bond_str   = std::min(bond_str   + nudge * 0.5f, 0.5f);
+                charge     += (0.0f - charge) * nudge;
+                break;
+
+            case MoleculeClass::AMINO_ACID:
+                // Amino acids: reactive + electronegative
+                reactivity = std::min(reactivity + nudge,        2.0f);
+                electroneg = std::min(electroneg + nudge * 0.5f, 2.0f);
+                break;
+
+            case MoleculeClass::NUCLEOTIDE:
+                // Nucleotides: strong stable bonds + high reactivity
+                bond_str   = std::min(bond_str   + nudge * 0.5f, 0.5f);
+                reactivity = std::min(reactivity + nudge,        2.0f);
+                break;
+
+            case MoleculeClass::RADICAL:
+                // Radicals: high reactivity, destabilised bonds
+                reactivity = std::min(reactivity + nudge * 1.5f, 2.0f);
+                bond_str   = std::max(bond_str   - nudge,       -0.5f);
+                break;
+
+            case MoleculeClass::POLYMER:
+                // Polymers: maximise bond strength
+                bond_str   = std::min(bond_str   + nudge,        0.5f);
+                reactivity += (1.0f - reactivity) * nudge * 0.3f;
+                break;
+
+            default:
+                // INORGANIC: gentle regression toward neutral
+                charge    += (0.0f - charge)    * nudge * 0.5f;
+                electroneg += (1.0f - electroneg) * nudge * 0.5f;
+                reactivity += (1.0f - reactivity) * nudge * 0.5f;
+                bond_str   += (0.0f - bond_str)   * nudge * 0.5f;
+                break;
+            }
+        }
     }
 }
 
@@ -290,7 +245,8 @@ void OrganismManager::update(
     const std::vector<glm::vec2>& velocities,
     const std::vector<float>&     energies,
     const std::vector<uint32_t>&  types,
-    Particles& particles)
+    Particles& particles,
+    BondManager& bond_manager)
 {
     uint32_t n = static_cast<uint32_t>(positions.size());
     if (n == 0) { organisms.clear(); return; }
@@ -316,12 +272,16 @@ void OrganismManager::update(
         org.traits.size      = static_cast<uint32_t>(members.size());
 
         glm::vec2 sum_pos(0.0f), sum_vel(0.0f);
+        bool      has_radical = false;
         for (uint32_t idx : members) {
             sum_pos += positions[idx];
             sum_vel += velocities[idx];
             uint32_t t = types[idx];
-            if (t < MAX_PARTICLE_TYPES)
+            if (t < MAX_PARTICLE_TYPES) {
                 org.traits.type_counts[t]++;
+                if (particles.behavior_flags[t] & BEHAVIOR_RADICAL)
+                    has_radical = true;
+            }
         }
 
         float inv = 1.0f / static_cast<float>(members.size());
@@ -334,13 +294,35 @@ void OrganismManager::update(
             total_energy += (idx < energies.size() ? energies[idx] : 1.0f);
         org.traits.energy = total_energy * inv;
 
-        float sum_d2 = 0.0f;
+        // Average genome traits: charge, electroneg, reactivity, bond_str
+        float sum_charge = 0.0f, sum_electroneg = 0.0f,
+              sum_reactivity = 0.0f, sum_bond_str = 0.0f;
         for (uint32_t idx : members) {
-            glm::vec2 d = positions[idx] - org.centroid;
-            sum_d2 += glm::dot(d, d);
+            uint32_t base = idx * GENOME_SIZE;
+            if (base + 3 < static_cast<uint32_t>(particles.genomes.size())) {
+                sum_charge      += particles.genomes[base + 0];
+                sum_electroneg  += particles.genomes[base + 1];
+                sum_reactivity  += particles.genomes[base + 2];
+                sum_bond_str    += particles.genomes[base + 3];
+            } else {
+                sum_electroneg += 1.0f;
+                sum_reactivity += 1.0f;
+            }
         }
-        org.spread = std::sqrt(sum_d2 * inv);
+        org.traits.avg_charge        = sum_charge        * inv;
+        org.traits.avg_electroneg    = sum_electroneg    * inv;
+        org.traits.avg_reactivity    = sum_reactivity    * inv;
+        org.traits.avg_bond_strength = sum_bond_str      * inv;
 
+        // Bond count: sum bond_counts of all member particles
+        uint32_t total_bonds = 0;
+        for (uint32_t idx : members) {
+            if (idx < static_cast<uint32_t>(bond_manager.bond_counts.size()))
+                total_bonds += bond_manager.bond_counts[idx];
+        }
+        org.traits.bond_count = total_bonds;
+
+        // Dominant type
         org.traits.dominant_type = 0;
         uint32_t max_count = 0;
         for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
@@ -349,6 +331,18 @@ void OrganismManager::update(
                 org.traits.dominant_type = t;
             }
         }
+
+        // Molecular class from atom composition
+        org.traits.mol_class = classify_molecule(org.traits.type_counts,
+                                                  org.traits.size,
+                                                  has_radical);
+
+        float sum_d2 = 0.0f;
+        for (uint32_t idx : members) {
+            glm::vec2 d = positions[idx] - org.centroid;
+            sum_d2 += glm::dot(d, d);
+        }
+        org.spread = std::sqrt(sum_d2 * inv);
 
         new_orgs.push_back(std::move(org));
     }
@@ -375,7 +369,7 @@ void OrganismManager::update(
                           static_cast<float>(prev_organisms_[pi].traits.size);
             if (ratio < 0.3f || ratio > 3.5f) continue;
 
-            float d2 = toroidal_dist2(new_orgs[ni].centroid, prev_organisms_[pi].centroid);
+            float d2 = dist2(new_orgs[ni].centroid, prev_organisms_[pi].centroid);
             if (d2 < best_d2) { best_d2 = d2; best_pi = static_cast<int>(pi); }
         }
 
@@ -383,16 +377,15 @@ void OrganismManager::update(
             prev_matched[best_pi] = true;
             new_matched[ni]       = true;
             const auto& prev      = prev_organisms_[best_pi];
-            new_orgs[ni].id                   = prev.id;
-            new_orgs[ni].traits.kills         = prev.traits.kills;
-            new_orgs[ni].traits.divisions     = prev.traits.divisions;
-            new_orgs[ni].traits.generation    = prev.traits.generation;
-            new_orgs[ni].traits.parent_id     = prev.traits.parent_id;
-            // energy is read from GPU each update — no carry-forward needed
+            new_orgs[ni].id                = prev.id;
+            new_orgs[ni].traits.kills      = prev.traits.kills;
+            new_orgs[ni].traits.divisions  = prev.traits.divisions;
+            new_orgs[ni].traits.generation = prev.traits.generation;
+            new_orgs[ni].traits.parent_id  = prev.traits.parent_id;
         }
     }
 
-    // 4. Division detection (DBSCAN-aware)
+    // 4. Division detection
     float div_r2 = (cluster_radius * 5.0f) * (cluster_radius * 5.0f);
 
     for (size_t pi = 0; pi < prev_organisms_.size(); ++pi) {
@@ -404,17 +397,14 @@ void OrganismManager::update(
         uint32_t total = 0;
 
         for (size_t ni = 0; ni < new_orgs.size(); ++ni) {
-            if (toroidal_dist2(new_orgs[ni].centroid, prev.centroid) < div_r2) {
+            if (dist2(new_orgs[ni].centroid, prev.centroid) < div_r2) {
                 nearby.push_back(ni);
                 total += new_orgs[ni].traits.size;
             }
         }
 
         if (nearby.size() < 2) continue;
-
-        if (total < prev.traits.size * 0.7f ||
-            total > prev.traits.size * 1.4f)
-            continue;
+        if (total < prev.traits.size * 0.7f || total > prev.traits.size * 1.4f) continue;
 
         for (size_t ni : nearby) {
             new_orgs[ni].traits.generation = prev.traits.generation + 1;
@@ -423,7 +413,7 @@ void OrganismManager::update(
         }
     }
 
-    // 5. Consumption detection (DBSCAN-aware)
+    // 5. Consumption detection
     float kill_r2 = (cluster_radius * 4.0f) * (cluster_radius * 4.0f);
 
     for (size_t ni = 0; ni < new_orgs.size(); ++ni) {
@@ -431,20 +421,18 @@ void OrganismManager::update(
 
         auto it = prev_sizes.find(new_orgs[ni].id);
         if (it == prev_sizes.end()) continue;
-
         if (new_orgs[ni].traits.size < it->second * 1.25f) continue;
 
         for (size_t pi = 0; pi < prev_organisms_.size(); ++pi) {
             if (prev_matched[pi]) continue;
-            if (toroidal_dist2(new_orgs[ni].centroid, prev_organisms_[pi].centroid) < kill_r2) {
+            if (dist2(new_orgs[ni].centroid, prev_organisms_[pi].centroid) < kill_r2) {
                 new_orgs[ni].traits.kills++;
                 break;
             }
         }
     }
 
-    // 5.5 Per-particle death from GPU energy
-    // Any particle with zero energy becomes dust (type 0); types re-upload next frame.
+    // 5.5 Per-particle reset from zero energy (atom returns to lowest energy: H)
     uint32_t deaths_this_tick = 0;
     for (uint32_t i = 0; i < static_cast<uint32_t>(energies.size()); ++i) {
         if (energies[i] <= 0.0f && particles.types[i] != 0) {
@@ -453,27 +441,20 @@ void OrganismManager::update(
         }
     }
 
-    // 5.6 Reproductive birth: high-energy REPRODUCTIVE particles convert nearby dust
-    uint32_t births_this_tick = apply_reproductive_birth(positions, energies, particles);
-
-    // 5.7 Population statistics
+    // 5.6 Population statistics
     {
         uint32_t dc = 0, ac = 0;
         std::memset(type_populations, 0, sizeof(type_populations));
         for (uint32_t i = 0; i < static_cast<uint32_t>(particles.types.size()); ++i) {
             uint32_t t = particles.types[i];
-            if (t == 0) {
-                ++dc;
-            } else {
-                ++ac;
-            }
+            if (t == 0) ++dc; else ++ac;
             if (t < MAX_PARTICLE_TYPES)
                 ++type_populations[t];
         }
         dust_count  = dc;
         alive_count = ac;
         last_deaths = deaths_this_tick;
-        last_births = births_this_tick;
+        last_births = 0;
 
         pop_history[pop_history_idx] = static_cast<float>(ac);
         pop_history_idx = (pop_history_idx + 1) % POP_HISTORY_LEN;
@@ -484,6 +465,5 @@ void OrganismManager::update(
     organisms       = std::move(new_orgs);
     prev_organisms_ = organisms;
 
-    apply_viral_infections(positions, particles);
     apply_trait_feedback(particles);
 }

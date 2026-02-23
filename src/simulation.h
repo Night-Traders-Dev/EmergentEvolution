@@ -7,6 +7,7 @@
 #include "renderer.h"
 #include "interface.h"
 #include "organism.h"
+#include "bond_manager.h"
 #include <GLFW/glfw3.h>
 #include <vector>
 
@@ -35,6 +36,7 @@ public:
     Renderer        renderer{};
     Interface       iface{};
     OrganismManager organism_manager{};
+    BondManager     bond_manager{};
 
 private:
     // Input state
@@ -43,8 +45,9 @@ private:
     glm::vec2 smooth_mouse_change_ = {};
     bool      lmb_down_            = false;
 
-    // Organism tracking
+    // Organism / bond tracking
     int                    organism_tick_counter_ = 0;
+    int                    bond_tick_counter_     = 0;
     std::vector<glm::vec2> readback_positions_;
     std::vector<glm::vec2> readback_velocities_;
     std::vector<float>     readback_energies_;

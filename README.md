@@ -1,10 +1,8 @@
 # Emergent Evolution
 
-A GPU-accelerated particle life simulation with biologically-inspired emergent behaviour.
-Thousands of particles interact through configurable force matrices, self-organise into
-organisms, inherit traits across generations, reproduce, mutate, and evolve.
-
-Written in C++20 with Vulkan compute shaders and Dear ImGui.
+A GPU-accelerated molecular chemistry simulation where real atoms form persistent covalent and ionic bonds,
+self-organise into molecular aggregates, and evolve their interaction patterns over time.
+Built with C++20, Vulkan compute shaders, and Dear ImGui.
 
 ---
 
@@ -13,10 +11,62 @@ Written in C++20 with Vulkan compute shaders and Dear ImGui.
 ### Particle Physics
 - Up to ~22,500 particles simulated in real time on the GPU
 - O(n²) pairwise force calculation in a GLSL compute shader
-- **Toroidal world** — particles wrap across all four edges (2560 × 1440)
+- **Infinite world** — no boundary wrapping; particles drift freely through unbounded space
 - Configurable repulsion radius, interaction radius, dampening, density limiting, and viscosity
 - Soft-body pressure field: exponential density falloff creates emergent elasticity
 - Double-buffered ping-pong buffers (position, velocity, angle, angular velocity, energy)
+
+### Atom Types (CPK colours)
+
+Particles represent the eight most biologically relevant atoms:
+
+| Type | Element | Colour | Valence | Behaviour |
+|------|---------|--------|---------|-----------|
+| 0 | **H** Hydrogen | White | 1 | Polar — dipole rotation |
+| 1 | **C** Carbon | Dark grey | 4 | Neutral backbone |
+| 2 | **N** Nitrogen | Blue | 3 | Electron donor |
+| 3 | **O** Oxygen | Red | 2 | Polar + electron acceptor |
+| 4 | **P** Phosphorus | Orange | 5 | Heavy + enzymatic catalyst |
+| 5 | **S** Sulfur | Yellow | 2 | Heavy |
+| 6 | **Na** Sodium | Violet | 1 | Heavy + ionic (+) + adhesive |
+| 7 | **Cl** Chlorine | Green | 1 | Heavy + ionic (−) + adhesive |
+
+Spawn abundance approximates biological prevalence: H 40 %, C 25 %, O 15 %, N 10 %, Na/Cl 3 % each, P/S 2 % each.
+
+### Persistent Covalent Bonds
+
+Every 2 frames the CPU checks for new bonds to form and overstretched bonds to break:
+
+- **Bond formation** — two atoms within `bond_form_radius` that are compatible (BOND_COMPAT matrix)
+  and have free valence slots snap together
+- **Bond breaking** — a bond stretches beyond `rest_length × break_factor` and snaps
+- **Bond spring force** — bonded pairs experience a Hookean restoring force on the GPU:
+  `F = k_eff × extension`, where `k_eff = bond_spring_k × clamp(bond_strength + 0.5, 0.2, 1.5)`
+- Bond compatibility respects real chemistry: C–C/C–N/C–O/O–H (covalent), Na–Cl (ionic), etc.
+- All bonds are held in a CPU-managed flat array uploaded to the GPU each frame (binding 16)
+
+### Electrochemistry Force Matrix
+
+The initial force matrix is seeded from electronegativity and charge data:
+
+- **O attracts H** strongly → water clusters form spontaneously
+- **Na ↔ Cl** strong mutual attraction → ionic pair adhesion
+- **Na/Cl repel** same-charge ions → charge separation
+- **C–C moderate attraction** → carbon backbone aggregation
+- The matrix can be hand-tuned at runtime via the force grid
+
+### Genome System
+
+Each particle carries 4 float genes uploaded to the GPU:
+
+| Index | Gene | Effect |
+|-------|------|--------|
+| 0 | Charge (−1 → +1) | Modulates ionic interactions |
+| 1 | Electronegativity (0.2 → 2.0) | Scales electron-transfer energy gain |
+| 2 | Reactivity (0.2 → 2.0) | Controls bond-strain energy cost |
+| 3 | Bond strength (−0.5 → +0.5) | Scales spring constant |
+
+Genome defaults are set per atom type with chemical accuracy and drift via trait feedback.
 
 ### Metabolism & Energy System
 
@@ -25,99 +75,81 @@ Particle brightness reflects energy — dim particles are starving.
 
 | Source | Rate |
 |--------|------|
-| Ambient food gain (baseline) | +0.010 / s |
+| Ambient gain (baseline) | +0.010 / s |
 | Passive metabolic drain | −0.015 / s |
 | Movement cost | −speed × 0.00015 / s |
 | Crowding penalty | −(density − limit) × 0.005 / s |
 | Symbiotic gain (cross-type attraction) | +attraction × proximity × 0.005 / pair / s |
-| Predator gain (when adjacent to prey) | +0.006 / s |
-| Prey drain (when adjacent to predator) | −0.006 / s |
 | Catalyst neighbour boost | +0.008 × catalysts / s |
-| Photosynth in open space | +light × 0.12 / s |
-| Dust recovery (type 0) | +0.15 / s |
+| Donor → Acceptor electron transfer | +electronegativity × proximity / s |
+| Bond strain cost | −abs(extension) / rest × 0.002 × dt |
+| Ionic attraction | +proximity bonus for opposite-charge pairs |
+| Radical chase | +proximity × 0.004 for RADICAL atoms |
 
-Particles that reach zero energy turn to **dust** (type 0) and drift until claimed by a
-reproductive organism. Dust recovers energy quickly and re-enters the food web.
+Particles that reach zero energy lose all bonding energy and revert to **H (type 0)**.
 
-### Force Matrix
-- Up to 10 particle types; each ordered pair has an independent attraction/repulsion scalar
-- Interactive grid: hover + scroll to adjust, right-click to zero
-- Per-type colour pickers
-- **Trait feedback**: organisms with accumulated kills amplify their dominant type's force row
-  (up to 1.8×), feeding directly back into GPU physics
+### Behaviour Flags
+
+| Flag | Bit | Atom(s) | Effect |
+|------|-----|---------|--------|
+| REPEL | 0 | — | Always repels every type |
+| POLAR | 1 | H, O | Dipole rotation (angle-dependent attraction) |
+| HEAVY | 2 | P, S, Na, Cl | Force response 0.25× — slow structural nucleus |
+| CATALYST | 3 | P | Boosts neighbours' energy each frame |
+| RADICAL | 4 | — | Aggressively chases all neighbours, drains energy |
+| ADHESIVE | 5 | Na, Cl | 1.8× self-attraction bonus |
+| DONOR | 6 | N | Emits electrons toward ACCEPTOR neighbours |
+| ACCEPTOR | 7 | O | Absorbs electrons from DONOR neighbours |
+| IONIC_POS | 8 | Na | Ionic repulsion from other cations |
+| IONIC_NEG | 9 | Cl | Ionic repulsion from other anions; attraction to cations |
+
+### Molecular Aggregate System
+
+Every 5 frames, particles are clustered using **DBSCAN** with a spatial-hash spatial index.
+Clusters of ≥ 3 atoms become **molecular aggregates** classified by atom composition:
+
+| Class | Classification Rule | Colour |
+|-------|-------------------|--------|
+| **H₂O** | H > ¾ cluster, O > 1 | Light blue |
+| **LIPID** | (C+H) > ⅔ cluster | Yellow |
+| **AACD** amino acid | (N+O) × 2 > size & C > 0 | Green |
+| **NUCL** nucleotide | P × 3 > size | Violet |
+| **RAD!** radical | any RADICAL member present | Red |
+| **POLY** polymer | C > ½ cluster & size > 20 | Orange |
+| **INRG** inorganic | otherwise | Grey |
+
+Aggregates are matched frame-to-frame; division and consumption events are tracked and
+accumulate into **generation**, **kills**, and **divisions** counters.
+
+**Trait feedback** — each aggregate nudges its members' genomes toward their molecular role
+(e.g. WATER → ↑ electronegativity; LIPID → ↑ bond strength; RADICAL → ↑ reactivity, ↓ bond strength).
+
+---
+
+## UI Panels
+
+### Particle Values (Force Grid)
+- N×N grid of coloured buttons for the force matrix (N = active particle types)
+- Element symbols (H / C / N / O / P / S / Na / Cl) overlaid on each row/column header
+- Hover + scroll to adjust a force; right-click to zero it
 
 ### Particle Archetypes
+Set a behaviour preset per type (overrides behaviour flags and force row):
+Default · Repeller · Polar · Heavy · Catalyst · Adhesive · Radical · Donor · Acceptor
 
-Eleven behaviour archetypes, selectable per type from the **Particle Archetypes** panel.
-Each preset also seeds a sensible force-matrix row which can be hand-edited.
+### Chemical Bonds
+Runtime sliders for bond dynamics:
+- **Bond Form Radius** — distance within which atoms can bond
+- **Bond Rest Length** — equilibrium bond length (spring target)
+- **Bond Break Factor** — multiplier on rest length at which bond snaps
+- **Bond Spring k** — base spring constant for bond force
 
-| Archetype | Behaviour |
-|-----------|-----------|
-| **Default** | Force matrix only |
-| **Repeller** | Always repels every type (models toxins, charged ions) |
-| **Polar** | Magnetic dipole — attraction modulated by dipole alignment; chains and rings form |
-| **Heavy** | Force response 0.25×; acts as a slow structural nucleus |
-| **Catalyst** | Neighbours gain extra energy each frame (enzyme / metabolic booster) |
-| **Membrane** | Force preset only: strong self-cohesion, repels others; forms bilayer rings |
-| **Viral** | Converts type of adjacent non-viral particles every 5 frames (CPU-driven) |
-| **Adhesive** | 1.8× self-attraction bonus — forms dense, stable colonies |
-| **Secretor** | Emits a chemical halo that pushes nearby particles toward it |
-| **Photosynth** | Drifts toward low-density space; gains energy in proportion to available "light" |
-| **Predator** | Chases non-self types; gains energy from proximity to prey |
-| **Reproductive** | Converts nearby recovered dust into new particles; drives population growth |
-
-### Default Ecosystem
-
-On every reset a **default food web** is automatically applied:
-
-| Type | Role | Archetype |
-|------|------|-----------|
-| 0 — Cyan | Dust / resource | *(passive)* |
-| 1 — Red | Primary producer | Photosynth |
-| 2 — Green | Colonial reproducer | Adhesive + Reproductive |
-| 3 — Magenta | Predator | Predator |
-| 4 — Yellow | Energy catalyst | Catalyst |
-
-This provides a working ecological loop immediately. Individual types can be overridden via
-the archetype panel at any time.
-
-### Evolution & Mutation
-
-Evolutionary pressure emerges from a closed birth–death cycle:
-
-1. **Death** — particles reaching zero energy revert to dust
-2. **Recovery** — dust rapidly regains energy (biomass recycling)
-3. **Birth** — a REPRODUCTIVE particle with energy ≥ 0.55 and a nearby recovered dust
-   particle converts that dust into a new particle of its own type (up to 20 births per
-   organism tick)
-4. **Mutation** — 8% of births produce a random non-dust type instead of copying the parent
-5. **Force row drift** — when a mutant birth occurs, the destination type's force row is
-   nudged ±0.05 per entry via an LCG hash, causing types to gradually evolve their
-   interaction patterns over generations
-
-### Organism System
-
-Every 5 frames, particles are clustered into **organisms** using DBSCAN with a
-toroidal-aware spatial hash:
-
-- Cluster radius configurable (default 40 px); all distance comparisons use shortest-path
-  across the toroidal boundary
-- Clusters of ≥ 3 particles become organisms with measured traits:
-  - Size, average speed, type composition, dominant type, mean energy
-- Organisms are matched frame-to-frame by centroid proximity (toroidal)
-- **Division** detected when a tracked organism splits into two nearby clusters
-- **Consumption** detected when a tracked organism grows > 20% and an unmatched neighbour
-  disappears nearby
-- **Lineage** tracked: generation, parent ID, kills, divisions accumulate and pass to children
-
-### Population Statistics UI
-
-The **Organisms** panel displays:
-- Live counts: **Alive / Dust / Births / Deaths** (updated each organism tick)
-- **Population bar chart** — segmented bar showing each type's share of all particles
-- **Population history graph** — 300-sample rolling chart of alive particle count
-- Per-type force-scale bars (trait feedback)
-- Top-8 organism table: size, speed, generation, kills, divisions, energy bar
+### Organisms (Molecular Aggregates)
+- Live counts: **Alive / Dust / Deaths** (updated each tick)
+- Population history graph (300-sample ring buffer)
+- Per-type force-scale bars (trait feedback multipliers, up to 1.8×)
+- Population bar chart — each type's share of all particles
+- Top-8 aggregate table: **type swatch · class · size · bonds · speed · gen · kills · divs · energy**
 
 ---
 
@@ -144,7 +176,7 @@ cmake --build build -j$(nproc)
 ```
 
 Compiled SPIR-V shaders are placed in `build/shaders/`.
-Run the binary from the build directory:
+Run the binary from the project root:
 
 ```bash
 ./build/particle_life
@@ -174,21 +206,25 @@ Run the binary from the build directory:
 
 ```
 src/
-  types.h               — Constants, SimConfig, ParticleBehavior flags
-  particles.h/.cpp      — CPU particle arrays, generation, archetype presets,
-                          default ecosystem setup
+  types.h               — Constants, SimConfig, ATOM_VALENCE, ParticleBehavior flags
+  particles.h/.cpp      — CPU particle arrays, CPK colours, electrochemistry force matrix,
+                          atom abundance spawn, archetype presets
+  bond_manager.h/.cpp   — CPU bond formation/breaking with spatial hash O(N);
+                          BOND_COMPAT compatibility matrix; bond_partners flat array
   vulkan_context.h/.cpp — Vulkan instance, device, swapchain, buffer/image helpers
-  compute_pipeline.h/.cpp — Compute pipeline, 15-binding descriptor layout,
-                            buffer lifecycle, energy readback
+  compute_pipeline.h/.cpp — 17-binding descriptor layout, buffer lifecycle,
+                            bond buffer upload, energy readback
   renderer.h/.cpp       — Fullscreen-quad graphics pipeline, ImGui, swapchain sync
-  interface.h/.cpp      — Dear ImGui panel: force grid, archetypes, population stats
-  organism.h/.cpp       — Toroidal DBSCAN clustering, trait tracking, birth/death,
-                          mutation, force row evolution
-  simulation.h/.cpp     — Main loop, input, camera, orchestration
+  interface.h/.cpp      — Dear ImGui panels: force grid, archetypes, bond params,
+                          molecular aggregate table with element symbol overlays
+  organism.h/.cpp       — DBSCAN clustering, MoleculeClass inference, trait feedback,
+                          lineage tracking
+  simulation.h/.cpp     — Main loop, input, camera, shared CPU readback, orchestration
   main.cpp              — Entry point, GLFW window
 
 shaders/
-  compute.comp          — GPU physics (forces, energy metabolism, archetypes) +
+  compute.comp          — GPU physics (pairwise forces, bond spring forces, energy
+                          metabolism, ionic/radical/donor-acceptor interactions) +
                           particle renderer
   fullscreen.vert       — Fullscreen triangle vertex shader
   fullscreen.frag       — Samples particle render texture → swapchain
@@ -213,10 +249,12 @@ shaders/
 | 12 | angular velocity (pong) | out |
 | 13 | energy (ping) | in |
 | 14 | energy (pong) | out |
+| 15 | genome | in (readonly) |
+| 16 | bond partners | in (readonly, CPU-managed) |
 
-All paired buffers (position, velocity, angle, angular velocity, energy) are A/B ping-pong
-double-buffered. Behavior flags and the force matrix are shared and reuploaded each frame
-via `upload_dynamic_data()`.
+All paired buffers are A/B ping-pong double-buffered. The bond buffer (binding 16) is a single
+flat `uint32_t` array — both descriptor sets point to the same buffer since the CPU writes it
+only while the GPU is idle.
 
 ---
 

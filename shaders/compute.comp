@@ -26,9 +26,16 @@ layout(set = 0, binding = 13, std430) buffer EnergyIn  { float data[]; } in_ener
 layout(set = 0, binding = 14, std430) buffer EnergyOut { float data[]; } out_energy_buffer;
 
 // ── Per-particle genome (readonly, CPU-managed) ───────────────────────────────
-// Layout per particle i: [i*4+0]=photo_eff  [i*4+1]=hunt_str
-//                        [i*4+2]=repro_drive [i*4+3]=social_bias
+// Layout per particle i: [i*4+0]=charge  [i*4+1]=electronegativity
+//                        [i*4+2]=reactivity [i*4+3]=bond_strength
 layout(set = 0, binding = 15, std430) readonly buffer Genomes { float data[]; } genome_buffer;
+
+// ── Bond buffer (readonly, CPU-managed by BondManager) ────────────────────────
+// Layout: bond_partners[i * MAX_BONDS + slot] = partner index, 0xFFFFFFFF = empty
+layout(set = 0, binding = 16, std430) readonly buffer BondBuffer { uint data[]; } bond_buffer;
+
+const uint MAX_BONDS  = 5u;
+const uint BOND_EMPTY = 0xFFFFFFFFu;
 
 // ── Push Constants ────────────────────────────────────────────────────────────
 layout(push_constant, std430) uniform Params {
@@ -49,22 +56,16 @@ layout(push_constant, std430) uniform Params {
     float local_density_cap;  // 64
 } params;
 
-const uint BEHAVIOR_REPEL        = 1u;
-const uint BEHAVIOR_POLAR        = 2u;
-const uint BEHAVIOR_HEAVY        = 4u;
-const uint BEHAVIOR_CATALYST     = 8u;
-const uint BEHAVIOR_VIRAL        = 16u;
-
-// New behaviors
-const uint BEHAVIOR_ADHESIVE     = 32u;
-const uint BEHAVIOR_SECRETOR     = 64u;
-const uint BEHAVIOR_PHOTOSYNTH   = 128u;
-const uint BEHAVIOR_PREDATOR     = 256u;
-const uint BEHAVIOR_REPRODUCTIVE = 512u;
-
-// World dimensions (toroidal)
-const float WORLD_W = 2560.0f;
-const float WORLD_H = 1440.0f;
+const uint BEHAVIOR_REPEL     = 1u;    // same-charge ionic repulsion
+const uint BEHAVIOR_POLAR     = 2u;    // dipole rotation (H, O)
+const uint BEHAVIOR_HEAVY     = 4u;    // high-mass atom
+const uint BEHAVIOR_CATALYST  = 8u;    // enzymatic / activation-energy reduction (P)
+const uint BEHAVIOR_RADICAL   = 16u;   // unpaired electron — aggressive bonding (was VIRAL)
+const uint BEHAVIOR_ADHESIVE  = 32u;   // ionic pair adhesion (Na-Cl)
+const uint BEHAVIOR_DONOR     = 64u;   // electron donor (was SECRETOR)
+const uint BEHAVIOR_ACCEPTOR  = 128u;  // electron acceptor (was PHOTOSYNTH)
+const uint BEHAVIOR_IONIC_POS = 256u;  // positive ion Na (was PREDATOR)
+const uint BEHAVIOR_IONIC_NEG = 512u;  // negative ion Cl (was REPRODUCTIVE)
 
 float random(float v) {
     return fract(sin(dot(vec2(v, v / 10.0f), vec2(12.9898f, 78.233f))) * 43758.5453f);
@@ -86,10 +87,10 @@ void apply_physics(uint i) {
     float energy         = in_energy_buffer.data[i];
     float interaction_energy_gain = 0.0;
 
-    // Read this particle's genome traits
-    float photo_eff   = genome_buffer.data[i * 4u + 0u]; // photosynthesis efficiency
-    float hunt_str    = genome_buffer.data[i * 4u + 1u]; // predator hunt strength
-    float social_bias = genome_buffer.data[i * 4u + 3u]; // same-type cohesion bias
+    // Read this particle's genome traits (chemistry)
+    float charge      = genome_buffer.data[i * 4u + 0u]; // partial charge (-1..+1)
+    float electroneg  = genome_buffer.data[i * 4u + 1u]; // electronegativity (0.1..2.0)
+    float bond_str    = genome_buffer.data[i * 4u + 3u]; // bond_strength / cohesion
 
     bool is_repel    = (flags_a & BEHAVIOR_REPEL)    != 0u;
     bool is_polar    = (flags_a & BEHAVIOR_POLAR)    != 0u;
@@ -105,11 +106,6 @@ void apply_physics(uint i) {
     for (int j = 0; j < int(params.particle_count); j++) {
         if (i == uint(j)) continue;
         vec2 delta = in_pos_buffer.data[j] - pos_a;
-        // Toroidal shortest-path correction
-        if (delta.x >  WORLD_W * 0.5f) delta.x -= WORLD_W;
-        if (delta.x < -WORLD_W * 0.5f) delta.x += WORLD_W;
-        if (delta.y >  WORLD_H * 0.5f) delta.y -= WORLD_H;
-        if (delta.y < -WORLD_H * 0.5f) delta.y += WORLD_H;
         float dist_sq = dot(delta, delta);
         if (dist_sq > 0.0f && dist_sq < MAX_RADIUS_SQ) {
             float dist = sqrt(dist_sq);
@@ -123,11 +119,6 @@ void apply_physics(uint i) {
 
         vec2  pos_b   = in_pos_buffer.data[j];
         vec2  delta   = pos_b - pos_a;
-        // Toroidal shortest-path correction
-        if (delta.x >  WORLD_W * 0.5f) delta.x -= WORLD_W;
-        if (delta.x < -WORLD_W * 0.5f) delta.x += WORLD_W;
-        if (delta.y >  WORLD_H * 0.5f) delta.y -= WORLD_H;
-        if (delta.y < -WORLD_H * 0.5f) delta.y += WORLD_H;
         float dist_sq = dot(delta, delta);
 
         if (dist_sq > 0.0f && dist_sq < MAX_RADIUS_SQ) {
@@ -168,44 +159,59 @@ void apply_physics(uint i) {
                 catalyst_boost += 1.0f - dist / params.interaction_radius;
             }
 
-            // --- New archetype behaviors (force-only) ---
+            // --- Chemistry behaviors ---
 
-            // ADHESIVE — strong cohesion to same type
+            // ADHESIVE — strong cohesion to same type (ionic pair glue)
             if ((flags_a & BEHAVIOR_ADHESIVE) != 0u && type_a == type_b) {
                 attraction *= 1.8f;
             }
 
-            // SECRETOR — chemical halo around secretor particles
-            if ((flags_b & BEHAVIOR_SECRETOR) != 0u) {
+            // DONOR — electron donor field attracts acceptor atoms
+            if ((flags_b & BEHAVIOR_DONOR) != 0u) {
                 float field = exp(-dist / (params.interaction_radius * 0.4f));
                 total_force += normal * field * 5.0f;
             }
 
-            // PREDATOR — chase other types (hunt_str scales chase force and energy gain)
-            if ((flags_a & BEHAVIOR_PREDATOR) != 0u && type_b != type_a) {
-                float chase = 1.0f - dist / params.interaction_radius;
-                total_force += normal * chase * 30.0f * hunt_str;
-                // Predator gains energy proportional to its hunt strength
-                if (dist < params.repulsion_radius * 2.0f)
-                    interaction_energy_gain += 0.006f * hunt_str;
+            // IONIC — opposite charges attract strongly, same charges repel
+            {
+                bool a_pos = (flags_a & BEHAVIOR_IONIC_POS) != 0u;
+                bool a_neg = (flags_a & BEHAVIOR_IONIC_NEG) != 0u;
+                bool b_pos = (flags_b & BEHAVIOR_IONIC_POS) != 0u;
+                bool b_neg = (flags_b & BEHAVIOR_IONIC_NEG) != 0u;
+                float prox = 1.0f - dist / MAX_RADIUS;
+                if ((a_pos && b_neg) || (a_neg && b_pos))
+                    total_force += normal * prox * 60.0f;
+                else if ((a_pos && b_pos) || (a_neg && b_neg))
+                    total_force -= normal * prox * 40.0f;
             }
 
-            // Prey energy drain: use predator j's hunt strength for the drain
-            if ((flags_b & BEHAVIOR_PREDATOR) != 0u && type_b != type_a
-                && dist < params.repulsion_radius * 2.0f) {
-                float pred_hunt = genome_buffer.data[j * 4u + 1u];
-                interaction_energy_gain -= 0.006f * pred_hunt;
+            // RADICAL — free radical chases all neighbors (was VIRAL)
+            if ((flags_a & BEHAVIOR_RADICAL) != 0u) {
+                float chase = 1.0f - dist / MAX_RADIUS;
+                total_force += normal * chase * 25.0f;
+                if (dist < params.repulsion_radius * 2.0f)
+                    interaction_energy_gain -= 0.004f * params.dt;
+            }
+
+            // ACCEPTOR ← DONOR electron transfer: acceptor gains, donor loses energy
+            if ((flags_a & BEHAVIOR_ACCEPTOR) != 0u && (flags_b & BEHAVIOR_DONOR) != 0u) {
+                float prox = 1.0f - dist / MAX_RADIUS;
+                interaction_energy_gain += prox * 0.08f * electroneg;
+            }
+            if ((flags_a & BEHAVIOR_DONOR) != 0u && (flags_b & BEHAVIOR_ACCEPTOR) != 0u) {
+                float prox = 1.0f - dist / MAX_RADIUS;
+                interaction_energy_gain -= prox * 0.05f;
             }
 
             // Symbiotic energy gain: attraction between different types transfers energy
             if (attraction > 0.0f && type_b != type_a) {
-                float proximity = 1.0f - dist / params.interaction_radius;
+                float proximity = 1.0f - dist / MAX_RADIUS;
                 interaction_energy_gain += attraction * proximity * 0.005f;
             }
 
-            // Social bias: positive → stronger same-type cohesion, negative → repulsion
+            // Bond_str trait modulates same-type cohesion
             if (type_a == type_b) {
-                attraction += social_bias * 0.5f;
+                attraction += bond_str * 0.5f;
             }
 
             // Apply density limiting to attraction
@@ -223,13 +229,23 @@ void apply_physics(uint i) {
         }
     }
 
-    // PHOTOSYNTH — drift toward "light" (low-density regions)
-    if ((flags_a & BEHAVIOR_PHOTOSYNTH) != 0u) {
-        float light = clamp(1.0f - local_density * 0.1f, 0.0f, 1.0f);
-        // Upward drift scaled by available "light"
-        total_force += vec2(0.0f, 1.0f) * light * 5.0f;
-        // Photosynth gains energy strongly in open areas
-        interaction_energy_gain += light * 0.12f;
+    // ── Bond spring forces (harmonic spring, binding 16) ─────────────────────
+    // Applies Hooke's law along each bond: F = k * (dist - rest_length)
+    // bond_str genome trait scales the spring stiffness.
+    {
+        float bond_rest = params.repulsion_radius * 1.1f;
+        float eff_k     = 80.0f * clamp(genome_buffer.data[i * 4u + 3u] + 0.5f, 0.2f, 1.5f);
+        for (uint slot = 0u; slot < MAX_BONDS; ++slot) {
+            uint j = bond_buffer.data[i * MAX_BONDS + slot];
+            if (j == BOND_EMPTY || j >= params.particle_count) continue;
+            vec2  delta     = in_pos_buffer.data[j] - pos_a;
+            float dist_b    = length(delta);
+            if (dist_b < 0.001f) continue;
+            float extension = dist_b - bond_rest;
+            total_force += (delta / dist_b) * eff_k * extension;
+            // Bond strain costs energy
+            interaction_energy_gain -= abs(extension) / bond_rest * 0.002f * params.dt;
+        }
     }
 
     // --- Energy Metabolism ---
@@ -237,18 +253,14 @@ void apply_physics(uint i) {
         float spd   = length(vel_a);
         float delta = 0.0f;
 
-        if (type_a == 0u) {
-            // Dust: fast recovery so the birth cycle stays active
-            delta += 0.15f * params.dt;
-        } else {
-            delta += 0.010f * params.dt;                             // ambient food gain (baseline)
-            delta -= 0.015f * params.dt;                             // passive metabolic drain
-            delta -= spd   * 0.00015f * params.dt;                  // movement cost (low)
-            if (local_density > params.density_limit)
-                delta -= (local_density - params.density_limit) * 0.005f * params.dt; // crowding
-            delta += interaction_energy_gain * params.dt;
-            delta += catalyst_boost * 0.008f * params.dt;           // catalyst neighbour boost
-        }
+        delta += 0.010f * params.dt;                              // ambient chemical energy gain
+        delta -= 0.015f * params.dt;                              // passive metabolic drain
+        delta -= spd   * 0.00015f * params.dt;                   // movement cost
+        if (local_density > params.density_limit)
+            delta -= (local_density - params.density_limit) * 0.005f * params.dt; // crowding
+        delta += interaction_energy_gain * params.dt;
+        delta += catalyst_boost * 0.008f * params.dt;            // P catalyst boost
+
         energy = clamp(energy + delta, 0.0f, 1.0f);
     }
     out_energy_buffer.data[i] = energy;
@@ -274,8 +286,8 @@ void apply_physics(uint i) {
     float speed = length(vel_a);
     if (speed > max_speed) vel_a = (vel_a / speed) * max_speed;
 
-    // Movement update (Toroidal world)
-    pos_a = mod(pos_a + vel_a * params.dt, vec2(WORLD_W, WORLD_H));
+    // Movement update (infinite world)
+    pos_a = pos_a + vel_a * params.dt;
 
     out_pos_buffer.data[i] = pos_a;
     out_vel_buffer.data[i] = vel_a;
