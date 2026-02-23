@@ -5,7 +5,7 @@ layout(local_size_x = 256) in;
 // ── Input Buffers ────────────────────────────────────────────────────────────
 layout(set = 0, binding = 0, std430) buffer InPosBuffer  { vec2  data[]; } in_pos_buffer;
 layout(set = 0, binding = 1, std430) buffer InVelBuffer  { vec2  data[]; } in_vel_buffer;
-layout(set = 0, binding = 2, std430) buffer Types        { uint  data[]; } type_buffer; // Removed readonly to allow death conversion
+layout(set = 0, binding = 2, std430) buffer Types        { uint  data[]; } type_buffer;
 layout(set = 0, binding = 3, std430) buffer Forces       { float data[]; } force_buffer;
 layout(set = 0, binding = 4, std430) buffer Colors       { vec4  data[]; } color_buffer;
 
@@ -25,23 +25,23 @@ layout(set = 0, binding = 14, std430) buffer EnergyOut          { float data[]; 
 
 // ── Push Constants ────────────────────────────────────────────────────────────
 layout(push_constant, std430) uniform Params {
-    vec2  region_size;        // 0
-    vec2  camera_origin;      // 8
-    uint  particle_count;     // 16
-    uint  particle_types;     // 20
-    uint  step;               // 24
-    float dt;                 // 28
-    float camera_zoom;        // 32
-    float radius;             // 36
-    float dampening;          // 40
-    float repulsion_radius;   // 44
-    float interaction_radius; // 48
-    float density_limit;      // 52
-    float viscosity_strength; // 56
-    float pressure_resistance;// 60
-    float local_density_cap;  // 64
-    float metabolic_rate;     // 68 - NEW
-    float energy_gain_rate;   // 72 - NEW
+    vec2  region_size;
+    vec2  camera_origin;
+    uint  particle_count;
+    uint  particle_types;
+    uint  step;
+    float dt;
+    float camera_zoom;
+    float radius;
+    float dampening;
+    float repulsion_radius;
+    float interaction_radius;
+    float density_limit;
+    float viscosity_strength;
+    float pressure_resistance;
+    float local_density_cap;
+    float metabolic_rate;     // passive drain
+    float energy_gain_rate;   // feeding gain
 } params;
 
 const uint BEHAVIOR_REPEL    = 1u;
@@ -59,7 +59,7 @@ void apply_physics(uint i) {
     uint  type_a        = type_buffer.data[i];
     float current_energy = energy_in_buffer.data[i];
 
-    // 1. Dead particles (Type 0) just drift with friction
+    // Dead particles drift
     if (type_a == 0) {
         vec2 friction_vel = vel_a * 0.95f;
         out_vel_buffer.data[i] = friction_vel;
@@ -73,13 +73,15 @@ void apply_physics(uint i) {
     float local_density = 0.0f;
     float feeding_gain = 0.0f;
 
-    // 2. Interaction Loop
+    // ─────────────────────────────────────────────
+    // Interaction Loop
+    // ─────────────────────────────────────────────
     for (uint j = 0; j < params.particle_count; j++) {
         if (i == j) continue;
 
-        vec2  pos_b = in_pos_buffer.data[j];
-        uint  type_b = type_buffer.data[j];
-        vec2  delta = pos_b - pos_a;
+        vec2 pos_b = in_pos_buffer.data[j];
+        uint type_b = type_buffer.data[j];
+        vec2 delta = pos_b - pos_a;
 
         // Toroidal wrap
         if (delta.x >  params.region_size.x * 0.5f) delta.x -= params.region_size.x;
@@ -93,7 +95,7 @@ void apply_physics(uint i) {
         float dist = sqrt(dist_sq);
         vec2  dir  = delta / dist;
 
-        // Physics: Repulsion / Attraction
+        // Attraction / Repulsion
         float force_mag = 0.0f;
         if (dist < params.repulsion_radius) {
             force_mag = (dist / params.repulsion_radius - 1.0f);
@@ -102,32 +104,51 @@ void apply_physics(uint i) {
             float interact_dist = params.interaction_radius - params.repulsion_radius;
             force_mag = strength * (1.0f - abs(2.0f * (dist - params.repulsion_radius) / interact_dist - 1.0f));
         }
-        total_force += dir * force_mag;
 
-        // Metabolism: Feeding logic
-        // If type_b is dead (0) or a different type, we might "eat" it
-        if (type_b != type_a) {
-            feeding_gain += params.energy_gain_rate * (1.0f - dist/MAX_RADIUS) * params.dt;
-        }
+        total_force += dir * force_mag;
         local_density += 1.0f;
+
+        // ─────────────────────────────────────────────
+        // Metabolism: Energy Gain From Interactions
+        // ─────────────────────────────────────────────
+
+        // A. Attraction gives energy (symbiosis)
+        float attraction = max(0.0f, force_mag);
+        feeding_gain += attraction * params.energy_gain_rate * params.dt;
+
+        // B. Eating dead particles (scavenging)
+        if (type_b == 0) {
+            feeding_gain += params.energy_gain_rate * 2.0f * (1.0f - dist/MAX_RADIUS) * params.dt;
+        }
+
+        // C. Eating other types (predation)
+        if (type_b != type_a && dist < params.repulsion_radius * 0.7f) {
+            feeding_gain += params.energy_gain_rate * 0.5f * params.dt;
+        }
     }
 
-    // 3. Apply Forces and Movement
+    // ─────────────────────────────────────────────
+    // Apply Forces
+    // ─────────────────────────────────────────────
     vec2 accel = total_force * 40.0f;
     vec2 new_vel = (vel_a + accel * params.dt) * params.dampening;
-    
-    // 4. Calculate Metabolism
-    float move_cost = length(new_vel) * 0.002f; // Cost for moving
-    float density_penalty = max(0.0f, local_density - params.density_limit) * 0.1f;
-    float total_decay = (params.metabolic_rate + move_cost + density_penalty) * params.dt;
-    
+
+    // ─────────────────────────────────────────────
+    // Metabolism: Passive Energy Drain
+    // ─────────────────────────────────────────────
+    float passive_drain  = params.metabolic_rate * params.dt;
+    float movement_drain = length(new_vel) * 0.002f;
+    float density_drain  = max(0.0f, local_density - params.density_limit) * 0.1f;
+
+    float total_decay = passive_drain + movement_drain + density_drain;
+
     float next_energy = clamp(current_energy - total_decay + feeding_gain, 0.0f, 1.0f);
 
-    // 5. Final Survival Check (The "Death Row" Re-ordering)
+    // Death
     if (next_energy <= 0.0f) {
-        type_buffer.data[i] = 0;       // Particle becomes "dust"
+        type_buffer.data[i] = 0;
         next_energy = 0.0f;
-        new_vel *= 0.2f;               // Sudden stop upon death
+        new_vel *= 0.2f;
     }
 
     // Write-back
@@ -139,10 +160,8 @@ void apply_physics(uint i) {
 void render_particle(uint i) {
     vec2 pos   = in_pos_buffer.data[i];
     uint type  = type_buffer.data[i];
-    
-    // Dim the color based on energy for visual feedback
     float energy = energy_in_buffer.data[i];
-    
+
     uint flags = behavior_buffer.data[type];
     bool polar = (flags & BEHAVIOR_POLAR) != 0u;
 
@@ -171,8 +190,8 @@ void render_particle(uint i) {
             if (d_main >= radius) continue;
 
             vec4 col = color_buffer.data[type];
-            
-            // Visual feedback for low energy (dimming)
+
+            // Dim by energy
             if (type != 0) {
                 col.rgb *= clamp(energy * 0.8 + 0.2, 0.2, 1.0);
             }
