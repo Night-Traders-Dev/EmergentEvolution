@@ -150,24 +150,22 @@ void Simulation::handle_input(GLFWwindow* window, double dt) {
     if (!iface.mouse_within || !iface.settings_visible) {
         if (lmb) {
             smooth_mouse_change_ += raw_change * static_cast<float>(dt);
-            cfg.camera_origin    += smooth_mouse_change_ / cfg.current_camera_zoom;
+            cfg.camera_origin    -= smooth_mouse_change_ / cfg.current_camera_zoom;
         }
     }
 
     if (!lmb) {
         raw_change = {};
-        cfg.camera_origin    += smooth_mouse_change_ / cfg.current_camera_zoom;
+        cfg.camera_origin    -= smooth_mouse_change_ / cfg.current_camera_zoom;
         smooth_mouse_change_  = glm::mix(smooth_mouse_change_, glm::vec2(0.0f),
                                           static_cast<float>(dt) * 4.0f);
     }
 
     // ── Mouse: zoom (scroll handled by GLFW callback set in main.cpp) ─────────
-    // Camera zoom is updated directly from the scroll callback via target_zoom_.
-    // We smooth it here.
+    // Smoothly interpolate current_camera_zoom toward the target stored in camera_zoom.
     cfg.current_camera_zoom = glm::mix(cfg.current_camera_zoom,
-                                       target_zoom_,
-                                       static_cast<float>(dt) * 4.0f);
-    cfg.camera_zoom = target_zoom_;
+                                       cfg.camera_zoom,
+                                       static_cast<float>(dt) * 8.0f);
 
     lmb_down_ = lmb;
 }
@@ -184,11 +182,10 @@ static void scroll_callback(GLFWwindow*, double, double y_offset) {
 
     float& zoom = g_sim->cfg.camera_zoom;
     if (y_offset > 0)
-        zoom += 0.25f * zoom;
+        zoom *= 1.25f;
     else if (y_offset < 0)
-        zoom -= 0.25f * zoom;
-    zoom = std::clamp(zoom, 1.0f, 10.0f);
-    g_sim->cfg.current_camera_zoom = zoom; // also update target for smoothing
+        zoom *= 0.8f;
+    zoom = std::clamp(zoom, 0.02f, 500.0f);
 }
 
 void Simulation_RegisterScrollCallback(GLFWwindow* window, Simulation* sim) {

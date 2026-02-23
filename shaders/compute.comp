@@ -73,12 +73,8 @@ void apply_physics(uint i) {
     for (int j = 0; j < int(params.particle_count); j++) {
         if (i == uint(j)) continue;
 
-        vec2  pos_b = in_pos_buffer.data[j];
-        vec2  delta = pos_a - pos_b;
-
-        delta.x -= round(delta.x / params.region_size.x) * params.region_size.x;
-        delta.y -= round(delta.y / params.region_size.y) * params.region_size.y;
-
+        vec2  pos_b   = in_pos_buffer.data[j];
+        vec2  delta   = pos_a - pos_b;
         float dist_sq = dot(delta, delta);
         if (dist_sq > MAX_RADIUS) continue;
 
@@ -98,10 +94,6 @@ void apply_physics(uint i) {
 
         vec2  pos_b   = in_pos_buffer.data[j];
         vec2  delta   = pos_a - pos_b;
-
-        delta.x -= round(delta.x / params.region_size.x) * params.region_size.x;
-        delta.y -= round(delta.y / params.region_size.y) * params.region_size.y;
-
         float dist_sq = dot(delta, delta);
         if (dist_sq > MAX_RADIUS) continue;
 
@@ -182,8 +174,8 @@ void apply_physics(uint i) {
     float damp = min(params.dampening + catalyst_boost * 0.04f, 0.99f);
     vel_a *= damp;
 
+    // Infinite world: positions are unbounded, no wrapping
     pos_a += vel_a * params.dt;
-    pos_a  = mod(pos_a + params.region_size, params.region_size);
 
     out_pos_buffer.data[i] = pos_a;
     out_vel_buffer.data[i] = vel_a;
@@ -203,27 +195,29 @@ void apply_physics(uint i) {
 
 
 void render_particle(uint i) {
-    vec2 pos  = in_pos_buffer.data[i];
-    uint type = type_buffer.data[i];
+    vec2 pos   = in_pos_buffer.data[i];
+    uint type  = type_buffer.data[i];
     uint flags = behavior_buffer.data[type];
-    bool polar  = (flags & BEHAVIOR_POLAR) != 0u;
+    bool polar = (flags & BEHAVIOR_POLAR) != 0u;
 
-    vec2 region_size   = params.region_size;
-    vec2 region_center = region_size * 0.5f;
-    vec2 delta         = pos + params.camera_origin;
-
-    delta = mod(delta + region_center + vec2(params.radius, params.radius), region_size) - region_center;
-
+    // Project world position to screen space.
+    // camera_origin is the world position at the center of the screen.
+    vec2 screen_center = params.region_size * 0.5f;
     float radius = params.radius * params.camera_zoom;
     int   range  = int(ceil(radius));
-    vec2  screen_pos = region_center + (delta * params.camera_zoom) - vec2(range, range);
+    float r      = float(range);
+
+    vec2 center = screen_center + (pos - params.camera_origin) * params.camera_zoom;
+
+    // Frustum cull: skip particles whose disk is entirely off-screen
+    if (center.x + r < 0.0f || center.x - r > params.region_size.x) return;
+    if (center.y + r < 0.0f || center.y - r > params.region_size.y) return;
 
     float angle   = polar ? angle_in_buffer.data[i] : 0.0f;
     vec2  dip_dir = polar ? vec2(cos(angle), sin(angle)) : vec2(0.0f);
-    // North pole is displaced in dipole direction from the screen-space center
-    // screen_pos is the render reference; actual centre = screen_pos + (range, range)
-    vec2  center     = screen_pos + vec2(float(range), float(range));
-    vec2  north_pt   = center + dip_dir * (radius * 0.55f);
+    vec2  north_pt = center + dip_dir * (radius * 0.55f);
+
+    vec2  screen_pos = center - vec2(r, r);
 
     for (int x = -range; x <= range; x++) {
         for (int y = -range; y <= range; y++) {

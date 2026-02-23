@@ -38,11 +38,10 @@ public:
 
 private:
     // Input state
-    glm::vec2 last_mouse_pos_    = {};
-    glm::vec2 mouse_change_      = {};
+    glm::vec2 last_mouse_pos_      = {};
+    glm::vec2 mouse_change_        = {};
     glm::vec2 smooth_mouse_change_ = {};
-    bool      lmb_down_          = false;
-    float     target_zoom_       = 1.0f;
+    bool      lmb_down_            = false;
 
     // Organism tracking
     int                    organism_tick_counter_ = 0;
