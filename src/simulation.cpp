@@ -76,7 +76,7 @@ void Simulation::tick(GLFWwindow* window, double dt) {
         if (organism_tick_counter_ % ORGANISM_UPDATE_INTERVAL == 0) {
             readback_positions_.resize(cfg.particle_count);
             readback_velocities_.resize(cfg.particle_count);
-            compute.read_current_state(vk, readback_positions_, readback_velocities_, particles.types);
+            compute.read_current_state(vk, readback_positions_, readback_velocities_);
             organism_manager.update(readback_positions_, readback_velocities_,
                                     particles.types, particles);
         }

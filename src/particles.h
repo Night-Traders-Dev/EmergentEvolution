@@ -16,13 +16,9 @@ public:
     std::vector<uint32_t>  types;
     std::vector<float>     forces;
     std::vector<glm::vec4> colors;
-    std::vector<float>     energy;
-    std::vector<float>     metabolic_rate;
-    std::vector<float>     efficiency; 
-    std::vector<float>     max_energy;
 
-    float trait_scales[MAX_PARTICLE_TYPES];
-    float structure_integrity[MAX_PARTICLE_TYPES]; // Added this
+    float    trait_scales[MAX_PARTICLE_TYPES];
+    float    structure_integrity[MAX_PARTICLE_TYPES];
     uint32_t behavior_flags[MAX_PARTICLE_TYPES];
 
     std::vector<float> angles;
@@ -41,6 +37,13 @@ public:
     void apply_preset_membrane(uint32_t type);
     void apply_preset_viral(uint32_t type, uint32_t active_types);
 
+    // New archetype presets
+    void apply_preset_adhesive(uint32_t type);
+    void apply_preset_secretor(uint32_t type);
+    void apply_preset_photosynth(uint32_t type);
+    void apply_preset_predator(uint32_t type, uint32_t active_types);
+    void apply_preset_reproductive(uint32_t type);
+
 private:
     std::mt19937 rng_;
 
@@ -54,7 +57,7 @@ private:
                       uint32_t  type = 0);
 
     // uniform int in [lo, hi]
-    int rand_range_i(int lo, int hi);
+    int   rand_range_i(int lo, int hi);
     // uniform float in [lo, hi)
     float rand_range_f(float lo, float hi);
 };

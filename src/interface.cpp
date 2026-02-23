@@ -49,15 +49,7 @@ void Interface::render_imgui(SimConfig&       cfg,
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    if (ImGui::CollapsingHeader("Metabolism & Life", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::SliderFloat("Energy Decay", &cfg.metabolic_rate, 0.0f, 0.01f, "%.3f");
-        ImGui::SameLine(); HelpMarker("Base energy lost per second.");
 
-        ImGui::SliderFloat("Feeding Rate", &cfg.energy_gain_rate, 0.05f, 1.0f, "%.2f");
-        ImGui::SameLine(); HelpMarker("Energy gained when near Catalyst particles.");
-    }
-
-    
     if (ImGui::CollapsingHeader("Soft-Body Physics", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::SliderFloat("Viscosity (Drag)", &cfg.viscosity_strength, 0.0f, 0.5f, "%.3f");
         ImGui::SameLine(); HelpMarker("Higher values make clusters move like thick liquid.");
@@ -265,10 +257,31 @@ void Interface::draw_archetype_panel(Particles& particles, const SimConfig& cfg)
         return;
 
     static const char* archetype_names[] = {
-        "Default", "Repeller", "Polar", "Heavy", "Catalyst", "Membrane", "Viral"
+        "Default",
+        "Repeller",
+        "Polar",
+        "Heavy",
+        "Catalyst",
+        "Membrane",
+        "Viral",
+        "Adhesive",
+        "Secretor",
+        "Photosynth",
+        "Predator",
+        "Reproductive"
     };
+
     static const char* flag_names[] = {
-        nullptr, "REPEL", "POLAR", "HEAVY", "CATALYST", nullptr, "VIRAL"
+        "REPEL",        // bit 0
+        "POLAR",        // bit 1
+        "HEAVY",        // bit 2
+        "CATALYST",     // bit 3
+        "VIRAL",        // bit 4
+        "ADHESIVE",     // bit 5
+        "SECRETOR",     // bit 6
+        "PHOTOSYNTH",   // bit 7
+        "PREDATOR",     // bit 8
+        "REPRODUCTIVE"  // bit 9
     };
 
     uint32_t pt = cfg.particle_types;
@@ -287,37 +300,42 @@ void Interface::draw_archetype_panel(Particles& particles, const SimConfig& cfg)
         ImGui::SameLine();
 
         // Archetype combo
-        ImGui::SetNextItemWidth(100.0f);
-        if (ImGui::Combo("##arch", &archetype_selection[t], archetype_names, 7)) {
+        ImGui::SetNextItemWidth(130.0f);
+        if (ImGui::Combo("##arch", &archetype_selection[t], archetype_names, IM_ARRAYSIZE(archetype_names))) {
             switch (archetype_selection[t]) {
-            case 0: particles.apply_preset_default(t);              break;
-            case 1: particles.apply_preset_repeller(t);             break;
-            case 2: particles.apply_preset_polar(t, pt);            break;
-            case 3: particles.apply_preset_heavy(t);                break;
-            case 4: particles.apply_preset_catalyst(t);             break;
-            case 5: particles.apply_preset_membrane(t);             break;
-            case 6: particles.apply_preset_viral(t, pt);            break;
+            case 0:  particles.apply_preset_default(t);              break;
+            case 1:  particles.apply_preset_repeller(t);             break;
+            case 2:  particles.apply_preset_polar(t, pt);            break;
+            case 3:  particles.apply_preset_heavy(t);                break;
+            case 4:  particles.apply_preset_catalyst(t);             break;
+            case 5:  particles.apply_preset_membrane(t);             break;
+            case 6:  particles.apply_preset_viral(t, pt);            break;
+            case 7:  particles.apply_preset_adhesive(t);             break;
+            case 8:  particles.apply_preset_secretor(t);             break;
+            case 9:  particles.apply_preset_photosynth(t);           break;
+            case 10: particles.apply_preset_predator(t, pt);         break;
+            case 11: particles.apply_preset_reproductive(t);         break;
             }
         }
 
-        // Show active behavior flags as small badges
+        // Show active behavior flags
         uint32_t flags = particles.behavior_flags[t];
         if (flags == BEHAVIOR_NONE) {
             ImGui::SameLine();
             ImGui::TextDisabled("──");
         } else {
-            for (int fi = 0; fi < 7; ++fi) {
-                if (flag_names[fi] == nullptr) continue;
-                uint32_t bit = 1u << fi;
-                if (!(flags & bit)) continue;
-                ImGui::SameLine();
-                ImGui::TextDisabled("%s", flag_names[fi]);
+            for (int bit = 0; bit < 10; ++bit) {
+                if (flags & (1u << bit)) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("%s", flag_names[bit]);
+                }
             }
         }
 
         ImGui::PopID();
     }
 }
+
 
 // ── Organism panel ────────────────────────────────────────────────────────────
 

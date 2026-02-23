@@ -19,73 +19,98 @@ void OrganismManager::reset() {
     next_id_ = 1;
 }
 
-// ── Clustering: spatial hash + union-find ──────────────────────────────────────
+// ── DBSCAN Clustering (spatial hash accelerated) ──────────────────────────────
 
 std::vector<int> OrganismManager::build_clusters(
     const std::vector<glm::vec2>& positions)
 {
     uint32_t n = static_cast<uint32_t>(positions.size());
+    if (n == 0) return {};
 
-    // DSU with full path compression
-    std::vector<int> parent(n);
-    std::vector<int> rank_arr(n, 0);
-    std::iota(parent.begin(), parent.end(), 0);
+    float eps  = cluster_radius * eps_scale;
+    float eps2 = eps * eps;
 
-    auto find = [&](int x) {
-        // Iterative with full compression (two-pass)
-        int root = x;
-        while (parent[root] != root) root = parent[root];
-        while (parent[x] != root) {
-            int next = parent[x];
-            parent[x] = root;
-            x = next;
-        }
-        return root;
-    };
-
-    auto unite = [&](int a, int b) {
-        a = find(a); b = find(b);
-        if (a == b) return;
-        if (rank_arr[a] < rank_arr[b]) std::swap(a, b);
-        parent[b] = a;
-        if (rank_arr[a] == rank_arr[b]) rank_arr[a]++;
-    };
-
-    // Build spatial hash
+    // Spatial hash
     std::unordered_map<int64_t, std::vector<uint32_t>> grid;
     grid.reserve(n / 4 + 1);
 
-    for (uint32_t i = 0; i < n; ++i) {
-        int cx = static_cast<int>(positions[i].x / cluster_radius);
-        int cy = static_cast<int>(positions[i].y / cluster_radius);
-        grid[cell_key(cx, cy)].push_back(i);
-    }
+    auto key = [&](float x, float y) {
+        int cx = static_cast<int>(x / eps);
+        int cy = static_cast<int>(y / eps);
+        return (static_cast<int64_t>(cx) << 32) | uint32_t(cy);
+    };
 
-    float r2 = cluster_radius * cluster_radius;
+    for (uint32_t i = 0; i < n; ++i)
+        grid[key(positions[i].x, positions[i].y)].push_back(i);
 
-    for (uint32_t i = 0; i < n; ++i) {
-        int cx = static_cast<int>(positions[i].x / cluster_radius);
-        int cy = static_cast<int>(positions[i].y / cluster_radius);
+    // Neighbor lookup
+    auto neighbors = [&](uint32_t i, std::vector<uint32_t>& out) {
+        out.clear();
+        float x = positions[i].x;
+        float y = positions[i].y;
+        int cx  = static_cast<int>(x / eps);
+        int cy  = static_cast<int>(y / eps);
 
         for (int dy = -1; dy <= 1; ++dy) {
             for (int dx = -1; dx <= 1; ++dx) {
-                auto it = grid.find(cell_key(cx + dx, cy + dy));
+                int64_t k = (static_cast<int64_t>(cx + dx) << 32) | uint32_t(cy + dy);
+                auto it = grid.find(k);
                 if (it == grid.end()) continue;
+
                 for (uint32_t j : it->second) {
-                    if (j <= i) continue;
                     glm::vec2 d = positions[j] - positions[i];
-                    if (glm::dot(d, d) < r2)
-                        unite(static_cast<int>(i), static_cast<int>(j));
+                    if (glm::dot(d, d) <= eps2)
+                        out.push_back(j);
                 }
             }
         }
+    };
+
+    enum State { UNVISITED, NOISE, CLUSTERED };
+    std::vector<State> state(n, UNVISITED);
+    std::vector<int>   cluster_id(n, -1);
+
+    int current_cluster = 0;
+    std::vector<uint32_t> neigh, neigh2;
+
+    // DBSCAN main loop
+    for (uint32_t i = 0; i < n; ++i) {
+        if (state[i] != UNVISITED) continue;
+
+        neighbors(i, neigh);
+
+        if (neigh.size() < min_pts) {
+            state[i] = NOISE;
+            continue;
+        }
+
+        int cid = current_cluster++;
+        cluster_id[i] = cid;
+        state[i]      = CLUSTERED;
+
+        std::vector<uint32_t> stack(neigh.begin(), neigh.end());
+
+        while (!stack.empty()) {
+            uint32_t p = stack.back();
+            stack.pop_back();
+
+            if (state[p] == NOISE) {
+                state[p]      = CLUSTERED;
+                cluster_id[p] = cid;
+            }
+
+            if (state[p] != UNVISITED) continue;
+
+            state[p]      = CLUSTERED;
+            cluster_id[p] = cid;
+
+            neighbors(p, neigh2);
+            if (neigh2.size() >= min_pts)
+                stack.insert(stack.end(), neigh2.begin(), neigh2.end());
+        }
     }
 
-    // Final pass: ensure all parents point directly to root
-    for (uint32_t i = 0; i < n; ++i)
-        parent[i] = find(i);
-
-    return parent;
+    return cluster_id;
 }
 
 // ── Viral infection ───────────────────────────────────────────────────────────
@@ -94,10 +119,10 @@ void OrganismManager::apply_viral_infections(
     const std::vector<glm::vec2>& positions,
     Particles& particles)
 {
-    uint32_t n = static_cast<uint32_t>(positions.size());
-    float viral_radius = cluster_radius * 0.5f;
-    float vr2          = viral_radius * viral_radius;
-    float cell_sz      = viral_radius;
+    uint32_t n        = static_cast<uint32_t>(positions.size());
+    float    viral_radius = cluster_radius * 0.5f;
+    float    vr2          = viral_radius * viral_radius;
+    float    cell_sz      = viral_radius;
 
     std::unordered_map<int64_t, std::vector<uint32_t>> grid;
     grid.reserve(n / 4 + 1);
@@ -137,15 +162,12 @@ void OrganismManager::apply_viral_infections(
 void OrganismManager::apply_trait_feedback(Particles& particles) {
     for (auto& org : organisms) {
         uint32_t type = org.traits.dominant_type;
-        
-        // Boost the force matrix as you already do
+
         float kill_bonus = std::min(org.traits.kills * 0.1f, 0.5f);
         particles.trait_scales[type] = 1.0f + kill_bonus;
 
-        // NEW: Evolution of "Structural Integrity"
-        // Heavily successful organisms become harder to compress (Soft-body toughness)
-        // This can be stored in a new per-type behavior array
-        particles.structure_integrity[type] = 1.0f + (org.traits.generation * 0.05f);
+        particles.structure_integrity[type] =
+            1.0f + (org.traits.generation * 0.05f);
     }
 }
 
@@ -160,7 +182,7 @@ void OrganismManager::update(
     uint32_t n = static_cast<uint32_t>(positions.size());
     if (n == 0) { organisms.clear(); return; }
 
-    // ── 1. Cluster particles ──────────────────────────────────────────────────
+    // 1. DBSCAN cluster
     auto parent = build_clusters(positions);
 
     std::unordered_map<int, std::vector<uint32_t>> root_map;
@@ -168,7 +190,7 @@ void OrganismManager::update(
     for (uint32_t i = 0; i < n; ++i)
         root_map[parent[i]].push_back(i);
 
-    // ── 2. Build new Organism structs ─────────────────────────────────────────
+    // 2. Build new organisms
     std::vector<Organism> new_orgs;
     new_orgs.reserve(root_map.size());
 
@@ -176,9 +198,9 @@ void OrganismManager::update(
         if (members.size() < ORGANISM_MIN_SIZE) continue;
 
         Organism org{};
-        org.id = next_id_++;
+        org.id               = next_id_++;
         org.particle_indices = members;
-        org.traits.size = static_cast<uint32_t>(members.size());
+        org.traits.size      = static_cast<uint32_t>(members.size());
 
         glm::vec2 sum_pos(0.0f), sum_vel(0.0f);
         for (uint32_t idx : members) {
@@ -190,7 +212,7 @@ void OrganismManager::update(
         }
 
         float inv = 1.0f / static_cast<float>(members.size());
-        org.centroid        = sum_pos * inv;
+        org.centroid         = sum_pos * inv;
         org.traits.avg_speed = glm::length(sum_vel * inv);
 
         float sum_d2 = 0.0f;
@@ -212,11 +234,10 @@ void OrganismManager::update(
         new_orgs.push_back(std::move(org));
     }
 
-    // ── 3. Match new orgs to previous (greedy nearest-centroid) ───────────────
+    // 3. Match new to previous
     std::vector<bool> prev_matched(prev_organisms_.size(), false);
     std::vector<bool> new_matched(new_orgs.size(), false);
 
-    // Record previous sizes for consumption detection
     std::unordered_map<uint64_t, uint32_t> prev_sizes;
     prev_sizes.reserve(prev_organisms_.size());
     for (const auto& p : prev_organisms_)
@@ -231,73 +252,70 @@ void OrganismManager::update(
         for (size_t pi = 0; pi < prev_organisms_.size(); ++pi) {
             if (prev_matched[pi]) continue;
 
-            float ratio = static_cast<float>(new_orgs[ni].traits.size)
-                        / static_cast<float>(prev_organisms_[pi].traits.size);
+            float ratio = static_cast<float>(new_orgs[ni].traits.size) /
+                          static_cast<float>(prev_organisms_[pi].traits.size);
             if (ratio < 0.3f || ratio > 3.5f) continue;
 
-            glm::vec2 d = new_orgs[ni].centroid - prev_organisms_[pi].centroid;
-            float d2 = glm::dot(d, d);
+            glm::vec2 d  = new_orgs[ni].centroid - prev_organisms_[pi].centroid;
+            float     d2 = glm::dot(d, d);
             if (d2 < best_d2) { best_d2 = d2; best_pi = static_cast<int>(pi); }
         }
 
         if (best_pi >= 0) {
             prev_matched[best_pi] = true;
             new_matched[ni]       = true;
-            const auto& prev = prev_organisms_[best_pi];
-            new_orgs[ni].id                 = prev.id;
-            new_orgs[ni].traits.kills       = prev.traits.kills;
-            new_orgs[ni].traits.divisions   = prev.traits.divisions;
-            new_orgs[ni].traits.generation  = prev.traits.generation;
-            new_orgs[ni].traits.parent_id   = prev.traits.parent_id;
+            const auto& prev      = prev_organisms_[best_pi];
+            new_orgs[ni].id                   = prev.id;
+            new_orgs[ni].traits.kills         = prev.traits.kills;
+            new_orgs[ni].traits.divisions     = prev.traits.divisions;
+            new_orgs[ni].traits.generation    = prev.traits.generation;
+            new_orgs[ni].traits.parent_id     = prev.traits.parent_id;
+            new_orgs[ni].traits.energy        = prev.traits.energy; // carry energy forward
         }
     }
 
-    // ── 4. Division detection ─────────────────────────────────────────────────
-    float div_r2 = (cluster_radius * 4.0f) * (cluster_radius * 4.0f);
+    // 4. Division detection (DBSCAN-aware)
+    float div_r2 = (cluster_radius * 5.0f) * (cluster_radius * 5.0f);
 
     for (size_t pi = 0; pi < prev_organisms_.size(); ++pi) {
         if (prev_matched[pi]) continue;
         const auto& prev = prev_organisms_[pi];
         if (prev.traits.size < ORGANISM_MIN_SIZE * 2) continue;
 
-        std::vector<size_t> nearby_new;
-        uint32_t nearby_total = 0;
+        std::vector<size_t> nearby;
+        uint32_t total = 0;
 
         for (size_t ni = 0; ni < new_orgs.size(); ++ni) {
             glm::vec2 d = new_orgs[ni].centroid - prev.centroid;
             if (glm::dot(d, d) < div_r2) {
-                nearby_new.push_back(ni);
-                nearby_total += new_orgs[ni].traits.size;
+                nearby.push_back(ni);
+                total += new_orgs[ni].traits.size;
             }
         }
 
-        if (nearby_new.size() >= 2) {
-            int diff = static_cast<int>(nearby_total) - static_cast<int>(prev.traits.size);
-            if (std::abs(diff) < static_cast<int>(prev.traits.size) / 2) {
-                for (size_t ni : nearby_new) {
-                    if (!new_matched[ni]) {
-                        new_orgs[ni].traits.kills     = prev.traits.kills;
-                        new_orgs[ni].traits.divisions = prev.traits.divisions + 1;
-                        new_orgs[ni].traits.generation= prev.traits.generation + 1;
-                        new_orgs[ni].traits.parent_id = prev.id;
-                        new_matched[ni] = true;
-                    } else {
-                        new_orgs[ni].traits.divisions++;
-                    }
-                }
-            }
+        if (nearby.size() < 2) continue;
+
+        if (total < prev.traits.size * 0.7f ||
+            total > prev.traits.size * 1.4f)
+            continue;
+
+        for (size_t ni : nearby) {
+            new_orgs[ni].traits.generation = prev.traits.generation + 1;
+            new_orgs[ni].traits.divisions  = prev.traits.divisions + 1;
+            new_orgs[ni].traits.parent_id  = prev.id;
         }
     }
 
-    // ── 5. Consumption detection ──────────────────────────────────────────────
-    float kill_r2 = (cluster_radius * 3.0f) * (cluster_radius * 3.0f);
+    // 5. Consumption detection (DBSCAN-aware)
+    float kill_r2 = (cluster_radius * 4.0f) * (cluster_radius * 4.0f);
 
     for (size_t ni = 0; ni < new_orgs.size(); ++ni) {
         if (!new_matched[ni]) continue;
 
         auto it = prev_sizes.find(new_orgs[ni].id);
         if (it == prev_sizes.end()) continue;
-        if (new_orgs[ni].traits.size < it->second * 1.2f) continue;
+
+        if (new_orgs[ni].traits.size < it->second * 1.25f) continue;
 
         for (size_t pi = 0; pi < prev_organisms_.size(); ++pi) {
             if (prev_matched[pi]) continue;
@@ -309,8 +327,46 @@ void OrganismManager::update(
         }
     }
 
-    // ── 6. Commit & feedback ──────────────────────────────────────────────────
-    organisms      = std::move(new_orgs);
+    // 5.5 Metabolic update (organism-level energy)
+    for (auto& org : new_orgs) {
+        // Movement cost (based on average speed)
+        float move_cost = org.traits.avg_speed * 0.002f;
+
+        // Density cost (based on how tightly packed the organism is)
+        float ideal_spread = cluster_radius * 0.6f;
+        float density_cost = 0.0f;
+        if (org.spread < ideal_spread)
+            density_cost = (ideal_spread - org.spread) * 0.0015f;
+
+        // Base metabolism (always drains)
+        float base_metabolism = 0.001f;
+
+        // Feeding gain – for now, tie it simply to kills (predation-like)
+        float feeding_gain = org.traits.kills * 0.02f;
+
+        // Update energy
+        org.traits.energy = glm::clamp(
+            org.traits.energy + feeding_gain - move_cost - density_cost - base_metabolism,
+            0.0f, 1.0f
+        );
+
+        // Death: organism dissolves into dust
+        if (org.traits.energy <= 0.0f) {
+            for (uint32_t idx : org.particle_indices)
+                particles.types[idx] = 0; // dust
+            org.traits.size = 0; // mark as effectively dead
+        }
+    }
+
+    // Remove dead (size==0) organisms from the list
+    new_orgs.erase(
+        std::remove_if(new_orgs.begin(), new_orgs.end(),
+                       [](const Organism& o) { return o.traits.size == 0; }),
+        new_orgs.end()
+    );
+
+    // 6. Commit & feedback
+    organisms       = std::move(new_orgs);
     prev_organisms_ = organisms;
 
     apply_viral_infections(positions, particles);

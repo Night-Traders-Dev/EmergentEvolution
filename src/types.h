@@ -12,13 +12,23 @@ static constexpr uint32_t MAX_PARTICLE_TYPES = 10;
 static constexpr uint32_t GROUP_DENSITY      = 256;
 
 enum ParticleBehavior : uint32_t {
-    BEHAVIOR_NONE     = 0,
-    BEHAVIOR_REPEL    = 1u << 0,
-    BEHAVIOR_POLAR    = 1u << 1,
-    BEHAVIOR_HEAVY    = 1u << 2,
-    BEHAVIOR_CATALYST = 1u << 3,
-    BEHAVIOR_VIRAL    = 1u << 4
+    BEHAVIOR_NONE         = 0,
+
+    // Existing
+    BEHAVIOR_REPEL        = 1u << 0,
+    BEHAVIOR_POLAR        = 1u << 1,
+    BEHAVIOR_HEAVY        = 1u << 2,
+    BEHAVIOR_CATALYST     = 1u << 3,
+    BEHAVIOR_VIRAL        = 1u << 4,
+
+    // New biological archetypes
+    BEHAVIOR_ADHESIVE     = 1u << 5,  // Strong cohesion to same-type or configured types
+    BEHAVIOR_SECRETOR     = 1u << 6,  // Emits a metabolic field (buff/debuff)
+    BEHAVIOR_PHOTOSYNTH   = 1u << 7,  // Gains energy in open/low-density areas
+    BEHAVIOR_PREDATOR     = 1u << 8,  // Moves toward nearby particles (chasing)
+    BEHAVIOR_REPRODUCTIVE = 1u << 9   // Divides when energy is high
 };
+
 
 struct PushConstants {
     glm::vec2 region_size;        // 0
@@ -36,11 +46,9 @@ struct PushConstants {
     float     viscosity_strength; // 56
     float     pressure_resistance;// 60
     float     local_density_cap;  // 64
-    float     metabolic_rate;     // 68 (New: Base energy decay)
-    float     energy_gain_rate;   // 72 (New: Feeding/Catalyst gain)
 };
-
-static_assert(sizeof(PushConstants) == 76, "PushConstants layout mismatch");
+// Size is 68 bytes
+static_assert(sizeof(PushConstants) == 68, "PushConstants layout mismatch");
 
 struct SimConfig {
     uint32_t particle_count     = 22500;
@@ -59,10 +67,6 @@ struct SimConfig {
     float viscosity_strength  = 0.15f;
     float pressure_resistance = 25.0f;
     float local_density_cap   = 1.0f;
-
-    // Metabolism Defaults
-    float metabolic_rate    = 0.05f; // Energy lost per second
-    float energy_gain_rate  = 0.20f; // Energy gained from catalysts
 
     glm::vec2 camera_origin      = { REGION_W / 2.0f, REGION_H / 2.0f };
     float     camera_zoom        = 1.0f;

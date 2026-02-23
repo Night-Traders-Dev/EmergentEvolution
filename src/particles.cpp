@@ -14,9 +14,6 @@ void Particles::gen_data(const SimConfig& cfg) {
     rng_.seed(cfg.generation_seed);
     for (float& s : trait_scales) s = 1.0f;
     for (auto& f : behavior_flags) f = BEHAVIOR_NONE;
-    for (auto& e : energy) {
-    e = 1.0f; // Start with full health!
-}
 
     if (cfg.reset_forces)
         gen_random_force_matrix();
@@ -31,7 +28,6 @@ void Particles::gen_particles(const SimConfig& cfg) {
     positions.clear();
     velocities.clear();
     types.clear();
-    energy.clear();
 
     const float rw = static_cast<float>(REGION_W);
     const float rh = static_cast<float>(REGION_H);
@@ -67,7 +63,6 @@ void Particles::add_particle(glm::vec2 pos, glm::vec2 vel, uint32_t type) {
     positions.push_back(pos);
     velocities.push_back(vel);
     types.push_back(type);
-    energy.push_back(1.0f); // Start with full health!
 }
 
 void Particles::gen_random_force_matrix() {
@@ -165,4 +160,42 @@ void Particles::apply_preset_viral(uint32_t type, uint32_t active_types) {
     // Strong attraction toward all types to get close enough to infect
     set_row(forces, type, 0.6f, 0.6f);
     (void)active_types;  // unused, kept for API symmetry
+}
+
+// ── New archetype presets ─────────────────────────────────────────────────────
+
+void Particles::apply_preset_adhesive(uint32_t type) {
+    if (type >= MAX_PARTICLE_TYPES) return;
+    behavior_flags[type] = BEHAVIOR_ADHESIVE;
+    // Strong self-cohesion, mild attraction to others
+    set_row(forces, type, 0.8f, 0.2f);
+}
+
+void Particles::apply_preset_secretor(uint32_t type) {
+    if (type >= MAX_PARTICLE_TYPES) return;
+    behavior_flags[type] = BEHAVIOR_SECRETOR;
+    // Mild self-attraction, neutral cross; main effect is shader "halo" force
+    set_row(forces, type, 0.2f, 0.0f);
+}
+
+void Particles::apply_preset_photosynth(uint32_t type) {
+    if (type >= MAX_PARTICLE_TYPES) return;
+    behavior_flags[type] = BEHAVIOR_PHOTOSYNTH;
+    // Gentle cohesion; main effect is shader "light" drift in low density
+    set_row(forces, type, 0.3f, 0.1f);
+}
+
+void Particles::apply_preset_predator(uint32_t type, uint32_t active_types) {
+    if (type >= MAX_PARTICLE_TYPES) return;
+    behavior_flags[type] = BEHAVIOR_PREDATOR;
+    // Repel self, attract others strongly
+    set_row(forces, type, -0.2f, 0.6f);
+    (void)active_types;
+}
+
+void Particles::apply_preset_reproductive(uint32_t type) {
+    if (type >= MAX_PARTICLE_TYPES) return;
+    behavior_flags[type] = BEHAVIOR_REPRODUCTIVE;
+    // Neutral-ish forces; reproduction is signaled via velocity in the shader
+    set_row(forces, type, 0.1f, 0.1f);
 }
