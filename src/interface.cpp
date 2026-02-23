@@ -50,10 +50,10 @@ void Interface::render_imgui(SimConfig&       cfg,
     ImGui::NewFrame();
 
     if (ImGui::CollapsingHeader("Metabolism & Life", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::SliderFloat("Energy Decay", &cfg.metabolic_rate, 0.0f, 0.2f, "%.3f");
+        ImGui::SliderFloat("Energy Decay", &cfg.metabolic_rate, 0.0f, 0.01f, "%.3f");
         ImGui::SameLine(); HelpMarker("Base energy lost per second.");
 
-        ImGui::SliderFloat("Feeding Rate", &cfg.energy_gain_rate, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Feeding Rate", &cfg.energy_gain_rate, 0.05f, 1.0f, "%.2f");
         ImGui::SameLine(); HelpMarker("Energy gained when near Catalyst particles.");
     }
 

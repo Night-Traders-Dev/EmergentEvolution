@@ -117,7 +117,7 @@ void apply_physics(uint i) {
     vec2 new_vel = (vel_a + accel * params.dt) * params.dampening;
     
     // 4. Calculate Metabolism
-    float move_cost = length(new_vel) * 0.02f; // Cost for moving
+    float move_cost = length(new_vel) * 0.002f; // Cost for moving
     float density_penalty = max(0.0f, local_density - params.density_limit) * 0.1f;
     float total_decay = (params.metabolic_rate + move_cost + density_penalty) * params.dt;
     
