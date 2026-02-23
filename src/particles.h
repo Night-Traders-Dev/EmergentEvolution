@@ -11,26 +11,20 @@
 
 class Particles {
 public:
-    // CPU arrays – uploaded to GPU after gen_data()
     std::vector<glm::vec2> positions;
     std::vector<glm::vec2> velocities;
     std::vector<uint32_t>  types;
-    std::vector<float>     forces;   // MAX_PARTICLE_TYPES² elements
-    std::vector<glm::vec4> colors;   // MAX_PARTICLE_TYPES elements
+    std::vector<float>     forces;
+    std::vector<glm::vec4> colors;
 
-    // Per-type force multipliers set by OrganismManager (1.0 = no effect)
     float trait_scales[MAX_PARTICLE_TYPES];
-
-    // Per-type behavior bitmask (ParticleBehavior flags)
+    float structure_integrity[MAX_PARTICLE_TYPES]; // Added this
     uint32_t behavior_flags[MAX_PARTICLE_TYPES];
 
-    // Per-particle orientation (radians) and angular velocity — for POLAR type
     std::vector<float> angles;
     std::vector<float> angular_velocities;
 
     Particles();
-
-    // Called once at startup and on every reset (F2).
     void gen_data(const SimConfig& cfg);
 
     // Archetype presets: set behavior_flags AND seed the force-matrix row for `type`.

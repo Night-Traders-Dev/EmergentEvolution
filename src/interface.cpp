@@ -16,6 +16,18 @@ void Interface::init() {
     seed_value = static_cast<int>(rd() % 32768);
 }
 
+// Helper for UI tooltips
+static void HelpMarker(const char* desc) {
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered()) {
+        ImGui::BeginTooltip();
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+        ImGui::TextUnformatted(desc);
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
+    }
+}
+
 // ── Force colour helper ───────────────────────────────────────────────────────
 
 ImVec4 Interface::force_to_color(float f) {
@@ -36,6 +48,15 @@ void Interface::render_imgui(SimConfig&       cfg,
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+
+
+    if (ImGui::CollapsingHeader("Soft-Body Physics", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::SliderFloat("Viscosity (Drag)", &cfg.viscosity_strength, 0.0f, 0.5f, "%.3f");
+        ImGui::SameLine(); HelpMarker("Higher values make clusters move like thick liquid.");
+
+        ImGui::SliderFloat("Pressure Resistance", &cfg.pressure_resistance, 0.0f, 50.0f, "%.1f");
+        ImGui::SameLine(); HelpMarker("Prevents organisms from collapsing into a single point.");
+    }
 
     if (!settings_visible) {
         ImGui::Render();

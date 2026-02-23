@@ -1,64 +1,68 @@
 #version 450
 
-layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x = 256) in;
 
-// Input buffers
+// ── Input Buffers ────────────────────────────────────────────────────────────
 layout(set = 0, binding = 0, std430) buffer InPosBuffer  { vec2  data[]; } in_pos_buffer;
 layout(set = 0, binding = 1, std430) buffer InVelBuffer  { vec2  data[]; } in_vel_buffer;
 layout(set = 0, binding = 2, std430) readonly buffer Types  { uint  data[]; } type_buffer;
 layout(set = 0, binding = 3, std430) buffer Forces       { float data[]; } force_buffer;
 layout(set = 0, binding = 4, std430) buffer Colors       { vec4  data[]; } color_buffer;
 
-// Output buffers
+// ── Output Buffers ───────────────────────────────────────────────────────────
 layout(set = 0, binding = 5, std430) buffer OutPosBuffer { vec2  data[]; } out_pos_buffer;
 layout(set = 0, binding = 6, std430) buffer OutVelBuffer { vec2  data[]; } out_vel_buffer;
 layout(set = 0, binding = 7, rgba32f) uniform image2D out_render_texture;
 
-// Behavior / orientation buffers
+// ── Behavior / Orientation Buffers ───────────────────────────────────────────
 layout(set = 0, binding =  8, std430) readonly buffer Behaviors { uint  data[]; } behavior_buffer;
 layout(set = 0, binding =  9, std430) buffer AngleIn            { float data[]; } angle_in_buffer;
 layout(set = 0, binding = 10, std430) buffer AngVelIn           { float data[]; } avel_in_buffer;
 layout(set = 0, binding = 11, std430) buffer AngleOut           { float data[]; } angle_out_buffer;
 layout(set = 0, binding = 12, std430) buffer AngVelOut          { float data[]; } avel_out_buffer;
 
-// Push constants
+// ── Push Constants ────────────────────────────────────────────────────────────
 layout(push_constant, std430) uniform Params {
-    vec2  region_size;
-    vec2  camera_origin;
-    uint  particle_count;
-    uint  particle_types;
-    uint  step;
-    float dt;
-    float camera_zoom;
-    float radius;
-    float dampening;
-    float repulsion_radius;
-    float interaction_radius;
-    float density_limit;
+    vec2  region_size;        // 0
+    vec2  camera_origin;      // 8
+    uint  particle_count;     // 16
+    uint  particle_types;     // 20
+    uint  step;               // 24
+    float dt;                 // 28
+    float camera_zoom;        // 32
+    float radius;             // 36
+    float dampening;          // 40
+    float repulsion_radius;   // 44
+    float interaction_radius; // 48
+    float density_limit;      // 52
+    float viscosity_strength; // 56
+    float pressure_resistance;// 60
+    float local_density_cap;  // 64
 } params;
 
-// Behavior flag constants (must match ParticleBehavior enum in types.h)
 const uint BEHAVIOR_REPEL    = 1u;
 const uint BEHAVIOR_POLAR    = 2u;
 const uint BEHAVIOR_HEAVY    = 4u;
 const uint BEHAVIOR_CATALYST = 8u;
 const uint BEHAVIOR_VIRAL    = 16u;
 
-// https://stackoverflow.com/questions/4200224/random-noise-functions-for-glsl
 float random(float v) {
     return fract(sin(dot(vec2(v, v / 10.0f), vec2(12.9898f, 78.233f))) * 43758.5453f);
 }
 
-
 void apply_physics(uint i) {
-    const float MAX_RADIUS = params.interaction_radius * params.interaction_radius;
+    const float MAX_RADIUS = params.interaction_radius;
+    const float MAX_RADIUS_SQ = MAX_RADIUS * MAX_RADIUS;
 
     vec2  pos_a         = in_pos_buffer.data[i];
     vec2  vel_a         = in_vel_buffer.data[i];
     uint  type_a        = type_buffer.data[i];
     uint  flags_a       = behavior_buffer.data[type_a];
+    
     vec2  total_force   = vec2(0.0f);
+    vec2  pressure_force = vec2(0.0f);
     float local_density = 0.0f;
+    float density_factor = 1.0 - min(local_density / params.local_density_cap, 1.0);
 
     bool is_repel    = (flags_a & BEHAVIOR_REPEL)    != 0u;
     bool is_polar    = (flags_a & BEHAVIOR_POLAR)    != 0u;
@@ -69,118 +73,107 @@ void apply_physics(uint i) {
     float torque_total   = 0.0f;
     float catalyst_boost = 0.0f;
 
-    // --- density pass ---
+    // --- Pass 1: Local Density Calculation ---
+    // Uses an exponential falloff to create a smooth 'soft body' pressure field
     for (int j = 0; j < int(params.particle_count); j++) {
         if (i == uint(j)) continue;
-
-        vec2  pos_b   = in_pos_buffer.data[j];
-        vec2  delta   = pos_a - pos_b;
+        vec2 delta = in_pos_buffer.data[j] - pos_a;
         float dist_sq = dot(delta, delta);
-        if (dist_sq > MAX_RADIUS) continue;
-
-        float dist = sqrt(dist_sq);
-        if (dist > 0.0f) {
-            uint type_b = type_buffer.data[j];
-            if (type_a == type_b)
-                local_density += 1.0f - dist / params.interaction_radius;
-            else
-                local_density += (1.0f - dist / params.interaction_radius) * 0.5f;
+        if (dist_sq > 0.0f && dist_sq < MAX_RADIUS_SQ) {
+            float dist = sqrt(dist_sq);
+            local_density += exp(-dist / (MAX_RADIUS * 0.5f));
         }
     }
 
-    // --- force pass ---
+    // --- Pass 2: Force Calculation ---
     for (int j = 0; j < int(params.particle_count); j++) {
         if (i == uint(j)) continue;
 
         vec2  pos_b   = in_pos_buffer.data[j];
-        vec2  delta   = pos_a - pos_b;
+        vec2  delta   = pos_b - pos_a; 
         float dist_sq = dot(delta, delta);
-        if (dist_sq > MAX_RADIUS) continue;
 
-        float dist = sqrt(dist_sq);
+        if (dist_sq > 0.0f && dist_sq < MAX_RADIUS_SQ) {
+            float dist = sqrt(dist_sq);
+            vec2  normal = delta / dist;
+            uint  type_b = type_buffer.data[j];
+            uint  flags_b = behavior_buffer.data[type_b];
 
-        if (dist > 0.0f) {
-            uint  type_b     = type_buffer.data[j];
-            uint  flags_b    = behavior_buffer.data[type_b];
-            float attraction = force_buffer.data[type_a + type_b * params.particle_types];
-            vec2  normal     = normalize(delta);
-            float force;
-
-            // REPEL: override force matrix — always push away
-            if (is_repel) {
-                attraction = -1.0f;
+            // 1. Soft-Body Pressure Force (Repulsion)
+            // Keeps organisms from collapsing into a single point
+            if (dist < params.repulsion_radius) {
+                float overlap = 1.0f - (dist / params.repulsion_radius);
+                pressure_force -= normal * overlap * params.pressure_resistance;
             }
 
-            // POLAR: modulate attraction by dipole alignment; accumulate torque
+            // 2. Attraction / Force Matrix Logic
+            float attraction = force_buffer.data[type_a + type_b * params.particle_types];
+
+            if (is_repel) attraction = -1.0f;
+
             if (is_polar) {
-                float align_a = dot(dipole_a, -normal);  // >0 if dipole points toward j
+                float align_a = dot(dipole_a, normal);
                 attraction *= clamp(1.0f + 1.5f * align_a, -0.5f, 2.5f);
 
                 if ((flags_b & BEHAVIOR_POLAR) != 0u) {
-                    vec2  dipole_b = vec2(cos(angle_in_buffer.data[j]),
-                                         sin(angle_in_buffer.data[j]));
-                    float align_b  = dot(dipole_b, normal);
-                    attraction    *= clamp(1.0f + 1.5f * align_b, -0.5f, 2.5f);
-
-                    // Torque for parallel alignment between dipoles
+                    vec2 dipole_b = vec2(cos(angle_in_buffer.data[j]), sin(angle_in_buffer.data[j]));
+                    float align_b = dot(dipole_b, -normal);
+                    attraction *= clamp(1.0f + 1.5f * align_b, -0.5f, 2.5f);
+                    
                     float cross_ab = dipole_a.x * dipole_b.y - dipole_a.y * dipole_b.x;
-                    torque_total  += cross_ab * (1.0f - dist / params.interaction_radius) * 0.02f;
+                    torque_total += cross_ab * (1.0f - dist / params.interaction_radius) * 0.02f;
                 }
-
-                // Torque to steer dipole toward attraction direction
-                float to_j_cross = dipole_a.x * (-normal.y) - dipole_a.y * (-normal.x);
-                torque_total += to_j_cross * abs(attraction)
-                              * (1.0f - dist / params.interaction_radius) * 0.04f;
+                float to_j_cross = dipole_a.x * normal.y - dipole_a.y * normal.x;
+                torque_total += to_j_cross * abs(attraction) * (1.0f - dist / params.interaction_radius) * 0.04f;
             }
 
-            // CATALYST neighbour: note boost factor for dampening
             if ((flags_b & BEHAVIOR_CATALYST) != 0u) {
                 catalyst_boost += 1.0f - dist / params.interaction_radius;
             }
 
+            // Apply density limiting to attraction
             if (attraction > 0.0f) {
-                float density_factor = 1.0f - min(max(0.0f, local_density - params.density_limit), 1.005f);
+                float density_factor = 1.0f - min(max(0.0f, local_density - params.density_limit), 1.0f);
                 attraction *= density_factor;
             }
 
-            if (dist < params.repulsion_radius) {
-                force = (dist / params.repulsion_radius - 1.0f) * 2.0f;
-            } else {
-                float width    = params.interaction_radius - params.repulsion_radius;
-                float midpoint = (params.repulsion_radius + params.interaction_radius) * 0.5f;
-                force = attraction * (1.0f - abs(dist - midpoint) / (width * 0.5f));
-            }
-
-            total_force += normal * force * -50.0f;
-        } else {
-            total_force += vec2(
-                random(float(i) + pos_a.x) - 0.5f,
-                random(float(i) + pos_a.y) - 0.5f
-            );
+            // Final scalar attraction force
+            float width    = params.interaction_radius - params.repulsion_radius;
+            float midpoint = (params.repulsion_radius + params.interaction_radius) * 0.5f;
+            float force_mag = attraction * (1.0f - abs(dist - midpoint) / (width * 0.5f + 0.001f));
+            
+            total_force += normal * force_mag * 50.0f;
         }
     }
 
-    // HEAVY: high effective mass — reduce force response
-    if (is_heavy) total_force *= 0.25f;
+    // --- Integration with Soft-Body Physics ---
 
-    const float MAX_FORCE = 100.0f;
-    float f_sq = dot(total_force, total_force);
-    if (f_sq > MAX_FORCE * MAX_FORCE)
-        total_force = normalize(total_force) * MAX_FORCE;
+    if (is_heavy) {
+        total_force *= 0.25f;
+        pressure_force *= 2.0f; // Structural nuclei are stiffer
+    }
 
-    vel_a += total_force * params.dt;
+    // Combine standard forces with pressure resistance
+    vec2 final_accel = total_force + pressure_force;
+    vel_a += final_accel * params.dt;
 
-    // CATALYST: particles near catalysts lose less energy (higher effective dampening)
-    float damp = min(params.dampening + catalyst_boost * 0.04f, 0.99f);
-    vel_a *= damp;
+    // Soft-Body Viscosity: Higher density creates more 'drag'
+    float viscosity_factor = clamp(local_density * params.viscosity_strength, 0.0f, 0.9f);
+    float effective_dampening = (params.dampening + catalyst_boost * 0.04f) * (1.0f - viscosity_factor);
+    vel_a *= clamp(effective_dampening, 0.0f, 0.99f);
 
-    // Infinite world: positions are unbounded, no wrapping
+    // Speed Cap: Prevents numerical explosions in high-pressure clusters
+    float max_speed = 300.0f / (1.0f + local_density * 0.15f);
+    float speed = length(vel_a);
+    if (speed > max_speed) vel_a = (vel_a / speed) * max_speed;
+
+    // Movement update (Unbounded world)
     pos_a += vel_a * params.dt;
 
     out_pos_buffer.data[i] = pos_a;
     out_vel_buffer.data[i] = vel_a;
 
-    // POLAR: integrate angular velocity and write updated angle
+    // --- Angular update (Polar) ---
     if (is_polar) {
         float avel = avel_in_buffer.data[i];
         avel += torque_total * params.dt;
@@ -193,15 +186,12 @@ void apply_physics(uint i) {
     }
 }
 
-
 void render_particle(uint i) {
     vec2 pos   = in_pos_buffer.data[i];
     uint type  = type_buffer.data[i];
     uint flags = behavior_buffer.data[type];
     bool polar = (flags & BEHAVIOR_POLAR) != 0u;
 
-    // Project world position to screen space.
-    // camera_origin is the world position at the center of the screen.
     vec2 screen_center = params.region_size * 0.5f;
     float radius = params.radius * params.camera_zoom;
     int   range  = int(ceil(radius));
@@ -209,7 +199,6 @@ void render_particle(uint i) {
 
     vec2 center = screen_center + (pos - params.camera_origin) * params.camera_zoom;
 
-    // Frustum cull: skip particles whose disk is entirely off-screen
     if (center.x + r < 0.0f || center.x - r > params.region_size.x) return;
     if (center.y + r < 0.0f || center.y - r > params.region_size.y) return;
 
@@ -232,15 +221,11 @@ void render_particle(uint i) {
             if (polar) {
                 float d_north = distance(px_center, north_pt);
                 if (d_north < radius * 0.38f) {
-                    // North pole: warm yellow dot
                     col = vec4(1.0f, 0.85f, 0.3f, 1.0f);
                 } else {
-                    // South hemisphere: blend in cool blue tint
                     vec2  to_px     = px_center - center;
                     float len_to_px = length(to_px);
-                    float south_dot = (len_to_px > 0.0f)
-                                    ? dot(to_px / len_to_px, -dip_dir)
-                                    : 0.0f;
+                    float south_dot = (len_to_px > 0.0f) ? dot(to_px / len_to_px, -dip_dir) : 0.0f;
                     float south_blend = max(0.0f, south_dot) * 0.45f;
                     col = mix(col, vec4(0.3f, 0.5f, 1.0f, 1.0f), south_blend);
                 }
@@ -251,13 +236,12 @@ void render_particle(uint i) {
     }
 }
 
-
 void main() {
     uint i = gl_GlobalInvocationID.x;
     if (i >= params.particle_count) return;
 
     switch (params.step) {
-    case 0: apply_physics(i);   break;
-    case 1: render_particle(i); break;
+        case 0: apply_physics(i);   break;
+        case 1: render_particle(i); break;
     }
 }

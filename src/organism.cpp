@@ -135,19 +135,18 @@ void OrganismManager::apply_viral_infections(
 // ── Trait feedback ────────────────────────────────────────────────────────────
 
 void OrganismManager::apply_trait_feedback(Particles& particles) {
-    for (float& s : particles.trait_scales) s = 1.0f;
+    for (auto& org : organisms) {
+        uint32_t type = org.traits.dominant_type;
+        
+        // Boost the force matrix as you already do
+        float kill_bonus = std::min(org.traits.kills * 0.1f, 0.5f);
+        particles.trait_scales[type] = 1.0f + kill_bonus;
 
-    for (const auto& org : organisms) {
-        uint32_t dt = org.traits.dominant_type;
-        if (dt >= MAX_PARTICLE_TYPES) continue;
-        float kill_bonus = 0.1f * std::min(static_cast<float>(org.traits.kills),     5.0f);
-        float div_bonus  = 0.03f * std::min(static_cast<float>(org.traits.divisions), 10.0f);
-        float scale = 1.0f + kill_bonus + div_bonus;
-        particles.trait_scales[dt] = std::max(particles.trait_scales[dt], scale);
+        // NEW: Evolution of "Structural Integrity"
+        // Heavily successful organisms become harder to compress (Soft-body toughness)
+        // This can be stored in a new per-type behavior array
+        particles.structure_integrity[type] = 1.0f + (org.traits.generation * 0.05f);
     }
-
-    for (float& s : particles.trait_scales)
-        s = std::min(s, 1.8f);
 }
 
 // ── Main update ───────────────────────────────────────────────────────────────

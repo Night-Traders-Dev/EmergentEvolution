@@ -6,60 +6,58 @@
 #include <string>
 #include <glm/glm.hpp>
 
-// ── Constants ────────────────────────────────────────────────────────────────
-
 static constexpr uint32_t REGION_W           = 2560;
 static constexpr uint32_t REGION_H           = 1440;
 static constexpr uint32_t MAX_PARTICLE_TYPES = 10;
 static constexpr uint32_t GROUP_DENSITY      = 256;
 
-// ── Particle behavior flags (bitmask per type, must match shader constants) ──
-
 enum ParticleBehavior : uint32_t {
     BEHAVIOR_NONE     = 0,
-    BEHAVIOR_REPEL    = 1u << 0,  // repels all types (shader)
-    BEHAVIOR_POLAR    = 1u << 1,  // magnetic dipole orientation (shader + render)
-    BEHAVIOR_HEAVY    = 1u << 2,  // high effective mass (shader)
-    BEHAVIOR_CATALYST = 1u << 3,  // boosts speed of nearby particles (shader)
-    BEHAVIOR_VIRAL    = 1u << 4   // converts adjacent non-viral particles (CPU only)
+    BEHAVIOR_REPEL    = 1u << 0,
+    BEHAVIOR_POLAR    = 1u << 1,
+    BEHAVIOR_HEAVY    = 1u << 2,
+    BEHAVIOR_CATALYST = 1u << 3,
+    BEHAVIOR_VIRAL    = 1u << 4
 };
-
-// ── GPU push-constant block (must match GLSL layout exactly) ─────────────────
 
 struct PushConstants {
-    glm::vec2 region_size;        //  0 – 7
-    glm::vec2 camera_origin;      //  8 – 15
-    uint32_t  particle_count;     // 16 – 19
-    uint32_t  particle_types;     // 20 – 23
-    uint32_t  step;               // 24 – 27
-    float     dt;                 // 28 – 31
-    float     camera_zoom;        // 32 – 35
-    float     radius;             // 36 – 39
-    float     dampening;          // 40 – 43
-    float     repulsion_radius;   // 44 – 47
-    float     interaction_radius; // 48 – 51
-    float     density_limit;      // 52 – 55
+    glm::vec2 region_size;        // 0
+    glm::vec2 camera_origin;      // 8
+    uint32_t  particle_count;     // 16
+    uint32_t  particle_types;     // 20
+    uint32_t  step;               // 24
+    float     dt;                 // 28
+    float     camera_zoom;        // 32
+    float     radius;             // 36
+    float     dampening;          // 40
+    float     repulsion_radius;   // 44
+    float     interaction_radius; // 48
+    float     density_limit;      // 52
+    float     viscosity_strength; // 56
+    float     pressure_resistance;// 60
+    float     local_density_cap;  // 64
 };
-static_assert(sizeof(PushConstants) == 56, "PushConstants layout mismatch");
-
-// ── Simulation configuration (mirrors interface slider defaults from .tscn) ──
+// Size is 68 bytes
+static_assert(sizeof(PushConstants) == 68, "PushConstants layout mismatch");
 
 struct SimConfig {
-    // Generation settings
-    uint32_t particle_count     = 22500; // pow(150,2)
+    uint32_t particle_count     = 22500;
     uint32_t particle_types     = 5;
     bool     reset_colors       = false;
     bool     reset_forces       = true;
     uint32_t generation_seed    = 0;
 
-    // Physics / rendering (real-time sliders)
     float radius             = 2.0f;
     float dampening          = 0.85f;
     float repulsion_radius   = 20.0f;
     float interaction_radius = 60.0f;
     float density_limit      = 60.0f;
 
-    // Camera state (managed by simulation)
+    // New Soft-Body Parameters
+    float viscosity_strength  = 0.15f;
+    float pressure_resistance = 25.0f;
+    float local_density_cap   = 1.0f;
+
     glm::vec2 camera_origin      = { REGION_W / 2.0f, REGION_H / 2.0f };
     float     camera_zoom        = 1.0f;
     float     current_camera_zoom = 1.0f;
