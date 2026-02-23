@@ -50,7 +50,8 @@ public:
     // Safe to call after end_single_command() (queue is idle).
     void read_current_state(VulkanContext& ctx,
                             std::vector<glm::vec2>& out_positions,
-                            std::vector<glm::vec2>& out_velocities) const;
+                            std::vector<glm::vec2>& out_velocities,
+                            std::vector<uint32_t>&  out_types) const;
 
 private:
     VkPipeline            pipeline_             = VK_NULL_HANDLE;

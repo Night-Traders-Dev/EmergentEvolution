@@ -369,27 +369,31 @@ void ComputePipeline::upload_dynamic_data(VulkanContext& ctx, const Particles& p
 
 void ComputePipeline::read_current_state(VulkanContext& ctx,
                                           std::vector<glm::vec2>& out_positions,
-                                          std::vector<glm::vec2>& out_velocities) const
+                                          std::vector<glm::vec2>& out_velocities,
+                                          std::vector<uint32_t>&  out_types) const 
 {
     if (pos_buffer_a_.handle == VK_NULL_HANDLE) return;
 
-    // After tick is incremented in record(), the output buffer is:
-    //   tick odd  → desc_set_a was used (input=a, output=b) → read pos_buffer_b_
-    //   tick even → desc_set_b was used (input=b, output=a) → read pos_buffer_a_
     const Buffer& cur_pos = (tick % 2 == 1) ? pos_buffer_b_ : pos_buffer_a_;
     const Buffer& cur_vel = (tick % 2 == 1) ? vel_buffer_b_ : vel_buffer_a_;
-
+    
     uint32_t n = static_cast<uint32_t>(out_positions.size());
-    VkDeviceSize bytes = n * sizeof(glm::vec2);
-
+    
+    // Read Positions
     void* mapped = nullptr;
-    vkMapMemory(ctx.device, cur_pos.memory, 0, bytes, 0, &mapped);
-    std::memcpy(out_positions.data(), mapped, bytes);
+    vkMapMemory(ctx.device, cur_pos.memory, 0, n * sizeof(glm::vec2), 0, &mapped);
+    std::memcpy(out_positions.data(), mapped, n * sizeof(glm::vec2));
     vkUnmapMemory(ctx.device, cur_pos.memory);
 
-    vkMapMemory(ctx.device, cur_vel.memory, 0, bytes, 0, &mapped);
-    std::memcpy(out_velocities.data(), mapped, bytes);
+    // Read Velocities
+    vkMapMemory(ctx.device, cur_vel.memory, 0, n * sizeof(glm::vec2), 0, &mapped);
+    std::memcpy(out_velocities.data(), mapped, n * sizeof(glm::vec2));
     vkUnmapMemory(ctx.device, cur_vel.memory);
+
+    // Read Types (Crucial for Organism Manager)
+    vkMapMemory(ctx.device, type_buffer_.memory, 0, n * sizeof(uint32_t), 0, &mapped);
+    std::memcpy(out_types.data(), mapped, n * sizeof(uint32_t));
+    vkUnmapMemory(ctx.device, type_buffer_.memory);
 }
 
 // ── Record (called per frame while simulation is active) ──────────────────────

@@ -54,7 +54,6 @@ void Particles::gen_particles(const SimConfig& cfg) {
                       rand_range_f(0.0f, rh));
         uint32_t t = static_cast<uint32_t>(rand_range_i(0, (int)cfg.particle_types - 1));
         add_particle(pos, glm::vec2(0.0f), t);
-        energy.push_back(1.0f);
     }
 
     // Random initial orientations for all particles (used by POLAR types)
@@ -68,6 +67,7 @@ void Particles::add_particle(glm::vec2 pos, glm::vec2 vel, uint32_t type) {
     positions.push_back(pos);
     velocities.push_back(vel);
     types.push_back(type);
+    energy.push_back(1.0f); // Start with full health!
 }
 
 void Particles::gen_random_force_matrix() {
