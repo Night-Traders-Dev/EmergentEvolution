@@ -42,6 +42,7 @@ void Particles::gen_particles(const SimConfig& cfg) {
         // Init orientation arrays for 2-particle case
         angles.assign(2, 0.0f);
         angular_velocities.assign(2, 0.0f);
+        energies.assign(2, 1.0f);
         return;
     }
 
@@ -57,6 +58,8 @@ void Particles::gen_particles(const SimConfig& cfg) {
     angular_velocities.assign(cfg.particle_count, 0.0f);
     for (uint32_t i = 0; i < cfg.particle_count; ++i)
         angles[i] = rand_range_f(0.0f, 6.28318f);
+
+    energies.assign(cfg.particle_count, 1.0f);
 }
 
 void Particles::add_particle(glm::vec2 pos, glm::vec2 vel, uint32_t type) {

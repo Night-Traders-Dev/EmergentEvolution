@@ -47,6 +47,7 @@ private:
     int                    organism_tick_counter_ = 0;
     std::vector<glm::vec2> readback_positions_;
     std::vector<glm::vec2> readback_velocities_;
+    std::vector<float>     readback_energies_;
 
     // Shader SPIRV paths (relative to working directory = build dir)
     static constexpr const char* COMPUTE_SPV  = "shaders/compute.spv";

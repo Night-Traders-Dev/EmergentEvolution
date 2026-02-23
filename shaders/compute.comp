@@ -21,6 +21,10 @@ layout(set = 0, binding = 10, std430) buffer AngVelIn           { float data[]; 
 layout(set = 0, binding = 11, std430) buffer AngleOut           { float data[]; } angle_out_buffer;
 layout(set = 0, binding = 12, std430) buffer AngVelOut          { float data[]; } avel_out_buffer;
 
+// ── Energy Buffers (ping-pong) ────────────────────────────────────────────────
+layout(set = 0, binding = 13, std430) buffer EnergyIn  { float data[]; } in_energy_buffer;
+layout(set = 0, binding = 14, std430) buffer EnergyOut { float data[]; } out_energy_buffer;
+
 // ── Push Constants ────────────────────────────────────────────────────────────
 layout(push_constant, std430) uniform Params {
     vec2  region_size;        // 0
@@ -70,6 +74,8 @@ void apply_physics(uint i) {
     vec2  pressure_force = vec2(0.0f);
     float local_density  = 0.0f;
     float density_factor = 1.0 - min(local_density / params.local_density_cap, 1.0);
+    float energy         = in_energy_buffer.data[i];
+    float interaction_energy_gain = 0.0;
 
     bool is_repel    = (flags_a & BEHAVIOR_REPEL)    != 0u;
     bool is_polar    = (flags_a & BEHAVIOR_POLAR)    != 0u;
@@ -155,6 +161,15 @@ void apply_physics(uint i) {
             if ((flags_a & BEHAVIOR_PREDATOR) != 0u && type_b != type_a) {
                 float chase = 1.0f - dist / params.interaction_radius;
                 total_force += normal * chase * 30.0f;
+                // Predator gains energy when close to prey
+                if (dist < params.repulsion_radius * 2.0f)
+                    interaction_energy_gain += 0.003f;
+            }
+
+            // Symbiotic energy gain: attraction between different types transfers energy
+            if (attraction > 0.0f && type_b != type_a) {
+                float proximity = 1.0f - dist / params.interaction_radius;
+                interaction_energy_gain += attraction * proximity * 0.002f;
             }
 
             // Apply density limiting to attraction
@@ -177,7 +192,23 @@ void apply_physics(uint i) {
         float light = clamp(1.0f - local_density * 0.1f, 0.0f, 1.0f);
         // Upward drift scaled by available "light"
         total_force += vec2(0.0f, 1.0f) * light * 5.0f;
+        // Photosynth gains energy in open areas
+        interaction_energy_gain += light * 0.08f;
     }
+
+    // --- Energy Metabolism ---
+    {
+        float spd   = length(vel_a);
+        float delta = 0.0f;
+        delta -= 0.04f * params.dt;                               // passive metabolic drain
+        delta -= spd   * 0.001f * params.dt;                     // movement cost
+        if (local_density > params.density_limit)
+            delta -= (local_density - params.density_limit) * 0.008f * params.dt; // crowding
+        delta += interaction_energy_gain * params.dt;
+        delta += catalyst_boost * 0.004f * params.dt;            // catalyst neighbour boost
+        energy = clamp(energy + delta, 0.0f, 1.0f);
+    }
+    out_energy_buffer.data[i] = energy;
 
     // --- Integration with Soft-Body Physics ---
 
@@ -258,6 +289,8 @@ void render_particle(uint i) {
             if (d_main >= radius) continue;
 
             vec4 col = color_buffer.data[type];
+            float energy_level = in_energy_buffer.data[i];
+            col.rgb *= mix(0.12f, 1.0f, energy_level);
 
             if (polar) {
                 float d_north = distance(px_center, north_pt);

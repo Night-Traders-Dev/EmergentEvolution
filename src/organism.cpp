@@ -176,6 +176,7 @@ void OrganismManager::apply_trait_feedback(Particles& particles) {
 void OrganismManager::update(
     const std::vector<glm::vec2>& positions,
     const std::vector<glm::vec2>& velocities,
+    const std::vector<float>&     energies,
     const std::vector<uint32_t>&  types,
     Particles& particles)
 {
@@ -214,6 +215,12 @@ void OrganismManager::update(
         float inv = 1.0f / static_cast<float>(members.size());
         org.centroid         = sum_pos * inv;
         org.traits.avg_speed = glm::length(sum_vel * inv);
+
+        // Average GPU-readback energy across all member particles
+        float total_energy = 0.0f;
+        for (uint32_t idx : members)
+            total_energy += (idx < energies.size() ? energies[idx] : 1.0f);
+        org.traits.energy = total_energy * inv;
 
         float sum_d2 = 0.0f;
         for (uint32_t idx : members) {
@@ -270,7 +277,7 @@ void OrganismManager::update(
             new_orgs[ni].traits.divisions     = prev.traits.divisions;
             new_orgs[ni].traits.generation    = prev.traits.generation;
             new_orgs[ni].traits.parent_id     = prev.traits.parent_id;
-            new_orgs[ni].traits.energy        = prev.traits.energy; // carry energy forward
+            // energy is read from GPU each update — no carry-forward needed
         }
     }
 
@@ -327,43 +334,12 @@ void OrganismManager::update(
         }
     }
 
-    // 5.5 Metabolic update (organism-level energy)
-    for (auto& org : new_orgs) {
-        // Movement cost (based on average speed)
-        float move_cost = org.traits.avg_speed * 0.002f;
-
-        // Density cost (based on how tightly packed the organism is)
-        float ideal_spread = cluster_radius * 0.6f;
-        float density_cost = 0.0f;
-        if (org.spread < ideal_spread)
-            density_cost = (ideal_spread - org.spread) * 0.0015f;
-
-        // Base metabolism (always drains)
-        float base_metabolism = 0.001f;
-
-        // Feeding gain – for now, tie it simply to kills (predation-like)
-        float feeding_gain = org.traits.kills * 0.02f;
-
-        // Update energy
-        org.traits.energy = glm::clamp(
-            org.traits.energy + feeding_gain - move_cost - density_cost - base_metabolism,
-            0.0f, 1.0f
-        );
-
-        // Death: organism dissolves into dust
-        if (org.traits.energy <= 0.0f) {
-            for (uint32_t idx : org.particle_indices)
-                particles.types[idx] = 0; // dust
-            org.traits.size = 0; // mark as effectively dead
-        }
+    // 5.5 Per-particle death from GPU energy
+    // Any particle with zero energy becomes dust (type 0); types re-upload next frame.
+    for (uint32_t i = 0; i < static_cast<uint32_t>(energies.size()); ++i) {
+        if (energies[i] <= 0.0f && particles.types[i] != 0)
+            particles.types[i] = 0;
     }
-
-    // Remove dead (size==0) organisms from the list
-    new_orgs.erase(
-        std::remove_if(new_orgs.begin(), new_orgs.end(),
-                       [](const Organism& o) { return o.traits.size == 0; }),
-        new_orgs.end()
-    );
 
     // 6. Commit & feedback
     organisms       = std::move(new_orgs);

@@ -52,16 +52,16 @@ void ComputePipeline::destroy(VulkanContext& ctx) {
 // Bindings 9-12: polar angle/angular-velocity (double-buffered)
 
 void ComputePipeline::create_descriptor_set_layout(VkDevice device) {
-    std::array<VkDescriptorSetLayoutBinding, 13> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 15> bindings{};
 
-    // Bindings 0-6 and 8-12: storage buffers
+    // Bindings 0-6 and 8-14: storage buffers
     for (uint32_t i = 0; i < 7; ++i) {
         bindings[i].binding         = i;
         bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[i].descriptorCount = 1;
         bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
     }
-    for (uint32_t i = 8; i < 13; ++i) {
+    for (uint32_t i = 8; i < 15; ++i) {
         bindings[i].binding         = i;
         bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[i].descriptorCount = 1;
@@ -128,10 +128,10 @@ void ComputePipeline::create_compute_pipeline(VulkanContext& ctx,
 // ── Descriptor pool ───────────────────────────────────────────────────────────
 
 void ComputePipeline::create_descriptor_pool(VkDevice device) {
-    // 2 sets × 12 storage buffers (7 orig + 1 behavior + 4 angle/avel) = 24
+    // 2 sets × 14 storage buffers (7 orig + 1 behavior + 4 angle/avel + 2 energy) = 28
     // 2 sets × 1 storage image = 2
     std::array<VkDescriptorPoolSize, 2> pool_sizes{};
-    pool_sizes[0] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 24 };
+    pool_sizes[0] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 28 };
     pool_sizes[1] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,   2 };
 
     VkDescriptorPoolCreateInfo ci{};
@@ -186,6 +186,12 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
     ctx.update_buffer(angular_vel_buffer_a_, particles.angular_velocities.data(), angle_size);
     ctx.update_buffer(angular_vel_buffer_b_, particles.angular_velocities.data(), angle_size);
 
+    VkDeviceSize energy_size = particles.energies.size() * sizeof(float);
+    energy_buffer_a_ = ctx.create_buffer(energy_size, BUF_USAGE, MEM_PROPS);
+    energy_buffer_b_ = ctx.create_buffer(energy_size, BUF_USAGE, MEM_PROPS);
+    ctx.update_buffer(energy_buffer_a_, particles.energies.data(), energy_size);
+    ctx.update_buffer(energy_buffer_b_, particles.energies.data(), energy_size);
+
     allocate_and_write_descriptor_sets(ctx);
 
     tick = 0;
@@ -213,6 +219,8 @@ void ComputePipeline::clear_buffers(VulkanContext& ctx) {
     ctx.destroy_buffer(angle_buffer_b_);
     ctx.destroy_buffer(angular_vel_buffer_a_);
     ctx.destroy_buffer(angular_vel_buffer_b_);
+    ctx.destroy_buffer(energy_buffer_a_);
+    ctx.destroy_buffer(energy_buffer_b_);
 }
 
 // ── Write descriptor sets ─────────────────────────────────────────────────────
@@ -267,8 +275,8 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     std::vector<VkWriteDescriptorSet>    writes;
     std::vector<VkDescriptorBufferInfo>  buf_infos;
     std::vector<VkDescriptorImageInfo>   img_infos;
-    writes.reserve(26);
-    buf_infos.reserve(24);
+    writes.reserve(30);
+    buf_infos.reserve(28);
     img_infos.reserve(2);
 
     auto pos_sz  = pos_buffer_a_.size;
@@ -278,6 +286,7 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     auto col_sz  = color_buffer_.size;
     auto beh_sz  = behavior_buffer_.size;
     auto ang_sz  = angle_buffer_a_.size;
+    auto nrg_sz  = energy_buffer_a_.size;
 
     // ── Set A: in=a, out=b ────────────────────────────────────────────────────
     write_storage_buffer(writes, buf_infos, desc_set_a_,  0, pos_buffer_a_.handle,         pos_sz);
@@ -293,6 +302,8 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     write_storage_buffer(writes, buf_infos, desc_set_a_, 10, angular_vel_buffer_a_.handle, ang_sz);
     write_storage_buffer(writes, buf_infos, desc_set_a_, 11, angle_buffer_b_.handle,       ang_sz);
     write_storage_buffer(writes, buf_infos, desc_set_a_, 12, angular_vel_buffer_b_.handle, ang_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_, 13, energy_buffer_a_.handle,      nrg_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_, 14, energy_buffer_b_.handle,      nrg_sz);
 
     // ── Set B: in=b, out=a ────────────────────────────────────────────────────
     write_storage_buffer(writes, buf_infos, desc_set_b_,  0, pos_buffer_b_.handle,         pos_sz);
@@ -308,6 +319,8 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     write_storage_buffer(writes, buf_infos, desc_set_b_, 10, angular_vel_buffer_b_.handle, ang_sz);
     write_storage_buffer(writes, buf_infos, desc_set_b_, 11, angle_buffer_a_.handle,       ang_sz);
     write_storage_buffer(writes, buf_infos, desc_set_b_, 12, angular_vel_buffer_a_.handle, ang_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_, 13, energy_buffer_b_.handle,      nrg_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_, 14, energy_buffer_a_.handle,      nrg_sz);
 
     vkUpdateDescriptorSets(ctx.device,
                            static_cast<uint32_t>(writes.size()),
@@ -341,27 +354,36 @@ void ComputePipeline::upload_dynamic_data(VulkanContext& ctx, const Particles& p
 
 void ComputePipeline::read_current_state(VulkanContext& ctx,
                                           std::vector<glm::vec2>& out_positions,
-                                          std::vector<glm::vec2>& out_velocities) const
+                                          std::vector<glm::vec2>& out_velocities,
+                                          std::vector<float>&     out_energies) const
 {
     if (pos_buffer_a_.handle == VK_NULL_HANDLE) return;
 
     // After tick is incremented in record(), the output buffer is:
-    //   tick odd  → desc_set_a was used (input=a, output=b) → read pos_buffer_b_
-    //   tick even → desc_set_b was used (input=b, output=a) → read pos_buffer_a_
+    //   tick odd  → desc_set_a was used (input=a, output=b) → read *_buffer_b_
+    //   tick even → desc_set_b was used (input=b, output=a) → read *_buffer_a_
     const Buffer& cur_pos = (tick % 2 == 1) ? pos_buffer_b_ : pos_buffer_a_;
     const Buffer& cur_vel = (tick % 2 == 1) ? vel_buffer_b_ : vel_buffer_a_;
+    const Buffer& cur_nrg = (tick % 2 == 1) ? energy_buffer_b_ : energy_buffer_a_;
 
     uint32_t n = static_cast<uint32_t>(out_positions.size());
-    VkDeviceSize bytes = n * sizeof(glm::vec2);
+    VkDeviceSize pos_bytes = n * sizeof(glm::vec2);
+    VkDeviceSize nrg_bytes = static_cast<uint32_t>(out_energies.size()) * sizeof(float);
 
     void* mapped = nullptr;
-    vkMapMemory(ctx.device, cur_pos.memory, 0, bytes, 0, &mapped);
-    std::memcpy(out_positions.data(), mapped, bytes);
+    vkMapMemory(ctx.device, cur_pos.memory, 0, pos_bytes, 0, &mapped);
+    std::memcpy(out_positions.data(), mapped, pos_bytes);
     vkUnmapMemory(ctx.device, cur_pos.memory);
 
-    vkMapMemory(ctx.device, cur_vel.memory, 0, bytes, 0, &mapped);
-    std::memcpy(out_velocities.data(), mapped, bytes);
+    vkMapMemory(ctx.device, cur_vel.memory, 0, pos_bytes, 0, &mapped);
+    std::memcpy(out_velocities.data(), mapped, pos_bytes);
     vkUnmapMemory(ctx.device, cur_vel.memory);
+
+    if (cur_nrg.handle != VK_NULL_HANDLE && !out_energies.empty()) {
+        vkMapMemory(ctx.device, cur_nrg.memory, 0, nrg_bytes, 0, &mapped);
+        std::memcpy(out_energies.data(), mapped, nrg_bytes);
+        vkUnmapMemory(ctx.device, cur_nrg.memory);
+    }
 }
 
 // ── Record (called per frame while simulation is active) ──────────────────────

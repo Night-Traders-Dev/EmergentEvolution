@@ -46,6 +46,7 @@ public:
 
     void update(const std::vector<glm::vec2>& positions,
                 const std::vector<glm::vec2>& velocities,
+                const std::vector<float>&     energies,
                 const std::vector<uint32_t>&  types,
                 Particles& particles);
 

@@ -40,11 +40,12 @@ public:
 
     bool is_ready() const { return pos_buffer_a_.handle != VK_NULL_HANDLE; }
 
-    // Read current particle positions and velocities back to CPU.
+    // Read current particle positions, velocities, and energies back to CPU.
     // Safe to call after end_single_command() (queue is idle).
     void read_current_state(VulkanContext& ctx,
                             std::vector<glm::vec2>& out_positions,
-                            std::vector<glm::vec2>& out_velocities) const;
+                            std::vector<glm::vec2>& out_velocities,
+                            std::vector<float>&     out_energies) const;
 
 private:
     VkPipeline            pipeline_             = VK_NULL_HANDLE;
@@ -69,6 +70,10 @@ private:
     Buffer angle_buffer_b_{};
     Buffer angular_vel_buffer_a_{};
     Buffer angular_vel_buffer_b_{};
+
+    // Double-buffered per-particle energy (bindings 13 & 14)
+    Buffer energy_buffer_a_{};
+    Buffer energy_buffer_b_{};
 
     // Descriptor sets: set_a uses (a→in, b→out), set_b uses (b→in, a→out)
     VkDescriptorSet desc_set_a_ = VK_NULL_HANDLE;

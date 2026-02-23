@@ -23,6 +23,7 @@ public:
 
     std::vector<float> angles;
     std::vector<float> angular_velocities;
+    std::vector<float> energies;   // per-particle, 0.0–1.0
 
     Particles();
     void gen_data(const SimConfig& cfg);
