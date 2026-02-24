@@ -348,6 +348,16 @@ void Simulation::handle_input(GLFWwindow* window, double dt) {
     }
     f11_prev = f11_cur;
 
+    // ── WASD: camera pan ──────────────────────────────────────────────────────
+    if (!ImGui::GetIO().WantCaptureKeyboard) {
+        const float PAN_SPEED = 600.0f; // world-pixels per second at zoom=1
+        float pan = PAN_SPEED * static_cast<float>(dt) / cfg.current_camera_zoom;
+        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) cfg.camera_origin.y -= pan;
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) cfg.camera_origin.y += pan;
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) cfg.camera_origin.x -= pan;
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) cfg.camera_origin.x += pan;
+    }
+
     // ── Mouse: camera pan ─────────────────────────────────────────────────────
     double mx, my;
     glfwGetCursorPos(window, &mx, &my);

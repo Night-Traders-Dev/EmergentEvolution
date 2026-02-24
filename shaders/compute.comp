@@ -478,6 +478,7 @@ void render_particle(uint i) {
 
             vec4 col = color_buffer.data[type];
             float energy_level = in_energy_buffer.data[i];
+            if (energy_level < 0.01f) return;  // dormant pool particle — skip render
             col.rgb *= mix(0.12f, 1.0f, energy_level);
 
             // Photons: smooth radial glow falloff (bright core → dark edge)

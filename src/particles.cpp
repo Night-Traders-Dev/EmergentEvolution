@@ -233,10 +233,10 @@ void Particles::gen_particles(const SimConfig& cfg) {
     const float rh = static_cast<float>(REGION_H);
 
     // ── Empty-world reservoir ──────────────────────────────────────────────────
-    // Generates a quiet pool of dormant H atoms at energy=0 that the F3 spawner
-    // can recycle. They render at 12% brightness (nearly invisible dark dots).
+    // Fills the full particle_count slots with dormant H atoms at energy=0.
+    // The F3 spawner recycles these slots; the world starts visually empty.
     if (cfg.start_empty) {
-        uint32_t pool = std::max(10u, cfg.pool_size);
+        uint32_t pool = std::max(10u, cfg.particle_count);
         for (uint32_t i = 0; i < pool; ++i)
             add_particle({ rand_range_f(0.0f, rw), rand_range_f(0.0f, rh) },
                          glm::vec2(0.0f), 0u); // H, no velocity

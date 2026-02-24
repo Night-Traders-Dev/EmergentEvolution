@@ -233,8 +233,13 @@ Heavy elements (Sr → U) cap at 56 visual nucleons for performance.
 
 Press **F3** to open the Spawn Picker. Select a template, then **left-click in the world** to place it.
 Newly placed particles are **spawn-protected** (90 frames normally · 600 frames in lab mode) so
-subsequent clicks never recycle them. Background auto-spawn is **disabled in lab mode** so manual
-placements are never overwritten.
+subsequent clicks never recycle them.
+
+**Lab mode** (`Start Empty` checkbox): the simulation resets to a completely blank world with a
+fixed 10,000-particle capacity. The particle-count slider is hidden — capacity is unlimited up to
+that pool. Background auto-spawn is disabled so manual placements are never overwritten.
+The **Particle Types** slider remains active to control how many element types appear in the
+force matrix.
 
 ### Atoms
 
@@ -362,7 +367,8 @@ Live stats for all four forces:
 | `Space` | Pause / unpause |
 | `F11` | Toggle fullscreen |
 | `Esc` | Quit |
-| Left drag | Pan camera |
+| `W A S D` | Pan camera |
+| Left drag | Pan camera (mouse) |
 | Scroll wheel | Zoom in / out |
 
 > **Force grid** — hover a cell and scroll to tune; right-click to zero it.

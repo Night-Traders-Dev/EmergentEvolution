@@ -82,16 +82,14 @@ void Interface::render_imgui(SimConfig&       cfg,
     // ── Generation settings ───────────────────────────────────────────────────
     ImGui::SeparatorText("Generation");
 
-    if (cfg.start_empty) ImGui::BeginDisabled();
-    ImGui::SliderFloat("Count Slider", &particle_count_slider, 1.0f, 317.0f, "%.0f");
-    int pc = static_cast<int>(std::max(2.0f, std::pow(particle_count_slider, 2.0f)));
     if (!cfg.start_empty) {
-        ImGui::Text("Particle Count:  %d", pc);
+        ImGui::SliderFloat("Count Slider", &particle_count_slider, 1.0f, 317.0f, "%.0f");
+        int pc = static_cast<int>(std::max(2.0f, std::pow(particle_count_slider, 2.0f)));
         cfg.particle_count = static_cast<uint32_t>(pc);
+        ImGui::Text("Particle Count:  %d", pc);
     } else {
-        ImGui::Text("Particle Count:  %u  (pool when empty)", cfg.particle_count);
+        cfg.particle_count = 10000;  // fixed lab capacity — no slider needed
     }
-    if (cfg.start_empty) ImGui::EndDisabled();
 
     ImGui::SliderFloat("Types Slider", &particle_types_slider, 1.0f, 18.0f, "%.0f");
     int pt = static_cast<int>(particle_types_slider);
@@ -109,13 +107,9 @@ void Interface::render_imgui(SimConfig&       cfg,
 
     ImGui::Checkbox("Start Empty  (F3 lab mode)", &cfg.start_empty);
     ImGui::SameLine(); HelpMarker(
-        "Start with a quiet reservoir of dormant H atoms instead of a live soup.\n"
-        "Use the F3 Spawn Picker to place atoms and molecules manually.");
-    if (cfg.start_empty) {
-        ImGui::SliderInt("Reservoir Size", reinterpret_cast<int*>(&cfg.pool_size),
-                         10, 22500, "%d atoms");
-        ImGui::SameLine(); HelpMarker("Dormant H atoms that the F3 spawner recycles.");
-    }
+        "Start with an empty world — no particles visible.\n"
+        "Use F3 to place atoms, molecules, and bio-molecules freely.\n"
+        "Particle Types controls how many types are available in the force matrix.");
 
     if (ImGui::Button("Reset Simulation (F2)", ImVec2(-1, 0)))
         request_reset = true;
