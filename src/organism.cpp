@@ -410,6 +410,20 @@ void OrganismManager::update(
             new_orgs[ni].traits.generation = prev.traits.generation + 1;
             new_orgs[ni].traits.divisions  = prev.traits.divisions + 1;
             new_orgs[ni].traits.parent_id  = prev.id;
+
+            // Genome mutation — ±3% on electronegativity + reactivity per division.
+            // This is the engine of Darwinian evolution: heritable variation under
+            // selection pressure (energy efficiency determines survival).
+            constexpr float MUT = 0.03f;
+            for (uint32_t idx : new_orgs[ni].particle_indices) {
+                uint32_t base = idx * GENOME_SIZE;
+                if (base + 3 >= static_cast<uint32_t>(particles.genomes.size())) continue;
+                float m = mutation_dist_(mutation_rng_) * MUT;
+                particles.genomes[base + 1] = std::clamp(
+                    particles.genomes[base + 1] + m, 0.1f, 2.0f);
+                particles.genomes[base + 2] = std::clamp(
+                    particles.genomes[base + 2] + m, 0.1f, 2.0f);
+            }
         }
     }
 

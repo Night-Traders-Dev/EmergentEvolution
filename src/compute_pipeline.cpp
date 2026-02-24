@@ -507,9 +507,9 @@ void ComputePipeline::record(VkCommandBuffer cmd,
 
     // ── Clear render texture ──────────────────────────────────────────────────
     VkClearColorValue clear_color{};
-    clear_color.float32[0] = 0.0f;
-    clear_color.float32[1] = 0.0f;
-    clear_color.float32[2] = 0.0f;
+    clear_color.float32[0] = 0.01f;
+    clear_color.float32[1] = 0.01f;
+    clear_color.float32[2] = 0.04f;  // deep space blue-black
     clear_color.float32[3] = 1.0f;
     VkImageSubresourceRange range{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
     vkCmdClearColorImage(cmd,

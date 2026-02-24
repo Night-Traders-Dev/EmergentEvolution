@@ -5,6 +5,7 @@
 #include "bond_manager.h"
 #include <cstdint>
 #include <vector>
+#include <random>
 #include <glm/glm.hpp>
 
 static constexpr uint32_t ORGANISM_UPDATE_INTERVAL = 5;
@@ -91,6 +92,10 @@ public:
 private:
     std::vector<Organism> prev_organisms_;
     uint64_t next_id_ = 1;
+
+    // Mutation RNG — seeded once at construction
+    std::mt19937  mutation_rng_{ std::random_device{}() };
+    std::uniform_real_distribution<float> mutation_dist_{ -1.0f, 1.0f };
 
     std::vector<int> build_clusters(const std::vector<glm::vec2>& positions);
 

@@ -94,6 +94,19 @@ void apply_physics(uint i) {
     uint  type_a        = type_buffer.data[i];
     uint  flags_a       = behavior_buffer.data[type_a];
 
+    // ── Dormant fast-path (lab-mode reservoir) ────────────────────────────────
+    // Pool particles at energy=0 are frozen in place — they skip all physics and
+    // cannot accumulate energy from symbiotic interactions or temperature noise.
+    // The F3 spawner activates them by setting energy > 0.
+    if (in_energy_buffer.data[i] < 0.001f) {
+        out_pos_buffer.data[i]    = pos_a;
+        out_vel_buffer.data[i]    = vec2(0.0f);
+        out_energy_buffer.data[i] = 0.0f;
+        angle_out_buffer.data[i]  = angle_in_buffer.data[i];
+        avel_out_buffer.data[i]   = avel_in_buffer.data[i];
+        return;
+    }
+
     // ── Photon fast-path ──────────────────────────────────────────────────────
     // Photons travel ballistic (no forces, no dampening).
     // They drain their own energy over time; atoms absorb from them in the j-loop below.
@@ -185,15 +198,24 @@ void apply_physics(uint i) {
             uint  type_b = type_buffer.data[j];
             uint  flags_b = behavior_buffer.data[type_b];
 
-            // ── Photon absorption ─────────────────────────────────────────────
-            // If neighbor j is a photon, atom i absorbs energy from it.
-            // The photon drains autonomously; atom claims its field energy.
+            // ── Photon absorption + photosynthesis ───────────────────────────
+            // All atoms passively absorb photon field energy (proportional to electroneg).
+            // CATALYST / DONOR atoms additionally perform photosynthesis: they absorb
+            // photon energy directly, independent of their current deficit — modelling
+            // light-driven energy capture by enzymatic / electron-donor molecules.
             if ((flags_b & BEHAVIOR_PHOTON) != 0u) {
                 float ph_energy = in_energy_buffer.data[j];
                 if (ph_energy > 0.04f && dist < params.repulsion_radius * 2.5f) {
                     float deficit = max(0.0f, 1.0f - energy);
                     float absorb  = deficit * 0.35f * clamp(electroneg, 0.2f, 2.0f) * params.dt;
                     interaction_energy_gain += ph_energy * absorb;
+
+                    // Photosynthesis bonus: CATALYST / DONOR harvest light more efficiently
+                    bool photosynthetic = (flags_a & (BEHAVIOR_CATALYST | BEHAVIOR_DONOR)) != 0u;
+                    if (photosynthetic && dist < params.interaction_radius * 0.5f) {
+                        float proximity = 1.0f - dist / (params.interaction_radius * 0.5f);
+                        interaction_energy_gain += ph_energy * 0.08f * proximity * params.dt;
+                    }
                 }
                 continue;  // no force from photon
             }
@@ -450,63 +472,134 @@ void render_particle(uint i) {
     bool polar     = (flags & BEHAVIOR_POLAR)  != 0u;
     bool is_photon = (flags & BEHAVIOR_PHOTON) != 0u;
 
+    // Dormant pool particles — skip entirely
+    float energy_level = in_energy_buffer.data[i];
+    if (energy_level < 0.01f) return;
+
     vec2 screen_center = params.region_size * 0.5f;
     float radius = params.radius * params.camera_zoom;
-    // Photons render as a soft glow disc — 4x base radius, minimum 5 px
     if (is_photon) radius = max(radius * 4.0f, 5.0f);
-    int   range  = int(ceil(radius));
-    float r      = float(range);
 
     vec2 center = screen_center + (pos - params.camera_origin) * params.camera_zoom;
+
+    // Energy bloom — high-energy particles extend their render range
+    float bloom = max(0.0f, (energy_level - 0.5f) * 2.0f);  // 0→1 as energy 0.5→1.0
+    float outer = radius * (1.0f + bloom * 0.6f);
+    int   range = int(ceil(outer));
+    float r     = float(range);
 
     if (center.x + r < 0.0f || center.x - r > params.region_size.x) return;
     if (center.y + r < 0.0f || center.y - r > params.region_size.y) return;
 
-    float angle   = polar ? angle_in_buffer.data[i] : 0.0f;
-    vec2  dip_dir = polar ? vec2(cos(angle), sin(angle)) : vec2(0.0f);
+    float angle    = polar ? angle_in_buffer.data[i] : 0.0f;
+    vec2  dip_dir  = polar ? vec2(cos(angle), sin(angle)) : vec2(0.0f);
     vec2  north_pt = center + dip_dir * (radius * 0.55f);
 
-    vec2  screen_pos = center - vec2(r, r);
+    vec2 screen_pos = center - vec2(r, r);
+
+    // Base colour for this particle — hoisted so bond rendering can reuse it
+    vec4 base_col = color_buffer.data[type];
+    base_col.rgb *= mix(0.10f, 1.0f, energy_level);
 
     for (int x = -range; x <= range; x++) {
         for (int y = -range; y <= range; y++) {
             ivec2 pixel_pos = ivec2(floor(screen_pos)) + ivec2(x, y);
             vec2  px_center = vec2(pixel_pos) + 0.5f;
+            float d_main    = distance(px_center, center);
 
-            float d_main = distance(px_center, center);
-            if (d_main >= radius) continue;
+            if (d_main >= outer) continue;  // outside disc + bloom halo — skip
 
-            vec4 col = color_buffer.data[type];
-            float energy_level = in_energy_buffer.data[i];
-            if (energy_level < 0.01f) return;  // dormant pool particle — skip render
-            col.rgb *= mix(0.12f, 1.0f, energy_level);
+            vec4 col = base_col;
 
-            // Photons: smooth radial glow falloff (bright core → dark edge)
-            if (is_photon) {
-                float norm_d = d_main / radius;
-                float glow   = max(0.0f, 1.0f - norm_d * norm_d);
-                col.rgb     *= glow * 1.6f;
-                // Additive blend so photons illuminate underlying pixels
+            if (d_main < radius) {
+                // ── Photon: radial glow, additive blend ───────────────────────
+                if (is_photon) {
+                    float norm_d = d_main / radius;
+                    float glow   = max(0.0f, 1.0f - norm_d * norm_d);
+                    col.rgb     *= glow * 1.6f;
+                    vec4 existing = imageLoad(out_render_texture, pixel_pos);
+                    imageStore(out_render_texture, pixel_pos,
+                               vec4(min(existing.rgb + col.rgb, vec3(1.0f)), 1.0f));
+                    continue;
+                }
+
+                // ── Smooth edge (anti-alias outer 28%) ────────────────────────
+                float edge = 1.0f - smoothstep(radius * 0.72f, radius, d_main);
+                col.rgb *= edge;
+
+                // ── Polar dipole colouring ────────────────────────────────────
+                if (polar) {
+                    float d_north = distance(px_center, north_pt);
+                    if (d_north < radius * 0.38f) {
+                        col = vec4(1.0f, 0.85f, 0.3f, 1.0f) * edge;
+                    } else {
+                        vec2  to_px    = px_center - center;
+                        float len_to   = length(to_px);
+                        float s_dot    = (len_to > 0.0f)
+                                       ? dot(to_px / len_to, -dip_dir) : 0.0f;
+                        float s_blend  = max(0.0f, s_dot) * 0.45f;
+                        col = mix(col, vec4(0.3f, 0.5f, 1.0f, 1.0f) * edge, s_blend);
+                    }
+                }
+
+                // ── Specular highlight (top-left, ~30% radius, +55% white) ───
+                vec2  hi_ctr = center + vec2(-radius * 0.28f, -radius * 0.28f);
+                float d_hi   = distance(px_center, hi_ctr);
+                if (d_hi < radius * 0.30f) {
+                    float hi = 1.0f - d_hi / (radius * 0.30f);
+                    hi *= hi;
+                    col.rgb = mix(col.rgb, vec3(1.0f), hi * 0.55f);
+                }
+
+                imageStore(out_render_texture, pixel_pos, col);
+
+            } else if (!is_photon && bloom > 0.01f) {
+                // ── Energy bloom halo (additive, outside disc) ────────────────
+                float t    = (d_main - radius) / (outer - radius);
+                float glow = (1.0f - t) * (1.0f - t) * bloom * 0.35f;
                 vec4 existing = imageLoad(out_render_texture, pixel_pos);
                 imageStore(out_render_texture, pixel_pos,
-                           vec4(min(existing.rgb + col.rgb, vec3(1.0f)), 1.0f));
-                continue;
+                           vec4(min(existing.rgb + col.rgb * glow, vec3(1.0f)), 1.0f));
             }
+        }
+    }
 
-            if (polar) {
-                float d_north = distance(px_center, north_pt);
-                if (d_north < radius * 0.38f) {
-                    col = vec4(1.0f, 0.85f, 0.3f, 1.0f);
-                } else {
-                    vec2  to_px     = px_center - center;
-                    float len_to_px = length(to_px);
-                    float south_dot = (len_to_px > 0.0f) ? dot(to_px / len_to_px, -dip_dir) : 0.0f;
-                    float south_blend = max(0.0f, south_dot) * 0.45f;
-                    col = mix(col, vec4(0.3f, 0.5f, 1.0f, 1.0f), south_blend);
-                }
+    // ── Bond lines (each bond drawn once by the lower-index particle) ─────────
+    if (!is_photon) {
+        for (uint slot = 0u; slot < MAX_BONDS; ++slot) {
+            uint j = bond_buffer.data[i * MAX_BONDS + slot];
+            if (j == BOND_EMPTY || j >= params.particle_count) continue;
+            if (j <= i) continue;   // only i < j draws this bond
+
+            float j_nrg = in_energy_buffer.data[j];
+            if (j_nrg < 0.01f) continue;
+
+            vec2  center_j = screen_center
+                           + (in_pos_buffer.data[j] - params.camera_origin)
+                           * params.camera_zoom;
+            vec2  line_d = center_j - center;
+            float line_l = length(line_d);
+            if (line_l < 1.0f) continue;
+
+            vec4 col_j = color_buffer.data[type_buffer.data[j]];
+            vec2 step  = line_d / line_l;
+            int  start = int(radius) + 1;
+            int  end   = int(line_l) - int(radius) - 1;
+
+            for (int s = start; s <= end; ++s) {
+                float t   = float(s) / line_l;
+                ivec2 pix = ivec2(floor(center + step * float(s)));
+                if (pix.x < 0 || pix.x >= int(params.region_size.x)) continue;
+                if (pix.y < 0 || pix.y >= int(params.region_size.y)) continue;
+
+                vec4  bc    = mix(base_col, col_j, t);
+                float e_mix = mix(energy_level, j_nrg, t);
+                bc.rgb *= mix(0.05f, 0.28f, e_mix);
+
+                vec4 ex = imageLoad(out_render_texture, pix);
+                imageStore(out_render_texture, pix,
+                           vec4(min(ex.rgb + bc.rgb, vec3(1.0f)), 1.0f));
             }
-
-            imageStore(out_render_texture, pixel_pos, col);
         }
     }
 }
