@@ -1283,9 +1283,6 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
             // Consecutive ring bonds (membrane topology)
             for (int i = 0; i < RING_N; ++i)
                 tmpl_bonds.push_back({ i, (i + 1) % RING_N });
-            // Cross-ring bonds (i→i+2): triangulates ring for stiffness
-            for (int i = 0; i < RING_N; ++i)
-                tmpl_bonds.push_back({ i, (i + 2) % RING_N });
             // Glycine-like amino acid core — within 10px of center, 47px+ from ring atoms
             tmpl_atoms.push_back({   0.f,   0.f, 2u }); // N  (16) — amino group
             tmpl_atoms.push_back({  -8.f,   0.f, 1u }); // C  (17) — alpha carbon
@@ -1309,8 +1306,6 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
                                        std::sin(i * RING_DA) * RING_R, 1u }); // C
             for (int i = 0; i < RING_N; ++i)
                 tmpl_bonds.push_back({ i, (i + 1) % RING_N });
-            for (int i = 0; i < RING_N; ++i)
-                tmpl_bonds.push_back({ i, (i + 2) % RING_N });
             // Organelle core — all within 14px of center, 43px+ from ring atoms
             tmpl_atoms.push_back({   0.f,   0.f, 4u }); // P  (16) — ATP γ-phosphate
             tmpl_atoms.push_back({ -12.f,   0.f, 4u }); // P  (17) — ATP β-phosphate
@@ -1340,8 +1335,6 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
                                        std::sin(i * RING_DA) * RING_R, 1u }); // C
             for (int i = 0; i < RING_N; ++i)
                 tmpl_bonds.push_back({ i, (i + 1) % RING_N });
-            for (int i = 0; i < RING_N; ++i)
-                tmpl_bonds.push_back({ i, (i + 2) % RING_N });
             // Ribosome-like amino acid core — within 15px of center, 55px+ from ring atoms
             tmpl_atoms.push_back({   0.f,   0.f, 2u }); // N  (20) — central amine
             tmpl_atoms.push_back({ -10.f,   0.f, 1u }); // C  (21) — alpha carbon
@@ -1371,8 +1364,6 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
                                        std::sin(i * RING_DA) * RING_R, 1u }); // C
             for (int i = 0; i < RING_N; ++i)
                 tmpl_bonds.push_back({ i, (i + 1) % RING_N });
-            for (int i = 0; i < RING_N; ++i)
-                tmpl_bonds.push_back({ i, (i + 2) % RING_N });
             // Full organelle core — within 17px of center, 53px+ from ring atoms
             tmpl_atoms.push_back({   0.f,   0.f, 4u }); // P  (20) — ATP central phosphate
             tmpl_atoms.push_back({ -12.f,  -8.f, 4u }); // P  (21) — DNA backbone
@@ -1408,8 +1399,6 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
                                        std::sin(i * RING_DA) * RING_R, 1u }); // C
             for (int i = 0; i < RING_N; ++i)
                 tmpl_bonds.push_back({ i, (i + 1) % RING_N });
-            for (int i = 0; i < RING_N; ++i)
-                tmpl_bonds.push_back({ i, (i + 2) % RING_N });
             // N-rich core — within 8px of center, 49px+ from ring atoms
             tmpl_atoms.push_back({  -8.f,   0.f, 2u }); // N  (16) — amine
             tmpl_atoms.push_back({   8.f,   0.f, 2u }); // N  (17) — amine
@@ -1431,8 +1420,6 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
                                        std::sin(i * RING_DA) * RING_R, 1u }); // C
             for (int i = 0; i < RING_N; ++i)
                 tmpl_bonds.push_back({ i, (i + 1) % RING_N });
-            for (int i = 0; i < RING_N; ++i)
-                tmpl_bonds.push_back({ i, (i + 2) % RING_N });
             // P-rich core — within 8px of center, 49px+ from ring atoms
             tmpl_atoms.push_back({  -8.f,   0.f, 4u }); // P  (16) — phosphate
             tmpl_atoms.push_back({   8.f,   0.f, 4u }); // P  (17) — phosphate
@@ -1460,8 +1447,6 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
                                        (i % 2 == 0) ? 1u : 3u }); // C/O cellulose
             for (int i = 0; i < WALL_N; ++i)
                 tmpl_bonds.push_back({ i, (i + 1) % WALL_N });
-            for (int i = 0; i < WALL_N; ++i)
-                tmpl_bonds.push_back({ i, (i + 2) % WALL_N });
 
             // ── Cell Membrane: 32 atoms, R=112px  (indices 40-71) ──
             constexpr int   MEM_N   = 32;
@@ -1473,8 +1458,6 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
                                        (i % 2 == 0) ? 1u : 4u }); // C/P phospholipid
             for (int i = 0; i < MEM_N; ++i)
                 tmpl_bonds.push_back({ WALL_N + i, WALL_N + (i + 1) % MEM_N });
-            for (int i = 0; i < MEM_N; ++i)
-                tmpl_bonds.push_back({ WALL_N + i, WALL_N + (i + 2) % MEM_N });
 
             // ── Radial tethers: wall↔membrane at 8 compass points ──
             // Wall[0°,45°,...] → Membrane[0°,45°,...] (28px gap ≈ turgor pressure)
@@ -1496,8 +1479,6 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
                                        NUC_TYPES[i] });
             for (int i = 0; i < NUC_N; ++i)
                 tmpl_bonds.push_back({ 72 + i, 72 + (i + 1) % NUC_N });
-            for (int i = 0; i < NUC_N; ++i)
-                tmpl_bonds.push_back({ 72 + i, 72 + (i + 2) % NUC_N });
             // Nucleolus: 2 atoms inside nucleus (indices 80-81)
             tmpl_atoms.push_back({ NUC_CX, NUC_CY + 5.0f, 2u }); // N  rRNA
             tmpl_atoms.push_back({ NUC_CX, NUC_CY - 5.0f, 1u }); // C  ribosomal
