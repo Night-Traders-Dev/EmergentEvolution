@@ -39,9 +39,13 @@ void Simulation::destroy() {
 void Simulation::reset() {
     vkDeviceWaitIdle(vk.device);
     particles.gen_data(cfg);
+    // When start_empty is on, gen_particles() emits pool_size particles instead of
+    // particle_count — sync the count so GPU buffers and push constants agree.
+    cfg.particle_count = static_cast<uint32_t>(particles.positions.size());
     compute.clear_buffers(vk);
     compute.create_buffers(vk, particles);
     organism_manager.reset();
+    sub_atomic_sim.reset();
     organism_tick_counter_ = 0;
 
     bond_manager.reset(cfg.particle_count);
@@ -69,12 +73,56 @@ void Simulation::tick(GLFWwindow* window, double dt) {
     if (is_active)
         compute.upload_dynamic_data(vk, particles);
 
+    // ── Hover detection (world-space nearest particle to mouse) ───────────────
+    {
+        iface.hover_particle_idx = -1;
+        iface.hover_energies_ptr = &readback_energies_;
+        if (!iface.mouse_within && !readback_positions_.empty()) {
+            double mx, my;
+            glfwGetCursorPos(window, &mx, &my);
+            int win_w, win_h;
+            glfwGetWindowSize(window, &win_w, &win_h);
+            glm::vec2 mw = cfg.camera_origin
+                         + (glm::vec2(float(mx), float(my)) - glm::vec2(win_w * 0.5f, win_h * 0.5f))
+                         / cfg.current_camera_zoom;
+
+            // 14 screen-pixel snap radius, converted to world units
+            float snap_r  = 14.0f / cfg.current_camera_zoom;
+            float min_d2  = snap_r * snap_r;
+            for (uint32_t pi = 0; pi < static_cast<uint32_t>(readback_positions_.size()); ++pi) {
+                glm::vec2 d = readback_positions_[pi] - mw;
+                float     d2 = d.x*d.x + d.y*d.y;
+                if (d2 < min_d2) { min_d2 = d2; iface.hover_particle_idx = static_cast<int32_t>(pi); }
+            }
+        }
+    }
+
+    // ── Sub-atomic LOD update ─────────────────────────────────────────────────
+    {
+        float zoom_now = cfg.current_camera_zoom;
+        int new_zoom   = (zoom_now > 150.f) ? 2 : (zoom_now > 20.f) ? 1 : 0;
+        int  hov_type  = -1;
+        float hov_nrg  = 0.f;
+        if (iface.hover_particle_idx >= 0) {
+            auto pidx = static_cast<uint32_t>(iface.hover_particle_idx);
+            if (pidx < static_cast<uint32_t>(particles.types.size())) {
+                hov_type = static_cast<int>(particles.types[pidx]);
+                if (pidx < static_cast<uint32_t>(readback_energies_.size()))
+                    hov_nrg = readback_energies_[pidx];
+            }
+        }
+        sub_atomic_sim.update(dt, hov_type, hov_nrg, new_zoom);
+    }
+
     // ── ImGui ──────────────────────────────────────────────────────────────────
     bool request_reset = false;
     iface.render_imgui(cfg, particles, organism_manager, bond_manager, request_reset);
 
     if (request_reset)
         reset();
+
+    // Sub-atomic panel — draws after main UI, still within ImGui frame
+    sub_atomic_sim.render_panel(iface.hover_particle_idx, particles);
 
     // ── Record compute command buffer ─────────────────────────────────────────
     // We encode the compute work into a separate one-shot command buffer
@@ -342,20 +390,24 @@ void Simulation::inject_photons(const std::vector<PhotonEvent>& events) {
 
     // Emit up to 20 photons per tick, skipping already-photon particles
     uint32_t injected = 0;
-    static constexpr float PHOTON_SPEED = 800.0f;
+    // 200 world-px/s — slow enough to be visible across several frames,
+    // fast enough to look like light relative to atom motion.
+    static constexpr float PHOTON_SPEED = 200.0f;
     for (const auto& ev : events) {
         if (injected >= 20) break;
 
-        // Find a suitable recycling candidate (non-photon, low energy)
+        // Find a suitable recycling candidate (non-photon, lowest-energy)
+        // Threshold 0.6 so we can recycle active particles — in a busy sim
+        // nearly dead (<0.1) particles rarely exist.
         uint32_t idx = n; // sentinel
         for (uint32_t s = injected; s < std::min<uint32_t>(40, n); ++s) {
             uint32_t cand = sorted[s];
             if (particles.types[cand] == PHOTON_TYPE) continue; // already a photon
-            if (cur_nrg[cand] > 0.1f) break;  // sorted ascending; if >0.1 then none below
+            if (cur_nrg[cand] > 0.6f) break;  // sorted ascending; everything above is busier
             idx = cand;
             break;
         }
-        if (idx == n) break;  // no suitable low-energy particle found
+        if (idx == n) break;  // no suitable candidate found
 
         cur_pos[idx] = ev.position;
         cur_vel[idx] = ev.direction * PHOTON_SPEED;
@@ -398,12 +450,17 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
     std::vector<float>     cur_nrg(n);
     compute.read_current_state(vk, cur_pos, cur_vel, cur_nrg);
 
-    // Helper: overwrite one particle slot
+    // Pull UI placement settings
+    const float  spawn_energy  = iface.spawn_energy;
+    const int    spawn_count   = std::max(1, iface.spawn_count);
+    const float  spawn_scatter = iface.spawn_scatter;
+
+    // Helper: overwrite one particle slot with energy from UI
     auto set_atom = [&](uint32_t idx, uint32_t type, glm::vec2 pos) {
         uint32_t t = std::min(type, static_cast<uint32_t>(ATOM_COUNT - 1u));
         cur_pos[idx]                = pos;
         cur_vel[idx]                = { 0.0f, 0.0f };
-        cur_nrg[idx]                = 0.7f;
+        cur_nrg[idx]                = spawn_energy;
         particles.types[idx]        = t;
         particles.genomes[idx*4+0]  = BASE_CHARGE[t];
         particles.genomes[idx*4+1]  = BASE_ELECTRONEG[t];
@@ -412,19 +469,31 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
         bond_manager.clear_particle_bonds(idx);
     };
 
-    // Find low-energy non-photon candidates for recycling
+    // Find low-energy non-photon candidates — need enough for spawn_count + molecule size
+    const uint32_t max_cands = static_cast<uint32_t>(std::max(256, spawn_count * 2 + 32));
     std::vector<uint32_t> sorted(n);
     std::iota(sorted.begin(), sorted.end(), 0u);
     std::sort(sorted.begin(), sorted.end(),
               [&](uint32_t a, uint32_t b){ return cur_nrg[a] < cur_nrg[b]; });
 
     std::vector<uint32_t> candidates;
-    candidates.reserve(64);
+    candidates.reserve(max_cands);
     for (uint32_t idx : sorted) {
         if (particles.types[idx] == PHOTON_TYPE) continue;
         candidates.push_back(idx);
-        if (candidates.size() >= 64) break;
+        if (static_cast<uint32_t>(candidates.size()) >= max_cands) break;
     }
+
+    // RNG for scatter offsets
+    static std::mt19937 place_rng{ std::random_device{}() };
+    auto scatter_offset = [&]() -> glm::vec2 {
+        if (spawn_scatter < 0.5f) return { 0.0f, 0.0f };
+        std::uniform_real_distribution<float> ang_d(0.0f, 6.28318f);
+        std::uniform_real_distribution<float> rad_d(0.0f, spawn_scatter);
+        float a = ang_d(place_rng);
+        float r = rad_d(place_rng);
+        return { std::cos(a) * r, std::sin(a) * r };
+    };
 
     // ── Molecule template definitions (Groups tab) ────────────────────────────
     struct AtomSpec { float rx, ry; uint32_t type; };
@@ -452,10 +521,14 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
           {{0,1},{1,2},{2,3},{2,4},{0,5},{0,6},{1,7}} },
     };
 
-    // ── Case: Single atom ─────────────────────────────────────────────────────
+    // ── Case: Atom(s) ─────────────────────────────────────────────────────────
     if (iface.spawn_tab == 0) {
-        if (candidates.empty()) return;
-        set_atom(candidates[0], static_cast<uint32_t>(iface.spawn_atom_type), world_pos);
+        uint32_t place = std::min(static_cast<uint32_t>(spawn_count),
+                                  static_cast<uint32_t>(candidates.size()));
+        if (place == 0) return;
+        uint32_t atom_type = static_cast<uint32_t>(iface.spawn_atom_type);
+        for (uint32_t k = 0; k < place; ++k)
+            set_atom(candidates[k], atom_type, world_pos + scatter_offset());
         compute.write_particle_state(vk, cur_pos, cur_vel, cur_nrg);
         compute.upload_dynamic_data(vk, particles);
         return;

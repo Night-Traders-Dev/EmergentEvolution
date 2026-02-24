@@ -70,7 +70,7 @@ const uint BEHAVIOR_IONIC_NEG = 512u;  // negative ion Cl (was REPRODUCTIVE)
 const uint BEHAVIOR_PHOTON    = 1024u; // massless energy carrier; skips normal physics
 
 const uint  PHOTON_TYPE_IDX  = 8u;
-const float PHOTON_DRAIN     = 0.12f; // energy drained per second (finite lifetime ~8s at full energy)
+const float PHOTON_DRAIN     = 0.07f; // energy drained per second (~4-8s lifetime depending on start energy)
 
 float random(float v) {
     return fract(sin(dot(vec2(v, v / 10.0f), vec2(12.9898f, 78.233f))) * 43758.5453f);
@@ -380,10 +380,13 @@ void render_particle(uint i) {
     vec2 pos   = in_pos_buffer.data[i];
     uint type  = type_buffer.data[i];
     uint flags = behavior_buffer.data[type];
-    bool polar = (flags & BEHAVIOR_POLAR) != 0u;
+    bool polar     = (flags & BEHAVIOR_POLAR)  != 0u;
+    bool is_photon = (flags & BEHAVIOR_PHOTON) != 0u;
 
     vec2 screen_center = params.region_size * 0.5f;
     float radius = params.radius * params.camera_zoom;
+    // Photons render as a soft glow disc — 4x base radius, minimum 5 px
+    if (is_photon) radius = max(radius * 4.0f, 5.0f);
     int   range  = int(ceil(radius));
     float r      = float(range);
 
@@ -409,6 +412,18 @@ void render_particle(uint i) {
             vec4 col = color_buffer.data[type];
             float energy_level = in_energy_buffer.data[i];
             col.rgb *= mix(0.12f, 1.0f, energy_level);
+
+            // Photons: smooth radial glow falloff (bright core → dark edge)
+            if (is_photon) {
+                float norm_d = d_main / radius;
+                float glow   = max(0.0f, 1.0f - norm_d * norm_d);
+                col.rgb     *= glow * 1.6f;
+                // Additive blend so photons illuminate underlying pixels
+                vec4 existing = imageLoad(out_render_texture, pixel_pos);
+                imageStore(out_render_texture, pixel_pos,
+                           vec4(min(existing.rgb + col.rgb, vec3(1.0f)), 1.0f));
+                continue;
+            }
 
             if (polar) {
                 float d_north = distance(px_center, north_pt);

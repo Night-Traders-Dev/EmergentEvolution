@@ -138,6 +138,28 @@ void Particles::gen_particles(const SimConfig& cfg) {
     const float rw = static_cast<float>(REGION_W);
     const float rh = static_cast<float>(REGION_H);
 
+    // ── Empty-world reservoir ──────────────────────────────────────────────────
+    // Generates a quiet pool of dormant H atoms at energy=0 that the F3 spawner
+    // can recycle. They render at 12% brightness (nearly invisible dark dots).
+    if (cfg.start_empty) {
+        uint32_t pool = std::max(10u, cfg.pool_size);
+        for (uint32_t i = 0; i < pool; ++i)
+            add_particle({ rand_range_f(0.0f, rw), rand_range_f(0.0f, rh) },
+                         glm::vec2(0.0f), 0u); // H, no velocity
+        angles.assign(pool, 0.0f);
+        angular_velocities.assign(pool, 0.0f);
+        energies.assign(pool, 0.0f);          // dark / near-invisible
+        genomes.assign(pool * GENOME_SIZE, 0.0f);
+        // Stamp H atom genome defaults
+        for (uint32_t i = 0; i < pool; ++i) {
+            genomes[i*4+0] = 0.3f;  // charge
+            genomes[i*4+1] = 0.6f;  // electronegativity
+            genomes[i*4+2] = 1.0f;  // reactivity
+            genomes[i*4+3] = 0.3f;  // bond_strength
+        }
+        return;
+    }
+
     if (cfg.particle_count == 2) {
         add_particle(glm::vec2(rw / 2.0f - 30.0f, rh / 2.0f),
                      glm::vec2(0.0f), 0u);

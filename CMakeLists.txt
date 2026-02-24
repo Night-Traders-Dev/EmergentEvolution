@@ -31,6 +31,7 @@ add_executable(particle_life
     src/simulation.cpp
     src/organism.cpp
     src/bond_manager.cpp
+    src/sub_atomic.cpp
 
     # ImGui core
     ${imgui_SOURCE_DIR}/imgui.cpp

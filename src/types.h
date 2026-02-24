@@ -92,6 +92,10 @@ struct SimConfig {
     uint32_t spawn_min       = 100;
     uint32_t spawn_max       = 500;
 
+    // Empty-world mode — start with a quiet dormant reservoir instead of a live soup
+    bool     start_empty     = false;
+    uint32_t pool_size       = 500;    // how many dormant H atoms to pre-allocate
+
     glm::vec2 camera_origin      = { REGION_W / 2.0f, REGION_H / 2.0f };
     float     camera_zoom        = 1.0f;
     float     current_camera_zoom = 1.0f;

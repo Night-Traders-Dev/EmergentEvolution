@@ -60,6 +60,7 @@ void Interface::render_imgui(SimConfig&       cfg,
     }
 
     if (!settings_visible) {
+        draw_hover_tooltip(org_manager, particles, bond_manager);
         ImGui::Render();
         return;
     }
@@ -81,10 +82,16 @@ void Interface::render_imgui(SimConfig&       cfg,
     // ── Generation settings ───────────────────────────────────────────────────
     ImGui::SeparatorText("Generation");
 
+    if (cfg.start_empty) ImGui::BeginDisabled();
     ImGui::SliderFloat("Count Slider", &particle_count_slider, 1.0f, 317.0f, "%.0f");
     int pc = static_cast<int>(std::max(2.0f, std::pow(particle_count_slider, 2.0f)));
-    ImGui::Text("Particle Count:  %d", pc);
-    cfg.particle_count = static_cast<uint32_t>(pc);
+    if (!cfg.start_empty) {
+        ImGui::Text("Particle Count:  %d", pc);
+        cfg.particle_count = static_cast<uint32_t>(pc);
+    } else {
+        ImGui::Text("Particle Count:  %u  (pool when empty)", cfg.particle_count);
+    }
+    if (cfg.start_empty) ImGui::EndDisabled();
 
     ImGui::SliderFloat("Types Slider", &particle_types_slider, 1.0f, 10.0f, "%.0f");
     int pt = static_cast<int>(particle_types_slider);
@@ -99,6 +106,16 @@ void Interface::render_imgui(SimConfig&       cfg,
     ImGui::InputInt("Seed", &seed_value);
     seed_value = std::clamp(seed_value, 0, 65535);
     cfg.generation_seed = static_cast<uint32_t>(seed_value);
+
+    ImGui::Checkbox("Start Empty  (F3 lab mode)", &cfg.start_empty);
+    ImGui::SameLine(); HelpMarker(
+        "Start with a quiet reservoir of dormant H atoms instead of a live soup.\n"
+        "Use the F3 Spawn Picker to place atoms and molecules manually.");
+    if (cfg.start_empty) {
+        ImGui::SliderInt("Reservoir Size", reinterpret_cast<int*>(&cfg.pool_size),
+                         10, 2000, "%d atoms");
+        ImGui::SameLine(); HelpMarker("Dormant H atoms that the F3 spawner recycles.");
+    }
 
     if (ImGui::Button("Reset Simulation (F2)", ImVec2(-1, 0)))
         request_reset = true;
@@ -167,6 +184,9 @@ void Interface::render_imgui(SimConfig&       cfg,
     // ── F3 Spawn Picker (separate floating window) ────────────────────────────
     if (spawn_menu_visible)
         draw_spawn_menu(org_manager, particles, cfg);
+
+    // ── Hover inspection tooltip ──────────────────────────────────────────────
+    draw_hover_tooltip(org_manager, particles, bond_manager);
 
     ImGui::Render();
 }
@@ -637,6 +657,38 @@ void Interface::draw_spawn_menu(const OrganismManager& org_manager,
             "Select an item below, then left-click in the world to place it");
     ImGui::Separator();
 
+    // ── Placement Settings ────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Placement Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::SliderFloat("Energy", &spawn_energy, 0.05f, 1.0f, "%.2f");
+        ImGui::SameLine(); HelpMarker(
+            "Initial energy of placed particles.\n"
+            "1.0 = full brightness / fast.  0.05 = dim / cold.");
+
+        if (spawn_tab == 0) {
+            // Count quick-select buttons
+            ImGui::Text("Count:");
+            ImGui::SameLine();
+            static const int COUNTS[] = { 1, 5, 10, 25, 50 };
+            for (int k = 0; k < 5; ++k) {
+                ImGui::PushID(k + 400);
+                char lbl[6]; std::snprintf(lbl, sizeof(lbl), "x%d", COUNTS[k]);
+                bool sel = (spawn_count == COUNTS[k]);
+                if (sel)
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.52f, 0.18f, 1.0f));
+                if (ImGui::SmallButton(lbl)) spawn_count = COUNTS[k];
+                if (sel) ImGui::PopStyleColor();
+                ImGui::PopID();
+                if (k < 4) ImGui::SameLine();
+            }
+
+            if (spawn_count > 1) {
+                ImGui::SliderFloat("Scatter Radius", &spawn_scatter, 0.0f, 250.0f, "%.0f px");
+                ImGui::SameLine(); HelpMarker("How far apart the atoms are spread around the click point.");
+            }
+        }
+    }
+    ImGui::Separator();
+
     if (ImGui::BeginTabBar("SpawnTabs")) {
 
         // ── Atoms tab ─────────────────────────────────────────────────────────
@@ -846,5 +898,117 @@ void Interface::draw_spawn_menu(const OrganismManager& org_manager,
     }
 
     ImGui::End();
+}
+
+// ── Hover inspection tooltip ──────────────────────────────────────────────────
+
+void Interface::draw_hover_tooltip(const OrganismManager& org_manager,
+                                    const Particles&       particles,
+                                    const BondManager&     bond_manager)
+{
+    if (hover_particle_idx < 0 || mouse_within) return;
+    auto pi = static_cast<uint32_t>(hover_particle_idx);
+    if (pi >= particles.types.size()) return;
+
+    float    energy  = (hover_energies_ptr && pi < hover_energies_ptr->size())
+                        ? (*hover_energies_ptr)[pi] : 0.0f;
+    uint32_t ptype   = particles.types[pi];
+    uint32_t bonds   = (pi < bond_manager.bond_counts.size())
+                        ? bond_manager.bond_counts[pi] : 0u;
+    uint32_t valence = (ptype < ATOM_COUNT) ? ATOM_VALENCE[ptype] : 0u;
+    bool     is_photon = (ptype == PHOTON_TYPE);
+
+    static const char* ATOM_FULL[ATOM_COUNT] = {
+        "Hydrogen","Carbon","Nitrogen","Oxygen",
+        "Phosphorus","Sulfur","Sodium","Chlorine"
+    };
+    static const char* ATOM_SYM[ATOM_COUNT] = {
+        "H","C","N","O","P","S","Na","Cl"
+    };
+
+    const char* type_name = is_photon ? "Photon"
+                          : (ptype < ATOM_COUNT ? ATOM_FULL[ptype] : "Unknown");
+    const char* type_sym  = is_photon ? "\xce\xb3"  // γ (UTF-8)
+                          : (ptype < ATOM_COUNT ? ATOM_SYM[ptype] : "?");
+    const glm::vec4& col  = (ptype < MAX_PARTICLE_TYPES)
+                             ? particles.colors[ptype] : glm::vec4(1.0f);
+
+    // Find the organism that contains this particle, if any
+    const Organism* org_ptr = nullptr;
+    for (const auto& o : org_manager.organisms) {
+        for (uint32_t mi : o.particle_indices) {
+            if (mi == pi) { org_ptr = &o; break; }
+        }
+        if (org_ptr) break;
+    }
+
+    ImGui::BeginTooltip();
+    ImGui::PushTextWrapPos(260.0f);
+
+    // ── Header: swatch + type name ────────────────────────────────────────────
+    ImGui::ColorButton("##hc", ImVec4(col.r, col.g, col.b, 1.0f),
+                       ImGuiColorEditFlags_NoTooltip, ImVec2(20, 20));
+    ImGui::SameLine();
+    ImGui::Text("%s  —  %s", type_sym, type_name);
+    ImGui::TextDisabled("Particle #%u", pi);
+    ImGui::Separator();
+
+    // ── Energy ────────────────────────────────────────────────────────────────
+    ImGui::Text("Energy:");
+    ImGui::SameLine(70.0f);
+    ImVec4 ecol = ImVec4(1.0f - energy, energy * 0.85f, 0.0f, 1.0f);
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ecol);
+    ImGui::ProgressBar(energy, ImVec2(130.0f, 10.0f), "");
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    ImGui::Text("%.2f", energy);
+
+    if (is_photon) {
+        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.5f, 1.0f),
+                           "Massless EM energy carrier");
+    } else {
+        // ── Bonds ─────────────────────────────────────────────────────────────
+        ImGui::Text("Bonds: %u / %u", bonds, valence);
+        if (bonds < valence)
+            ImGui::SameLine(), ImGui::TextDisabled("(%u free)", valence - bonds);
+
+        // ── Genome ────────────────────────────────────────────────────────────
+        if (pi * 4 + 3 < particles.genomes.size()) {
+            float charge   = particles.genomes[pi*4+0];
+            float eneg     = particles.genomes[pi*4+1];
+            float react    = particles.genomes[pi*4+2];
+            float bond_str = particles.genomes[pi*4+3];
+            ImGui::Separator();
+            ImGui::Text("Charge:       %+.2f", charge);
+            ImGui::Text("Electroneg:    %.2f", eneg);
+            ImGui::Text("Reactivity:    %.2f", react);
+            ImGui::Text("Bond Str:     %+.2f", bond_str);
+        }
+    }
+
+    // ── Organism / cluster ────────────────────────────────────────────────────
+    if (org_ptr) {
+        static const char* MOL_NAMES[] = {
+            "Inorganic","Water","Lipid","Amino Acid","Nucleotide","Radical","Polymer"
+        };
+        auto mc = static_cast<uint8_t>(org_ptr->traits.mol_class);
+
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.6f, 1.0f, 0.6f, 1.0f), "Cluster: %s",
+                           mc < 7 ? MOL_NAMES[mc] : "Unknown");
+        ImGui::Text("%u atoms  •  %u bonds  •  speed %.1f",
+                    org_ptr->traits.size,
+                    org_ptr->traits.bond_count,
+                    org_ptr->traits.avg_speed);
+        ImGui::Text("Avg energy: %.2f", org_ptr->traits.energy);
+        if (org_ptr->traits.generation > 0)
+            ImGui::Text("Gen %u  •  Kills %u  •  Divs %u",
+                        org_ptr->traits.generation,
+                        org_ptr->traits.kills,
+                        org_ptr->traits.divisions);
+    }
+
+    ImGui::PopTextWrapPos();
+    ImGui::EndTooltip();
 }
 

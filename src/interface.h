@@ -21,12 +21,21 @@ public:
     bool glow_enabled     = false;
 
     // ── F3 Spawn Menu ─────────────────────────────────────────────────────────
-    bool spawn_menu_visible = false;
-    bool pending_spawn      = false;  // waiting for user to left-click in world
-    int  spawn_tab          = 0;      // 0=Atoms, 1=Groups, 2=Organisms
-    int  spawn_atom_type    = 1;      // 0=H..7=Cl (default C)
-    int  spawn_group_idx    = 0;      // which molecule template
-    int  spawn_organism_idx = -1;     // -1=predefined template, ≥0=live organism
+    bool  spawn_menu_visible = false;
+    bool  pending_spawn      = false;  // waiting for user to left-click in world
+    int   spawn_tab          = 0;      // 0=Atoms, 1=Groups, 2=Organisms
+    int   spawn_atom_type    = 1;      // 0=H..7=Cl (default C)
+    int   spawn_group_idx    = 0;      // which molecule template
+    int   spawn_organism_idx = -1;     // -1=predefined template, ≥0=live organism
+
+    // ── Hover inspection (set by Simulation each tick) ────────────────────────
+    int32_t                   hover_particle_idx = -1;
+    const std::vector<float>* hover_energies_ptr = nullptr;
+
+    // Placement settings (apply to all spawn types)
+    int   spawn_count        = 1;      // number of atoms to place per click (Atoms tab)
+    float spawn_energy       = 0.7f;   // initial energy of placed particles
+    float spawn_scatter      = 40.0f;  // scatter radius when count > 1 (pixels)
 
     // ── Sliders (raw slider values, converted to actual params by render_imgui) ─
     float particle_count_slider  = 150.0f;  // particle_count = pow(value, 2)
@@ -66,6 +75,9 @@ private:
     void draw_spawn_menu(const OrganismManager& org_manager,
                          const Particles& particles,
                          const SimConfig& cfg);
+    void draw_hover_tooltip(const OrganismManager& org_manager,
+                            const Particles& particles,
+                            const BondManager& bond_manager);
 
     static ImVec4 force_to_color(float f);
 };

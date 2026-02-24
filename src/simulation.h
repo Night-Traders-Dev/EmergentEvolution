@@ -8,6 +8,7 @@
 #include "interface.h"
 #include "organism.h"
 #include "bond_manager.h"
+#include "sub_atomic.h"
 #include <GLFW/glfw3.h>
 #include <vector>
 
@@ -37,6 +38,7 @@ public:
     Interface       iface{};
     OrganismManager organism_manager{};
     BondManager     bond_manager{};
+    SubAtomicSim    sub_atomic_sim{};
 
 private:
     // Input state
