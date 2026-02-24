@@ -22,6 +22,9 @@ public:
 
     // ── F3 Spawn Menu ─────────────────────────────────────────────────────────
     bool  spawn_menu_visible = false;
+
+    // ── F4 Quantum Field Display ───────────────────────────────────────────────
+    bool  quantum_field_visible = false;
     bool  pending_spawn      = false;  // waiting for user to left-click in world
     int   spawn_tab          = 0;      // 0=Atoms, 1=Groups, 2=Organisms, 3=Organics
     int   spawn_atom_type    = 1;      // 0=H..7=Cl (default C)
@@ -46,6 +49,7 @@ public:
     uint32_t total_bonds_display     = 0;
     uint32_t photon_count_display    = 0;
     uint32_t sm_counts_display[5]    = {};  // [0]=α [1]=e⁻ [2]=e⁺ [3]=ν [4]=μ
+    uint32_t type_counts_display[MAX_PARTICLE_TYPES] = {};  // active count per type
     // Genome drift (rolling avg across all active particles)
     float    avg_electroneg_display  = 1.0f;
     float    avg_reactivity_display  = 1.0f;
@@ -93,6 +97,7 @@ private:
     void draw_spawn_menu(const OrganismManager& org_manager,
                          const Particles& particles,
                          const SimConfig& cfg);
+    void draw_quantum_field_display(const Particles& particles);
     void draw_hover_tooltip(const OrganismManager& org_manager,
                             const Particles& particles,
                             const BondManager& bond_manager);

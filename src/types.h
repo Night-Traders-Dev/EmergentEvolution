@@ -8,7 +8,7 @@
 
 static constexpr uint32_t REGION_W           = 2560;
 static constexpr uint32_t REGION_H           = 1440;
-static constexpr uint32_t MAX_PARTICLE_TYPES = 26;
+static constexpr uint32_t MAX_PARTICLE_TYPES = 32;
 static constexpr uint32_t GROUP_DENSITY      = 256;
 static constexpr uint32_t GENOME_SIZE        = 4;   // floats per particle: charge, electronegativity, reactivity, bond_strength
 
@@ -19,21 +19,28 @@ static constexpr uint32_t MAX_BONDS_PER_PARTICLE = 6;   // U has valence 6
 static constexpr uint32_t PHOTON_TYPE            = 18u; // particle type index for photons
 
 // Standard Model free particle type indices (beyond atoms + photon)
-static constexpr uint32_t ALPHA_TYPE    = 19u;  // He-4 nucleus
-static constexpr uint32_t ELECTRON_TYPE = 20u;  // free electron (e-)
-static constexpr uint32_t POSITRON_TYPE = 21u;  // positron (e+)
-static constexpr uint32_t NEUTRINO_TYPE = 22u;  // electron neutrino
-static constexpr uint32_t MUON_TYPE     = 23u;  // muon (μ-)
+static constexpr uint32_t ALPHA_TYPE         = 19u;  // He-4 nucleus (α)
+static constexpr uint32_t ELECTRON_TYPE      = 20u;  // free electron (e⁻)
+static constexpr uint32_t POSITRON_TYPE      = 21u;  // positron (e⁺)
+static constexpr uint32_t NEUTRINO_TYPE      = 22u;  // electron neutrino (νe)
+static constexpr uint32_t MUON_TYPE          = 23u;  // muon (μ⁻)
+static constexpr uint32_t TAU_TYPE           = 24u;  // tau lepton (τ⁻)
+static constexpr uint32_t MU_NEUTRINO_TYPE   = 25u;  // muon neutrino (νμ)
+static constexpr uint32_t TAU_NEUTRINO_TYPE  = 26u;  // tau neutrino (ντ)
+static constexpr uint32_t W_BOSON_TYPE       = 27u;  // W± gauge boson (weak force)
+static constexpr uint32_t Z_BOSON_TYPE       = 28u;  // Z⁰ gauge boson (weak force)
+static constexpr uint32_t HIGGS_TYPE         = 29u;  // Higgs boson (H⁰)
 
 // Max covalent bonds per particle type (indexed 0–MAX_PARTICLE_TYPES-1)
-// Atoms 0–17, photon 18, SM particles 19–23, reserved 24–25
-//                                H  C  N  O  P  S Na Cl Fe Ni Si Ca Ti Sr Au Pb Eu  U  γ  α  e- e+ ν  μ  r  r
+// Atoms 0–17, photon 18, SM particles 19–29, reserved 30–31
+//                                H  C  N  O  P  S Na Cl Fe Ni Si Ca Ti Sr Au Pb Eu  U  γ  α  e- e+ νe μ  τ  νμ ντ W  Z  H  r  r
 static constexpr uint32_t ATOM_VALENCE[MAX_PARTICLE_TYPES] = {
-    1, 4, 3, 2, 5, 2, 1, 1,  // original 8: H C N O P S Na Cl
-    3, 2, 4, 2, 4, 2, 1, 4, 3, 6,  // new 10: Fe Ni Si Ca Ti Sr Au Pb Eu U
-    0,            // photon (18)
-    0, 0, 0, 0, 0, // alpha e- e+ ν μ (19–23)
-    0, 0           // reserved (24–25)
+    1, 4, 3, 2, 5, 2, 1, 1,  // H C N O P S Na Cl (0-7)
+    3, 2, 4, 2, 4, 2, 1, 4, 3, 6,  // Fe Ni Si Ca Ti Sr Au Pb Eu U (8-17)
+    0,                   // photon (18)
+    0, 0, 0, 0, 0,       // α e- e+ νe μ (19-23)
+    0, 0, 0, 0, 0, 0,    // τ νμ ντ W Z H (24-29)
+    0, 0                 // reserved (30-31)
 };
 
 enum ParticleBehavior : uint32_t {
@@ -55,6 +62,11 @@ enum ParticleBehavior : uint32_t {
     BEHAVIOR_NEUTRINO  = 1u << 13, // near-zero interaction; ballistic like photon
     BEHAVIOR_POSITRON  = 1u << 14, // positron (e+); annihilates with LEPTON
     BEHAVIOR_MUON      = 1u << 15, // heavy lepton; decays to e- on half-life TTL
+    // Per-atom mass tiers — encoded as 1/√(relative_mass) fractions for force scaling
+    BEHAVIOR_MASS_MEDIUM = 1u << 16, // C N O  (12-16 amu)  mass_inv=0.27
+    BEHAVIOR_MASS_HEAVY  = 1u << 17, // P S Na Cl (23-35 amu)  mass_inv=0.18
+    BEHAVIOR_MASS_DENSE  = 1u << 18, // Fe Ni Si Ca Ti (28-59 amu)  mass_inv=0.13
+    BEHAVIOR_MASS_ULTRA  = 1u << 19, // Sr Au Pb Eu U (88-238 amu) mass_inv=0.08
 };
 
 
@@ -84,10 +96,10 @@ static_assert(sizeof(PushConstants) == 84, "PushConstants layout mismatch");
 
 struct SimConfig {
     uint32_t particle_count     = 22500;
-    uint32_t particle_types     = 5;
+    uint32_t particle_types     = 8;       // H C N O P S Na Cl — all essential bioatoms
     bool     reset_colors       = false;
     bool     reset_forces       = true;
-    float    force_randomness   = 0.25f;   // 0=pure chemistry  1=pure random
+    float    force_randomness   = 0.0f;    // 0=pure chemistry  1=pure random
     uint32_t generation_seed    = 0;
 
     float radius             = 2.0f;
@@ -110,7 +122,7 @@ struct SimConfig {
     float    bond_activation_energy   = 0.02f;  // min relative KE required to form a bond
 
     // Thermal noise
-    float    temperature              = 0.05f;  // Brownian motion strength (0 = off)
+    float    temperature              = 0.30f;  // Brownian motion strength (0 = off)
 
     // Fundamental forces (off by default)
     float    gravity_strength         = 0.0f;   // scaled gravitational attraction
@@ -118,7 +130,7 @@ struct SimConfig {
     float    vacuum_energy            = 0.0f;   // vacuum fluctuation rate + ZPE floor (0=off)
 
     // Periodic particle spawn
-    bool     spawn_enabled   = true;
+    bool     spawn_enabled   = false;
     float    spawn_interval  = 5.0f;   // seconds between spawn events
     uint32_t spawn_min       = 100;
     uint32_t spawn_max       = 500;

@@ -287,6 +287,10 @@ void Interface::render_imgui(SimConfig&       cfg,
     if (spawn_menu_visible)
         draw_spawn_menu(org_manager, particles, cfg);
 
+    // ── F4 Quantum Field Display ──────────────────────────────────────────────
+    if (quantum_field_visible)
+        draw_quantum_field_display(particles);
+
     // ── Hover inspection tooltip ──────────────────────────────────────────────
     draw_hover_tooltip(org_manager, particles, bond_manager);
 
@@ -820,16 +824,31 @@ void Interface::draw_spawn_menu(const OrganismManager& org_manager,
             ImGui::TextDisabled("Choose atom type:");
             ImGui::Spacing();
 
-            // Atoms 0–17 (elements) + SM free particles (19–23)
-            static constexpr int SPAWN_TYPE_COUNT = 23;  // ATOM_COUNT + 5 SM types
+            // Atoms 0–17 (elements) + SM free particles (18–29 skipping 18=photon)
+            // Photon is in SM section at index 18 directly
+            static constexpr int SPAWN_TYPE_COUNT = 30;  // 18 atoms + 12 SM particles
             static const uint32_t SPAWN_TYPES[SPAWN_TYPE_COUNT] = {
                 0,1,2,3,4,5,6,7, 8,9,10,11,12,13,14,15,16,17,  // elements
-                ALPHA_TYPE, ELECTRON_TYPE, POSITRON_TYPE, NEUTRINO_TYPE, MUON_TYPE
+                PHOTON_TYPE, ALPHA_TYPE, ELECTRON_TYPE, POSITRON_TYPE,
+                NEUTRINO_TYPE, MUON_TYPE, TAU_TYPE,
+                MU_NEUTRINO_TYPE, TAU_NEUTRINO_TYPE,
+                W_BOSON_TYPE, Z_BOSON_TYPE, HIGGS_TYPE
             };
             static const char* ATOM_LABELS[SPAWN_TYPE_COUNT] = {
                 "H","C","N","O","P","S","Na","Cl",
                 "Fe","Ni","Si","Ca","Ti","Sr","Au","Pb","Eu","U",
-                "\xce\xb1", "e\xe2\x81\xbb", "e\xe2\x81\x8a", "\xce\xbd", "\xce\xbc"
+                "\xce\xb3",          // photon γ
+                "\xce\xb1",          // alpha α
+                "e\xe2\x81\xbb",     // electron e-
+                "e\xe2\x81\x8a",     // positron e+
+                "\xce\xbd\xe2\x82\x91",  // νe
+                "\xce\xbc",          // muon μ
+                "\xcf\x84",          // tau τ
+                "\xce\xbd\xce\xbc",  // νμ
+                "\xce\xbd\xcf\x84",  // ντ
+                "W\xc2\xb1",         // W boson
+                "Z\xe2\x81\xb0",     // Z boson
+                "H\xe2\x81\xb0"      // Higgs H0
             };
             static const char* ATOM_FULL[SPAWN_TYPE_COUNT] = {
                 "Hydrogen","Carbon","Nitrogen","Oxygen",
@@ -837,11 +856,18 @@ void Interface::draw_spawn_menu(const OrganismManager& org_manager,
                 "Iron","Nickel","Silicon","Calcium",
                 "Titanium","Strontium","Gold","Lead",
                 "Europium","Uranium",
-                "Alpha particle (He-4)",
-                "Free electron (e\xe2\x81\xbb)",
-                "Positron (e\xe2\x81\x8a) — annihilates with e\xe2\x81\xbb",
-                "Neutrino \xe2\x80\x94 near-zero interaction",
-                "Muon \xe2\x80\x94 decays to e\xe2\x81\xbb + \xce\xbd"
+                "Photon (\xce\xb3)  — massless, ballistic",
+                "Alpha particle (\xce\xb1)  — He-4 nucleus",
+                "Electron (e\xe2\x81\xbb)  — free lepton",
+                "Positron (e\xe2\x81\x8a)  — annihilates with e\xe2\x81\xbb",
+                "Electron neutrino (\xce\xbd\xe2\x82\x91)  — near-zero interaction",
+                "Muon (\xce\xbc\xe2\x81\xbb)  — decays to e\xe2\x81\xbb + neutrinos",
+                "Tau (\xcf\x84\xe2\x81\xbb)  — heaviest lepton, fast decay",
+                "Muon neutrino (\xce\xbd\xce\xbc)  — from muon decay",
+                "Tau neutrino (\xce\xbd\xcf\x84)  — from tau decay",
+                "W boson (W\xc2\xb1)  — charged weak-force carrier",
+                "Z boson (Z\xe2\x81\xb0)  — neutral weak-force carrier",
+                "Higgs boson (H\xe2\x81\xb0)  — scalar field quantum"
             };
 
             // Separator before SM particles
@@ -851,7 +877,7 @@ void Interface::draw_spawn_menu(const OrganismManager& org_manager,
                 uint32_t t = SPAWN_TYPES[ti];
                 if (ti == static_cast<int>(ATOM_COUNT) && !sm_sep_drawn) {
                     ImGui::Spacing();
-                    ImGui::TextDisabled("Standard Model free particles:");
+                    ImGui::SeparatorText("Standard Model");
                     sm_sep_drawn = true;
                 }
                 ImGui::PushID(static_cast<int>(t));
@@ -886,35 +912,94 @@ void Interface::draw_spawn_menu(const OrganismManager& org_manager,
 
         // ── Groups tab ────────────────────────────────────────────────────────
         if (ImGui::BeginTabItem("Groups")) {
-            ImGui::TextDisabled("Choose molecule template:");
+            ImGui::TextDisabled("Earth molecules — click to place:");
             ImGui::Spacing();
 
             struct MolTemplate { const char* label; const char* desc; };
-            static const MolTemplate TEMPLATES[14] = {
-                { "H2O",   "Water: 1 O + 2 H  (bent, ~105 deg)"             },
-                { "CH4",   "Methane: 1 C + 4 H  (tetrahedral)"              },
-                { "NaCl",  "Salt: Na-Cl ionic pair"                          },
-                { "NH3",   "Ammonia: 1 N + 3 H  (trigonal pyramidal)"       },
-                { "CO2",   "Carbon dioxide: O=C=O  (linear)"                 },
-                { "Gly",   "Glycine: N-C-C(=O)  amino acid backbone"        },
-                { "C6H6",  "Benzene: 6-carbon aromatic ring + 6 H"          },
-                { "SiO4",  "Silicate: Si + 4 O  (tetrahedral, rock-forming)" },
-                { "Fe2O3", "Hematite: 2 Fe + 3 O  (iron oxide mineral)"     },
-                { "EtOH",  "Ethanol: 2 C + 6 H + 1 O  (alcohol)"           },
-                { "CaCO3", "Calcite: Ca + C + 3 O  (limestone mineral)"     },
-                { "Au3",   "Gold trimer: 3 Au  (metallic nano-cluster)"     },
-                { "UO2",   "Uranium oxide: U + 2 O  (nuclear fuel analog)"  },
-                { "FeS2",  "Pyrite: Fe + 2 S  (fool's gold mineral)"        },
+            // Indices match MOLECULES[] in simulation.cpp (0-48)
+            static const MolTemplate TEMPLATES[49] = {
+                // Common (0-13)
+                { "H2O",    "Water: O + 2H  (bent ~105 deg)"                    },
+                { "CH4",    "Methane: C + 4H  (tetrahedral)"                    },
+                { "NaCl",   "Salt: Na-Cl  (ionic pair)"                         },
+                { "NH3",    "Ammonia: N + 3H  (trigonal pyramidal)"             },
+                { "CO2",    "Carbon dioxide: O=C=O  (linear)"                   },
+                { "Gly",    "Glycine: N-C-C(=O)  amino acid backbone"           },
+                { "C6H6",   "Benzene: 6-C aromatic ring + 6H"                   },
+                { "SiO4",   "Silicate: Si + 4O  (tetrahedral, rock-forming)"    },
+                { "Fe2O3",  "Hematite: 2Fe + 3O  (iron oxide mineral)"          },
+                { "EtOH",   "Ethanol: 2C + 6H + O  (alcohol)"                  },
+                { "CaCO3",  "Calcite: Ca + C + 3O  (limestone)"                 },
+                { "Au3",    "Gold trimer: 3 Au  (metallic cluster)"             },
+                { "UO2",    "Uranium dioxide: U + 2O  (nuclear fuel)"           },
+                { "FeS2",   "Pyrite: Fe + 2S  (fool's gold)"                    },
+                // Atmospheric (14-21)
+                { "O2",     "Dioxygen: O=O  (atmospheric O2)"                   },
+                { "N2",     "Dinitrogen: N=N  (78% of atmosphere)"              },
+                { "O3",     "Ozone: bent O3  (stratospheric shield)"            },
+                { "CO",     "Carbon monoxide: C=O  (combustion product)"        },
+                { "NO",     "Nitric oxide: N=O  (radical, signalling)"          },
+                { "NO2",    "Nitrogen dioxide: bent NO2  (smog, brown gas)"     },
+                { "SO2",    "Sulfur dioxide: bent SO2  (volcanic, acid rain)"   },
+                { "H2S",    "Hydrogen sulfide: bent H2S  (rotten egg smell)"    },
+                // Acids / bases (22-27)
+                { "HCl",    "Hydrochloric acid: H-Cl  (stomach acid)"           },
+                { "NaOH",   "Sodium hydroxide: Na-O-H  (lye, strong base)"      },
+                { "H2O2",   "Hydrogen peroxide: H-O-O-H  (bleach, antiseptic)" },
+                { "H2SO4",  "Sulfuric acid: S + 4O + 2H  (simplified)"         },
+                { "HNO3",   "Nitric acid: N + 3O + H  (simplified)"            },
+                { "H3PO4",  "Phosphoric acid: P + 4O + 3H  (biological)"       },
+                // Organic basics (28-38)
+                { "CH2O",   "Formaldehyde: H2C=O  (simplest aldehyde)"         },
+                { "HCN",    "Hydrogen cyanide: H-C=N  (toxic, prebiotic)"      },
+                { "C2H6",   "Ethane: H3C-CH3  (natural gas component)"         },
+                { "C2H4",   "Ethylene: H2C=CH2  (plant hormone, plastic)"      },
+                { "C2H2",   "Acetylene: HC=CH  (welding gas)"                  },
+                { "MeOH",   "Methanol: H3C-OH  (wood alcohol)"                 },
+                { "AcOH",   "Acetic acid: CH3-COOH  (vinegar)"                 },
+                { "Urea",   "Urea: (NH2)2C=O  (biological waste, fertiliser)"  },
+                { "Acetone","Acetone: (CH3)2C=O  (solvent)"                    },
+                { "C3H8",   "Propane: CH3-CH2-CH3  (LP gas)"                   },
+                { "MeNH2",  "Methylamine: CH3-NH2  (prebiotic amine)"          },
+                // Minerals (39-44)
+                { "SiO2",   "Quartz: O-Si-O  (most common mineral)"            },
+                { "TiO2",   "Rutile: O-Ti-O  (titanium ore)"                   },
+                { "NiO",    "Nickel oxide: Ni-O  (smelting product)"           },
+                { "CaO",    "Quicklime: Ca-O  (cement precursor)"              },
+                { "FeO",    "Wuestite: Fe-O  (iron ore)"                       },
+                { "NiS",    "Millerite: Ni-S  (nickel ore)"                    },
+                // Misc (45-48)
+                { "SO3",    "Sulfur trioxide: planar SO3  (acid anhydride)"    },
+                { "ClNO",   "Nitrosyl chloride: Cl-N=O  (reactive halide)"     },
+                { "CS2",    "Carbon disulfide: S=C=S  (solvent)"               },
+                { "PH3",    "Phosphine: trigonal PH3  (toxic, prebiotic?)"     },
             };
 
-            for (int i = 0; i < 14; ++i) {
+            // Section separators by category
+            static const struct { int start; const char* label; } SECTIONS[] = {
+                { 0,  "Common"      },
+                { 14, "Atmospheric" },
+                { 22, "Acids & Bases"},
+                { 28, "Organic"     },
+                { 39, "Minerals"    },
+                { 45, "Other"       },
+            };
+            static constexpr int NSEC = 6;
+            int sec = 0;
+            for (int i = 0; i < 49; ++i) {
+                // Print section header when we hit a section boundary
+                if (sec < NSEC && i == SECTIONS[sec].start) {
+                    if (i != 0) ImGui::Spacing();
+                    ImGui::SeparatorText(SECTIONS[sec].label);
+                    ++sec;
+                }
                 ImGui::PushID(i + 100);
                 bool sel = (spawn_group_idx == i && spawn_tab == 1);
                 ImGui::PushStyleColor(ImGuiCol_Button,
                     sel ? ImVec4(0.18f, 0.52f, 0.18f, 1.0f)
                         : ImVec4(0.22f, 0.28f, 0.38f, 1.0f));
 
-                if (ImGui::Button(TEMPLATES[i].label, { 78.0f, 44.0f })) {
+                if (ImGui::Button(TEMPLATES[i].label, { 72.0f, 36.0f })) {
                     spawn_group_idx = i;
                     spawn_tab       = 1;
                     pending_spawn   = true;
@@ -924,7 +1009,9 @@ void Interface::draw_spawn_menu(const OrganismManager& org_manager,
 
                 ImGui::PopStyleColor();
                 ImGui::PopID();
-                if ((i + 1) % 3 != 0)
+                // 4 per row within a section — reset at each section start
+                int pos_in_row = (i - SECTIONS[std::max(0, sec-1)].start);
+                if ((pos_in_row + 1) % 4 != 0 && i != 48)
                     ImGui::SameLine();
             }
 
@@ -1015,28 +1102,68 @@ void Interface::draw_spawn_menu(const OrganismManager& org_manager,
             ImGui::SeparatorText("Predefined Templates");
 
             struct OrgTemplate { const char* label; const char* desc; int tidx; };
-            static const OrgTemplate ORG_TMPL[3] = {
-                { "Water Cluster", "5x H2O arranged in a pentagon ring",    -10 },
-                { "Salt Lattice",  "4x NaCl ionic crystal 2x2 fragment",   -11 },
-                { "Lipid Stub",    "C6H12O2 short fatty acid chain",        -12 },
-            };
 
+            // ── Chemistry presets (3 in a row) ────────────────────────────────
+            static const OrgTemplate CHEM_TMPL[3] = {
+                { "Water Cluster", "5x H2O arranged in a pentagon ring",  -10 },
+                { "Salt Lattice",  "4x NaCl ionic crystal 2x2 fragment", -11 },
+                { "Lipid Stub",    "C6H12O2 short fatty acid chain",      -12 },
+            };
             for (int i = 0; i < 3; ++i) {
                 ImGui::PushID(i + 300);
-                bool sel = (spawn_organism_idx == ORG_TMPL[i].tidx && spawn_tab == 2);
-                if (sel)
-                    ImGui::PushStyleColor(ImGuiCol_Button,
-                        ImVec4(0.18f, 0.52f, 0.18f, 1.0f));
-                if (ImGui::Button(ORG_TMPL[i].label, { 145.0f, 36.0f })) {
-                    spawn_organism_idx = ORG_TMPL[i].tidx;
-                    spawn_tab          = 2;
-                    pending_spawn      = true;
+                bool sel = (spawn_organism_idx == CHEM_TMPL[i].tidx && spawn_tab == 2);
+                if (sel) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.52f, 0.18f, 1.0f));
+                if (ImGui::Button(CHEM_TMPL[i].label, { 145.0f, 36.0f })) {
+                    spawn_organism_idx = CHEM_TMPL[i].tidx;
+                    spawn_tab = 2; pending_spawn = true;
                 }
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s", ORG_TMPL[i].desc);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", CHEM_TMPL[i].desc);
                 if (sel) ImGui::PopStyleColor();
                 ImGui::PopID();
                 if (i < 2) ImGui::SameLine();
+            }
+
+            // ── Cell structures (3 proto-cells / 3 cells, 3-per-row) ──────────
+            ImGui::Spacing();
+            ImGui::SeparatorText("Cell Structures  (area cleared on spawn)");
+            static const OrgTemplate CELL_TMPL[6] = {
+                { "Proto-Cell",
+                  "16-C ring R=57 (spacing=bond_rest=22px) + glycine-like core\n"
+                  "Core [N C2 O2]: (N+O)*2=6>5, C>0 \xe2\x86\x92 AMINO_ACID \xe2\x86\x92 PROTO_CELL\n"
+                  "Cross-ring bonds (i\xe2\x86\x92i+2) triangulate membrane. Clear=118px.", -13 },
+                { "Proto-Cell L",
+                  "20-C ring R=70 (spacing=bond_rest=22px) + ribosome-like core\n"
+                  "Core [N3 C3 O2]: (N+O)*2=10>8, C>0 \xe2\x86\x92 AMINO_ACID \xe2\x86\x92 PROTO_CELL\n"
+                  "Cross-ring bonds for stiffness. Clear=130px.",    -15 },
+                { "Proto-Cell N",
+                  "16-C ring R=57 + N-rich amino acid core\n"
+                  "Core [N2 C O2]: (N+O)*2=8>5, C>0 \xe2\x86\x92 AMINO_ACID \xe2\x86\x92 PROTO_CELL\n"
+                  "Cross-ring bonds. Clear=118px.",                  -17 },
+                { "Cell",
+                  "16-C ring R=57 + DNA/ATP/ribosome organelle core\n"
+                  "Core [P5 N2 C]: ATP triphosphate + DNA backbone + base pair\n"
+                  "P*3=15>8 \xe2\x86\x92 NUCLEOTIDE \xe2\x86\x92 CELL. Clear=118px.",   -14 },
+                { "Cell L",
+                  "20-C ring R=70 + full organelle core\n"
+                  "Core [P5 N2 C2 O S2]: DNA + ATP + Fe-S cluster (mitochondria)\n"
+                  "P*3=15>12 \xe2\x86\x92 NUCLEOTIDE \xe2\x86\x92 CELL. Clear=130px.",  -16 },
+                { "Cell P",
+                  "16-C ring R=57 + P-rich nucleotide core\n"
+                  "Core [P3 N C]: P*3=9>5 \xe2\x86\x92 NUCLEOTIDE \xe2\x86\x92 CELL\n"
+                  "Cross-ring bonds. Clear=118px.",                  -18 },
+            };
+            for (int i = 0; i < 6; ++i) {
+                ImGui::PushID(i + 310);
+                bool sel = (spawn_organism_idx == CELL_TMPL[i].tidx && spawn_tab == 2);
+                if (sel) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.52f, 0.18f, 1.0f));
+                if (ImGui::Button(CELL_TMPL[i].label, { 145.0f, 36.0f })) {
+                    spawn_organism_idx = CELL_TMPL[i].tidx;
+                    spawn_tab = 2; pending_spawn = true;
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", CELL_TMPL[i].desc);
+                if (sel) ImGui::PopStyleColor();
+                ImGui::PopID();
+                if (i % 3 != 2) ImGui::SameLine();
             }
 
             ImGui::EndTabItem();
@@ -1290,5 +1417,284 @@ void Interface::draw_hover_tooltip(const OrganismManager& org_manager,
 
     ImGui::PopTextWrapPos();
     ImGui::EndTooltip();
+}
+
+// ── F4 Quantum Field Display ──────────────────────────────────────────────────
+// Shows the Standard Model particle census, per-field excitation meters, and
+// inter-field coupling diagram for the current simulation state.
+
+void Interface::draw_quantum_field_display(const Particles& particles) {
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos({ io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f },
+                            ImGuiCond_Appearing, { 0.5f, 0.5f });
+    ImGui::SetNextWindowSize({ 740.0f, 560.0f }, ImGuiCond_Appearing);
+
+    if (!ImGui::Begin("Quantum Fields [F4]", &quantum_field_visible,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse)) {
+        ImGui::End(); return;
+    }
+
+    // ── Pre-compute field strengths from live particle census ──────────────
+    const uint32_t* tc = type_counts_display;  // short alias
+
+    // EM field: photons + free charges (electrons, positrons, ions)
+    uint32_t charged = tc[ELECTRON_TYPE] + tc[POSITRON_TYPE]
+                     + tc[6]  // Na+
+                     + tc[7]; // Cl-
+    float em_strength = std::min(1.0f,
+        (tc[PHOTON_TYPE] * 0.05f + charged * 0.1f) / 10.0f);
+
+    // Weak nuclear: W/Z bosons + all leptons
+    uint32_t leptons = tc[ELECTRON_TYPE] + tc[POSITRON_TYPE]
+                     + tc[NEUTRINO_TYPE] + tc[MUON_TYPE]
+                     + tc[TAU_TYPE] + tc[MU_NEUTRINO_TYPE] + tc[TAU_NEUTRINO_TYPE];
+    float weak_strength = std::min(1.0f,
+        (tc[W_BOSON_TYPE] * 0.5f + tc[Z_BOSON_TYPE] * 0.5f + leptons * 0.05f) / 5.0f);
+
+    // Higgs: always has vacuum value 0.12; excited by Higgs bosons + mass content
+    uint32_t massive = active_particle_display;
+    float higgs_strength = std::min(1.0f,
+        0.12f + tc[HIGGS_TYPE] * 0.4f + massive * 0.00003f);
+
+    // Gravitational: scaled by total mass-weighted active particles
+    float grav_strength = std::min(1.0f, massive * 0.00005f);
+
+    // Strong (QCD): always 0 — no free quarks/gluons in sim
+    float strong_strength = 0.0f;
+
+    // ── Layout: SM diagram (left) | field meters (right) ──────────────────
+    ImGui::Columns(2, "qf_cols", false);
+    ImGui::SetColumnWidth(0, 340.0f);
+
+    // ════════════════════════════════════════════════════════════
+    // LEFT: Standard Model particle grid
+    // ════════════════════════════════════════════════════════════
+    ImGui::TextColored({ 0.9f, 0.85f, 0.3f, 1.f }, "Standard Model");
+    ImGui::Spacing();
+
+    // Helper: draw one particle box with dynamic highlight
+    auto draw_particle_box = [&](uint32_t type_idx, const char* symbol,
+                                  bool confined) {
+        uint32_t count = (type_idx < MAX_PARTICLE_TYPES) ? tc[type_idx] : 0u;
+        bool     active = count > 0 && !confined;
+
+        ImVec4 bg, txt;
+        if (confined) {
+            bg  = { 0.15f, 0.15f, 0.17f, 1.f };
+            txt = { 0.4f,  0.4f,  0.4f,  1.f };
+        } else if (type_idx < particles.colors.size()) {
+            const glm::vec4& c = particles.colors[type_idx];
+            float bright = active ? 0.55f : 0.22f;
+            bg  = { c.r * bright, c.g * bright, c.b * bright, 1.f };
+            txt = active ? ImVec4{ c.r, c.g, c.b, 1.f }
+                         : ImVec4{ 0.4f, 0.4f, 0.4f, 1.f };
+        } else {
+            bg  = { 0.2f, 0.2f, 0.2f, 1.f };
+            txt = { 0.6f, 0.6f, 0.6f, 1.f };
+        }
+
+        ImVec2 sz { 54.0f, 40.0f };
+        ImGui::PushStyleColor(ImGuiCol_Button, bg);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, bg);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  bg);
+        ImGui::PushStyleColor(ImGuiCol_Text, txt);
+
+        // Active particle has a bright border
+        if (active) {
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);
+            ImGui::PushStyleColor(ImGuiCol_Border,
+                ImVec4(txt.x, txt.y, txt.z, 0.9f));
+        }
+
+        char lbl[32];
+        if (!confined && count > 0)
+            std::snprintf(lbl, sizeof(lbl), "%s\n%u", symbol, count);
+        else
+            std::snprintf(lbl, sizeof(lbl), "%s", symbol);
+
+        ImGui::PushID(static_cast<int>(type_idx) + 2000);
+        ImGui::Button(lbl, sz);
+        ImGui::PopID();
+
+        if (active) {
+            ImGui::PopStyleVar();
+            ImGui::PopStyleColor();  // border
+        }
+        ImGui::PopStyleColor(4);
+    };
+
+    // Generation headers
+    ImGui::TextDisabled("         Gen I     Gen II    Gen III");
+
+    // Up-type quarks (u c t) — confined
+    ImGui::TextColored({0.5f,0.5f,0.5f,1.f}, "Up q. ");
+    ImGui::SameLine();
+    draw_particle_box(99, "u", true); ImGui::SameLine();
+    draw_particle_box(99, "c", true); ImGui::SameLine();
+    draw_particle_box(99, "t", true);
+    ImGui::Spacing();
+
+    // Down-type quarks (d s b) — confined
+    ImGui::TextColored({0.5f,0.5f,0.5f,1.f}, "Down q");
+    ImGui::SameLine();
+    draw_particle_box(99, "d", true); ImGui::SameLine();
+    draw_particle_box(99, "s", true); ImGui::SameLine();
+    draw_particle_box(99, "b", true);
+    ImGui::Spacing();
+
+    // Charged leptons (e μ τ)
+    ImGui::TextColored({0.7f,0.7f,1.0f,1.f}, "Lept. ");
+    ImGui::SameLine();
+    draw_particle_box(ELECTRON_TYPE,     "e\xe2\x81\xbb",    false); ImGui::SameLine();
+    draw_particle_box(MUON_TYPE,         "\xce\xbc\xe2\x81\xbb", false); ImGui::SameLine();
+    draw_particle_box(TAU_TYPE,          "\xcf\x84\xe2\x81\xbb", false);
+    ImGui::Spacing();
+
+    // Neutrinos (νe νμ ντ)
+    ImGui::TextColored({0.6f,0.6f,0.8f,1.f}, "Neutr.");
+    ImGui::SameLine();
+    draw_particle_box(NEUTRINO_TYPE,     "\xce\xbd\xe2\x82\x91",  false); ImGui::SameLine();
+    draw_particle_box(MU_NEUTRINO_TYPE,  "\xce\xbd\xce\xbc",      false); ImGui::SameLine();
+    draw_particle_box(TAU_NEUTRINO_TYPE, "\xce\xbd\xcf\x84",      false);
+    ImGui::Spacing();
+
+    ImGui::Separator();
+    ImGui::TextColored({ 0.9f, 0.85f, 0.3f, 1.f }, "Bosons");
+    ImGui::Spacing();
+
+    draw_particle_box(PHOTON_TYPE,  "\xce\xb3",     false); ImGui::SameLine();
+    draw_particle_box(W_BOSON_TYPE, "W\xc2\xb1",    false); ImGui::SameLine();
+    draw_particle_box(Z_BOSON_TYPE, "Z\xe2\x81\xb0",false); ImGui::SameLine();
+    draw_particle_box(99,           "g",             true);  ImGui::SameLine();  // gluon confined
+    draw_particle_box(HIGGS_TYPE,   "H\xe2\x81\xb0",false);
+    ImGui::Spacing();
+
+    ImGui::Separator();
+    ImGui::TextColored({ 0.9f, 0.85f, 0.3f, 1.f }, "Composite");
+    ImGui::Spacing();
+    draw_particle_box(ALPHA_TYPE, "\xce\xb1 (He4)", false);
+
+    // ════════════════════════════════════════════════════════════
+    // RIGHT: Quantum field meters + stats
+    // ════════════════════════════════════════════════════════════
+    ImGui::NextColumn();
+
+    ImGui::TextColored({ 0.9f, 0.85f, 0.3f, 1.f }, "Active Quantum Fields");
+    ImGui::Spacing();
+
+    // Field meter helper: colored progress bar + coupling list
+    auto draw_field = [&](const char* name, float strength,
+                           ImVec4 color, const char* coupling) {
+        ImGui::TextColored(color, "%s", name);
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, color);
+        ImGui::ProgressBar(strength, { -1, 14 }, "");
+        ImGui::PopStyleColor();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.f));
+        ImGui::TextWrapped("  %s", coupling);
+        ImGui::PopStyleColor();
+        ImGui::Spacing();
+    };
+
+    draw_field("Electromagnetic (QED)",
+               em_strength,
+               { 0.95f, 0.85f, 0.1f, 1.f },
+               "couples to: \xce\xb3  e\xe2\x81\xbb  e\xe2\x81\x8a  charges");
+
+    draw_field("Weak Nuclear (EW)",
+               weak_strength,
+               { 0.5f, 0.55f, 1.0f, 1.f },
+               "couples to: W\xc2\xb1  Z\xe2\x81\xb0  all leptons");
+
+    draw_field("Strong / QCD",
+               strong_strength,
+               { 0.4f, 0.8f, 0.3f, 1.f },
+               "confined — no free quarks in this sim");
+
+    draw_field("Higgs Field",
+               higgs_strength,
+               { 1.0f, 0.6f, 0.15f, 1.f },
+               "couples to: H\xe2\x81\xb0  all massive particles\n  (vacuum vev = 246 GeV analogue)");
+
+    draw_field("Gravity",
+               grav_strength,
+               { 0.65f, 0.55f, 0.45f, 1.f },
+               "couples to: all massive particles");
+
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::TextColored({ 0.9f, 0.85f, 0.3f, 1.f }, "Vacuum & Decay");
+    ImGui::Spacing();
+
+    ImGui::Text("Active particles:   %u", active_particle_display);
+    ImGui::Text("Dormant (pool):     %u", dormant_particle_display);
+    ImGui::Text("Total photons:      %u", tc[PHOTON_TYPE]);
+    ImGui::Text("Total decays:       %u", decay_total_display);
+    ImGui::Text("Total energy:       %.1f", total_energy_display);
+    ImGui::Spacing();
+
+    // Mini-table of all SM particle counts
+    ImGui::Separator();
+    ImGui::TextColored({ 0.7f, 0.7f, 0.7f, 1.f }, "SM Particle Census");
+    if (ImGui::BeginTable("sm_census", 4,
+            ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingFixedFit)) {
+        struct SMEntry { const char* sym; uint32_t type_idx; };
+        static const SMEntry SM_LIST[] = {
+            { "\xce\xb3",            PHOTON_TYPE       },
+            { "\xce\xb1",            ALPHA_TYPE        },
+            { "e\xe2\x81\xbb",       ELECTRON_TYPE     },
+            { "e\xe2\x81\x8a",       POSITRON_TYPE     },
+            { "\xce\xbd\xe2\x82\x91",NEUTRINO_TYPE     },
+            { "\xce\xbc\xe2\x81\xbb",MUON_TYPE         },
+            { "\xcf\x84\xe2\x81\xbb",TAU_TYPE          },
+            { "\xce\xbd\xce\xbc",    MU_NEUTRINO_TYPE  },
+            { "\xce\xbd\xcf\x84",    TAU_NEUTRINO_TYPE },
+            { "W\xc2\xb1",           W_BOSON_TYPE      },
+            { "Z\xe2\x81\xb0",       Z_BOSON_TYPE      },
+            { "H\xe2\x81\xb0",       HIGGS_TYPE        },
+        };
+        static constexpr int N_SM = 12;
+        for (int k = 0; k < N_SM; ++k) {
+            ImGui::TableNextColumn();
+            uint32_t cnt = (SM_LIST[k].type_idx < MAX_PARTICLE_TYPES)
+                         ? tc[SM_LIST[k].type_idx] : 0u;
+            if (cnt > 0 && SM_LIST[k].type_idx < particles.colors.size()) {
+                const glm::vec4& c = particles.colors[SM_LIST[k].type_idx];
+                ImGui::TextColored({ c.r, c.g, c.b, 1.f },
+                    "%s:%u", SM_LIST[k].sym, cnt);
+            } else {
+                ImGui::TextDisabled("%s:0", SM_LIST[k].sym);
+            }
+        }
+        ImGui::EndTable();
+    }
+
+    ImGui::Columns(1);
+
+    // ── Bottom: inter-field coupling diagram (text schematic) ─────────────
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::TextColored({ 0.7f, 0.7f, 0.7f, 1.f }, "Field Coupling Schematic");
+    ImGui::Spacing();
+
+    // Color each segment by which field is active
+    auto field_color = [](float s) -> ImVec4 {
+        return s > 0.1f ? ImVec4(1.f, 1.f, 0.4f, 1.f)
+                        : ImVec4(0.4f, 0.4f, 0.4f, 1.f);
+    };
+    // Draw schematic as colored text segments
+    ImGui::TextColored({ 0.6f, 0.6f, 0.6f, 1.f },
+        "Quarks/Gluons  -[Strong]->  Hadrons  -[Gravity]->  ...");
+    ImGui::TextColored(field_color(em_strength),
+        "e\xe2\x81\xbb + e\xe2\x81\x8a  -[EM]->  \xce\xb3 + \xce\xb3   (annihilation active: %s)",
+        (tc[ELECTRON_TYPE] > 0 && tc[POSITRON_TYPE] > 0) ? "YES" : "no");
+    ImGui::TextColored(field_color(weak_strength),
+        "W\xc2\xb1 / Z\xe2\x81\xb0  -[Weak]->  leptons + \xce\xbd   (%u active bosons)",
+        tc[W_BOSON_TYPE] + tc[Z_BOSON_TYPE]);
+    ImGui::TextColored(field_color(higgs_strength),
+        "H\xe2\x81\xb0  -[Higgs]->  2\xce\xb3   (%u Higgs present)", tc[HIGGS_TYPE]);
+    ImGui::TextColored(field_color(grav_strength),
+        "All mass  -[Gravity]->  clusters   (%u massive active)", active_particle_display);
+
+    ImGui::End();
 }
 

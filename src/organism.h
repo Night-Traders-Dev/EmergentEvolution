@@ -113,7 +113,8 @@ private:
     std::mt19937  mutation_rng_{ std::random_device{}() };
     std::uniform_real_distribution<float> mutation_dist_{ -1.0f, 1.0f };
 
-    std::vector<int> build_clusters(const std::vector<glm::vec2>& positions);
+    std::vector<int> build_clusters(const std::vector<glm::vec2>& positions,
+                                     const std::vector<float>&     energies);
 
     void apply_trait_feedback(Particles& particles);
 };

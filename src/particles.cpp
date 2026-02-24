@@ -147,6 +147,30 @@ void Particles::apply_atom_defaults(uint32_t active_types, float force_randomnes
     for (uint32_t t = 0; t < n; ++t)
         behavior_flags[t] = ATOM_FLAGS[t];
 
+    // Per-atom mass tiers (OR'd in after base flags)
+    static const uint32_t ATOM_MASS_FLAGS[ATOM_COUNT] = {
+        0u,                   // H   (1 amu)   — lightest
+        BEHAVIOR_MASS_MEDIUM, // C   (12 amu)
+        BEHAVIOR_MASS_MEDIUM, // N   (14 amu)
+        BEHAVIOR_MASS_MEDIUM, // O   (16 amu)
+        BEHAVIOR_MASS_HEAVY,  // P   (31 amu)
+        BEHAVIOR_MASS_HEAVY,  // S   (32 amu)
+        BEHAVIOR_MASS_HEAVY,  // Na  (23 amu)
+        BEHAVIOR_MASS_HEAVY,  // Cl  (35 amu)
+        BEHAVIOR_MASS_DENSE,  // Fe  (56 amu)
+        BEHAVIOR_MASS_DENSE,  // Ni  (59 amu)
+        BEHAVIOR_MASS_DENSE,  // Si  (28 amu)
+        BEHAVIOR_MASS_DENSE,  // Ca  (40 amu)
+        BEHAVIOR_MASS_DENSE,  // Ti  (48 amu)
+        BEHAVIOR_MASS_ULTRA,  // Sr  (88 amu)
+        BEHAVIOR_MASS_ULTRA,  // Au  (197 amu)
+        BEHAVIOR_MASS_ULTRA,  // Pb  (207 amu)
+        BEHAVIOR_MASS_ULTRA,  // Eu  (152 amu)
+        BEHAVIOR_MASS_ULTRA,  // U   (238 amu)
+    };
+    for (uint32_t t = 0; t < n; ++t)
+        behavior_flags[t] |= ATOM_MASS_FLAGS[t];
+
     // Electrochemistry force matrix — blended with random noise for emergent variation
     for (uint32_t a = 0; a < n; ++a)
         for (uint32_t b = 0; b < n; ++b) {
@@ -177,14 +201,15 @@ void Particles::setup_photon_type() {
 }
 
 // ── setup_sm_types ────────────────────────────────────────────────────────────
-// Standard Model free particle types 19-23: alpha, e-, e+, neutrino, muon.
+// Standard Model free particle types 19-29.
 // Colors, behavior flags, and zero force-matrix rows. Not spawned by default.
 
 void Particles::setup_sm_types() {
     // Zero force rows/columns for all SM types so they don't accidentally
     // attract/repel through the chemistry force matrix.
     static constexpr uint32_t SM_TYPES[] = {
-        ALPHA_TYPE, ELECTRON_TYPE, POSITRON_TYPE, NEUTRINO_TYPE, MUON_TYPE
+        ALPHA_TYPE, ELECTRON_TYPE, POSITRON_TYPE, NEUTRINO_TYPE, MUON_TYPE,
+        TAU_TYPE, MU_NEUTRINO_TYPE, TAU_NEUTRINO_TYPE, W_BOSON_TYPE, Z_BOSON_TYPE, HIGGS_TYPE
     };
     for (uint32_t t : SM_TYPES) {
         if (t >= MAX_PARTICLE_TYPES) continue;
@@ -212,16 +237,52 @@ void Particles::setup_sm_types() {
         behavior_flags[POSITRON_TYPE] = BEHAVIOR_POSITRON | BEHAVIOR_IONIC_POS;
     }
 
-    // Neutrino: near-invisible dim grey; no force interactions
+    // Electron neutrino (νe): near-invisible dim grey; no force interactions
     if (colors.size() > NEUTRINO_TYPE) {
         colors[NEUTRINO_TYPE]         = { 0.4f, 0.4f, 0.5f, 0.5f };
         behavior_flags[NEUTRINO_TYPE] = BEHAVIOR_NEUTRINO;
     }
 
-    // Muon: vivid purple heavy lepton; decays to electron (CPU-side TTL)
+    // Muon (μ-): vivid purple heavy lepton; decays to e- + νe + νμ (CPU TTL)
     if (colors.size() > MUON_TYPE) {
         colors[MUON_TYPE]         = { 0.7f, 0.2f, 0.9f, 1.0f };
         behavior_flags[MUON_TYPE] = BEHAVIOR_MUON | BEHAVIOR_LEPTON | BEHAVIOR_IONIC_NEG;
+    }
+
+    // Tau lepton (τ-): bright crimson; heavier than muon, decays similarly
+    if (colors.size() > TAU_TYPE) {
+        colors[TAU_TYPE]         = { 0.95f, 0.1f, 0.3f, 1.0f };
+        behavior_flags[TAU_TYPE] = BEHAVIOR_MUON | BEHAVIOR_LEPTON | BEHAVIOR_IONIC_NEG;
+    }
+
+    // Muon neutrino (νμ): faint amber-grey; ballistic, near-zero interaction
+    if (colors.size() > MU_NEUTRINO_TYPE) {
+        colors[MU_NEUTRINO_TYPE]         = { 0.5f, 0.45f, 0.3f, 0.45f };
+        behavior_flags[MU_NEUTRINO_TYPE] = BEHAVIOR_NEUTRINO;
+    }
+
+    // Tau neutrino (ντ): faint teal-grey; ballistic, near-zero interaction
+    if (colors.size() > TAU_NEUTRINO_TYPE) {
+        colors[TAU_NEUTRINO_TYPE]         = { 0.3f, 0.5f, 0.45f, 0.45f };
+        behavior_flags[TAU_NEUTRINO_TYPE] = BEHAVIOR_NEUTRINO;
+    }
+
+    // W boson (W±): pulsing orange-gold; charged weak-force carrier, very short-lived
+    if (colors.size() > W_BOSON_TYPE) {
+        colors[W_BOSON_TYPE]         = { 1.0f, 0.65f, 0.0f, 1.0f };
+        behavior_flags[W_BOSON_TYPE] = BEHAVIOR_PHOTON;  // ballistic, fast energy drain
+    }
+
+    // Z boson (Z0): silver-white; neutral weak-force carrier, very short-lived
+    if (colors.size() > Z_BOSON_TYPE) {
+        colors[Z_BOSON_TYPE]         = { 0.85f, 0.85f, 0.9f, 1.0f };
+        behavior_flags[Z_BOSON_TYPE] = BEHAVIOR_PHOTON;  // ballistic, fast energy drain
+    }
+
+    // Higgs boson (H0): golden shimmer; scalar field quantum, very short-lived
+    if (colors.size() > HIGGS_TYPE) {
+        colors[HIGGS_TYPE]         = { 1.0f, 0.88f, 0.2f, 1.0f };
+        behavior_flags[HIGGS_TYPE] = BEHAVIOR_HEAVY | BEHAVIOR_CATALYST;
     }
 }
 

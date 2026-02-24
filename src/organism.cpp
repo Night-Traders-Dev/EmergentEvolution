@@ -39,7 +39,8 @@ void OrganismManager::reset() {
 // ── DBSCAN Clustering (spatial hash accelerated) ──────────────────────────────
 
 std::vector<int> OrganismManager::build_clusters(
-    const std::vector<glm::vec2>& positions)
+    const std::vector<glm::vec2>& positions,
+    const std::vector<float>&     energies)
 {
     uint32_t n = static_cast<uint32_t>(positions.size());
     if (n == 0) return {};
@@ -52,6 +53,9 @@ std::vector<int> OrganismManager::build_clusters(
     grid.reserve(n / 4 + 1);
 
     for (uint32_t i = 0; i < n; ++i) {
+        // Skip dormant particles (energy ≤ 0.001) — lab-mode reservoir particles
+        // cluster into a single 10k-member blob otherwise and flood the Organisms panel.
+        if (i < energies.size() && energies[i] <= 0.001f) continue;
         int cx = static_cast<int>(std::floor(positions[i].x / eps));
         int cy = static_cast<int>(std::floor(positions[i].y / eps));
         grid[cell_key(cx, cy)].push_back(i);
@@ -280,8 +284,8 @@ void OrganismManager::update(
     uint32_t n = static_cast<uint32_t>(positions.size());
     if (n == 0) { organisms.clear(); return; }
 
-    // 1. DBSCAN cluster
-    auto parent = build_clusters(positions);
+    // 1. DBSCAN cluster (energies passed to exclude dormant reservoir particles)
+    auto parent = build_clusters(positions, energies);
 
     std::unordered_map<int, std::vector<uint32_t>> root_map;
     root_map.reserve(n / 8 + 1);

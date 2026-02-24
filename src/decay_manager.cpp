@@ -42,9 +42,15 @@ const DecayParams DecayManager::DECAY_TABLE[MAX_PARTICLE_TYPES] = {
     DecayParams{},       // 20 e-   — stable
     DecayParams{},       // 21 e+   — handled separately (annihilation, not half-life)
     DecayParams{},       // 22 ν    — stable
-    { true, 0.5f, ELECTRON_TYPE, NEUTRINO_TYPE, 0.15f, false }, // 23 μ → e- + ν
-    DecayParams{},       // 24 reserved
-    DecayParams{},       // 25 reserved
+    { true, 0.5f,  ELECTRON_TYPE, NEUTRINO_TYPE, 0.15f, false }, // 23 μ- → e- + νe
+    { true, 0.04f, ELECTRON_TYPE, NEUTRINO_TYPE, 0.20f, false }, // 24 τ- → e- + νe  (simplified)
+    DecayParams{},       // 25 νμ — stable (near massless)
+    DecayParams{},       // 26 ντ — stable (near massless)
+    { true, 0.02f, ELECTRON_TYPE, NEUTRINO_TYPE, 0.30f, false }, // 27 W± → e + ν  (leptonic)
+    { true, 0.02f, ELECTRON_TYPE, POSITRON_TYPE, 0.30f, false }, // 28 Z⁰ → e- + e+ (pair)
+    { true, 0.08f, PHOTON_TYPE,   0xFFFFFFFFu,   0.40f, true  }, // 29 H⁰ → 2γ  (H→γγ loop)
+    DecayParams{},       // 30 reserved
+    DecayParams{},       // 31 reserved
 };
 
 // ── reset ─────────────────────────────────────────────────────────────────────

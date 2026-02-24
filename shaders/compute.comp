@@ -77,6 +77,11 @@ const uint BEHAVIOR_LEPTON    = 4096u;  // free lepton (e-, muon)
 const uint BEHAVIOR_NEUTRINO  = 8192u;  // near-zero interaction; ballistic like photon
 const uint BEHAVIOR_POSITRON  = 16384u; // positron e+; annihilates with LEPTON
 const uint BEHAVIOR_MUON      = 32768u; // heavy lepton; decays CPU-side
+// Per-atom mass tiers (bits 16-19)
+const uint BEHAVIOR_MASS_MEDIUM = 65536u;   // C N O  (12-16 amu)  mass_inv=0.27
+const uint BEHAVIOR_MASS_HEAVY  = 131072u;  // P S Na Cl (23-35 amu)  mass_inv=0.18
+const uint BEHAVIOR_MASS_DENSE  = 262144u;  // Fe Ni Si Ca Ti (28-59 amu)  mass_inv=0.13
+const uint BEHAVIOR_MASS_ULTRA  = 524288u;  // Sr Au Pb Eu U (88-238 amu) mass_inv=0.08
 
 const uint  PHOTON_TYPE_IDX  = 18u;
 const float PHOTON_DRAIN     = 0.07f; // energy drained per second (~4-8s lifetime depending on start energy)
@@ -265,17 +270,19 @@ void apply_physics(uint i) {
                 total_force += normal * field * 5.0f;
             }
 
-            // IONIC — opposite charges attract strongly, same charges repel
+            // COULOMB — Electrostatic 1/r² using per-particle genome charge values.
+            // F = K * q_a * q_b / (r² + r₀²)
+            // Same sign → repel (subtract normal); opposite sign → attract (add normal).
+            // Covers ionic bonds (Na-Cl), hydrogen bonds (H–O), and partial charges.
             {
-                bool a_pos = (flags_a & BEHAVIOR_IONIC_POS) != 0u;
-                bool a_neg = (flags_a & BEHAVIOR_IONIC_NEG) != 0u;
-                bool b_pos = (flags_b & BEHAVIOR_IONIC_POS) != 0u;
-                bool b_neg = (flags_b & BEHAVIOR_IONIC_NEG) != 0u;
-                float prox = 1.0f - dist / MAX_RADIUS;
-                if ((a_pos && b_neg) || (a_neg && b_pos))
-                    total_force += normal * prox * 60.0f;
-                else if ((a_pos && b_pos) || (a_neg && b_neg))
-                    total_force -= normal * prox * 40.0f;
+                float q_j     = genome_buffer.data[j * 4u + 0u];
+                float q_prod  = charge * q_j;
+                if (abs(q_prod) > 0.0005f) {
+                    const float K_COULOMB = 50000.0f;
+                    const float SOFTEN_SQ = params.repulsion_radius * params.repulsion_radius;
+                    float coulomb = K_COULOMB * q_prod / (dist_sq + SOFTEN_SQ);
+                    total_force -= normal * coulomb;  // same charges repel (q_prod>0 → repel)
+                }
             }
 
             // RADICAL — free radical chases all neighbors (was VIRAL)
@@ -322,9 +329,16 @@ void apply_physics(uint i) {
 
             // ── Gravity ───────────────────────────────────────────────────────
             // F = G * m_a * m_b / r²  (always attractive; softened singularity)
+            // After mass_inv scaling below, net acceleration = G * m_b / r² (equiv. principle ✓)
             if (params.gravity_strength > 0.001f) {
-                float mass_a = (flags_a & BEHAVIOR_HEAVY) != 0u ? 3.0f : 1.0f;
-                float mass_b = (flags_b & BEHAVIOR_HEAVY) != 0u ? 3.0f : 1.0f;
+                float mass_a = (flags_a & BEHAVIOR_MASS_ULTRA)  != 0u ? 12.5f :
+                               (flags_a & BEHAVIOR_MASS_DENSE)  != 0u ?  7.7f :
+                               (flags_a & BEHAVIOR_MASS_HEAVY)  != 0u ?  5.6f :
+                               (flags_a & BEHAVIOR_MASS_MEDIUM) != 0u ?  3.7f : 1.0f;
+                float mass_b = (flags_b & BEHAVIOR_MASS_ULTRA)  != 0u ? 12.5f :
+                               (flags_b & BEHAVIOR_MASS_DENSE)  != 0u ?  7.7f :
+                               (flags_b & BEHAVIOR_MASS_HEAVY)  != 0u ?  5.6f :
+                               (flags_b & BEHAVIOR_MASS_MEDIUM) != 0u ?  3.7f : 1.0f;
                 float f_grav = params.gravity_strength * mass_a * mass_b
                                / (dist_sq + 100.0f);
                 total_force += normal * f_grav;
@@ -419,10 +433,14 @@ void apply_physics(uint i) {
 
     // --- Integration with Soft-Body Physics ---
 
-    if (is_heavy) {
-        total_force    *= 0.25f;
-        pressure_force *= 2.0f; // Structural nuclei are stiffer
-    }
+    // Per-atom mass scaling: heavier atoms need more force to accelerate (F=ma → a=F/m)
+    // mass_inv = 1/m, approximated via √(relative_mass) fractions for tractable dynamics
+    float mass_inv = (flags_a & BEHAVIOR_MASS_ULTRA)  != 0u ? 0.08f :
+                     (flags_a & BEHAVIOR_MASS_DENSE)  != 0u ? 0.13f :
+                     (flags_a & BEHAVIOR_MASS_HEAVY)  != 0u ? 0.18f :
+                     (flags_a & BEHAVIOR_MASS_MEDIUM) != 0u ? 0.27f : 1.0f;
+    total_force    *= mass_inv;
+    pressure_force *= mass_inv * 2.0f; // stiffer structural response for heavier atoms
 
     // Combine standard forces with pressure resistance
     vec2 final_accel = total_force + pressure_force;
@@ -439,11 +457,14 @@ void apply_physics(uint i) {
     if (speed > max_speed) vel_a = (vel_a / speed) * max_speed;
 
     // Thermal noise (Brownian motion)
+    // PCG-style hash: uncorrelated per-particle per-frame random angle
     if (params.temperature > 0.001f) {
-        // Deterministic pseudo-random angle per particle per frame
-        float rng_angle = float(i) * 2.3999632f + params.dt * 137.508f;
+        uint bm_seed = (i * 1664525u + params.step * 1013904223u) ^ 0x9e3779b9u;
+        bm_seed ^= (bm_seed >> 17u); bm_seed *= 0xbf58476du; bm_seed ^= (bm_seed >> 31u);
+        float rng_angle = float(bm_seed) * (6.28318f / 4294967296.0f);
         vec2  noise_dir = vec2(cos(rng_angle), sin(rng_angle));
-        vel_a += noise_dir * params.temperature * 0.3f;
+        // Heavier atoms have less thermal displacement (equipartition: v ∝ 1/√m)
+        vel_a += noise_dir * params.temperature * 0.3f * sqrt(mass_inv);
     }
 
     // Movement update (infinite world)

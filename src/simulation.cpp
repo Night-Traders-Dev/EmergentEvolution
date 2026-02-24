@@ -92,12 +92,21 @@ void Simulation::tick(GLFWwindow* window, double dt) {
                          + (glm::vec2(float(mx), float(my)) - glm::vec2(win_w * 0.5f, win_h * 0.5f))
                          / cfg.current_camera_zoom;
 
-            // 14 screen-pixel snap radius, converted to world units
-            float snap_r  = 14.0f / cfg.current_camera_zoom;
-            float min_d2  = snap_r * snap_r;
+            // Snap radius: at least particle-radius + 2 world units, but never smaller
+            // than 6 screen pixels worth of world space (so it still works when zoomed out).
+            float world_min = 6.0f / cfg.current_camera_zoom;
+            float snap_r    = std::max(cfg.radius + 2.0f, world_min);
+            float min_d2    = snap_r * snap_r;
+            const float RW  = static_cast<float>(REGION_W);
+            const float RH  = static_cast<float>(REGION_H);
             for (uint32_t pi = 0; pi < static_cast<uint32_t>(readback_positions_.size()); ++pi) {
                 glm::vec2 d = readback_positions_[pi] - mw;
-                float     d2 = d.x*d.x + d.y*d.y;
+                // Shortest-path toroidal distance
+                if (d.x >  RW * 0.5f) d.x -= RW;
+                else if (d.x < -RW * 0.5f) d.x += RW;
+                if (d.y >  RH * 0.5f) d.y -= RH;
+                else if (d.y < -RH * 0.5f) d.y += RH;
+                float d2 = d.x*d.x + d.y*d.y;
                 if (d2 < min_d2) { min_d2 = d2; iface.hover_particle_idx = static_cast<int32_t>(pi); }
             }
         }
@@ -143,6 +152,7 @@ void Simulation::tick(GLFWwindow* window, double dt) {
         // Active / dormant / energy / photon / SM particle counts
         uint32_t active = 0, dormant = 0, photons = 0;
         uint32_t sm[5]  = {};
+        uint32_t type_counts[MAX_PARTICLE_TYPES] = {};
         double   e_sum = 0.0, en_sum = 0.0, re_sum = 0.0;
         uint32_t genome_n = 0;
         const uint32_t np = static_cast<uint32_t>(readback_energies_.size());
@@ -152,6 +162,7 @@ void Simulation::tick(GLFWwindow* window, double dt) {
             if (e < 0.01f) { ++dormant; continue; }
             ++active;
             e_sum += e;
+            if (t < MAX_PARTICLE_TYPES) ++type_counts[t];
             if (t == PHOTON_TYPE)                        { ++photons; continue; }
             if (t >= ALPHA_TYPE && t <= MUON_TYPE)       { ++sm[t - ALPHA_TYPE]; continue; }
             // Genome averages (normal atoms only)
@@ -167,6 +178,7 @@ void Simulation::tick(GLFWwindow* window, double dt) {
         iface.avg_energy_display       = active ? static_cast<float>(e_sum / active) : 0.f;
         iface.photon_count_display     = photons;
         std::copy(sm, sm + 5, iface.sm_counts_display);
+        std::copy(type_counts, type_counts + MAX_PARTICLE_TYPES, iface.type_counts_display);
         if (genome_n > 0) {
             iface.avg_electroneg_display = static_cast<float>(en_sum / genome_n);
             iface.avg_reactivity_display = static_cast<float>(re_sum / genome_n);
@@ -288,11 +300,17 @@ void Simulation::tick(GLFWwindow* window, double dt) {
                                 dvel[pidx] = ev.product_vel;
                                 dnrg[pidx] = ev.q_energy;
                                 // Genome: set charge for SM particle types
-                                if (ev.product_type == ALPHA_TYPE)    particles.genomes[pidx*GENOME_SIZE] =  0.8f;
-                                else if (ev.product_type == ELECTRON_TYPE) particles.genomes[pidx*GENOME_SIZE] = -1.0f;
-                                else if (ev.product_type == POSITRON_TYPE) particles.genomes[pidx*GENOME_SIZE] =  1.0f;
-                                else if (ev.product_type == NEUTRINO_TYPE) particles.genomes[pidx*GENOME_SIZE] =  0.0f;
-                                else if (ev.product_type == MUON_TYPE)     particles.genomes[pidx*GENOME_SIZE] = -1.0f;
+                                if      (ev.product_type == ALPHA_TYPE)        particles.genomes[pidx*GENOME_SIZE] =  0.8f;
+                                else if (ev.product_type == ELECTRON_TYPE)    particles.genomes[pidx*GENOME_SIZE] = -1.0f;
+                                else if (ev.product_type == POSITRON_TYPE)    particles.genomes[pidx*GENOME_SIZE] =  1.0f;
+                                else if (ev.product_type == NEUTRINO_TYPE)    particles.genomes[pidx*GENOME_SIZE] =  0.0f;
+                                else if (ev.product_type == MUON_TYPE)        particles.genomes[pidx*GENOME_SIZE] = -1.0f;
+                                else if (ev.product_type == TAU_TYPE)         particles.genomes[pidx*GENOME_SIZE] = -1.0f;
+                                else if (ev.product_type == MU_NEUTRINO_TYPE) particles.genomes[pidx*GENOME_SIZE] =  0.0f;
+                                else if (ev.product_type == TAU_NEUTRINO_TYPE)particles.genomes[pidx*GENOME_SIZE] =  0.0f;
+                                else if (ev.product_type == W_BOSON_TYPE)     particles.genomes[pidx*GENOME_SIZE] =  1.0f;
+                                else if (ev.product_type == Z_BOSON_TYPE)     particles.genomes[pidx*GENOME_SIZE] =  0.0f;
+                                else if (ev.product_type == HIGGS_TYPE)       particles.genomes[pidx*GENOME_SIZE] =  0.0f;
                                 spawn_protect_ids_.insert(pidx);
                             }
 
@@ -375,6 +393,13 @@ void Simulation::handle_input(GLFWwindow* window, double dt) {
         if (!iface.spawn_menu_visible) iface.pending_spawn = false;
     }
     f3_prev = f3_cur;
+
+    // F4: quantum field display
+    static bool f4_prev = false;
+    bool f4_cur = (glfwGetKey(window, GLFW_KEY_F4) == GLFW_PRESS);
+    if (f4_cur && !f4_prev)
+        iface.quantum_field_visible = !iface.quantum_field_visible;
+    f4_prev = f4_cur;
 
     // F11: toggle fullscreen
     static bool f11_prev = false;
@@ -717,7 +742,8 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
     struct BondSpec { int ai, bi; };
     struct MolSpec  { std::vector<AtomSpec> atoms; std::vector<BondSpec> bonds; };
 
-    static const MolSpec MOLECULES[14] = {
+    static const MolSpec MOLECULES[49] = {
+        // ── Common molecules (original 14) ───────────────────────────────────
         // 0: H2O — O + 2H, bent ~105°
         { {{0,0,3},{-14,12,0},{14,12,0}},
           {{0,1},{0,2}} },
@@ -764,6 +790,134 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
         // 13: FeS2 — pyrite / fool's gold (Fe + 2S)
         { {{0,0,8},{-20,0,5},{20,0,5}},
           {{0,1},{0,2}} },
+
+        // ── Atmospheric gases ─────────────────────────────────────────────────
+        // 14: O2 — dioxygen (O=O)
+        { {{-11,0,3},{11,0,3}},
+          {{0,1}} },
+        // 15: N2 — dinitrogen (N≡N)
+        { {{-11,0,2},{11,0,2}},
+          {{0,1}} },
+        // 16: O3 — ozone (bent ~117°, 3 O)
+        { {{0,0,3},{-20,11,3},{20,11,3}},
+          {{0,1},{0,2}} },
+        // 17: CO — carbon monoxide (C≡O)
+        { {{-11,0,1},{11,0,3}},
+          {{0,1}} },
+        // 18: NO — nitric oxide (N=O)
+        { {{-11,0,2},{11,0,3}},
+          {{0,1}} },
+        // 19: NO2 — nitrogen dioxide (bent ~134°)
+        { {{0,0,2},{-22,8,3},{22,8,3}},
+          {{0,1},{0,2}} },
+        // 20: SO2 — sulfur dioxide (bent ~119°)
+        { {{0,0,5},{-22,10,3},{22,10,3}},
+          {{0,1},{0,2}} },
+        // 21: H2S — hydrogen sulfide (bent ~92°)
+        { {{0,0,5},{-14,10,0},{14,10,0}},
+          {{0,1},{0,2}} },
+
+        // ── Acids, bases, salts ───────────────────────────────────────────────
+        // 22: HCl — hydrochloric acid (H-Cl)
+        { {{-11,0,0},{11,0,7}},
+          {{0,1}} },
+        // 23: NaOH — sodium hydroxide (Na-O-H)
+        { {{-24,0,6},{0,0,3},{16,0,0}},
+          {{0,1},{1,2}} },
+        // 24: H2O2 — hydrogen peroxide (H-O-O-H)
+        { {{-34,0,0},{-11,0,3},{11,0,3},{34,0,0}},
+          {{0,1},{1,2},{2,3}} },
+        // 25: H2SO4 — sulfuric acid (S + 4O + 2H, simplified)
+        { {{0,0,5},{0,-22,3},{-22,0,3},{22,0,3},{0,22,3},{-36,0,0},{36,0,0}},
+          {{0,1},{0,2},{0,3},{0,4},{2,5},{3,6}} },
+        // 26: HNO3 — nitric acid (H-O-N(=O)2)
+        { {{0,0,2},{-22,0,3},{16,-16,3},{16,16,3},{-36,0,0}},
+          {{0,1},{0,2},{0,3},{1,4}} },
+        // 27: H3PO4 — phosphoric acid (P + 4O + 3H)
+        { {{0,0,4},{0,-22,3},{-22,0,3},{22,0,3},{0,22,3},{-36,0,0},{36,0,0},{0,36,0}},
+          {{0,1},{0,2},{0,3},{0,4},{2,5},{3,6},{4,7}} },
+
+        // ── Organic basics ────────────────────────────────────────────────────
+        // 28: CH2O — formaldehyde (H2C=O)
+        { {{0,0,1},{0,-22,3},{-14,12,0},{14,12,0}},
+          {{0,1},{0,2},{0,3}} },
+        // 29: HCN — hydrogen cyanide (H-C≡N)
+        { {{-24,0,0},{0,0,1},{24,0,2}},
+          {{0,1},{1,2}} },
+        // 30: C2H6 — ethane (H3C-CH3)
+        { {{-11,0,1},{11,0,1},
+           {-25,14,0},{-25,-14,0},{-25,0,0},
+           {25,14,0},{25,-14,0},{25,0,0}},
+          {{0,1},{0,2},{0,3},{0,4},{1,5},{1,6},{1,7}} },
+        // 31: C2H4 — ethylene (H2C=CH2)
+        { {{-11,0,1},{11,0,1},
+           {-25,14,0},{-25,-14,0},
+           {25,14,0},{25,-14,0}},
+          {{0,1},{0,2},{0,3},{1,4},{1,5}} },
+        // 32: C2H2 — acetylene (HC≡CH)
+        { {{-11,0,1},{11,0,1},{-26,0,0},{26,0,0}},
+          {{0,1},{0,2},{1,3}} },
+        // 33: CH3OH — methanol (H3C-OH)
+        { {{-11,0,1},{11,0,3},
+           {-25,14,0},{-25,-14,0},{-25,0,0},{26,0,0}},
+          {{0,1},{0,2},{0,3},{0,4},{1,5}} },
+        // 34: CH3COOH — acetic acid (CH3-C(=O)-OH)
+        { {{-22,0,1},{0,0,1},{14,-14,3},{14,14,3},
+           {-36,14,0},{-36,-14,0},{-36,0,0},{28,22,0}},
+          {{0,1},{1,2},{1,3},{3,7},{0,4},{0,5},{0,6}} },
+        // 35: Urea — (NH2)2CO
+        { {{0,0,1},{0,-22,3},{-22,0,2},{22,0,2},
+           {-34,14,0},{-34,-14,0},{34,14,0},{34,-14,0}},
+          {{0,1},{0,2},{0,3},{2,4},{2,5},{3,6},{3,7}} },
+        // 36: Acetone — (CH3)2C=O
+        { {{0,0,1},{0,-22,3},{-22,0,1},{22,0,1},
+           {-36,14,0},{-36,-14,0},{-36,0,0},
+           {36,14,0},{36,-14,0},{36,0,0}},
+          {{0,1},{0,2},{0,3},{2,4},{2,5},{2,6},{3,7},{3,8},{3,9}} },
+        // 37: C3H8 — propane (CH3-CH2-CH3)
+        { {{-22,0,1},{0,0,1},{22,0,1},
+           {-36,14,0},{-36,-14,0},{-36,0,0},
+           {0,22,0},{0,-22,0},
+           {36,14,0},{36,-14,0},{36,0,0}},
+          {{0,1},{1,2},{0,3},{0,4},{0,5},{1,6},{1,7},{2,8},{2,9},{2,10}} },
+        // 38: CH3NH2 — methylamine (CH3-NH2)
+        { {{-11,0,1},{11,0,2},
+           {-25,14,0},{-25,-14,0},{-25,0,0},{25,14,0},{25,-14,0}},
+          {{0,1},{0,2},{0,3},{0,4},{1,5},{1,6}} },
+
+        // ── Minerals ──────────────────────────────────────────────────────────
+        // 39: SiO2 — quartz (O-Si-O, linear)
+        { {{0,0,10},{-24,0,3},{24,0,3}},
+          {{0,1},{0,2}} },
+        // 40: TiO2 — rutile (O-Ti-O, linear)
+        { {{0,0,12},{-24,0,3},{24,0,3}},
+          {{0,1},{0,2}} },
+        // 41: NiO — nickel oxide
+        { {{-13,0,9},{13,0,3}},
+          {{0,1}} },
+        // 42: CaO — calcium oxide
+        { {{-13,0,11},{13,0,3}},
+          {{0,1}} },
+        // 43: FeO — iron(II) oxide (wüstite)
+        { {{-13,0,8},{13,0,3}},
+          {{0,1}} },
+        // 44: NiS — nickel sulfide (millerite)
+        { {{-13,0,9},{13,0,5}},
+          {{0,1}} },
+
+        // ── More small molecules ──────────────────────────────────────────────
+        // 45: SO3 — sulfur trioxide (planar trigonal)
+        { {{0,0,5},{0,-24,3},{-20,12,3},{20,12,3}},
+          {{0,1},{0,2},{0,3}} },
+        // 46: ClNO — nitrosyl chloride (Cl-N=O)
+        { {{0,0,2},{0,-22,3},{22,8,7}},
+          {{0,1},{0,2}} },
+        // 47: CS2 — carbon disulfide (S=C=S)
+        { {{0,0,1},{-24,0,5},{24,0,5}},
+          {{0,1},{0,2}} },
+        // 48: PH3 — phosphine (trigonal pyramidal)
+        { {{0,0,4},{0,-22,0},{-18,12,0},{18,12,0}},
+          {{0,1},{0,2},{0,3}} },
     };
 
     // ── Bio-molecule templates (Organics tab) ────────────────────────────────
@@ -813,7 +967,7 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
 
     // ── Case: Molecule template ───────────────────────────────────────────────
     if (iface.spawn_tab == 1) {
-        int gi = std::clamp(iface.spawn_group_idx, 0, 13);
+        int gi = std::clamp(iface.spawn_group_idx, 0, 48);
         const MolSpec& mol = MOLECULES[gi];
         uint32_t need = static_cast<uint32_t>(mol.atoms.size());
         if (candidates.size() < need) return;
@@ -949,8 +1103,216 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
                     tmpl_bonds.push_back({ci - 3, ci}); // C-C chain
                 }
             }
+        } else if (oi == -13) {
+            // Small Proto-Cell: 16-C lipid ring (R=57, spacing=22px=bond_rest) + glycine core
+            // Ring: C*3=48>16 → LIPID; ring_factor≈1.0 → VESICLE
+            // Core (5 atoms: N=1 C=2 O=2): (N+O)*2=6>5, C>0 → AMINO_ACID → PROTO_CELL
+            constexpr float  RING_R  = 57.0f;   // 22/(2*sin(π/16)) = 56.6 ≈ 57px
+            constexpr int    RING_N  = 16;
+            constexpr float  RING_DA = 6.28318530f / RING_N;
+            for (int i = 0; i < RING_N; ++i)
+                tmpl_atoms.push_back({ std::cos(i * RING_DA) * RING_R,
+                                       std::sin(i * RING_DA) * RING_R, 1u }); // C
+            // Consecutive ring bonds (membrane topology)
+            for (int i = 0; i < RING_N; ++i)
+                tmpl_bonds.push_back({ i, (i + 1) % RING_N });
+            // Cross-ring bonds (i→i+2): triangulates ring for stiffness
+            for (int i = 0; i < RING_N; ++i)
+                tmpl_bonds.push_back({ i, (i + 2) % RING_N });
+            // Glycine-like amino acid core — within 10px of center, 47px+ from ring atoms
+            tmpl_atoms.push_back({   0.f,   0.f, 2u }); // N  (16) — amino group
+            tmpl_atoms.push_back({  -8.f,   0.f, 1u }); // C  (17) — alpha carbon
+            tmpl_atoms.push_back({   8.f,   0.f, 1u }); // C  (18) — carbonyl carbon
+            tmpl_atoms.push_back({   8.f,  -9.f, 3u }); // O  (19) — carbonyl O (=O)
+            tmpl_atoms.push_back({   0.f,   9.f, 3u }); // O  (20) — hydroxyl (−OH)
+            tmpl_bonds.push_back({ 16, 17 }); // N-Cα
+            tmpl_bonds.push_back({ 16, 18 }); // N-C(=O)
+            tmpl_bonds.push_back({ 17, 19 }); // Cα-O
+            tmpl_bonds.push_back({ 18, 20 }); // C-OH
+        } else if (oi == -14) {
+            // Cell: 16-C lipid ring (R=57) + DNA/ATP/ribosome organelle core
+            // Ring: LIPID + ring_factor≈1.0 → VESICLE
+            // Core (8 atoms: P=5 N=2 C=1): P*3=15>8 → NUCLEOTIDE → CELL
+            // Organelles represented: ATP (P-P-P), DNA backbone (P-N-C), ribosome (N-N-C)
+            constexpr float  RING_R  = 57.0f;
+            constexpr int    RING_N  = 16;
+            constexpr float  RING_DA = 6.28318530f / RING_N;
+            for (int i = 0; i < RING_N; ++i)
+                tmpl_atoms.push_back({ std::cos(i * RING_DA) * RING_R,
+                                       std::sin(i * RING_DA) * RING_R, 1u }); // C
+            for (int i = 0; i < RING_N; ++i)
+                tmpl_bonds.push_back({ i, (i + 1) % RING_N });
+            for (int i = 0; i < RING_N; ++i)
+                tmpl_bonds.push_back({ i, (i + 2) % RING_N });
+            // Organelle core — all within 14px of center, 43px+ from ring atoms
+            tmpl_atoms.push_back({   0.f,   0.f, 4u }); // P  (16) — ATP γ-phosphate
+            tmpl_atoms.push_back({ -12.f,   0.f, 4u }); // P  (17) — ATP β-phosphate
+            tmpl_atoms.push_back({  12.f,   0.f, 4u }); // P  (18) — ATP α-phosphate
+            tmpl_atoms.push_back({   0.f, -12.f, 4u }); // P  (19) — DNA backbone P
+            tmpl_atoms.push_back({  -8.f,  10.f, 4u }); // P  (20) — RNA phosphate
+            tmpl_atoms.push_back({   8.f,  10.f, 2u }); // N  (21) — purine base
+            tmpl_atoms.push_back({   0.f,  14.f, 2u }); // N  (22) — pyrimidine base
+            tmpl_atoms.push_back({   6.f, -10.f, 1u }); // C  (23) — ribose carbon
+            tmpl_bonds.push_back({ 16, 17 }); // P-P  ATP γ-β
+            tmpl_bonds.push_back({ 16, 18 }); // P-P  ATP γ-α
+            tmpl_bonds.push_back({ 16, 19 }); // P-P  ATP-DNA bridge
+            tmpl_bonds.push_back({ 17, 20 }); // P-P  DNA-RNA
+            tmpl_bonds.push_back({ 18, 21 }); // P-N  base attachment
+            tmpl_bonds.push_back({ 21, 22 }); // N-N  base pair
+            tmpl_bonds.push_back({ 22, 23 }); // N-C  glycosidic bond
+            tmpl_bonds.push_back({ 19, 23 }); // P-C  ribose-phosphate
+        } else if (oi == -15) {
+            // Large Proto-Cell: 20-C ring (R=70, spacing=22px=bond_rest) + ribosome-like core
+            // Ring: C*3=60>20 → LIPID; ring_factor≈1.0 → VESICLE
+            // Core (8 atoms: N=3 C=3 O=2): (N+O)*2=10>8, C>0 → AMINO_ACID → PROTO_CELL
+            constexpr float  RING_R  = 70.0f;   // 22/(2*sin(π/20)) = 70.3 ≈ 70px
+            constexpr int    RING_N  = 20;
+            constexpr float  RING_DA = 6.28318530f / RING_N;
+            for (int i = 0; i < RING_N; ++i)
+                tmpl_atoms.push_back({ std::cos(i * RING_DA) * RING_R,
+                                       std::sin(i * RING_DA) * RING_R, 1u }); // C
+            for (int i = 0; i < RING_N; ++i)
+                tmpl_bonds.push_back({ i, (i + 1) % RING_N });
+            for (int i = 0; i < RING_N; ++i)
+                tmpl_bonds.push_back({ i, (i + 2) % RING_N });
+            // Ribosome-like amino acid core — within 15px of center, 55px+ from ring atoms
+            tmpl_atoms.push_back({   0.f,   0.f, 2u }); // N  (20) — central amine
+            tmpl_atoms.push_back({ -10.f,   0.f, 1u }); // C  (21) — alpha carbon
+            tmpl_atoms.push_back({  10.f,   0.f, 1u }); // C  (22) — beta carbon
+            tmpl_atoms.push_back({ -10.f,  10.f, 2u }); // N  (23) — amino group
+            tmpl_atoms.push_back({  10.f,  10.f, 2u }); // N  (24) — amino group
+            tmpl_atoms.push_back({   0.f,  14.f, 1u }); // C  (25) — carbonyl carbon
+            tmpl_atoms.push_back({  -8.f, -12.f, 3u }); // O  (26) — carboxyl O
+            tmpl_atoms.push_back({   8.f, -12.f, 3u }); // O  (27) — carboxyl O
+            tmpl_bonds.push_back({ 20, 21 }); // N-Cα
+            tmpl_bonds.push_back({ 20, 22 }); // N-Cβ
+            tmpl_bonds.push_back({ 21, 23 }); // Cα-N amine
+            tmpl_bonds.push_back({ 22, 24 }); // Cβ-N amine
+            tmpl_bonds.push_back({ 20, 25 }); // N-C carbonyl
+            tmpl_bonds.push_back({ 21, 26 }); // Cα-O carboxyl
+            tmpl_bonds.push_back({ 22, 27 }); // Cβ-O carboxyl
+        } else if (oi == -16) {
+            // Large Cell: 20-C ring (R=70) + full organelle core
+            // Ring: LIPID + ring_factor≈1.0 → VESICLE
+            // Core (12 atoms: P=5 N=2 C=2 O=1 S=2): P*3=15>12 → NUCLEOTIDE → CELL
+            // Organelles: DNA (P-N-C backbone), ATP (P-P-P), mitochondrion Fe-S (S-S), ribosome (N-C)
+            constexpr float  RING_R  = 70.0f;
+            constexpr int    RING_N  = 20;
+            constexpr float  RING_DA = 6.28318530f / RING_N;
+            for (int i = 0; i < RING_N; ++i)
+                tmpl_atoms.push_back({ std::cos(i * RING_DA) * RING_R,
+                                       std::sin(i * RING_DA) * RING_R, 1u }); // C
+            for (int i = 0; i < RING_N; ++i)
+                tmpl_bonds.push_back({ i, (i + 1) % RING_N });
+            for (int i = 0; i < RING_N; ++i)
+                tmpl_bonds.push_back({ i, (i + 2) % RING_N });
+            // Full organelle core — within 17px of center, 53px+ from ring atoms
+            tmpl_atoms.push_back({   0.f,   0.f, 4u }); // P  (20) — ATP central phosphate
+            tmpl_atoms.push_back({ -12.f,  -8.f, 4u }); // P  (21) — DNA backbone
+            tmpl_atoms.push_back({  12.f,  -8.f, 4u }); // P  (22) — DNA backbone
+            tmpl_atoms.push_back({   0.f, -15.f, 4u }); // P  (23) — ATP terminal
+            tmpl_atoms.push_back({  16.f,   0.f, 4u }); // P  (24) — phosphate chain
+            tmpl_atoms.push_back({ -16.f,   0.f, 2u }); // N  (25) — purine base
+            tmpl_atoms.push_back({ -10.f,  12.f, 2u }); // N  (26) — pyrimidine base
+            tmpl_atoms.push_back({   0.f,  12.f, 1u }); // C  (27) — ribose carbon
+            tmpl_atoms.push_back({  -5.f, -10.f, 1u }); // C  (28) — backbone carbon
+            tmpl_atoms.push_back({  10.f,  10.f, 3u }); // O  (29) — oxygen bridge
+            tmpl_atoms.push_back({   0.f,  16.f, 5u }); // S  (30) — Fe-S cluster (ETC)
+            tmpl_atoms.push_back({   8.f,  14.f, 5u }); // S  (31) — Fe-S pair
+            tmpl_bonds.push_back({ 20, 21 }); // P-P  ATP-DNA
+            tmpl_bonds.push_back({ 20, 22 }); // P-P  ATP-DNA
+            tmpl_bonds.push_back({ 20, 23 }); // P-P  ATP chain
+            tmpl_bonds.push_back({ 20, 24 }); // P-P  phosphate
+            tmpl_bonds.push_back({ 21, 25 }); // P-N  base attachment
+            tmpl_bonds.push_back({ 22, 25 }); // P-N  base pair
+            tmpl_bonds.push_back({ 25, 26 }); // N-N  base stacking
+            tmpl_bonds.push_back({ 26, 27 }); // N-C  glycosidic
+            tmpl_bonds.push_back({ 27, 28 }); // C-C  backbone
+            tmpl_bonds.push_back({ 28, 29 }); // C-O  ester
+            tmpl_bonds.push_back({ 30, 31 }); // S-S  iron-sulfur cluster
+        } else if (oi == -17) {
+            // Alt Proto-Cell: 16-C ring (R=57) + N-rich amino acid core
+            // Core (5 atoms: N=2 C=1 O=2): (N+O)*2=8>5, C>0 → AMINO_ACID → PROTO_CELL
+            constexpr float  RING_R  = 57.0f;
+            constexpr int    RING_N  = 16;
+            constexpr float  RING_DA = 6.28318530f / RING_N;
+            for (int i = 0; i < RING_N; ++i)
+                tmpl_atoms.push_back({ std::cos(i * RING_DA) * RING_R,
+                                       std::sin(i * RING_DA) * RING_R, 1u }); // C
+            for (int i = 0; i < RING_N; ++i)
+                tmpl_bonds.push_back({ i, (i + 1) % RING_N });
+            for (int i = 0; i < RING_N; ++i)
+                tmpl_bonds.push_back({ i, (i + 2) % RING_N });
+            // N-rich core — within 8px of center, 49px+ from ring atoms
+            tmpl_atoms.push_back({  -8.f,   0.f, 2u }); // N  (16) — amine
+            tmpl_atoms.push_back({   8.f,   0.f, 2u }); // N  (17) — amine
+            tmpl_atoms.push_back({   0.f,   0.f, 1u }); // C  (18) — alpha carbon
+            tmpl_atoms.push_back({   0.f,  -8.f, 3u }); // O  (19) — carbonyl O
+            tmpl_atoms.push_back({   0.f,   8.f, 3u }); // O  (20) — hydroxyl O
+            tmpl_bonds.push_back({ 16, 18 }); // N-C
+            tmpl_bonds.push_back({ 17, 18 }); // N-C
+            tmpl_bonds.push_back({ 18, 19 }); // C=O
+            tmpl_bonds.push_back({ 18, 20 }); // C-OH
+        } else if (oi == -18) {
+            // Alt Cell: 16-C ring (R=57) + P-rich nucleotide core
+            // Core (5 atoms: P=3 N=1 C=1): P*3=9>5 → NUCLEOTIDE → CELL
+            constexpr float  RING_R  = 57.0f;
+            constexpr int    RING_N  = 16;
+            constexpr float  RING_DA = 6.28318530f / RING_N;
+            for (int i = 0; i < RING_N; ++i)
+                tmpl_atoms.push_back({ std::cos(i * RING_DA) * RING_R,
+                                       std::sin(i * RING_DA) * RING_R, 1u }); // C
+            for (int i = 0; i < RING_N; ++i)
+                tmpl_bonds.push_back({ i, (i + 1) % RING_N });
+            for (int i = 0; i < RING_N; ++i)
+                tmpl_bonds.push_back({ i, (i + 2) % RING_N });
+            // P-rich core — within 8px of center, 49px+ from ring atoms
+            tmpl_atoms.push_back({  -8.f,   0.f, 4u }); // P  (16) — phosphate
+            tmpl_atoms.push_back({   8.f,   0.f, 4u }); // P  (17) — phosphate
+            tmpl_atoms.push_back({   0.f,  -8.f, 4u }); // P  (18) — phosphate
+            tmpl_atoms.push_back({   0.f,   8.f, 2u }); // N  (19) — base N
+            tmpl_atoms.push_back({   0.f,   0.f, 1u }); // C  (20) — ribose C
+            tmpl_bonds.push_back({ 16, 17 }); // P-P
+            tmpl_bonds.push_back({ 16, 18 }); // P-P
+            tmpl_bonds.push_back({ 17, 19 }); // P-N base
+            tmpl_bonds.push_back({ 18, 20 }); // P-C ribose
         } else {
             return;
+        }
+
+        // ── Pre-clear: push all soup particles out of the ring neighbourhood ──────
+        // Without this, ~150-200 soup particles within eps=40 of ring atoms merge
+        // into the ring's DBSCAN cluster, diluting C fraction below the LIPID threshold.
+        if (oi <= -13) {
+            // clear_r covers ring_R + eps(40) + 20px drift buffer
+            const float CLEAR_R  = (oi == -15 || oi == -16) ? 130.0f : 118.0f;
+            const float CLEAR_R2 = CLEAR_R * CLEAR_R;
+            const float OUT_R    = CLEAR_R + 30.0f;  // scatter to just outside clear zone
+            const float RW = static_cast<float>(REGION_W);
+            const float RH = static_cast<float>(REGION_H);
+            for (uint32_t k = 0; k < n; ++k) {
+                if (particles.types[k] == PHOTON_TYPE) continue;
+                if (spawn_protect_ids_.count(k)) continue;
+                glm::vec2 d = cur_pos[k] - world_pos;
+                // Toroidal shortest path
+                if (d.x >  RW * 0.5f) d.x -= RW;
+                else if (d.x < -RW * 0.5f) d.x += RW;
+                if (d.y >  RH * 0.5f) d.y -= RH;
+                else if (d.y < -RH * 0.5f) d.y += RH;
+                float d2 = glm::dot(d, d);
+                if (d2 > CLEAR_R2) continue;
+                // Eject radially outward; stagger scatter distances to avoid pile-up
+                float ang = (d2 > 1e-6f) ? std::atan2(d.y, d.x)
+                                          : static_cast<float>(k % 628) * 0.01f;
+                float rad = OUT_R + static_cast<float>(k % 80) * 1.5f;
+                glm::vec2 np = world_pos + glm::vec2(std::cos(ang) * rad,
+                                                      std::sin(ang) * rad);
+                np.x = std::fmod(np.x + RW * 2.0f, RW);
+                np.y = std::fmod(np.y + RH * 2.0f, RH);
+                cur_pos[k]  = np;
+                cur_vel[k]  = { 0.0f, 0.0f };
+                bond_manager.clear_particle_bonds(k);
+            }
         }
 
         uint32_t need = static_cast<uint32_t>(tmpl_atoms.size());
@@ -966,6 +1328,14 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
             spawn_protect_ids_.insert(idx);
         }
         spawn_protect_ttl_ = cfg.start_empty ? 600 : 90;
+
+        // Boost bond stiffness for ring atoms — eff_k = 80*(bond_str+0.5) → 120 (vs 80 default)
+        if (oi <= -13) {
+            int rn = (oi == -15 || oi == -16) ? 20 : 16;
+            for (int i = 0; i < rn && i < static_cast<int>(placed.size()); ++i)
+                particles.genomes[placed[i] * 4 + 3] = 1.0f;
+        }
+
         for (const auto& b : tmpl_bonds) {
             if (b.ai < static_cast<int>(placed.size()) &&
                 b.bi < static_cast<int>(placed.size()))
