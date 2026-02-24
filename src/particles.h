@@ -36,7 +36,7 @@ public:
     // Sets CPK colors, chemistry behavior flags, and electrochemistry force matrix
     // for all active atom types (H C N O P S Na Cl).
     // Called automatically from gen_data(); can also be called from the UI.
-    void apply_atom_defaults(uint32_t active_types);
+    void apply_atom_defaults(uint32_t active_types, float force_randomness = 0.0f);
 
     // Sets photon color and behavior flag for type index PHOTON_TYPE (8).
     // Called at the end of apply_atom_defaults() and before photon injection.

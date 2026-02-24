@@ -87,6 +87,7 @@ struct SimConfig {
     uint32_t particle_types     = 5;
     bool     reset_colors       = false;
     bool     reset_forces       = true;
+    float    force_randomness   = 0.25f;   // 0=pure chemistry  1=pure random
     uint32_t generation_seed    = 0;
 
     float radius             = 2.0f;

@@ -212,6 +212,18 @@ Aggregates accumulate **generation**, **kills**, and **divisions** counters acro
 **Trait feedback** nudges each member's genome toward the chemical role of the aggregate class
 (e.g. WATER → ↑ electronegativity · LIPID → ↑ bond strength · RADICAL → ↑ reactivity).
 
+**Darwinian evolution operates on three levels:**
+
+| Mechanism | Detail |
+|---|---|
+| **Division mutation** | On each detected division, ±3% random drift is applied to every member's electronegativity and reactivity genome values — heritable, stochastic variation |
+| **Fitness-driven force adaptation** | Each organism update, the top-3 organisms by fitness score (kills × 3 + divisions × 2 + energy × 10 + size × 0.01) nudge their dominant type's self-cohesion force +0.004 toward attraction — successful types gradually form tighter clusters |
+| **Trait-scale amplification** | Bond-rich, large organisms boost their type's entire force row by up to **2.5×** (raised from 1.8×), widening the gap between thriving and marginal types |
+
+**Force randomness** (UI slider, default 0.25) blends random variation into the chemistry defaults on reset.
+At 0 every run is identical; at 0.25 each seed produces a unique force landscape — different attractors,
+different winning strategies, genuinely distinct evolutionary paths.
+
 ---
 
 ## Sub-Atomic LOD
@@ -294,6 +306,21 @@ Clone any live molecular aggregate, or place one of three predefined templates:
 ## UI Reference
 
 <details>
+<summary><b>Generation Settings</b></summary>
+
+| Control | Effect |
+|---|---|
+| Particle Count | Pool size (hidden in lab mode — fixed at 10,000) |
+| Particle Types | How many element types appear in the force matrix (1–18) |
+| Reset Colors on next run | Restore CPK palette on reset |
+| Reset Forces on next run | Re-randomise the force matrix on reset |
+| **Force Randomness** | 0–1 blend from pure chemistry defaults to pure random forces; 0.2–0.4 recommended for emergent dynamics |
+| Seed | Deterministic RNG seed — same seed + same Force Randomness → identical run |
+| Start Empty (lab mode) | Clear world, fixed 10,000-particle pool, no auto-spawn |
+
+</details>
+
+<details>
 <summary><b>Particle Values (Force Grid)</b></summary>
 
 26×26 interaction matrix rendered as a colour-coded button grid. Element symbols on headers.
@@ -339,7 +366,7 @@ Nine behaviour presets per particle type:
 
 - Live aggregate counts: **Alive / Dust / Deaths**
 - Population history graph (300-frame ring buffer)
-- Per-type trait-feedback force-scale bars (max 1.8×)
+- Per-type trait-feedback force-scale bars (max 2.5×)
 - Top-8 table: type · class · size · bonds · speed · gen · kills · divs · energy
 
 </details>

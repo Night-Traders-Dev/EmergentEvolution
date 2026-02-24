@@ -23,7 +23,7 @@ void Particles::gen_data(const SimConfig& cfg) {
         gen_default_colors();
 
     // Set atom types, CPK colors, and chemistry force matrix
-    apply_atom_defaults(cfg.particle_types);
+    apply_atom_defaults(cfg.particle_types, cfg.force_randomness);
 
     gen_particles(cfg);
 }
@@ -97,7 +97,7 @@ static void set_row(std::vector<float>& forces, uint32_t type, float self_val, f
 // Sets CPK colors, chemistry behavior flags, and electrochemistry force matrix
 // for all active atom types. Called by gen_data() and the reset UI.
 
-void Particles::apply_atom_defaults(uint32_t active_types) {
+void Particles::apply_atom_defaults(uint32_t active_types, float force_randomness) {
     uint32_t n = std::min(active_types, static_cast<uint32_t>(ATOM_COUNT));
 
     // CPK colors
@@ -147,10 +147,13 @@ void Particles::apply_atom_defaults(uint32_t active_types) {
     for (uint32_t t = 0; t < n; ++t)
         behavior_flags[t] = ATOM_FLAGS[t];
 
-    // Electrochemistry force matrix
+    // Electrochemistry force matrix — blended with random noise for emergent variation
     for (uint32_t a = 0; a < n; ++a)
-        for (uint32_t b = 0; b < n; ++b)
-            forces[a + b * MAX_PARTICLE_TYPES] = CHEM_FORCE[a][b];
+        for (uint32_t b = 0; b < n; ++b) {
+            float chem = CHEM_FORCE[a][b];
+            float rnd  = rand_range_f(-1.0f, 1.0f);
+            forces[a + b * MAX_PARTICLE_TYPES] = chem + (rnd - chem) * force_randomness;
+        }
 
     // Always set up photon type (type index 18) — zero forces, BEHAVIOR_PHOTON flag
     setup_photon_type();

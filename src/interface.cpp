@@ -79,6 +79,13 @@ void Interface::render_imgui(SimConfig&       cfg,
 
     mouse_within = ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow);
 
+    // ── Header: FPS + active particle count ──────────────────────────────────
+    ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+        "%.0f fps  |  %u active  |  %u bonds",
+        fps_display, active_particle_display, total_bonds_display);
+    ImGui::SameLine();
+    ImGui::TextDisabled("  %.2f avg E", avg_energy_display);
+
     // ── Generation settings ───────────────────────────────────────────────────
     ImGui::SeparatorText("Generation");
 
@@ -100,6 +107,11 @@ void Interface::render_imgui(SimConfig&       cfg,
     ImGui::Checkbox("Reset Forces on Next Run",  &reset_forces_check);
     cfg.reset_colors = reset_colors_check;
     cfg.reset_forces = reset_forces_check;
+    ImGui::SliderFloat("Force Randomness", &cfg.force_randomness, 0.0f, 1.0f, "%.2f");
+    ImGui::SameLine(); HelpMarker(
+        "Blends random variation into chemistry force defaults.\n"
+        "0 = pure chemistry  \xc2\xb7  1 = pure random\n"
+        "0.2\xe2\x80\x930.4 recommended for emergent behaviour.");
 
     ImGui::InputInt("Seed", &seed_value);
     seed_value = std::clamp(seed_value, 0, 65535);
@@ -176,6 +188,58 @@ void Interface::render_imgui(SimConfig&       cfg,
 
     // ── Organism panel ────────────────────────────────────────────────────────
     draw_organism_panel(org_manager, bond_manager, particles, cfg);
+
+    // ── System Stats panel ────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("System Stats")) {
+        // Particle census
+        ImGui::TextDisabled("Particle Census:");
+        ImGui::Text("Active:   %u", active_particle_display);
+        ImGui::SameLine(160); ImGui::TextDisabled("(energy > 0.01)");
+        ImGui::Text("Dormant:  %u", dormant_particle_display);
+        ImGui::SameLine(160); ImGui::TextDisabled("(lab pool)");
+        ImGui::Text("Photons:  %u", photon_count_display);
+
+        // SM particle live counts
+        static const char* SM_NAMES[5] = {
+            "\xce\xb1 alpha", "e\xe2\x81\xbb electron", "e\xe2\x81\xba positron",
+            "\xce\xbd neutrino", "\xce\xbc muon"
+        };
+        bool any_sm = false;
+        for (int s = 0; s < 5; ++s) if (sm_counts_display[s] > 0) { any_sm = true; break; }
+        if (any_sm) {
+            ImGui::Separator();
+            ImGui::TextDisabled("Standard Model particles (live):");
+            for (int s = 0; s < 5; ++s) {
+                if (sm_counts_display[s] > 0)
+                    ImGui::Text("  %-14s %u", SM_NAMES[s], sm_counts_display[s]);
+            }
+        }
+
+        ImGui::Separator();
+
+        // Energy balance
+        ImGui::TextDisabled("Energy:");
+        ImGui::Text("Total:    %.1f", total_energy_display);
+        ImGui::Text("Average:  %.3f / particle", avg_energy_display);
+
+        ImGui::Separator();
+
+        // Bond network
+        ImGui::TextDisabled("Chemistry:");
+        ImGui::Text("Total bonds: %u", total_bonds_display);
+
+        ImGui::Separator();
+
+        // Genome drift
+        ImGui::TextDisabled("Genome drift (population avg):");
+        ImGui::Text("Electroneg:  %.3f", avg_electroneg_display);
+        ImGui::SameLine(200);
+        ImGui::ProgressBar((avg_electroneg_display - 0.1f) / 1.9f, ImVec2(-1, 6));
+        ImGui::Text("Reactivity:  %.3f", avg_reactivity_display);
+        ImGui::SameLine(200);
+        ImGui::ProgressBar((avg_reactivity_display - 0.1f) / 1.9f, ImVec2(-1, 6));
+        ImGui::TextDisabled("Drift indicates evolutionary pressure on genome traits.");
+    }
 
     // ── Quantum Physics panel ─────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Quantum Physics")) {

@@ -64,6 +64,10 @@ private:
     // Periodic particle spawn
     double                 spawn_timer_ = 0.0;
 
+    // FPS rolling average
+    double   fps_acc_       = 0.0;
+    int      fps_frame_cnt_ = 0;
+
     // Shader SPIRV paths (relative to working directory = build dir)
     static constexpr const char* COMPUTE_SPV  = "shaders/compute.spv";
     static constexpr const char* VERT_SPV     = "shaders/fullscreen.vert.spv";

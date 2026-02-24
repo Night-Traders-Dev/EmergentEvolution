@@ -130,6 +130,53 @@ void Simulation::tick(GLFWwindow* window, double dt) {
         }
     }
 
+    // ── System stats for debug panel ─────────────────────────────────────────
+    {
+        // Rolling FPS (averaged over 30 frames)
+        fps_acc_ += dt;
+        if (++fps_frame_cnt_ >= 30) {
+            iface.fps_display = 30.0f / static_cast<float>(fps_acc_);
+            fps_acc_          = 0.0;
+            fps_frame_cnt_    = 0;
+        }
+
+        // Active / dormant / energy / photon / SM particle counts
+        uint32_t active = 0, dormant = 0, photons = 0;
+        uint32_t sm[5]  = {};
+        double   e_sum = 0.0, en_sum = 0.0, re_sum = 0.0;
+        uint32_t genome_n = 0;
+        const uint32_t np = static_cast<uint32_t>(readback_energies_.size());
+        for (uint32_t pi = 0; pi < np; ++pi) {
+            float    e = readback_energies_[pi];
+            uint32_t t = particles.types[pi];
+            if (e < 0.01f) { ++dormant; continue; }
+            ++active;
+            e_sum += e;
+            if (t == PHOTON_TYPE)                        { ++photons; continue; }
+            if (t >= ALPHA_TYPE && t <= MUON_TYPE)       { ++sm[t - ALPHA_TYPE]; continue; }
+            // Genome averages (normal atoms only)
+            if (pi * GENOME_SIZE + 2 < particles.genomes.size()) {
+                en_sum += particles.genomes[pi * GENOME_SIZE + 1];
+                re_sum += particles.genomes[pi * GENOME_SIZE + 2];
+                ++genome_n;
+            }
+        }
+        iface.active_particle_display  = active;
+        iface.dormant_particle_display = dormant;
+        iface.total_energy_display     = static_cast<float>(e_sum);
+        iface.avg_energy_display       = active ? static_cast<float>(e_sum / active) : 0.f;
+        iface.photon_count_display     = photons;
+        std::copy(sm, sm + 5, iface.sm_counts_display);
+        if (genome_n > 0) {
+            iface.avg_electroneg_display = static_cast<float>(en_sum / genome_n);
+            iface.avg_reactivity_display = static_cast<float>(re_sum / genome_n);
+        }
+        // Bond count (each bond stored twice — once per endpoint)
+        uint32_t bond_sum = 0;
+        for (uint32_t bc : bond_manager.bond_counts) bond_sum += bc;
+        iface.total_bonds_display = bond_sum / 2;
+    }
+
     // ── ImGui ──────────────────────────────────────────────────────────────────
     iface.decay_total_display   = decay_manager.total_decays;
     iface.vacuum_total_display  = vacuum_total_injections_;

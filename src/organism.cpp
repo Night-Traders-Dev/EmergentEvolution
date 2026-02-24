@@ -173,7 +173,7 @@ void OrganismManager::apply_trait_feedback(Particles& particles) {
         // Force-row scale: bonds + size, capped at 1.8×
         float bond_bonus = std::min(org.traits.bond_count * 0.005f, 0.4f);
         float size_bonus = std::min(org.traits.size       * 0.001f, 0.3f);
-        float new_scale  = std::clamp(1.0f + bond_bonus + size_bonus, 1.0f, 1.8f);
+        float new_scale  = std::clamp(1.0f + bond_bonus + size_bonus, 1.0f, 2.5f);
         particles.trait_scales[type] = std::max(particles.trait_scales[type], new_scale);
 
         particles.structure_integrity[type] =
@@ -235,6 +235,29 @@ void OrganismManager::apply_trait_feedback(Particles& particles) {
                 break;
             }
         }
+    }
+
+    // Fitness-driven force nudge: top-3 organisms by fitness push their type's
+    // self-interaction force toward cohesion, creating adaptive selection pressure
+    // on the force landscape between resets.
+    constexpr float FORCE_NUDGE = 0.004f;
+    struct FitPair { float fit; uint32_t type; };
+    std::vector<FitPair> ranked;
+    ranked.reserve(organisms.size());
+    for (const auto& org : organisms) {
+        float fit = org.traits.kills     * 3.0f
+                  + org.traits.divisions * 2.0f
+                  + org.traits.energy    * 10.0f
+                  + org.traits.size      * 0.01f;
+        ranked.push_back({ fit, org.traits.dominant_type });
+    }
+    int top_n = static_cast<int>(std::min<size_t>(3, ranked.size()));
+    std::partial_sort(ranked.begin(), ranked.begin() + top_n, ranked.end(),
+        [](const FitPair& a, const FitPair& b) { return a.fit > b.fit; });
+    for (int i = 0; i < top_n; ++i) {
+        uint32_t t  = ranked[i].type;
+        float&   sf = particles.forces[t + t * MAX_PARTICLE_TYPES];
+        sf = std::clamp(sf + FORCE_NUDGE, -1.0f, 1.0f);
     }
 }
 

@@ -37,6 +37,19 @@ public:
     uint32_t decay_total_display  = 0;
     uint32_t vacuum_total_display = 0;
 
+    // ── System stats (set by Simulation each tick) ────────────────────────────
+    float    fps_display             = 0.0f;
+    uint32_t active_particle_display = 0;   // energy > 0.01
+    uint32_t dormant_particle_display= 0;   // energy ≤ 0.01 (pool)
+    float    total_energy_display    = 0.0f;
+    float    avg_energy_display      = 0.0f;
+    uint32_t total_bonds_display     = 0;
+    uint32_t photon_count_display    = 0;
+    uint32_t sm_counts_display[5]    = {};  // [0]=α [1]=e⁻ [2]=e⁺ [3]=ν [4]=μ
+    // Genome drift (rolling avg across all active particles)
+    float    avg_electroneg_display  = 1.0f;
+    float    avg_reactivity_display  = 1.0f;
+
     // Placement settings (apply to all spawn types)
     int   spawn_count        = 1;      // number of atoms to place per click (Atoms tab)
     float spawn_energy       = 0.7f;   // initial energy of placed particles
