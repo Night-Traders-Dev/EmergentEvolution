@@ -66,7 +66,8 @@ void Simulation::tick(GLFWwindow* window, double dt) {
     handle_input(window, dt);
 
     // ── Periodic particle spawn ────────────────────────────────────────────────
-    if (cfg.spawn_enabled && is_active) {
+    // Disabled in lab mode (start_empty) — the user manually places everything via F3.
+    if (cfg.spawn_enabled && is_active && !cfg.start_empty) {
         spawn_timer_ += dt;
         if (spawn_timer_ >= cfg.spawn_interval) {
             spawn_timer_ = 0.0;
@@ -409,10 +410,10 @@ void Simulation::do_particle_spawn() {
     uint32_t spawn_count = std::uniform_int_distribution<uint32_t>(
         cfg.spawn_min, std::min(cfg.spawn_max, n))(spawn_rng);
 
-    // Choose target indices — sort by energy ascending, pick the lowest
+    // Choose target indices — sort by energy ascending, skip protected/photon
     std::vector<uint32_t> sorted(n);
     std::iota(sorted.begin(), sorted.end(), 0u);
-    std::partial_sort(sorted.begin(), sorted.begin() + spawn_count, sorted.end(),
+    std::sort(sorted.begin(), sorted.end(),
         [&](uint32_t a, uint32_t b){ return cur_nrg[a] < cur_nrg[b]; });
 
     // Pick a random world position for the spawn cluster
@@ -461,8 +462,11 @@ void Simulation::do_particle_spawn() {
     std::uniform_real_distribution<float> scat(-scatter, scatter);
     std::uniform_real_distribution<float> uni01(0.0f, 1.0f);
 
-    for (uint32_t s = 0; s < spawn_count; ++s) {
+    uint32_t placed = 0;
+    for (uint32_t s = 0; s < n && placed < spawn_count; ++s) {
         uint32_t idx = sorted[s];
+        if (particles.types[idx] == PHOTON_TYPE)   continue;
+        if (spawn_protect_ids_.count(idx))          continue;  // respect F3 placements
 
         // Position: cluster near cx,cy with scatter
         cur_pos[idx] = { cx + scat(spawn_rng), cy + scat(spawn_rng) };
@@ -485,6 +489,7 @@ void Simulation::do_particle_spawn() {
 
         // Clear any existing bonds for the recycled particle
         bond_manager.clear_particle_bonds(idx);
+        ++placed;
     }
 
     // Push the new positions/velocities/energies to both ping-pong GPU buffers
@@ -743,7 +748,7 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
             set_atom(candidates[k], atom_type, world_pos + scatter_offset());
             spawn_protect_ids_.insert(candidates[k]);
         }
-        spawn_protect_ttl_ = 90;
+        spawn_protect_ttl_ = cfg.start_empty ? 600 : 90;
         compute.write_particle_state(vk, cur_pos, cur_vel, cur_nrg);
         compute.upload_dynamic_data(vk, particles);
         return;
@@ -765,7 +770,7 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
             placed.push_back(idx);
             spawn_protect_ids_.insert(idx);
         }
-        spawn_protect_ttl_ = 90;
+        spawn_protect_ttl_ = cfg.start_empty ? 600 : 90;
         for (const auto& b : mol.bonds) {
             if (b.ai < static_cast<int>(placed.size()) &&
                 b.bi < static_cast<int>(placed.size()))
@@ -828,7 +833,7 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
 
             for (uint32_t s = 0; s < m; ++s)
                 spawn_protect_ids_.insert(candidates[s]);
-            spawn_protect_ttl_ = 90;
+            spawn_protect_ttl_ = cfg.start_empty ? 600 : 90;
             compute.write_particle_state(vk, cur_pos, cur_vel, cur_nrg);
             compute.upload_dynamic_data(vk, particles);
             return;
@@ -903,7 +908,7 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
             placed.push_back(idx);
             spawn_protect_ids_.insert(idx);
         }
-        spawn_protect_ttl_ = 90;
+        spawn_protect_ttl_ = cfg.start_empty ? 600 : 90;
         for (const auto& b : tmpl_bonds) {
             if (b.ai < static_cast<int>(placed.size()) &&
                 b.bi < static_cast<int>(placed.size()))
@@ -931,7 +936,7 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
             placed.push_back(idx);
             spawn_protect_ids_.insert(idx);
         }
-        spawn_protect_ttl_ = 90;
+        spawn_protect_ttl_ = cfg.start_empty ? 600 : 90;
         for (const auto& b : mol.bonds) {
             if (b.ai < static_cast<int>(placed.size()) &&
                 b.bi < static_cast<int>(placed.size()))

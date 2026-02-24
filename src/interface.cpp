@@ -113,7 +113,7 @@ void Interface::render_imgui(SimConfig&       cfg,
         "Use the F3 Spawn Picker to place atoms and molecules manually.");
     if (cfg.start_empty) {
         ImGui::SliderInt("Reservoir Size", reinterpret_cast<int*>(&cfg.pool_size),
-                         10, 2000, "%d atoms");
+                         10, 22500, "%d atoms");
         ImGui::SameLine(); HelpMarker("Dormant H atoms that the F3 spawner recycles.");
     }
 
