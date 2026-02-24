@@ -117,11 +117,77 @@ void Interface::render_imgui(SimConfig&       cfg,
     seed_value = std::clamp(seed_value, 0, 65535);
     cfg.generation_seed = static_cast<uint32_t>(seed_value);
 
-    ImGui::Checkbox("Start Empty  (F3 lab mode)", &cfg.start_empty);
-    ImGui::SameLine(); HelpMarker(
-        "Start with an empty world — no particles visible.\n"
-        "Use F3 to place atoms, molecules, and bio-molecules freely.\n"
-        "Particle Types controls how many types are available in the force matrix.");
+    // ── Environment presets ──────────────────────────────────────────────────
+    ImGui::Spacing();
+    ImGui::SeparatorText("Environment");
+    static const char* ENV_NAMES[] = {
+        "Lab Mode", "Tide Pool", "Hydrothermal Vent", "Primordial Soup",
+        "Freshwater Pond", "Deep Space", "Nebula", "Asteroid Surface", "Comet"
+    };
+    int env = static_cast<int>(cfg.environment_mode);
+    if (ImGui::Combo("##env_mode", &env, ENV_NAMES, IM_ARRAYSIZE(ENV_NAMES))) {
+        cfg.environment_mode = static_cast<uint32_t>(env);
+        switch (cfg.environment_mode) {
+            case 0: // Lab Mode
+                cfg.temperature = 0.30f; cfg.dampening = 0.85f;
+                cfg.gravity_strength = 0.0f; cfg.lorentz_strength = 0.0f;
+                cfg.vacuum_energy = 0.0f; cfg.start_empty = true;
+                break;
+            case 1: // Tide Pool
+                cfg.temperature = 0.30f; cfg.dampening = 0.93f;
+                cfg.gravity_strength = 0.0f; cfg.lorentz_strength = 0.0f;
+                cfg.vacuum_energy = 0.0f; cfg.start_empty = false;
+                break;
+            case 2: // Hydrothermal Vent
+                cfg.temperature = 0.623f; cfg.dampening = 0.90f;
+                cfg.gravity_strength = 0.0f; cfg.lorentz_strength = 0.0f;
+                cfg.vacuum_energy = 0.0f; cfg.start_empty = false;
+                break;
+            case 3: // Primordial Soup
+                cfg.temperature = 0.353f; cfg.dampening = 0.88f;
+                cfg.gravity_strength = 0.0f; cfg.lorentz_strength = 0.0f;
+                cfg.vacuum_energy = 0.0f; cfg.start_empty = false;
+                break;
+            case 4: // Freshwater Pond
+                cfg.temperature = 0.293f; cfg.dampening = 0.91f;
+                cfg.gravity_strength = 0.0f; cfg.lorentz_strength = 0.0f;
+                cfg.vacuum_energy = 0.0f; cfg.start_empty = false;
+                break;
+            case 5: // Deep Space
+                cfg.temperature = 0.003f; cfg.dampening = 0.99f;
+                cfg.gravity_strength = 0.0f; cfg.lorentz_strength = 0.0f;
+                cfg.vacuum_energy = 0.3f; cfg.start_empty = false;
+                break;
+            case 6: // Nebula
+                cfg.temperature = 0.023f; cfg.dampening = 0.98f;
+                cfg.gravity_strength = 0.1f; cfg.lorentz_strength = 0.0f;
+                cfg.vacuum_energy = 0.0f; cfg.start_empty = false;
+                break;
+            case 7: // Asteroid Surface
+                cfg.temperature = 0.223f; cfg.dampening = 0.95f;
+                cfg.gravity_strength = 0.05f; cfg.lorentz_strength = 0.0f;
+                cfg.vacuum_energy = 0.0f; cfg.start_empty = false;
+                break;
+            case 8: // Comet
+                cfg.temperature = 0.173f; cfg.dampening = 0.97f;
+                cfg.gravity_strength = 0.02f; cfg.lorentz_strength = 0.0f;
+                cfg.vacuum_energy = 0.0f; cfg.start_empty = false;
+                break;
+        }
+        dampening_slider = cfg.dampening;
+    }
+    static const char* ENV_HINTS[] = {
+        "Empty world \xe2\x80\x94 use F3 to place structures",
+        "Salt water with organic molecules (27\xc2\xb0""C)",
+        "Extreme heat, sulfur & iron minerals (350\xc2\xb0""C)",
+        "Early Earth: C, N, O, P-rich organic mix (80\xc2\xb0""C)",
+        "Pure water with trace minerals (20\xc2\xb0""C)",
+        "Near-vacuum, cosmic ray bombardment (-270\xc2\xb0""C)",
+        "Dense hydrogen cloud with gravity (-250\xc2\xb0""C)",
+        "Rocky metallic surface: Fe, Si, Ni (-50\xc2\xb0""C)",
+        "Ice, dust & organics (-100\xc2\xb0""C)",
+    };
+    ImGui::TextDisabled("%s", ENV_HINTS[cfg.environment_mode]);
 
     if (ImGui::Button("Reset Simulation (F2)", ImVec2(-1, 0)))
         request_reset = true;
@@ -133,7 +199,12 @@ void Interface::render_imgui(SimConfig&       cfg,
     ImGui::Text("Dampening:  %.2f", dampening_slider);
     cfg.dampening = dampening_slider;
 
-    ImGui::SliderFloat("Temperature",   &cfg.temperature,      0.0f, 1.0f, "%.3f");
+    {
+        float celsius = cfg.temperature * 1000.0f - 273.15f;
+        char temp_fmt[32];
+        snprintf(temp_fmt, sizeof(temp_fmt), "%.1f \xc2\xb0""C", celsius);
+        ImGui::SliderFloat("Temperature", &cfg.temperature, 0.0f, 1.0f, temp_fmt);
+    }
     ImGui::SliderFloat("Gravity",       &cfg.gravity_strength, 0.0f, 5.0f, "%.4f");
     ImGui::SliderFloat("Magnetism",     &cfg.lorentz_strength, 0.0f, 2.0f, "%.4f");
     ImGui::SliderFloat("Vacuum Energy", &cfg.vacuum_energy,    0.0f, 1.0f, "%.3f");

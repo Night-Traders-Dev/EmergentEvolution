@@ -27,6 +27,7 @@ fundamental forces found in nature.
 
 - [Physics Engine](#physics-engine)
 - [Periodic Table](#periodic-table--18-elements)
+- [Environment Templates](#environment-templates)
 - [Standard Model Particles](#standard-model-particles)
 - [Radioactive Decay](#radioactive-decay)
 - [Quantum Field Effects](#quantum-field-effects)
@@ -94,10 +95,34 @@ Three nucleosynthesis groups spanning the periodic table, each with distinct ele
 </tbody>
 </table>
 
-> **Spawn abundance** — H 40% · C 25% · O 15% · N 10% · Na/Cl 3% · P/S 2% · r-process ≤ 0.5%
+> **Spawn abundance** varies by environment template — e.g. Tide Pool is salt water + organics,
+> Asteroid Surface is dominated by Fe/Si/Ni. See [Environment Templates](#environment-templates).
 >
 > Particles initialise in **three well-separated seed clusters** (triangle formation) so distinct
 > chemistry zones evolve independently before merging.
+
+---
+
+## Environment Templates
+
+Nine environment presets control particle abundance, temperature, dampening, and physics on reset.
+Select from the **Environment** dropdown in the settings panel, then press **F2** to regenerate.
+
+| # | Environment | Temp | Dampening | Key Atoms | Special |
+|---|---|---|---|---|---|
+| 0 | **Lab Mode** | 27°C | 0.85 | *(empty)* | Default — use F3 to place structures |
+| 1 | **Tide Pool** | 27°C | 0.93 | H, O, Na, Cl, C, N | Salt water + organics |
+| 2 | **Hydrothermal Vent** | 350°C | 0.90 | H, O, S, Fe, Si, Ca | Hot, mineral-rich water |
+| 3 | **Primordial Soup** | 80°C | 0.88 | H, C, N, O, P, S | Early Earth organics |
+| 4 | **Freshwater Pond** | 20°C | 0.91 | H, O, Ca, Na | Pure water + trace minerals |
+| 5 | **Deep Space** | −270°C | 0.99 | H, C, N, O | Sparse, cosmic ray bombardment |
+| 6 | **Nebula** | −250°C | 0.98 | H, C, N, O, Si, Fe | Dense hydrogen cloud, gravity = 0.1 |
+| 7 | **Asteroid Surface** | −50°C | 0.95 | Fe, Si, Ni, Ca, O, Ti | Rocky metallic body |
+| 8 | **Comet** | −100°C | 0.97 | H, O, C, N, Si, Fe, S, P | Ice + dust + organics |
+
+**Lab Mode** starts with an empty world and a dormant particle reservoir — place atoms, molecules,
+and cells manually via the F3 spawn picker. All other templates fill the world with particles
+matching real-world elemental compositions on reset.
 
 ---
 
@@ -265,9 +290,8 @@ Press **F3** to open the Spawn Picker. Select a template, then **left-click in t
 Newly placed particles are **spawn-protected** (90 frames normally · 600 frames in lab mode) so
 subsequent clicks never recycle them.
 
-**Lab mode** (`Start Empty` checkbox): the simulation resets to a completely blank world with a
-fixed 10,000-particle capacity. The particle-count slider is hidden — capacity is unlimited up to
-that pool. Background auto-spawn is disabled so manual placements are never overwritten.
+**Lab Mode** (environment 0): the simulation resets to a completely blank world with a dormant
+particle reservoir. Background auto-spawn is disabled so manual placements are never overwritten.
 The **Particle Types** slider remains active to control how many element types appear in the
 force matrix.
 
@@ -334,7 +358,7 @@ Clone any live molecular aggregate, or place one of three predefined templates:
 | Reset Forces on next run | Re-randomise the force matrix on reset |
 | **Force Randomness** | 0–1 blend from pure chemistry defaults to pure random forces; 0.2–0.4 recommended for emergent dynamics |
 | Seed | Deterministic RNG seed — same seed + same Force Randomness → identical run |
-| Start Empty (lab mode) | Clear world, fixed 10,000-particle pool, no auto-spawn |
+| **Environment** | 9 presets (Lab Mode → Comet) — sets abundance, temperature, dampening, gravity |
 
 </details>
 
@@ -372,7 +396,7 @@ Nine behaviour presets per particle type:
 
 | Slider | Range | Default | Effect |
 |---|---|---|---|
-| Temperature | 0 – 2 | 0.3 | Thermal noise per frame |
+| Temperature | 0 – 2 | 0.3 | Thermal noise per frame (displayed in °C) |
 | Gravity | 0 – 5 | 0 | Newtonian 1/r² between heavy particles |
 | Magnetism | 0 – 2 | 0 | Lorentz force on charged particle pairs |
 | Vacuum Energy | 0 – 1 | 0 | ZPE floor + virtual photon/fermion pair rate |

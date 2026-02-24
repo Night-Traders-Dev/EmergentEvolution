@@ -299,7 +299,8 @@ void Particles::gen_particles(const SimConfig& cfg) {
     // ── Empty-world reservoir ──────────────────────────────────────────────────
     // Fills the full particle_count slots with dormant H atoms at energy=0.
     // The F3 spawner recycles these slots; the world starts visually empty.
-    if (cfg.start_empty) {
+    // Lab Mode (env 0) always forces empty start.
+    if (cfg.environment_mode == 0 || cfg.start_empty) {
         uint32_t pool = std::max(10u, cfg.particle_count);
         for (uint32_t i = 0; i < pool; ++i)
             add_particle({ rand_range_f(0.0f, rw), rand_range_f(0.0f, rh) },
@@ -334,38 +335,44 @@ void Particles::gen_particles(const SimConfig& cfg) {
         return;
     }
 
-    // ── Atom abundance ratios (cumulative) ───────────────────────────────────
-    // H=40%, C=25%, O=15%, N=10%, P=2%, S=2%, Na=3%, Cl=3%
-    // R-process / supernova elements are very rare (< 0.5% each)
-    // Renormalise to the number of active types so the user's type-count slider
-    // still determines which atoms appear.
-    static const float RAW_ABUNDANCE[ATOM_COUNT] = {
-        0.400f, // H
-        0.250f, // C
-        0.100f, // N
-        0.150f, // O
-        0.020f, // P
-        0.020f, // S
-        0.030f, // Na
-        0.030f, // Cl
-        // ── R-process / supernova elements ────────────────────────────────────
-        0.005f, // Fe  (most common heavy metal in cosmos after alpha process)
-        0.002f, // Ni
-        0.005f, // Si  (major silicate planet component)
-        0.003f, // Ca
-        0.001f, // Ti
-        0.001f, // Sr  (first confirmed kilonova r-process product)
-        0.001f, // Au  (gold, neutron star merger)
-        0.001f, // Pb  (r-process end point)
-        0.001f, // Eu  (lanthanide, neutron star diagnostic)
-        0.001f, // U   (actinide, r-process endpoint)
+    // ── Environment abundance tables ────────────────────────────────────────
+    // Index: H  C  N  O  P  S  Na Cl Fe Ni Si Ca Ti Sr Au Pb Eu U
+    static const float ENV_ABUNDANCE[9][ATOM_COUNT] = {
+        // 0: Lab Mode — not used (start_empty path)
+        { 0.0f },
+        // 1: Tide Pool — salt water + organics
+        { 0.60f, 0.04f, 0.03f, 0.16f, 0.01f, 0.01f, 0.05f, 0.05f,
+          0.01f, 0.0f, 0.0f, 0.02f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f },
+        // 2: Hydrothermal Vent — hot, sulfur/iron rich
+        { 0.35f, 0.05f, 0.05f, 0.15f, 0.02f, 0.12f, 0.0f, 0.0f,
+          0.10f, 0.02f, 0.06f, 0.05f, 0.01f, 0.0f, 0.01f, 0.0f, 0.0f, 0.01f },
+        // 3: Primordial Soup — early Earth organics
+        { 0.30f, 0.20f, 0.15f, 0.20f, 0.03f, 0.03f, 0.01f, 0.01f,
+          0.03f, 0.01f, 0.01f, 0.01f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.01f },
+        // 4: Freshwater Pond — mostly water + trace minerals
+        { 0.72f, 0.02f, 0.01f, 0.19f, 0.0f, 0.0f, 0.01f, 0.01f,
+          0.01f, 0.0f, 0.0f, 0.02f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f },
+        // 5: Deep Space — sparse hydrogen
+        { 0.88f, 0.03f, 0.02f, 0.05f, 0.0f, 0.0f, 0.0f, 0.0f,
+          0.01f, 0.0f, 0.01f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f },
+        // 6: Nebula — dense H cloud with trace metals
+        { 0.82f, 0.05f, 0.03f, 0.05f, 0.0f, 0.0f, 0.0f, 0.0f,
+          0.02f, 0.01f, 0.01f, 0.0f, 0.01f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f },
+        // 7: Asteroid Surface — heavy/rocky elements
+        { 0.02f, 0.05f, 0.0f, 0.18f, 0.0f, 0.05f, 0.0f, 0.0f,
+          0.22f, 0.10f, 0.18f, 0.08f, 0.05f, 0.02f, 0.02f, 0.02f, 0.01f, 0.0f },
+        // 8: Comet — ice + dust + organics
+        { 0.40f, 0.12f, 0.05f, 0.25f, 0.02f, 0.02f, 0.0f, 0.0f,
+          0.04f, 0.01f, 0.04f, 0.01f, 0.01f, 0.0f, 0.0f, 0.01f, 0.0f, 0.02f },
     };
+    const float* abundance = ENV_ABUNDANCE[std::min(cfg.environment_mode, 8u)];
+
     uint32_t n_active = std::min(cfg.particle_types, static_cast<uint32_t>(ATOM_COUNT));
     float cum[ATOM_COUNT + 1];
     cum[0] = 0.0f;
     float total = 0.0f;
-    for (uint32_t i = 0; i < n_active; ++i) total += RAW_ABUNDANCE[i];
-    for (uint32_t i = 0; i < n_active; ++i) cum[i+1] = cum[i] + RAW_ABUNDANCE[i] / total;
+    for (uint32_t i = 0; i < n_active; ++i) total += abundance[i];
+    for (uint32_t i = 0; i < n_active; ++i) cum[i+1] = cum[i] + abundance[i] / total;
     cum[n_active] = 1.0f; // clamp
 
     // ── Three well-separated seed clusters ───────────────────────────────────

@@ -345,6 +345,10 @@ void Simulation::tick(GLFWwindow* window, double dt) {
             // ── Vacuum fluctuations (QFT virtual pairs + ZPE) ─────────────────
             if (need_bond)
                 inject_vacuum_fluctuations();
+
+            // ── Cosmic ray injection (environment mode 5: Deep Space) ─────────
+            if (need_bond && cfg.environment_mode == 5)
+                inject_cosmic_rays();
         }
     }
 
@@ -1761,6 +1765,66 @@ void Simulation::inject_vacuum_fluctuations() {
             compute.write_particle_state(vk, fpos, fvel, fnrg);
             compute.upload_dynamic_data(vk, particles);
         }
+    }
+}
+
+// ── Cosmic ray injection ──────────────────────────────────────────────────────
+// Injects 1-3 high-energy particles per bond cycle from world edges.
+// Active only in environment_mode == 5 (Deep Space).
+
+void Simulation::inject_cosmic_rays() {
+    if (!compute.is_ready()) return;
+    auto& cur_pos = readback_positions_;
+    auto& cur_vel = readback_velocities_;
+    auto& cur_nrg = readback_energies_;
+    uint32_t n = static_cast<uint32_t>(particles.types.size());
+    if (n == 0) return;
+
+    static std::mt19937 cr_rng{ std::random_device{}() };
+    std::uniform_real_distribution<float> uni(0.0f, 1.0f);
+    int inject_count = 1 + static_cast<int>(uni(cr_rng) * 3.0f);
+    bool modified = false;
+
+    for (int j = 0; j < inject_count; ++j) {
+        // Find a low-energy recyclable particle
+        uint32_t idx = 0xFFFFFFFF;
+        for (int tries = 0; tries < 50; ++tries) {
+            uint32_t cand = static_cast<uint32_t>(uni(cr_rng) * n);
+            if (cand >= n) continue;
+            if (particles.types[cand] == PHOTON_TYPE) continue;
+            if (spawn_protect_ids_.count(cand)) continue;
+            if (cur_nrg[cand] < 0.05f) { idx = cand; break; }
+        }
+        if (idx == 0xFFFFFFFF) continue;
+
+        // Random light atom type (H, C, N, O)
+        uint32_t cosmic_type = static_cast<uint32_t>(uni(cr_rng) * 4.0f);
+        float angle = uni(cr_rng) * 6.28318f;
+        float speed = 150.0f + uni(cr_rng) * 150.0f;
+
+        // Spawn at random world edge
+        float edge = uni(cr_rng);
+        glm::vec2 pos(0.0f);
+        if (edge < 0.25f)
+            pos = glm::vec2(0.0f, uni(cr_rng) * REGION_H);
+        else if (edge < 0.5f)
+            pos = glm::vec2(static_cast<float>(REGION_W), uni(cr_rng) * REGION_H);
+        else if (edge < 0.75f)
+            pos = glm::vec2(uni(cr_rng) * REGION_W, 0.0f);
+        else
+            pos = glm::vec2(uni(cr_rng) * REGION_W, static_cast<float>(REGION_H));
+
+        cur_pos[idx] = pos;
+        cur_vel[idx] = glm::vec2(std::cos(angle), std::sin(angle)) * speed;
+        cur_nrg[idx] = 0.8f + uni(cr_rng) * 0.2f;
+        particles.types[idx] = cosmic_type;
+        bond_manager.clear_particle_bonds(idx);
+        modified = true;
+    }
+
+    if (modified) {
+        compute.write_particle_state(vk, cur_pos, cur_vel, cur_nrg);
+        compute.upload_dynamic_data(vk, particles);
     }
 }
 

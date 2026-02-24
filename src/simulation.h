@@ -81,4 +81,5 @@ private:
     void inject_photons(const std::vector<PhotonEvent>& events);
     void do_spawn_at_world(glm::vec2 world_pos);
     void inject_vacuum_fluctuations();
+    void inject_cosmic_rays();
 };

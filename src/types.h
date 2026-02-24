@@ -135,9 +135,13 @@ struct SimConfig {
     uint32_t spawn_min       = 100;
     uint32_t spawn_max       = 500;
 
-    // Empty-world mode — start with a quiet dormant reservoir instead of a live soup
-    bool     start_empty     = false;
+    // Lab mode — start with a quiet dormant reservoir; use F3 to place structures
+    bool     start_empty     = true;
     uint32_t pool_size       = 5000;   // how many dormant H atoms to pre-allocate
+
+    // Environment presets
+    uint32_t environment_mode = 0;  // 0=Standard, 1=Water, 2=Salt Water,
+                                    // 3=Empty Space, 4=Cosmic Rays, 5=Magnetic Field
 
     glm::vec2 camera_origin      = { REGION_W / 2.0f, REGION_H / 2.0f };
     float     camera_zoom        = 1.0f;
