@@ -31,7 +31,7 @@ fundamental forces found in nature.
 - [Radioactive Decay](#radioactive-decay)
 - [Quantum Field Effects](#quantum-field-effects)
 - [Chemistry & Bonding](#chemistry--bonding)
-- [Organisms & Evolution](#organisms--evolution)
+- [Aggregates & Cells](#aggregates--cells)
 - [Sub-Atomic LOD](#sub-atomic-lod)
 - [F3 Lab Spawn Picker](#f3-lab-spawn-picker)
 - [UI Reference](#ui-reference)
@@ -193,36 +193,54 @@ Each particle carries four float genes passed to the GPU each frame:
 
 ---
 
-## Organisms & Evolution
+## Aggregates & Cells
 
-Every 5 frames, DBSCAN clustering (spatial hash) groups bonded atoms into **molecular aggregates**.
-Each aggregate is classified, tracked across frames, and evolves via trait feedback.
+Every 5 frames, DBSCAN clustering (spatial hash) groups nearby atoms into **molecular aggregates**.
+These are plain chemistry — water, lipids, crystals — and are tracked but do not count as organisms.
 
-| Class | Classification Rule | Colour |
+### Molecular classification (chemistry layer)
+
+| Class | Classification Rule |
+|---|---|
+| **H₂O** water | H > ¾ cluster & O > 1 |
+| **LIPID** | (C+H) > ⅔ cluster |
+| **AACD** amino acid | (N+O)×2 > size & C > 0 |
+| **NUCL** nucleotide | P×3 > size |
+| **RAD!** radical | any RADICAL member |
+| **POLY** polymer | C > ½ cluster & size > 20 |
+| **INRG** inorganic | otherwise |
+
+### Biological complexity hierarchy (emergence layer)
+
+A structure is only recognised as a **cell** when its geometry qualifies — chemistry alone is not enough.
+
+| Tier | Label | Criteria |
 |---|---|---|
-| **H₂O** | H > ¾ cluster & O > 1 | Light blue |
-| **LIPID** | (C+H) > ⅔ cluster | Yellow |
-| **AACD** amino acid | (N+O)×2 > size & C > 0 | Green |
-| **NUCL** nucleotide | P×3 > size | Violet |
-| **RAD!** radical | any RADICAL member | Red |
-| **POLY** polymer | C > ½ cluster & size > 20 | Orange |
-| **INRG** inorganic | otherwise | Grey |
+| AGGREGATE | — | Any cluster; not shown in the Cells table |
+| **VESICLE** | `VSIC` | LIPID cluster with **ring topology** (ring_factor > 0.65) and size ≥ 8 |
+| **PROTO-CELL** | `PCLL` | Vesicle that spatially **encloses** at least one non-lipid cluster |
+| **CELL** | `CELL` | Proto-cell with a **nucleotide cluster** enclosed (DNA/RNA analog) |
 
-Aggregates accumulate **generation**, **kills**, and **divisions** counters across their lineage.
-**Trait feedback** nudges each member's genome toward the chemical role of the aggregate class
-(e.g. WATER → ↑ electronegativity · LIPID → ↑ bond strength · RADICAL → ↑ reactivity).
+**ring_factor** = mean distance from centroid / max distance from centroid.
+A solid lipid blob scores ~0.5; a hollow ring scores ~0.9+.
 
-**Darwinian evolution operates on three levels:**
+### Darwinian evolution (vesicle+ only)
+
+Evolution pressure only applies to **vesicle and above** — plain water molecules are not competing.
 
 | Mechanism | Detail |
 |---|---|
-| **Division mutation** | On each detected division, ±3% random drift is applied to every member's electronegativity and reactivity genome values — heritable, stochastic variation |
-| **Fitness-driven force adaptation** | Each organism update, the top-3 organisms by fitness score (kills × 3 + divisions × 2 + energy × 10 + size × 0.01) nudge their dominant type's self-cohesion force +0.004 toward attraction — successful types gradually form tighter clusters |
-| **Trait-scale amplification** | Bond-rich, large organisms boost their type's entire force row by up to **2.5×** (raised from 1.8×), widening the gap between thriving and marginal types |
+| **Division mutation** | On division, ±3% drift applied to every member's electronegativity and reactivity — heritable stochastic variation |
+| **Fitness-driven force adaptation** | Top-3 vesicle+ structures by fitness (kills × 3 + divisions × 2 + energy × 10 + size × 0.01) nudge their type's self-cohesion force +0.004 per update cycle |
+| **Trait-scale amplification** | Bond-rich cell-class clusters boost their type's force row up to **2.5×** |
 
-**Force randomness** (UI slider, default 0.25) blends random variation into the chemistry defaults on reset.
-At 0 every run is identical; at 0.25 each seed produces a unique force landscape — different attractors,
-different winning strategies, genuinely distinct evolutionary paths.
+### Trait feedback (all aggregates)
+
+Genome nudging toward molecular role applies to every aggregate regardless of complexity:
+WATER → ↑ electronegativity · LIPID → ↑ bond strength · RADICAL → ↑ reactivity · etc.
+
+**Force randomness** (Generation slider, default 0.25) blends random variation into chemistry
+force defaults on reset — different seeds produce genuinely distinct fitness landscapes.
 
 ---
 
@@ -362,12 +380,14 @@ Nine behaviour presets per particle type:
 </details>
 
 <details>
-<summary><b>Organisms Panel</b></summary>
+<summary><b>Aggregates & Cells Panel</b></summary>
 
-- Live aggregate counts: **Alive / Dust / Deaths**
+- Total cluster count (**Clusters: N active | M dust**)
+- **Vesicles / Proto-cells / Cells** tier counts
 - Population history graph (300-frame ring buffer)
-- Per-type trait-feedback force-scale bars (max 2.5×)
-- Top-8 table: type · class · size · bonds · speed · gen · kills · divs · energy
+- Per-type trait-feedback force-scale bars (max 2.5×, only filled by vesicle+ structures)
+- **Top-8 table** (vesicle+ only): tier · ring_factor · size · bonds · speed · gen · kills · divs · energy
+  - `VSIC` = vesicle (lipid ring) · `PCLL` = proto-cell · `CELL` = cell with nucleotide
 
 </details>
 

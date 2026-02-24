@@ -511,20 +511,36 @@ void Interface::draw_organism_panel(OrganismManager& org_manager,
                                     const Particles& particles,
                                     const SimConfig& cfg)
 {
-    if (!ImGui::CollapsingHeader("Organisms"))
+    if (!ImGui::CollapsingHeader("Aggregates & Cells"))
         return;
 
     ImGui::SliderFloat("Cluster Radius", &org_manager.cluster_radius, 10.0f, 200.0f, "%.0f");
 
     uint32_t org_count = static_cast<uint32_t>(org_manager.organisms.size());
-    ImGui::Text("Active Organisms: %u", org_count);
 
-    // Population statistics
+    // Aggregate + cell hierarchy counts
+    ImGui::Text("Clusters: %u active  |  %u dust",
+        org_manager.alive_count, org_manager.dust_count);
+    ImGui::Separator();
+    ImGui::Columns(3, "cellcounts", false);
+    ImGui::TextDisabled("Vesicles");   ImGui::NextColumn();
+    ImGui::TextDisabled("Proto-cells"); ImGui::NextColumn();
+    ImGui::TextDisabled("Cells");      ImGui::NextColumn();
+    ImGui::Text("%u", org_manager.vesicle_count);   ImGui::NextColumn();
+    ImGui::Text("%u", org_manager.protocell_count); ImGui::NextColumn();
+    if (org_manager.cell_count > 0)
+        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f),
+            "\xe2\x98\x85 %u", org_manager.cell_count);
+    else
+        ImGui::Text("0");
+    ImGui::NextColumn();
+    ImGui::Columns(1);
+    if (org_manager.cell_count == 0)
+        ImGui::TextDisabled("(lipid ring + enclosed nucleotide = cell)");
+    ImGui::Separator();
+
+    // Deaths / births
     ImGui::Columns(2, "popstats", false);
-    ImGui::TextDisabled("Alive");  ImGui::NextColumn();
-    ImGui::TextDisabled("Dust");   ImGui::NextColumn();
-    ImGui::Text("%u", org_manager.alive_count); ImGui::NextColumn();
-    ImGui::Text("%u", org_manager.dust_count);  ImGui::NextColumn();
     ImGui::TextDisabled("Births"); ImGui::NextColumn();
     ImGui::TextDisabled("Deaths"); ImGui::NextColumn();
     ImGui::Text("%u", org_manager.last_births); ImGui::NextColumn();
@@ -561,7 +577,7 @@ void Interface::draw_organism_panel(OrganismManager& org_manager,
         const glm::vec4& c = particles.colors[t];
         ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(c.r, c.g, c.b, 1.0f));
 
-        float frac = (particles.trait_scales[t] - 1.0f) / 0.8f;
+        float frac = (particles.trait_scales[t] - 1.0f) / 1.5f;  // cap 2.5× → full bar
         ImGui::ProgressBar(frac, ImVec2(-1.0f, 6.0f), "");
         ImGui::SameLine();
         ImGui::Text("%.2fx", particles.trait_scales[t]);
@@ -612,46 +628,44 @@ void Interface::draw_organism_panel(OrganismManager& org_manager,
         }
     }
 
-    if (org_count == 0) {
-        ImGui::TextDisabled("(no organisms detected yet)");
-        return;
-    }
-
-    // Sort by size
+    // Filter to vesicle+ only — plain aggregates (water, minerals) are not organisms
     std::vector<const Organism*> sorted;
     sorted.reserve(org_count);
     for (const auto& o : org_manager.organisms)
-        sorted.push_back(&o);
+        if (o.traits.complexity >= ComplexityLevel::VESICLE)
+            sorted.push_back(&o);
 
+    if (sorted.empty()) {
+        ImGui::TextDisabled("No vesicles detected yet.");
+        ImGui::TextDisabled("C/H particles must form a ring (size\xe2\x89\xa58)");
+        ImGui::TextDisabled("to qualify. Adjust forces or wait.");
+        return;
+    }
+
+    // Sort by complexity desc, then size desc
     std::sort(sorted.begin(), sorted.end(),
               [](const Organism* a, const Organism* b) {
+                  if (a->traits.complexity != b->traits.complexity)
+                      return a->traits.complexity > b->traits.complexity;
                   return a->traits.size > b->traits.size;
               });
 
-    uint32_t show = std::min(org_count, 8u);
-    ImGui::TextDisabled("Top organisms (by size):");
+    uint32_t show = std::min(static_cast<uint32_t>(sorted.size()), 8u);
+    ImGui::TextDisabled("Cells / Vesicles (by complexity, then size):");
 
-    // MoleculeClass label/color helpers
-    auto mol_label = [](MoleculeClass m) -> const char* {
-        switch (m) {
-        case MoleculeClass::WATER:      return "H2O ";
-        case MoleculeClass::LIPID:      return "LIPD";
-        case MoleculeClass::AMINO_ACID: return "AACD";
-        case MoleculeClass::NUCLEOTIDE: return "NUCL";
-        case MoleculeClass::RADICAL:    return "RAD!";
-        case MoleculeClass::POLYMER:    return "POLY";
-        default:                        return "INRG";
+    // Complexity tier label + colour (replaces raw mol_class label in table)
+    auto cell_label = [](ComplexityLevel c) -> const char* {
+        switch (c) {
+        case ComplexityLevel::CELL:       return "CELL";
+        case ComplexityLevel::PROTO_CELL: return "PCLL";
+        default:                          return "VSIC";  // VESICLE
         }
     };
-    auto mol_color = [](MoleculeClass m) -> ImVec4 {
-        switch (m) {
-        case MoleculeClass::WATER:      return ImVec4(0.4f, 0.7f, 1.0f, 1.0f);  // light blue
-        case MoleculeClass::LIPID:      return ImVec4(1.0f, 0.9f, 0.2f, 1.0f);  // yellow
-        case MoleculeClass::AMINO_ACID: return ImVec4(0.3f, 1.0f, 0.5f, 1.0f);  // green
-        case MoleculeClass::NUCLEOTIDE: return ImVec4(0.7f, 0.3f, 1.0f, 1.0f);  // violet
-        case MoleculeClass::RADICAL:    return ImVec4(1.0f, 0.3f, 0.3f, 1.0f);  // red
-        case MoleculeClass::POLYMER:    return ImVec4(1.0f, 0.6f, 0.2f, 1.0f);  // orange
-        default:                        return ImVec4(0.6f, 0.6f, 0.6f, 1.0f);  // grey
+    auto cell_color = [](ComplexityLevel c) -> ImVec4 {
+        switch (c) {
+        case ComplexityLevel::CELL:       return ImVec4(0.3f, 1.0f, 0.3f, 1.0f);  // bright green
+        case ComplexityLevel::PROTO_CELL: return ImVec4(0.6f, 1.0f, 0.4f, 1.0f);  // lime
+        default:                          return ImVec4(1.0f, 0.9f, 0.2f, 1.0f);  // yellow (vesicle)
         }
     };
 
@@ -684,13 +698,18 @@ void Interface::draw_organism_panel(OrganismManager& org_manager,
             ImGui::ColorButton("##tc", ImVec4(c.r, c.g, c.b, 1.0f),
                                ImGuiColorEditFlags_NoTooltip, ImVec2(14, 12));
 
-            // Molecule class label
+            // Complexity tier label
             ImGui::TableSetColumnIndex(1);
-            ImGui::PushStyleColor(ImGuiCol_Text, mol_color(o.traits.mol_class));
-            ImGui::TextUnformatted(mol_label(o.traits.mol_class));
+            ImGui::PushStyleColor(ImGuiCol_Text, cell_color(o.traits.complexity));
+            ImGui::TextUnformatted(cell_label(o.traits.complexity));
             ImGui::PopStyleColor();
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Charge:%.2f  Electroneg:%.2f\nReactivity:%.2f  BondStr:%.2f",
+                ImGui::SetTooltip(
+                    "Ring: %.2f  Nucleotide: %s\n"
+                    "Charge:%.2f  Electroneg:%.2f\n"
+                    "Reactivity:%.2f  BondStr:%.2f",
+                    o.traits.ring_factor,
+                    o.traits.has_nucleotide_inside ? "yes" : "no",
                     o.traits.avg_charge, o.traits.avg_electroneg,
                     o.traits.avg_reactivity, o.traits.avg_bond_strength);
             }

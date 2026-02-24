@@ -27,6 +27,9 @@ void OrganismManager::reset() {
     last_deaths        = 0;
     dust_count         = 0;
     alive_count        = 0;
+    vesicle_count      = 0;
+    protocell_count    = 0;
+    cell_count         = 0;
     pop_history_idx    = 0;
     pop_history_count  = 0;
     std::memset(pop_history,       0, sizeof(pop_history));
@@ -170,16 +173,19 @@ void OrganismManager::apply_trait_feedback(Particles& particles) {
     for (auto& org : organisms) {
         uint32_t type = org.traits.dominant_type;
 
-        // Force-row scale: bonds + size, capped at 1.8×
-        float bond_bonus = std::min(org.traits.bond_count * 0.005f, 0.4f);
-        float size_bonus = std::min(org.traits.size       * 0.001f, 0.3f);
-        float new_scale  = std::clamp(1.0f + bond_bonus + size_bonus, 1.0f, 2.5f);
-        particles.trait_scales[type] = std::max(particles.trait_scales[type], new_scale);
+        // Force-row scale and structure integrity: only meaningful for cell-like structures.
+        // Plain water / mineral aggregates do not exert evolutionary selection pressure.
+        if (org.traits.complexity >= ComplexityLevel::VESICLE) {
+            float bond_bonus = std::min(org.traits.bond_count * 0.005f, 0.4f);
+            float size_bonus = std::min(org.traits.size       * 0.001f, 0.3f);
+            float new_scale  = std::clamp(1.0f + bond_bonus + size_bonus, 1.0f, 2.5f);
+            particles.trait_scales[type] = std::max(particles.trait_scales[type], new_scale);
 
-        particles.structure_integrity[type] =
-            1.0f + (org.traits.generation * 0.05f);
+            particles.structure_integrity[type] =
+                1.0f + (org.traits.generation * 0.05f);
+        }
 
-        // Per-particle genome nudging toward molecular role
+        // Genome nudging: chemistry-appropriate for all mol classes
         for (uint32_t idx : org.particle_indices) {
             uint32_t base = idx * GENOME_SIZE;
             if (base + 3 >= static_cast<uint32_t>(particles.genomes.size())) continue;
@@ -237,14 +243,14 @@ void OrganismManager::apply_trait_feedback(Particles& particles) {
         }
     }
 
-    // Fitness-driven force nudge: top-3 organisms by fitness push their type's
-    // self-interaction force toward cohesion, creating adaptive selection pressure
-    // on the force landscape between resets.
+    // Fitness-driven force nudge: top-3 VESICLE+ structures push their type's
+    // self-cohesion force, creating selection pressure only for cell-like clusters.
     constexpr float FORCE_NUDGE = 0.004f;
     struct FitPair { float fit; uint32_t type; };
     std::vector<FitPair> ranked;
     ranked.reserve(organisms.size());
     for (const auto& org : organisms) {
+        if (org.traits.complexity < ComplexityLevel::VESICLE) continue;
         float fit = org.traits.kills     * 3.0f
                   + org.traits.divisions * 2.0f
                   + org.traits.energy    * 10.0f
@@ -360,12 +366,31 @@ void OrganismManager::update(
                                                   org.traits.size,
                                                   has_radical);
 
+        // Spread (RMS) and ring_factor (mean_dist/max_dist — high value = ring topology)
         float sum_d2 = 0.0f;
+        float sum_d  = 0.0f;
+        float max_d  = 0.0f;
         for (uint32_t idx : members) {
-            glm::vec2 d = positions[idx] - org.centroid;
-            sum_d2 += glm::dot(d, d);
+            glm::vec2 dv = positions[idx] - org.centroid;
+            float     d  = glm::length(dv);
+            sum_d2 += glm::dot(dv, dv);
+            sum_d  += d;
+            max_d   = std::max(max_d, d);
         }
         org.spread = std::sqrt(sum_d2 * inv);
+        {
+            float mean_d = sum_d * inv;
+            org.traits.ring_factor = max_d > 1e-6f ? mean_d / max_d : 0.0f;
+        }
+
+        // Complexity: promote LIPID clusters with ring topology to VESICLE
+        static constexpr float    VESICLE_RING_THRESHOLD = 0.65f;
+        static constexpr uint32_t VESICLE_MIN_SIZE        = 8;
+        if (org.traits.mol_class == MoleculeClass::LIPID
+            && org.traits.ring_factor > VESICLE_RING_THRESHOLD
+            && org.traits.size >= VESICLE_MIN_SIZE) {
+            org.traits.complexity = ComplexityLevel::VESICLE;
+        }
 
         new_orgs.push_back(std::move(org));
     }
@@ -478,7 +503,27 @@ void OrganismManager::update(
         }
     }
 
-    // 5.6 Population statistics
+    // 5.6 Containment pass — promote vesicles to proto-cell / cell
+    for (auto& org : new_orgs) {
+        if (org.traits.complexity < ComplexityLevel::VESICLE) continue;
+        // Approximate inner void radius: ring particles sit at ~mean_dist from centroid
+        float inner_r = org.traits.ring_factor * org.spread;
+        for (const auto& other : new_orgs) {
+            if (&other == &org) continue;
+            if (other.traits.mol_class == MoleculeClass::LIPID) continue;
+            float d = glm::length(other.centroid - org.centroid);
+            if (d + other.spread * 0.3f < inner_r) {
+                if (org.traits.complexity < ComplexityLevel::PROTO_CELL)
+                    org.traits.complexity = ComplexityLevel::PROTO_CELL;
+                if (other.traits.mol_class == MoleculeClass::NUCLEOTIDE) {
+                    org.traits.has_nucleotide_inside = true;
+                    org.traits.complexity = ComplexityLevel::CELL;
+                }
+            }
+        }
+    }
+
+    // 5.7 Population statistics
     {
         uint32_t dc = 0, ac = 0;
         std::memset(type_populations, 0, sizeof(type_populations));
@@ -492,6 +537,18 @@ void OrganismManager::update(
         alive_count = ac;
         last_deaths = deaths_this_tick;
         last_births = 0;
+
+        vesicle_count   = 0;
+        protocell_count = 0;
+        cell_count      = 0;
+        for (const auto& org : new_orgs) {
+            switch (org.traits.complexity) {
+                case ComplexityLevel::VESICLE:    ++vesicle_count;   break;
+                case ComplexityLevel::PROTO_CELL: ++protocell_count; break;
+                case ComplexityLevel::CELL:       ++cell_count;      break;
+                default: break;
+            }
+        }
 
         pop_history[pop_history_idx] = static_cast<float>(ac);
         pop_history_idx = (pop_history_idx + 1) % POP_HISTORY_LEN;

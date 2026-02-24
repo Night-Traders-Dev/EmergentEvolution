@@ -22,6 +22,14 @@ enum class MoleculeClass : uint8_t {
     POLYMER    = 6,
 };
 
+// Biological complexity tier — promoted from AGGREGATE only by geometry
+enum class ComplexityLevel : uint8_t {
+    AGGREGATE  = 0,  // any DBSCAN cluster (water, minerals, lipid blob, etc.)
+    VESICLE    = 1,  // lipid ring topology (ring_factor > 0.65, size >= 8)
+    PROTO_CELL = 2,  // vesicle spatially enclosing non-lipid content
+    CELL       = 3,  // proto-cell with a nucleotide cluster inside
+};
+
 struct OrganismTraits {
     uint32_t size          = 0;
     float    avg_speed     = 0.0f;
@@ -37,8 +45,13 @@ struct OrganismTraits {
     float avg_reactivity    = 1.0f;
     float avg_bond_strength = 0.0f;
 
-    MoleculeClass mol_class  = MoleculeClass::INORGANIC;
-    uint32_t      bond_count = 0;  // total bonds among member particles
+    MoleculeClass  mol_class  = MoleculeClass::INORGANIC;
+    uint32_t       bond_count = 0;  // total bonds among member particles
+
+    // Topology / complexity
+    float          ring_factor           = 0.0f;   // mean_dist/max_dist from centroid; >0.65 = ring
+    ComplexityLevel complexity           = ComplexityLevel::AGGREGATE;
+    bool           has_nucleotide_inside = false;  // true if a nucleotide cluster is enclosed
 
     // Lineage
     uint32_t generation = 0;
@@ -70,7 +83,10 @@ public:
     uint32_t last_births  = 0;
     uint32_t last_deaths  = 0;
     uint32_t dust_count   = 0;
-    uint32_t alive_count  = 0;
+    uint32_t alive_count  = 0;   // total active DBSCAN clusters
+    uint32_t vesicle_count   = 0;
+    uint32_t protocell_count = 0;
+    uint32_t cell_count      = 0;
 
     // Per-type particle counts (updated each organism tick)
     uint32_t type_populations[MAX_PARTICLE_TYPES] = {};
