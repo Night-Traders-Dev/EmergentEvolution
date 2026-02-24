@@ -23,17 +23,19 @@ public:
     // ── F3 Spawn Menu ─────────────────────────────────────────────────────────
     bool  spawn_menu_visible = false;
     bool  pending_spawn      = false;  // waiting for user to left-click in world
-    int   spawn_tab          = 0;      // 0=Atoms, 1=Groups, 2=Organisms
+    int   spawn_tab          = 0;      // 0=Atoms, 1=Groups, 2=Organisms, 3=Organics
     int   spawn_atom_type    = 1;      // 0=H..7=Cl (default C)
     int   spawn_group_idx    = 0;      // which molecule template
     int   spawn_organism_idx = -1;     // -1=predefined template, ≥0=live organism
+    int   spawn_organic_idx  = 0;      // which bio-molecule template
 
     // ── Hover inspection (set by Simulation each tick) ────────────────────────
     int32_t                   hover_particle_idx = -1;
     const std::vector<float>* hover_energies_ptr = nullptr;
 
-    // ── Decay stats (set by Simulation each tick) ─────────────────────────────
-    uint32_t decay_total_display = 0;
+    // ── Decay + quantum stats (set by Simulation each tick) ───────────────────
+    uint32_t decay_total_display  = 0;
+    uint32_t vacuum_total_display = 0;
 
     // Placement settings (apply to all spawn types)
     int   spawn_count        = 1;      // number of atoms to place per click (Atoms tab)

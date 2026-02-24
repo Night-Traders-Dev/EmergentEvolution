@@ -304,18 +304,21 @@ void Particles::gen_particles(const SimConfig& cfg) {
     for (uint32_t i = 0; i < n_active; ++i) cum[i+1] = cum[i] + RAW_ABUNDANCE[i] / total;
     cum[n_active] = 1.0f; // clamp
 
-    // ── Non-uniform clustered spawn ───────────────────────────────────────────
-    // Generate 4-8 random cluster centres so matter starts as separated blobs.
-    int n_clusters = 4 + static_cast<int>(rng_() % 5);
-    std::vector<glm::vec2> cluster_centers(n_clusters);
-    for (auto& c : cluster_centers)
-        c = { rand_range_f(rw * 0.08f, rw * 0.92f),
-              rand_range_f(rh * 0.08f, rh * 0.92f) };
-
-    // Each cluster has its own sigma (spread) for variety
-    std::vector<float> cluster_sigma(n_clusters);
-    for (auto& s : cluster_sigma)
-        s = rand_range_f(rh * 0.06f, rh * 0.22f);
+    // ── Three well-separated seed clusters ───────────────────────────────────
+    // Triangle layout so matter starts in distinct regions of the world.
+    // Small random jitter keeps each reset visually unique.
+    static const float SEED_X[3] = { 0.25f, 0.50f, 0.75f };
+    static const float SEED_Y[3] = { 0.28f, 0.72f, 0.28f };
+    int n_clusters = 3;
+    std::vector<glm::vec2> cluster_centers(3);
+    std::vector<float>     cluster_sigma(3);
+    for (int k = 0; k < 3; ++k) {
+        cluster_centers[k] = {
+            std::clamp(rw * (SEED_X[k] + rand_range_f(-0.08f, 0.08f)), rw * 0.05f, rw * 0.95f),
+            std::clamp(rh * (SEED_Y[k] + rand_range_f(-0.08f, 0.08f)), rh * 0.05f, rh * 0.95f)
+        };
+        cluster_sigma[k] = rand_range_f(rh * 0.07f, rh * 0.18f);
+    }
 
     std::normal_distribution<float> gauss(0.0f, 1.0f);
 

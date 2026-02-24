@@ -77,9 +77,10 @@ struct PushConstants {
     float     temperature;        // 68  — thermal noise strength
     float     gravity_strength;   // 72  — scaled gravity (0 = off)
     float     lorentz_strength;   // 76  — scaled Lorentz / magnetic force (0 = off)
+    float     vacuum_energy;      // 80  — zero-point energy / vacuum fluctuation strength
 };
-// Size is 80 bytes
-static_assert(sizeof(PushConstants) == 80, "PushConstants layout mismatch");
+// Size is 84 bytes
+static_assert(sizeof(PushConstants) == 84, "PushConstants layout mismatch");
 
 struct SimConfig {
     uint32_t particle_count     = 22500;
@@ -113,6 +114,7 @@ struct SimConfig {
     // Fundamental forces (off by default)
     float    gravity_strength         = 0.0f;   // scaled gravitational attraction
     float    lorentz_strength         = 0.0f;   // scaled Lorentz / magnetic deflection
+    float    vacuum_energy            = 0.0f;   // vacuum fluctuation rate + ZPE floor (0=off)
 
     // Periodic particle spawn
     bool     spawn_enabled   = true;

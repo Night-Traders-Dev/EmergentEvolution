@@ -69,8 +69,12 @@ private:
     static constexpr const char* VERT_SPV     = "shaders/fullscreen.vert.spv";
     static constexpr const char* FRAG_SPV     = "shaders/fullscreen.frag.spv";
 
+    // Vacuum fluctuation counter (displayed in UI)
+    uint32_t vacuum_total_injections_ = 0;
+
     void handle_input(GLFWwindow* window, double dt);
     void do_particle_spawn();
     void inject_photons(const std::vector<PhotonEvent>& events);
     void do_spawn_at_world(glm::vec2 world_pos);
+    void inject_vacuum_fluctuations();
 };

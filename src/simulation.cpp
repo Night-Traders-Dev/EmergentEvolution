@@ -130,7 +130,8 @@ void Simulation::tick(GLFWwindow* window, double dt) {
     }
 
     // ── ImGui ──────────────────────────────────────────────────────────────────
-    iface.decay_total_display = decay_manager.total_decays;
+    iface.decay_total_display   = decay_manager.total_decays;
+    iface.vacuum_total_display  = vacuum_total_injections_;
     bool request_reset = false;
     iface.render_imgui(cfg, particles, organism_manager, bond_manager, request_reset);
 
@@ -274,6 +275,10 @@ void Simulation::tick(GLFWwindow* window, double dt) {
                                         readback_energies_, particles.types, particles,
                                         bond_manager);
             }
+
+            // ── Vacuum fluctuations (QFT virtual pairs + ZPE) ─────────────────
+            if (need_bond)
+                inject_vacuum_fluctuations();
         }
     }
 
@@ -699,6 +704,35 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
           {{0,1},{0,2}} },
     };
 
+    // ── Bio-molecule templates (Organics tab) ────────────────────────────────
+    // Types: H=0 C=1 N=2 O=3 P=4 S=5
+    static const MolSpec ORGANICS[8] = {
+        // 0: Glycine — NH2-CH2-COOH (8 atoms)
+        { {{-24,0,2},{0,0,1},{22,0,1},{32,-14,3},{32,14,3},{-34,-12,0},{-34,12,0},{0,-16,0}},
+          {{0,1},{1,2},{2,3},{2,4},{0,5},{0,6},{1,7}} },
+        // 1: Alanine — NH2-CH(CH3)-COOH (10 atoms)
+        { {{-24,0,2},{0,0,1},{0,-22,1},{22,0,1},{32,-14,3},{32,14,3},{-34,-12,0},{-34,12,0},{-10,-32,0},{10,-32,0}},
+          {{0,1},{1,2},{1,3},{3,4},{3,5},{0,6},{0,7},{2,8},{2,9}} },
+        // 2: Glucose — hexose ring (11 atoms: 5C + ring-O + 5 OH)
+        { {{22,0,1},{11,19,1},{-11,19,1},{-22,0,1},{-11,-19,1},{11,-19,3},{34,-10,3},{18,30,3},{-18,30,3},{-34,-10,3},{-20,-28,3}},
+          {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{0,6},{1,7},{2,8},{3,9},{4,10}} },
+        // 3: Ribose — pentose ring (9 atoms: 4C + ring-O + 4 OH)
+        { {{20,0,1},{12,17,1},{-12,17,1},{-20,0,1},{0,-20,3},{32,-6,3},{18,28,3},{-18,28,3},{-32,-6,3}},
+          {{0,1},{1,2},{2,3},{3,4},{4,0},{0,5},{1,6},{2,7},{3,8}} },
+        // 4: Butyric acid — CH3-CH2-CH2-COOH, short fatty acid (12 atoms)
+        { {{-30,0,1},{-10,0,1},{10,0,1},{30,0,1},{44,-14,3},{44,14,3},{-40,14,0},{-40,-14,0},{-10,16,0},{-10,-16,0},{10,16,0},{10,-16,0}},
+          {{0,1},{1,2},{2,3},{3,4},{3,5},{0,6},{0,7},{1,8},{1,9},{2,10},{2,11}} },
+        // 5: Glycerophosphate — lipid head (P + 4O + 3C + N, 10 atoms)
+        { {{0,0,4},{-20,12,3},{-20,-12,3},{20,0,3},{0,-22,3},{36,0,1},{50,14,1},{50,-14,1},{66,0,2},{48,28,3}},
+          {{0,1},{0,2},{0,3},{0,4},{3,5},{5,6},{5,7},{6,8},{5,9}} },
+        // 6: Adenine — purine base (10 atoms: 5C + 5N in fused 6-5 ring)
+        { {{0,22,2},{18,10,1},{22,-10,2},{8,-24,1},{-14,-20,1},{-20,6,1},{-30,-8,2},{-28,12,1},{-10,28,2},{-32,18,2}},
+          {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{3,8},{8,7},{7,6},{6,4},{5,9}} },
+        // 7: Cytosine — pyrimidine base (8 atoms: 4C + 3N + 1O in 6-ring + NH2)
+        { {{-22,0,2},{0,18,1},{22,0,2},{22,-20,1},{0,-24,1},{-22,-14,1},{0,30,3},{34,-26,2}},
+          {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{1,6},{3,7}} },
+    };
+
     // ── Case: Atom(s) ─────────────────────────────────────────────────────────
     if (iface.spawn_tab == 0) {
         uint32_t place = std::min(static_cast<uint32_t>(spawn_count),
@@ -879,6 +913,149 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
         compute.write_particle_state(vk, cur_pos, cur_vel, cur_nrg);
         compute.upload_dynamic_data(vk, particles);
         return;
+    }
+
+    // ── Case: Organics (bio-molecules) ─────────────────────────────────────────
+    if (iface.spawn_tab == 3) {
+        int oi = std::clamp(iface.spawn_organic_idx, 0, 7);
+        const MolSpec& mol = ORGANICS[oi];
+        uint32_t need = static_cast<uint32_t>(mol.atoms.size());
+        if (candidates.size() < need) return;
+
+        std::vector<uint32_t> placed;
+        placed.reserve(need);
+        for (uint32_t i = 0; i < need; ++i) {
+            uint32_t idx = candidates[i];
+            set_atom(idx, mol.atoms[i].type,
+                     world_pos + glm::vec2(mol.atoms[i].rx, mol.atoms[i].ry));
+            placed.push_back(idx);
+            spawn_protect_ids_.insert(idx);
+        }
+        spawn_protect_ttl_ = 90;
+        for (const auto& b : mol.bonds) {
+            if (b.ai < static_cast<int>(placed.size()) &&
+                b.bi < static_cast<int>(placed.size()))
+                bond_manager.force_bond(placed[b.ai], placed[b.bi]);
+        }
+        compute.write_particle_state(vk, cur_pos, cur_vel, cur_nrg);
+        compute.upload_dynamic_data(vk, particles);
+        return;
+    }
+}
+
+// ── Vacuum fluctuations ───────────────────────────────────────────────────────
+// Injects virtual particle pairs: photon pairs (ZPE photons) and occasional
+// e⁺/e⁻ pairs (fermion vacuum fluctuations). Called each bond-update cycle.
+
+void Simulation::inject_vacuum_fluctuations() {
+    if (cfg.vacuum_energy <= 0.001f) return;
+    if (!compute.is_ready()) return;
+    const uint32_t n = cfg.particle_count;
+    if (n == 0) return;
+
+    static std::mt19937 vac_rng{ std::random_device{}() };
+    std::uniform_real_distribution<float> uni01(0.0f, 1.0f);
+    std::uniform_real_distribution<float> pos_x(0.0f, float(REGION_W));
+    std::uniform_real_distribution<float> pos_y(0.0f, float(REGION_H));
+    std::uniform_real_distribution<float> ang_d(0.0f, 6.28318f);
+
+    // Expected virtual photon pairs per bond-update cycle (avg)
+    float expected_ph = cfg.vacuum_energy * 0.8f;
+    int n_photon_pairs = static_cast<int>(expected_ph);
+    if (uni01(vac_rng) < (expected_ph - static_cast<float>(n_photon_pairs))) ++n_photon_pairs;
+
+    // Expected fermion pairs (rarer, ~18% of photon rate)
+    float expected_fm = cfg.vacuum_energy * 0.15f;
+    int n_fermion_pairs = static_cast<int>(expected_fm);
+    if (uni01(vac_rng) < (expected_fm - static_cast<float>(n_fermion_pairs))) ++n_fermion_pairs;
+
+    if (n_photon_pairs <= 0 && n_fermion_pairs <= 0) return;
+
+    // ── Virtual photon pairs ──────────────────────────────────────────────────
+    // Two low-energy photons emitted from the same point in opposite directions.
+    // They drain via PHOTON_DRAIN (0.07/s) and are absorbed by nearby atoms.
+    if (n_photon_pairs > 0) {
+        std::vector<PhotonEvent> virt_ph;
+        virt_ph.reserve(static_cast<size_t>(n_photon_pairs) * 2);
+        for (int p = 0; p < n_photon_pairs; ++p) {
+            glm::vec2 vpos  = { pos_x(vac_rng), pos_y(vac_rng) };
+            float     a     = ang_d(vac_rng);
+            glm::vec2 dir   = { std::cos(a), std::sin(a) };
+            float     nrg   = 0.10f + cfg.vacuum_energy * 0.10f;  // 0.10–0.20
+            virt_ph.push_back({ vpos,  dir, nrg });
+            virt_ph.push_back({ vpos, -dir, nrg });
+        }
+        inject_photons(virt_ph);
+        vacuum_total_injections_ += static_cast<uint32_t>(n_photon_pairs);
+    }
+
+    // ── Virtual fermion pairs (e⁺/e⁻) ────────────────────────────────────────
+    // Particle–antiparticle pair created from vacuum; they quickly annihilate
+    // (detected by DecayManager on the next bond-update cycle).
+    if (n_fermion_pairs > 0) {
+        // Need a fresh state read since inject_photons may have written back
+        std::vector<glm::vec2> fpos(n), fvel(n);
+        std::vector<float>     fnrg(n);
+        compute.read_current_state(vk, fpos, fvel, fnrg);
+
+        // Collect low-energy candidates to recycle
+        const uint32_t NEED = static_cast<uint32_t>(n_fermion_pairs) * 2u + 2u;
+        std::vector<uint32_t> order(n);
+        std::iota(order.begin(), order.end(), 0u);
+        uint32_t sort_n = std::min(NEED * 4u, n);
+        std::partial_sort(order.begin(), order.begin() + static_cast<int>(sort_n), order.end(),
+            [&](uint32_t a, uint32_t b){ return fnrg[a] < fnrg[b]; });
+
+        std::vector<uint32_t> cands;
+        cands.reserve(NEED);
+        for (uint32_t k = 0; k < sort_n && cands.size() < NEED; ++k) {
+            uint32_t idx = order[k];
+            if (particles.types[idx] == PHOTON_TYPE) continue;
+            if (spawn_protect_ids_.count(idx)) continue;
+            cands.push_back(idx);
+        }
+
+        float vm_spd = 55.0f + cfg.vacuum_energy * 30.0f;
+        uint32_t ci = 0;
+        bool modified = false;
+
+        for (int p = 0; p < n_fermion_pairs && ci + 1 < cands.size(); ++p) {
+            glm::vec2 vpos = { pos_x(vac_rng), pos_y(vac_rng) };
+            float     a    = ang_d(vac_rng);
+            glm::vec2 dir  = { std::cos(a), std::sin(a) };
+
+            uint32_t ip = cands[ci++];  // positron
+            particles.types[ip]           = POSITRON_TYPE;
+            fpos[ip]                       = vpos + glm::vec2{3.f, 0.f};
+            fvel[ip]                       =  dir * vm_spd;
+            fnrg[ip]                       = 0.18f;
+            particles.genomes[ip*4+0]      =  1.0f;  // +charge
+            particles.genomes[ip*4+1]      =  0.5f;
+            particles.genomes[ip*4+2]      =  1.0f;
+            particles.genomes[ip*4+3]      =  0.0f;
+            bond_manager.clear_particle_bonds(ip);
+            spawn_protect_ids_.insert(ip);
+
+            uint32_t ie = cands[ci++];  // electron
+            particles.types[ie]           = ELECTRON_TYPE;
+            fpos[ie]                       = vpos - glm::vec2{3.f, 0.f};
+            fvel[ie]                       = -dir * vm_spd;
+            fnrg[ie]                       = 0.18f;
+            particles.genomes[ie*4+0]      = -1.0f;  // -charge
+            particles.genomes[ie*4+1]      =  0.5f;
+            particles.genomes[ie*4+2]      =  1.0f;
+            particles.genomes[ie*4+3]      =  0.0f;
+            bond_manager.clear_particle_bonds(ie);
+            spawn_protect_ids_.insert(ie);
+
+            modified = true;
+        }
+
+        if (modified) {
+            spawn_protect_ttl_ = std::max(spawn_protect_ttl_, 30);
+            compute.write_particle_state(vk, fpos, fvel, fnrg);
+            compute.upload_dynamic_data(vk, particles);
+        }
     }
 }
 

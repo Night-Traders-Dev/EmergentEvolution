@@ -485,6 +485,7 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     pc.temperature          = cfg.temperature;
     pc.gravity_strength     = cfg.gravity_strength;
     pc.lorentz_strength     = cfg.lorentz_strength;
+    pc.vacuum_energy        = cfg.vacuum_energy;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,

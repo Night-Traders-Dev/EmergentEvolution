@@ -57,6 +57,7 @@ layout(push_constant, std430) uniform Params {
     float temperature;        // 68 — thermal noise strength
     float gravity_strength;   // 72 — scaled gravity (0 = off)
     float lorentz_strength;   // 76 — scaled Lorentz / magnetic force (0 = off)
+    float vacuum_energy;      // 80 — zero-point energy / vacuum fluctuation strength
 } params;
 
 const uint BEHAVIOR_REPEL     = 1u;     // same-charge ionic repulsion
@@ -105,13 +106,35 @@ void apply_physics(uint i) {
         return;                              // skip all normal physics
     }
 
-    // ── Neutrino fast-path ────────────────────────────────────────────────────
+    // ── Neutrino path (with CEvNS weak interaction) ───────────────────────────
     // Neutrinos are near-massless, near-interaction-free. Ballistic; slow energy drain.
+    // Coherent Elastic neutrino-Nucleus Scattering (CEvNS): tiny deflection when
+    // passing within interaction_radius of a HEAVY nucleus (W/Z boson exchange).
     if ((flags_a & BEHAVIOR_NEUTRINO) != 0u) {
         float nrg = max(in_energy_buffer.data[i] - 0.001f * params.dt, 0.0f);
         out_energy_buffer.data[i] = nrg;
-        out_pos_buffer.data[i]    = pos_a + vel_a * params.dt;
-        out_vel_buffer.data[i]    = vel_a;
+
+        const float WEAK_RADIUS_SQ = params.interaction_radius * params.interaction_radius;
+        const float WEAK_COUPLING  = 0.004f;  // ~10^-4 relative to EM — weak force analog
+        vec2 weak_kick = vec2(0.0f);
+
+        for (int j = 0; j < int(params.particle_count); j++) {
+            if (i == uint(j)) continue;
+            uint flags_j = behavior_buffer.data[type_buffer.data[j]];
+            if ((flags_j & BEHAVIOR_HEAVY) == 0u) continue;  // only scatter off heavy nuclei
+            vec2  dj  = pos_a - in_pos_buffer.data[j];
+            float d2j = dot(dj, dj);
+            if (d2j > 0.0f && d2j < WEAK_RADIUS_SQ) {
+                float dist_j = sqrt(d2j);
+                // Coherent scatter: tiny repulsion (elastic collision approximation)
+                weak_kick += (dj / dist_j) * WEAK_COUPLING
+                             * (1.0f - d2j / WEAK_RADIUS_SQ);
+            }
+        }
+
+        vec2 new_vel = vel_a + weak_kick * params.dt;
+        out_pos_buffer.data[i] = pos_a + new_vel * params.dt;
+        out_vel_buffer.data[i] = new_vel;
         return;
     }
 
@@ -364,6 +387,9 @@ void apply_physics(uint i) {
             delta -= (local_density - params.density_limit) * 0.005f * params.dt; // crowding
         delta += interaction_energy_gain * params.dt;
         delta += catalyst_boost * 0.008f * params.dt;            // P catalyst boost
+        // Zero-point energy floor: vacuum fluctuations prevent complete energy death
+        if (params.vacuum_energy > 0.001f)
+            delta += params.vacuum_energy * 0.003f * params.dt;  // ZPE baseline
 
         energy = clamp(energy + delta, 0.0f, 1.0f);
     }

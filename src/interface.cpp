@@ -127,9 +127,16 @@ void Interface::render_imgui(SimConfig&       cfg,
     ImGui::Text("Dampening:  %.2f", dampening_slider);
     cfg.dampening = dampening_slider;
 
-    ImGui::SliderFloat("Temperature", &cfg.temperature, 0.0f, 1.0f, "%.3f");
-    ImGui::SliderFloat("Gravity",     &cfg.gravity_strength,  0.0f, 5.0f,  "%.4f");
-    ImGui::SliderFloat("Magnetism",   &cfg.lorentz_strength,  0.0f, 2.0f,  "%.4f");
+    ImGui::SliderFloat("Temperature",   &cfg.temperature,      0.0f, 1.0f, "%.3f");
+    ImGui::SliderFloat("Gravity",       &cfg.gravity_strength, 0.0f, 5.0f, "%.4f");
+    ImGui::SliderFloat("Magnetism",     &cfg.lorentz_strength, 0.0f, 2.0f, "%.4f");
+    ImGui::SliderFloat("Vacuum Energy", &cfg.vacuum_energy,    0.0f, 1.0f, "%.3f");
+    ImGui::SameLine(); HelpMarker(
+        "Quantum vacuum fluctuations:\n"
+        "  \xe2\x80\xa2 Injects virtual photon pairs (ZPE radiation)\n"
+        "  \xe2\x80\xa2 Injects virtual e+/e- pairs that annihilate\n"
+        "  \xe2\x80\xa2 ZPE energy floor prevents complete particle death\n"
+        "  \xe2\x80\xa2 Neutrino CEvNS weak scattering always active");
 
     ImGui::SliderFloat("Repulsion Radius", &repulsion_slider, 1.0f, 400.0f);
     ImGui::Text("Repulsion Radius:  %d", static_cast<int>(repulsion_slider));
@@ -176,16 +183,37 @@ void Interface::render_imgui(SimConfig&       cfg,
     // ── Organism panel ────────────────────────────────────────────────────────
     draw_organism_panel(org_manager, bond_manager, particles, cfg);
 
-    // ── Radioactive Decay panel ───────────────────────────────────────────────
-    if (ImGui::CollapsingHeader("Radioactive Decay")) {
-        ImGui::Text("Total decay events:  %u", decay_total_display);
+    // ── Quantum Physics panel ─────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Quantum Physics")) {
+        // ── Vacuum / QFT ──────────────────────────────────────────────────────
+        ImGui::TextDisabled("Quantum Field / Vacuum:");
+        ImGui::Text("Virtual pair events:  %u", vacuum_total_display);
+        ImGui::SameLine(); HelpMarker(
+            "Counts virtual photon-pair injections from vacuum fluctuations.\n"
+            "Enable via the Vacuum Energy slider.");
+        ImGui::TextDisabled("ZPE floor, CEvNS neutrino scattering always active");
+
         ImGui::Separator();
-        ImGui::TextDisabled("Unstable isotopes:");
-        ImGui::BulletText("U  \xe2\x86\x92 Pb + \xce\xb1 + \xce\xb3  (alpha decay,  T\xc2\xbd ~ 30 s)");
-        ImGui::BulletText("Eu \xe2\x86\x92 Fe + e\xe2\x81\xbb + \xce\xb3  (beta\xe2\x81\xbb decay, T\xc2\xbd ~ 25 s)");
-        ImGui::BulletText("Sr \xe2\x86\x92 Ca + e\xe2\x81\xbb + \xce\xb3  (beta\xe2\x81\xbb decay, T\xc2\xbd ~ 40 s)");
-        ImGui::BulletText("Ni \xe2\x86\x92 Fe + e\xe2\x81\x8a       (beta\xe2\x81\xba decay, T\xc2\xbd ~ 50 s)");
-        ImGui::BulletText("\xce\xbc  \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd          (muon decay, T\xc2\xbd ~ 0.5 s)");
+
+        // ── Gauge bosons (summary) ────────────────────────────────────────────
+        ImGui::TextDisabled("Gauge interactions:");
+        ImGui::BulletText("EM:    Coulomb + Lorentz (photon \xce\xb3)");
+        ImGui::BulletText("Weak:  \xce\xb2 decay, \xce\xbc decay (W\xc2\xb1/Z\xc2\xb0)");
+        ImGui::BulletText("Strong:sub-atomic Yukawa + covalent bonds");
+        ImGui::BulletText("Gravity: inverse-square (slider)");
+        ImGui::BulletText("CEvNS: \xce\xbd scatter off nuclei (always on)");
+
+        ImGui::Separator();
+
+        // ── Radioactive decay ─────────────────────────────────────────────────
+        ImGui::TextDisabled("Radioactive decay:");
+        ImGui::Text("Total decay events:  %u", decay_total_display);
+        ImGui::BulletText("U  \xe2\x86\x92 Pb + \xce\xb1 + \xce\xb3  (alpha,  T\xc2\xbd~30 s)");
+        ImGui::BulletText("Eu \xe2\x86\x92 Fe + e\xe2\x81\xbb + \xce\xb3  (\xce\xb2\xe2\x81\xbb,    T\xc2\xbd~25 s)");
+        ImGui::BulletText("Sr \xe2\x86\x92 Ca + e\xe2\x81\xbb + \xce\xb3  (\xce\xb2\xe2\x81\xbb,    T\xc2\xbd~40 s)");
+        ImGui::BulletText("Ni \xe2\x86\x92 Fe + e\xe2\x81\x8a       (\xce\xb2\xe2\x81\xba,    T\xc2\xbd~50 s)");
+        ImGui::BulletText("\xce\xbc  \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd        (muon,  T\xc2\xbd~0.5 s)");
+        ImGui::BulletText("e\xe2\x81\xba + e\xe2\x81\xbb \xe2\x86\x92 2\xce\xb3          (annihilation)");
         ImGui::Separator();
         ImGui::TextDisabled("SM particles: spawn via F3 \xe2\x86\x92 Atoms tab");
     }
@@ -937,6 +965,111 @@ void Interface::draw_spawn_menu(const OrganismManager& org_manager,
             ImGui::EndTabItem();
         }
 
+        // ── Organics tab ──────────────────────────────────────────────────────
+        if (ImGui::BeginTabItem("Organics")) {
+            ImGui::TextDisabled("Bio-molecule templates:");
+            ImGui::Spacing();
+
+            struct OrgTemplate { const char* label; const char* desc; };
+            static const OrgTemplate ORG_MOLS[8] = {
+                { "Gly",    "Glycine: simplest amino acid  NH2-CH2-COOH  (8 atoms)"            },
+                { "Ala",    "Alanine: amino acid w/ methyl side-chain  (10 atoms)"             },
+                { "Glc",    "Glucose: hexose sugar ring  C6H12O6 (simplified, 11 atoms)"       },
+                { "Rib",    "Ribose: pentose sugar ring  C5H10O4 (simplified, 9 atoms)"        },
+                { "ButAc",  "Butyric acid: short fatty acid chain  C4H8O2  (12 atoms)"         },
+                { "GlyP",   "Glycerophosphate: lipid head group  P+C+N  (10 atoms)"            },
+                { "Ade",    "Adenine: purine nucleobase (DNA/RNA)  C5H5N5  (10 atoms)"         },
+                { "Cyt",    "Cytosine: pyrimidine nucleobase (DNA/RNA)  C4H5N3O  (8 atoms)"    },
+            };
+
+            static const ImVec4 ORG_COLORS[4] = {
+                { 0.45f, 0.22f, 0.52f, 1.0f },  // protein — purple
+                { 0.55f, 0.42f, 0.12f, 1.0f },  // lipid   — brown
+                { 0.22f, 0.50f, 0.28f, 1.0f },  // carb    — green
+                { 0.22f, 0.36f, 0.58f, 1.0f },  // nucleic — blue
+            };
+            // Category index: 0,1 = protein; 2,3 = carb; 4,5 = lipid; 6,7 = nucleic
+            static const int ORG_CAT[8] = { 0, 0, 2, 2, 1, 1, 3, 3 };
+
+            ImGui::SeparatorText("Proteins"); ImGui::Spacing();
+            for (int i = 0; i < 2; ++i) {
+                ImGui::PushID(i + 400);
+                bool sel = (spawn_organic_idx == i && spawn_tab == 3);
+                const ImVec4& base_col = ORG_COLORS[ORG_CAT[i]];
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                    sel ? ImVec4(base_col.x*1.4f, base_col.y*1.4f, base_col.z*1.4f, 1.0f)
+                        : base_col);
+                if (ImGui::Button(ORG_MOLS[i].label, { 88.0f, 40.0f })) {
+                    spawn_organic_idx = i;
+                    spawn_tab         = 3;
+                    pending_spawn     = true;
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", ORG_MOLS[i].desc);
+                ImGui::PopStyleColor();
+                ImGui::PopID();
+                if (i < 1) ImGui::SameLine();
+            }
+
+            ImGui::Spacing(); ImGui::SeparatorText("Carbohydrates"); ImGui::Spacing();
+            for (int i = 2; i < 4; ++i) {
+                ImGui::PushID(i + 400);
+                bool sel = (spawn_organic_idx == i && spawn_tab == 3);
+                const ImVec4& base_col = ORG_COLORS[ORG_CAT[i]];
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                    sel ? ImVec4(base_col.x*1.4f, base_col.y*1.4f, base_col.z*1.4f, 1.0f)
+                        : base_col);
+                if (ImGui::Button(ORG_MOLS[i].label, { 88.0f, 40.0f })) {
+                    spawn_organic_idx = i;
+                    spawn_tab         = 3;
+                    pending_spawn     = true;
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", ORG_MOLS[i].desc);
+                ImGui::PopStyleColor();
+                ImGui::PopID();
+                if (i < 3) ImGui::SameLine();
+            }
+
+            ImGui::Spacing(); ImGui::SeparatorText("Lipids"); ImGui::Spacing();
+            for (int i = 4; i < 6; ++i) {
+                ImGui::PushID(i + 400);
+                bool sel = (spawn_organic_idx == i && spawn_tab == 3);
+                const ImVec4& base_col = ORG_COLORS[ORG_CAT[i]];
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                    sel ? ImVec4(base_col.x*1.4f, base_col.y*1.4f, base_col.z*1.4f, 1.0f)
+                        : base_col);
+                if (ImGui::Button(ORG_MOLS[i].label, { 88.0f, 40.0f })) {
+                    spawn_organic_idx = i;
+                    spawn_tab         = 3;
+                    pending_spawn     = true;
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", ORG_MOLS[i].desc);
+                ImGui::PopStyleColor();
+                ImGui::PopID();
+                if (i < 5) ImGui::SameLine();
+            }
+
+            ImGui::Spacing(); ImGui::SeparatorText("Nucleic Acids"); ImGui::Spacing();
+            for (int i = 6; i < 8; ++i) {
+                ImGui::PushID(i + 400);
+                bool sel = (spawn_organic_idx == i && spawn_tab == 3);
+                const ImVec4& base_col = ORG_COLORS[ORG_CAT[i]];
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                    sel ? ImVec4(base_col.x*1.4f, base_col.y*1.4f, base_col.z*1.4f, 1.0f)
+                        : base_col);
+                if (ImGui::Button(ORG_MOLS[i].label, { 88.0f, 40.0f })) {
+                    spawn_organic_idx = i;
+                    spawn_tab         = 3;
+                    pending_spawn     = true;
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", ORG_MOLS[i].desc);
+                ImGui::PopStyleColor();
+                ImGui::PopID();
+                if (i < 7) ImGui::SameLine();
+            }
+
+            ImGui::EndTabItem();
+        }
+
         ImGui::EndTabBar();
     }
 
@@ -984,9 +1117,21 @@ void Interface::draw_hover_tooltip(const OrganismManager& org_manager,
         "Fe","Ni","Si","Ca","Ti","Sr","Au","Pb","Eu","U"
     };
 
+    // SM free particle names / symbols
+    static const char* SM_NAMES[5] = {
+        "Alpha particle (He-4)", "Free Electron", "Positron",
+        "Electron Neutrino", "Muon"
+    };
+    static const char* SM_SYMS[5] = {
+        "\xce\xb1", "e\xe2\x81\xbb", "e\xe2\x81\x8a", "\xce\xbd", "\xce\xbc"
+    };
+    bool is_sm = (ptype >= ALPHA_TYPE && ptype < ALPHA_TYPE + 5u);
+
     const char* type_name = is_photon ? "Photon"
+                          : is_sm     ? SM_NAMES[ptype - ALPHA_TYPE]
                           : (ptype < ATOM_COUNT ? ATOM_FULL[ptype] : "Unknown");
-    const char* type_sym  = is_photon ? "\xce\xb3"  // γ (UTF-8)
+    const char* type_sym  = is_photon ? "\xce\xb3"
+                          : is_sm     ? SM_SYMS[ptype - ALPHA_TYPE]
                           : (ptype < ATOM_COUNT ? ATOM_SYM[ptype] : "?");
     const glm::vec4& col  = (ptype < MAX_PARTICLE_TYPES)
                              ? particles.colors[ptype] : glm::vec4(1.0f);
