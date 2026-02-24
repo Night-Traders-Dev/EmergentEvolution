@@ -71,11 +71,13 @@ static constexpr float QUARK_HC_K   = 400.f;
 // ── reset ─────────────────────────────────────────────────────────────────────
 
 void SubAtomicSim::reset() {
-    active       = false;
-    zoom_level   = 0;
-    atom_type    = -1;
-    focused_nuc  = 0;
-    settle_frames_ = 0;
+    active                 = false;
+    zoom_level             = 0;
+    atom_type              = -1;
+    focused_nuc            = 0;
+    settle_frames_         = 0;
+    current_binding_energy = 0.f;
+    nuclear_stability      = 1.f;
     nucleons.clear();
     electrons.clear();
     quarks.clear();
@@ -222,11 +224,16 @@ void SubAtomicSim::init_quark_view(int nuc_idx) {
 
 void SubAtomicSim::step_nucleon(float dt) {
     const int N = static_cast<int>(nucleons.size());
-    if (N == 0) return;
+    if (N == 0) {
+        current_binding_energy = 0.f;
+        nuclear_stability      = 1.f;
+        return;
+    }
 
     const float damp = (settle_frames_ < 90) ? 0.75f : 0.97f;
 
     std::vector<glm::vec2> forces(static_cast<size_t>(N), { 0.f, 0.f });
+    float binding_energy_acc = 0.f;  // accumulated per-frame potential energy
 
     for (int sub = 0; sub < 4; ++sub) {
         float sdt = dt * 0.25f;
@@ -243,7 +250,8 @@ void SubAtomicSim::step_nucleon(float dt) {
                 glm::vec2 f = yukawa(r, YUKAWA_G2, YUKAWA_L);
 
                 // Coulomb: repels proton–proton only
-                if (nucleons[i].charge > 0.f && nucleons[j].charge > 0.f)
+                bool both_protons = (nucleons[i].charge > 0.f && nucleons[j].charge > 0.f);
+                if (both_protons)
                     f += coulomb(r, 1.f, K_NUC);
 
                 // Hard-core Pauli exclusion
@@ -252,6 +260,13 @@ void SubAtomicSim::step_nucleon(float dt) {
 
                 forces[i] += f;
                 forces[j] -= f;
+
+                // Accumulate binding energy potential on last sub-step
+                if (sub == 3) {
+                    float V_yukawa  = -YUKAWA_G2 * std::exp(-d / YUKAWA_L) / d;
+                    float V_coulomb = both_protons ? K_NUC / d : 0.f;
+                    binding_energy_acc += V_yukawa + V_coulomb;
+                }
             }
         }
 
@@ -264,6 +279,18 @@ void SubAtomicSim::step_nucleon(float dt) {
     // Apply damping once per frame (framerate-independent approximation)
     for (auto& nuc : nucleons)
         nuc.vel *= damp;
+
+    // Update binding energy and nuclear stability for LOD coupling
+    current_binding_energy = binding_energy_acc;
+
+    // Expected binding energy: liquid-drop reference — scales with A*V_typical
+    float A        = float(N);
+    float expected = -YUKAWA_G2 * A * 0.8f / YUKAWA_L;  // typical saturation energy
+    if (expected < -1.f) {
+        nuclear_stability = std::clamp(binding_energy_acc / expected, 0.f, 1.f);
+    } else {
+        nuclear_stability = 1.f;
+    }
 }
 
 // ── step_electrons ────────────────────────────────────────────────────────────
@@ -414,10 +441,14 @@ void SubAtomicSim::update(double dt, int hovered_atom_type, float atom_energy,
 
 static const char* ATOM_NAMES[ATOM_COUNT]   = {
     "Hydrogen","Carbon","Nitrogen","Oxygen",
-    "Phosphorus","Sulfur","Sodium","Chlorine"
+    "Phosphorus","Sulfur","Sodium","Chlorine",
+    "Iron","Nickel","Silicon","Calcium",
+    "Titanium","Strontium","Gold","Lead",
+    "Europium","Uranium"
 };
 static const char* ATOM_SYMBOLS[ATOM_COUNT] = {
-    "H","C","N","O","P","S","Na","Cl"
+    "H","C","N","O","P","S","Na","Cl",
+    "Fe","Ni","Si","Ca","Ti","Sr","Au","Pb","Eu","U"
 };
 
 void SubAtomicSim::render_panel(int hover_particle_idx, const Particles& particles) {
@@ -596,8 +627,16 @@ void SubAtomicSim::render_panel(int hover_particle_idx, const Particles& particl
                                  sizeof(shell_str) - static_cast<size_t>(off),
                                  "%d", SHELLS[atom_type][sh]);
         }
-        ImGui::Text("%dp  %dn  %de  |  Shells: %s  |  Bohr-Yukawa model",
-                    nc.p, nc.n, static_cast<int>(electrons.size()), shell_str);
+        ImGui::Text("%dp  %dn  %de  |  Shells: %s", nc.p, nc.n,
+                    static_cast<int>(electrons.size()), shell_str);
+        // Nuclear stability indicator (LOD coupling)
+        float stab = nuclear_stability;
+        ImGui::SameLine();
+        ImGui::TextColored(
+            stab > 0.7f ? ImVec4(0.4f,1.f,0.4f,1.f) :
+            stab > 0.4f ? ImVec4(1.f,0.85f,0.f,1.f) :
+                          ImVec4(1.f,0.3f,0.2f,1.f),
+            "  Stability %.0f%%", stab * 100.f);
     } else if (zoom_level == 2) {
         bool is_p = (focused_nuc >= 0 &&
                      focused_nuc < static_cast<int>(nucleons.size()) &&

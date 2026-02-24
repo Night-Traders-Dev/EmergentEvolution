@@ -55,19 +55,27 @@ layout(push_constant, std430) uniform Params {
     float pressure_resistance;// 60
     float local_density_cap;  // 64
     float temperature;        // 68 — thermal noise strength
+    float gravity_strength;   // 72 — scaled gravity (0 = off)
+    float lorentz_strength;   // 76 — scaled Lorentz / magnetic force (0 = off)
 } params;
 
-const uint BEHAVIOR_REPEL     = 1u;    // same-charge ionic repulsion
-const uint BEHAVIOR_POLAR     = 2u;    // dipole rotation (H, O)
-const uint BEHAVIOR_HEAVY     = 4u;    // high-mass atom
-const uint BEHAVIOR_CATALYST  = 8u;    // enzymatic / activation-energy reduction (P)
-const uint BEHAVIOR_RADICAL   = 16u;   // unpaired electron — aggressive bonding (was VIRAL)
-const uint BEHAVIOR_ADHESIVE  = 32u;   // ionic pair adhesion (Na-Cl)
-const uint BEHAVIOR_DONOR     = 64u;   // electron donor (was SECRETOR)
-const uint BEHAVIOR_ACCEPTOR  = 128u;  // electron acceptor (was PHOTOSYNTH)
-const uint BEHAVIOR_IONIC_POS = 256u;  // positive ion Na (was PREDATOR)
-const uint BEHAVIOR_IONIC_NEG = 512u;  // negative ion Cl (was REPRODUCTIVE)
-const uint BEHAVIOR_PHOTON    = 1024u; // massless energy carrier; skips normal physics
+const uint BEHAVIOR_REPEL     = 1u;     // same-charge ionic repulsion
+const uint BEHAVIOR_POLAR     = 2u;     // dipole rotation (H, O)
+const uint BEHAVIOR_HEAVY     = 4u;     // high-mass atom
+const uint BEHAVIOR_CATALYST  = 8u;     // enzymatic / activation-energy reduction (P)
+const uint BEHAVIOR_RADICAL   = 16u;    // unpaired electron — aggressive bonding
+const uint BEHAVIOR_ADHESIVE  = 32u;    // ionic pair adhesion (Na-Cl)
+const uint BEHAVIOR_DONOR     = 64u;    // electron donor
+const uint BEHAVIOR_ACCEPTOR  = 128u;   // electron acceptor
+const uint BEHAVIOR_IONIC_POS = 256u;   // positive ion Na
+const uint BEHAVIOR_IONIC_NEG = 512u;   // negative ion Cl
+const uint BEHAVIOR_PHOTON    = 1024u;  // massless energy carrier; skips normal physics
+// Standard Model / decay product flags
+const uint BEHAVIOR_ALPHA     = 2048u;  // He-4 nucleus (alpha particle)
+const uint BEHAVIOR_LEPTON    = 4096u;  // free lepton (e-, muon)
+const uint BEHAVIOR_NEUTRINO  = 8192u;  // near-zero interaction; ballistic like photon
+const uint BEHAVIOR_POSITRON  = 16384u; // positron e+; annihilates with LEPTON
+const uint BEHAVIOR_MUON      = 32768u; // heavy lepton; decays CPU-side
 
 const uint  PHOTON_TYPE_IDX  = 18u;
 const float PHOTON_DRAIN     = 0.07f; // energy drained per second (~4-8s lifetime depending on start energy)
@@ -95,6 +103,16 @@ void apply_physics(uint i) {
         out_pos_buffer.data[i]    = pos_a + vel_a * params.dt;
         out_vel_buffer.data[i]    = vel_a;  // no dampening — photon coasts
         return;                              // skip all normal physics
+    }
+
+    // ── Neutrino fast-path ────────────────────────────────────────────────────
+    // Neutrinos are near-massless, near-interaction-free. Ballistic; slow energy drain.
+    if ((flags_a & BEHAVIOR_NEUTRINO) != 0u) {
+        float nrg = max(in_energy_buffer.data[i] - 0.001f * params.dt, 0.0f);
+        out_energy_buffer.data[i] = nrg;
+        out_pos_buffer.data[i]    = pos_a + vel_a * params.dt;
+        out_vel_buffer.data[i]    = vel_a;
+        return;
     }
 
     vec2  total_force    = vec2(0.0f);
@@ -254,8 +272,31 @@ void apply_physics(uint i) {
             float width    = params.interaction_radius - params.repulsion_radius;
             float midpoint = (params.repulsion_radius + params.interaction_radius) * 0.5f;
             float force_mag = attraction * (1.0f - abs(dist - midpoint) / (width * 0.5f + 0.001f));
-            
+
             total_force += normal * force_mag * 50.0f;
+
+            // ── Gravity ───────────────────────────────────────────────────────
+            // F = G * m_a * m_b / r²  (always attractive; softened singularity)
+            if (params.gravity_strength > 0.001f) {
+                float mass_a = (flags_a & BEHAVIOR_HEAVY) != 0u ? 3.0f : 1.0f;
+                float mass_b = (flags_b & BEHAVIOR_HEAVY) != 0u ? 3.0f : 1.0f;
+                float f_grav = params.gravity_strength * mass_a * mass_b
+                               / (dist_sq + 100.0f);
+                total_force += normal * f_grav;
+            }
+
+            // ── Lorentz (magnetic) force ──────────────────────────────────────
+            // 2D Biot-Savart: B_z from j's current, then F = q_i (v_i × B_z ẑ)
+            if (params.lorentz_strength > 0.001f) {
+                float q_b = genome_buffer.data[j * 4u + 0u];
+                if (abs(charge) > 0.05f && abs(q_b) > 0.05f) {
+                    vec2  vel_b   = in_vel_buffer.data[j];
+                    float cross_j = vel_b.x * (-normal.y) - vel_b.y * (-normal.x);
+                    float B_z     = params.lorentz_strength * q_b * cross_j
+                                    / (dist + 1.0f);
+                    total_force  += charge * B_z * vec2(vel_a.y, -vel_a.x);
+                }
+            }
         }
     }
 

@@ -128,6 +128,8 @@ void Interface::render_imgui(SimConfig&       cfg,
     cfg.dampening = dampening_slider;
 
     ImGui::SliderFloat("Temperature", &cfg.temperature, 0.0f, 1.0f, "%.3f");
+    ImGui::SliderFloat("Gravity",     &cfg.gravity_strength,  0.0f, 5.0f,  "%.4f");
+    ImGui::SliderFloat("Magnetism",   &cfg.lorentz_strength,  0.0f, 2.0f,  "%.4f");
 
     ImGui::SliderFloat("Repulsion Radius", &repulsion_slider, 1.0f, 400.0f);
     ImGui::Text("Repulsion Radius:  %d", static_cast<int>(repulsion_slider));
@@ -173,6 +175,20 @@ void Interface::render_imgui(SimConfig&       cfg,
 
     // ── Organism panel ────────────────────────────────────────────────────────
     draw_organism_panel(org_manager, bond_manager, particles, cfg);
+
+    // ── Radioactive Decay panel ───────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Radioactive Decay")) {
+        ImGui::Text("Total decay events:  %u", decay_total_display);
+        ImGui::Separator();
+        ImGui::TextDisabled("Unstable isotopes:");
+        ImGui::BulletText("U  \xe2\x86\x92 Pb + \xce\xb1 + \xce\xb3  (alpha decay,  T\xc2\xbd ~ 30 s)");
+        ImGui::BulletText("Eu \xe2\x86\x92 Fe + e\xe2\x81\xbb + \xce\xb3  (beta\xe2\x81\xbb decay, T\xc2\xbd ~ 25 s)");
+        ImGui::BulletText("Sr \xe2\x86\x92 Ca + e\xe2\x81\xbb + \xce\xb3  (beta\xe2\x81\xbb decay, T\xc2\xbd ~ 40 s)");
+        ImGui::BulletText("Ni \xe2\x86\x92 Fe + e\xe2\x81\x8a       (beta\xe2\x81\xba decay, T\xc2\xbd ~ 50 s)");
+        ImGui::BulletText("\xce\xbc  \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd          (muon decay, T\xc2\xbd ~ 0.5 s)");
+        ImGui::Separator();
+        ImGui::TextDisabled("SM particles: spawn via F3 \xe2\x86\x92 Atoms tab");
+    }
 
     ImGui::Separator();
     ImGui::TextDisabled("F1: toggle UI  |  F2: reset  |  F3: spawn picker  |  Space: pause");
@@ -699,41 +715,64 @@ void Interface::draw_spawn_menu(const OrganismManager& org_manager,
             ImGui::TextDisabled("Choose atom type:");
             ImGui::Spacing();
 
-            static const char* ATOM_LABELS[ATOM_COUNT] = {
-                "H", "C", "N", "O", "P", "S", "Na", "Cl",
-                "Fe", "Ni", "Si", "Ca", "Ti", "Sr", "Au", "Pb", "Eu", "U"
+            // Atoms 0–17 (elements) + SM free particles (19–23)
+            static constexpr int SPAWN_TYPE_COUNT = 23;  // ATOM_COUNT + 5 SM types
+            static const uint32_t SPAWN_TYPES[SPAWN_TYPE_COUNT] = {
+                0,1,2,3,4,5,6,7, 8,9,10,11,12,13,14,15,16,17,  // elements
+                ALPHA_TYPE, ELECTRON_TYPE, POSITRON_TYPE, NEUTRINO_TYPE, MUON_TYPE
             };
-            static const char* ATOM_FULL[ATOM_COUNT] = {
-                "Hydrogen", "Carbon", "Nitrogen", "Oxygen",
-                "Phosphorus", "Sulfur", "Sodium", "Chlorine",
-                "Iron", "Nickel", "Silicon", "Calcium",
-                "Titanium", "Strontium", "Gold", "Lead",
-                "Europium", "Uranium"
+            static const char* ATOM_LABELS[SPAWN_TYPE_COUNT] = {
+                "H","C","N","O","P","S","Na","Cl",
+                "Fe","Ni","Si","Ca","Ti","Sr","Au","Pb","Eu","U",
+                "\xce\xb1", "e\xe2\x81\xbb", "e\xe2\x81\x8a", "\xce\xbd", "\xce\xbc"
+            };
+            static const char* ATOM_FULL[SPAWN_TYPE_COUNT] = {
+                "Hydrogen","Carbon","Nitrogen","Oxygen",
+                "Phosphorus","Sulfur","Sodium","Chlorine",
+                "Iron","Nickel","Silicon","Calcium",
+                "Titanium","Strontium","Gold","Lead",
+                "Europium","Uranium",
+                "Alpha particle (He-4)",
+                "Free electron (e\xe2\x81\xbb)",
+                "Positron (e\xe2\x81\x8a) — annihilates with e\xe2\x81\xbb",
+                "Neutrino \xe2\x80\x94 near-zero interaction",
+                "Muon \xe2\x80\x94 decays to e\xe2\x81\xbb + \xce\xbd"
             };
 
-            for (int t = 0; t < static_cast<int>(ATOM_COUNT); ++t) {
-                ImGui::PushID(t);
-                const glm::vec4& col = particles.colors[t];
-                bool sel = (spawn_atom_type == t && spawn_tab == 0);
-                float bright = sel ? 1.25f : 0.72f;
-                ImGui::PushStyleColor(ImGuiCol_Button,
-                    ImVec4(col.r * bright, col.g * bright, col.b * bright, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                    ImVec4(col.r, col.g, col.b, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                    ImVec4(col.r * 1.35f, col.g * 1.35f, col.b * 1.35f, 1.0f));
+            // Separator before SM particles
+            bool sm_sep_drawn = false;
 
-                if (ImGui::Button(ATOM_LABELS[t], { 58.0f, 44.0f })) {
-                    spawn_atom_type = t;
-                    spawn_tab       = 0;
-                    pending_spawn   = true;
+            for (int ti = 0; ti < SPAWN_TYPE_COUNT; ++ti) {
+                uint32_t t = SPAWN_TYPES[ti];
+                if (ti == static_cast<int>(ATOM_COUNT) && !sm_sep_drawn) {
+                    ImGui::Spacing();
+                    ImGui::TextDisabled("Standard Model free particles:");
+                    sm_sep_drawn = true;
                 }
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s  (valence %u)", ATOM_FULL[t], ATOM_VALENCE[t]);
+                ImGui::PushID(static_cast<int>(t));
+                if (t < particles.colors.size()) {
+                    const glm::vec4& col = particles.colors[t];
+                    bool sel = (static_cast<uint32_t>(spawn_atom_type) == t && spawn_tab == 0);
+                    float bright = sel ? 1.25f : 0.72f;
+                    ImGui::PushStyleColor(ImGuiCol_Button,
+                        ImVec4(col.r * bright, col.g * bright, col.b * bright, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                        ImVec4(col.r, col.g, col.b, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                        ImVec4(col.r * 1.35f, col.g * 1.35f, col.b * 1.35f, 1.0f));
 
-                ImGui::PopStyleColor(3);
+                    if (ImGui::Button(ATOM_LABELS[ti], { 58.0f, 44.0f })) {
+                        spawn_atom_type = static_cast<int>(t);
+                        spawn_tab       = 0;
+                        pending_spawn   = true;
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("%s", ATOM_FULL[ti]);
+
+                    ImGui::PopStyleColor(3);
+                }
                 ImGui::PopID();
-                if ((t + 1) % 6 != 0)
+                if ((ti + 1) % 6 != 0)
                     ImGui::SameLine();
             }
 

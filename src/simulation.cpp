@@ -46,6 +46,7 @@ void Simulation::reset() {
     compute.create_buffers(vk, particles);
     organism_manager.reset();
     sub_atomic_sim.reset();
+    decay_manager.reset();
     organism_tick_counter_ = 0;
 
     bond_manager.reset(cfg.particle_count);
@@ -118,7 +119,18 @@ void Simulation::tick(GLFWwindow* window, double dt) {
         sub_atomic_sim.update(dt, hov_type, hov_nrg, new_zoom);
     }
 
+    // ── LOD coupling: nuclear stability → macro reactivity ────────────────────
+    if (sub_atomic_sim.active && iface.hover_particle_idx >= 0) {
+        float instability = 1.f - sub_atomic_sim.nuclear_stability;
+        auto idx = static_cast<uint32_t>(iface.hover_particle_idx);
+        if (idx * GENOME_SIZE + 2 < static_cast<uint32_t>(particles.genomes.size())) {
+            float& reactivity = particles.genomes[idx * GENOME_SIZE + 2];
+            reactivity = std::clamp(reactivity + instability * 0.005f, 0.2f, 2.0f);
+        }
+    }
+
     // ── ImGui ──────────────────────────────────────────────────────────────────
+    iface.decay_total_display = decay_manager.total_decays;
     bool request_reset = false;
     iface.render_imgui(cfg, particles, organism_manager, bond_manager, request_reset);
 
@@ -168,6 +180,93 @@ void Simulation::tick(GLFWwindow* window, double dt) {
                 // Inject photons emitted by bond events (capped at 20 per tick)
                 if (!bond_manager.pending_photons.empty())
                     inject_photons(bond_manager.pending_photons);
+
+                // ── Radioactive decay processing ──────────────────────────────
+                {
+                    float real_dt = static_cast<float>(dt) * static_cast<float>(cfg.bond_update_interval);
+                    auto decay_events = decay_manager.update(
+                        particles.types, readback_positions_,
+                        readback_energies_, real_dt, cfg.particle_count);
+
+                    if (!decay_events.empty()) {
+                        // Build a sorted list of low-energy non-photon candidates for
+                        // product particle injection. Cap at 64 to avoid O(n) stall.
+                        static const uint32_t DECAY_CAND_MAX = 64u;
+                        std::vector<uint32_t> cands;
+                        cands.reserve(DECAY_CAND_MAX);
+                        // Sort indices by energy ascending (reuse readback_energies_)
+                        std::vector<uint32_t> order(cfg.particle_count);
+                        std::iota(order.begin(), order.end(), 0u);
+                        std::partial_sort(order.begin(),
+                            order.begin() + static_cast<int>(std::min(
+                                static_cast<uint32_t>(order.size()), DECAY_CAND_MAX * 4)),
+                            order.end(),
+                            [&](uint32_t a, uint32_t b){
+                                return readback_energies_[a] < readback_energies_[b];
+                            });
+                        for (uint32_t idx : order) {
+                            if (particles.types[idx] == PHOTON_TYPE) continue;
+                            if (spawn_protect_ids_.count(idx)) continue;
+                            cands.push_back(idx);
+                            if (cands.size() >= DECAY_CAND_MAX) break;
+                        }
+
+                        // Read current GPU positions/velocities for in-place edits
+                        std::vector<glm::vec2> dpos(cfg.particle_count);
+                        std::vector<glm::vec2> dvel(cfg.particle_count);
+                        std::vector<float>     dnrg(cfg.particle_count);
+                        compute.read_current_state(vk, dpos, dvel, dnrg);
+
+                        uint32_t cand_idx = 0;
+                        std::vector<PhotonEvent> gamma_photons;
+
+                        for (const auto& ev : decay_events) {
+                            if (ev.parent_idx >= cfg.particle_count) continue;
+
+                            // Transform parent particle in-place
+                            particles.types[ev.parent_idx] = ev.daughter_type;
+                            bond_manager.clear_particle_bonds(ev.parent_idx);
+                            dnrg[ev.parent_idx] = std::clamp(dnrg[ev.parent_idx] - ev.q_energy * 0.5f, 0.f, 1.f);
+                            // Zero partial charge on daughter (it's been transmuted)
+                            particles.genomes[ev.parent_idx * GENOME_SIZE + 0] = 0.f;
+
+                            // Inject product particle into a recycled low-energy slot
+                            if (ev.product_type != 0xFFFFFFFFu && cand_idx < cands.size()) {
+                                uint32_t pidx = cands[cand_idx++];
+                                particles.types[pidx] = ev.product_type;
+                                bond_manager.clear_particle_bonds(pidx);
+                                dpos[pidx] = ev.parent_pos + glm::vec2{3.f, 3.f};
+                                dvel[pidx] = ev.product_vel;
+                                dnrg[pidx] = ev.q_energy;
+                                // Genome: set charge for SM particle types
+                                if (ev.product_type == ALPHA_TYPE)    particles.genomes[pidx*GENOME_SIZE] =  0.8f;
+                                else if (ev.product_type == ELECTRON_TYPE) particles.genomes[pidx*GENOME_SIZE] = -1.0f;
+                                else if (ev.product_type == POSITRON_TYPE) particles.genomes[pidx*GENOME_SIZE] =  1.0f;
+                                else if (ev.product_type == NEUTRINO_TYPE) particles.genomes[pidx*GENOME_SIZE] =  0.0f;
+                                else if (ev.product_type == MUON_TYPE)     particles.genomes[pidx*GENOME_SIZE] = -1.0f;
+                                spawn_protect_ids_.insert(pidx);
+                            }
+
+                            // Emit gamma photon if flagged
+                            if (ev.emits_gamma) {
+                                float angle = float(ev.parent_idx) * 1.618f;
+                                glm::vec2 dir = { std::cos(angle), std::sin(angle) };
+                                gamma_photons.push_back({ ev.parent_pos, dir, 0.6f });
+                            }
+                        }
+
+                        if (!decay_events.empty()) {
+                            spawn_protect_ttl_ = std::max(spawn_protect_ttl_, 60);
+                        }
+
+                        // Write modified state back to GPU
+                        compute.write_particle_state(vk, dpos, dvel, dnrg);
+                        compute.upload_dynamic_data(vk, particles);
+
+                        if (!gamma_photons.empty())
+                            inject_photons(gamma_photons);
+                    }
+                }
             }
 
             if (need_organism) {
@@ -495,15 +594,26 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
 
     // Helper: overwrite one particle slot with energy from UI
     auto set_atom = [&](uint32_t idx, uint32_t type, glm::vec2 pos) {
-        uint32_t t = std::min(type, static_cast<uint32_t>(ATOM_COUNT - 1u));
+        uint32_t t = std::min(type, static_cast<uint32_t>(MAX_PARTICLE_TYPES - 1u));
         cur_pos[idx]                = pos;
         cur_vel[idx]                = { 0.0f, 0.0f };
         cur_nrg[idx]                = spawn_energy;
         particles.types[idx]        = t;
-        particles.genomes[idx*4+0]  = BASE_CHARGE[t];
-        particles.genomes[idx*4+1]  = BASE_ELECTRONEG[t];
-        particles.genomes[idx*4+2]  = BASE_REACTIVITY[t];
-        particles.genomes[idx*4+3]  = BASE_BOND_STR[t];
+        // Set genome from atom table for elements (0-17); use SM defaults for others
+        if (t < ATOM_COUNT) {
+            particles.genomes[idx*4+0]  = BASE_CHARGE[t];
+            particles.genomes[idx*4+1]  = BASE_ELECTRONEG[t];
+            particles.genomes[idx*4+2]  = BASE_REACTIVITY[t];
+            particles.genomes[idx*4+3]  = BASE_BOND_STR[t];
+        } else {
+            // SM particle defaults
+            float sm_charge = (t == ELECTRON_TYPE || t == MUON_TYPE) ? -1.0f :
+                              (t == POSITRON_TYPE  || t == ALPHA_TYPE) ?  1.0f : 0.0f;
+            particles.genomes[idx*4+0] = sm_charge;
+            particles.genomes[idx*4+1] = 0.5f;  // electronegativity
+            particles.genomes[idx*4+2] = 1.0f;  // reactivity
+            particles.genomes[idx*4+3] = 0.0f;  // bond_str
+        }
         bond_manager.clear_particle_bonds(idx);
     };
 

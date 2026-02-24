@@ -32,6 +32,7 @@ add_executable(particle_life
     src/organism.cpp
     src/bond_manager.cpp
     src/sub_atomic.cpp
+    src/decay_manager.cpp
 
     # ImGui core
     ${imgui_SOURCE_DIR}/imgui.cpp

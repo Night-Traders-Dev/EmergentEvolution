@@ -9,6 +9,7 @@
 #include "organism.h"
 #include "bond_manager.h"
 #include "sub_atomic.h"
+#include "decay_manager.h"
 #include <GLFW/glfw3.h>
 #include <vector>
 #include <unordered_set>
@@ -40,6 +41,7 @@ public:
     OrganismManager organism_manager{};
     BondManager     bond_manager{};
     SubAtomicSim    sub_atomic_sim{};
+    DecayManager    decay_manager{};
 
 private:
     // Input state

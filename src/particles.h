@@ -42,6 +42,11 @@ public:
     // Called at the end of apply_atom_defaults() and before photon injection.
     void setup_photon_type();
 
+    // Sets colors, behavior flags, and zero force rows for Standard Model particle
+    // types 19-23 (alpha, e-, e+, neutrino, muon).
+    // Called at the end of apply_atom_defaults().
+    void setup_sm_types();
+
     // Individual atom preset: set flags + seed force row for one type index.
     void apply_preset_atom(uint32_t type, uint32_t active_types);
 

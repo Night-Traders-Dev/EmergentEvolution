@@ -32,6 +32,9 @@ public:
     int32_t                   hover_particle_idx = -1;
     const std::vector<float>* hover_energies_ptr = nullptr;
 
+    // ── Decay stats (set by Simulation each tick) ─────────────────────────────
+    uint32_t decay_total_display = 0;
+
     // Placement settings (apply to all spawn types)
     int   spawn_count        = 1;      // number of atoms to place per click (Atoms tab)
     float spawn_energy       = 0.7f;   // initial energy of placed particles

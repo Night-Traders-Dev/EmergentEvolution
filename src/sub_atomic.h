@@ -21,10 +21,15 @@ struct SubParticle {
 
 class SubAtomicSim {
 public:
-    bool active      = false;
-    int  zoom_level  = 0;   // 0=hidden, 1=nucleon view, 2=quark view
-    int  atom_type   = -1;  // currently shown atom type (0=H..7=Cl), -1=none
-    int  focused_nuc = 0;   // which nucleon index to zoom into for quark view
+    bool  active      = false;
+    int   zoom_level  = 0;   // 0=hidden, 1=nucleon view, 2=quark view
+    int   atom_type   = -1;  // currently shown atom type (0=H..17=U), -1=none
+    int   focused_nuc = 0;   // which nucleon index to zoom into for quark view
+
+    // LOD coupling outputs — updated each frame in step_nucleon()
+    // current_binding_energy < 0 means nucleus is bound (more negative = more stable)
+    float current_binding_energy = 0.f;
+    float nuclear_stability      = 1.f;  // 1.0=stable, 0.0=ready to decay
 
     std::vector<SubParticle>           nucleons;   // protons + neutrons
     std::vector<SubParticle>           electrons;

@@ -8,7 +8,7 @@
 
 static constexpr uint32_t REGION_W           = 2560;
 static constexpr uint32_t REGION_H           = 1440;
-static constexpr uint32_t MAX_PARTICLE_TYPES = 20;
+static constexpr uint32_t MAX_PARTICLE_TYPES = 26;
 static constexpr uint32_t GROUP_DENSITY      = 256;
 static constexpr uint32_t GENOME_SIZE        = 4;   // floats per particle: charge, electronegativity, reactivity, bond_strength
 
@@ -18,11 +18,22 @@ static constexpr uint32_t ATOM_COUNT             = 18;
 static constexpr uint32_t MAX_BONDS_PER_PARTICLE = 6;   // U has valence 6
 static constexpr uint32_t PHOTON_TYPE            = 18u; // particle type index for photons
 
-// Max covalent bonds per atom type (indexed 0-17)
-//                              H  C  N  O  P  S Na Cl Fe Ni Si Ca Ti Sr Au Pb Eu  U
-static constexpr uint32_t ATOM_VALENCE[ATOM_COUNT] = {
-    1, 4, 3, 2, 5, 2, 1, 1,  // original 8
-    3, 2, 4, 2, 4, 2, 1, 4, 3, 6   // new 10: Fe Ni Si Ca Ti Sr Au Pb Eu U
+// Standard Model free particle type indices (beyond atoms + photon)
+static constexpr uint32_t ALPHA_TYPE    = 19u;  // He-4 nucleus
+static constexpr uint32_t ELECTRON_TYPE = 20u;  // free electron (e-)
+static constexpr uint32_t POSITRON_TYPE = 21u;  // positron (e+)
+static constexpr uint32_t NEUTRINO_TYPE = 22u;  // electron neutrino
+static constexpr uint32_t MUON_TYPE     = 23u;  // muon (μ-)
+
+// Max covalent bonds per particle type (indexed 0–MAX_PARTICLE_TYPES-1)
+// Atoms 0–17, photon 18, SM particles 19–23, reserved 24–25
+//                                H  C  N  O  P  S Na Cl Fe Ni Si Ca Ti Sr Au Pb Eu  U  γ  α  e- e+ ν  μ  r  r
+static constexpr uint32_t ATOM_VALENCE[MAX_PARTICLE_TYPES] = {
+    1, 4, 3, 2, 5, 2, 1, 1,  // original 8: H C N O P S Na Cl
+    3, 2, 4, 2, 4, 2, 1, 4, 3, 6,  // new 10: Fe Ni Si Ca Ti Sr Au Pb Eu U
+    0,            // photon (18)
+    0, 0, 0, 0, 0, // alpha e- e+ ν μ (19–23)
+    0, 0           // reserved (24–25)
 };
 
 enum ParticleBehavior : uint32_t {
@@ -38,6 +49,12 @@ enum ParticleBehavior : uint32_t {
     BEHAVIOR_IONIC_POS = 1u << 8,  // positive ion (Na) (was PREDATOR)
     BEHAVIOR_IONIC_NEG = 1u << 9,  // negative ion (Cl) (was REPRODUCTIVE)
     BEHAVIOR_PHOTON    = 1u << 10, // massless energy carrier; skips normal physics
+    // Standard Model / decay product flags
+    BEHAVIOR_ALPHA     = 1u << 11, // He-4 nucleus emitted from alpha decay
+    BEHAVIOR_LEPTON    = 1u << 12, // free lepton (e-, muon)
+    BEHAVIOR_NEUTRINO  = 1u << 13, // near-zero interaction; ballistic like photon
+    BEHAVIOR_POSITRON  = 1u << 14, // positron (e+); annihilates with LEPTON
+    BEHAVIOR_MUON      = 1u << 15, // heavy lepton; decays to e- on half-life TTL
 };
 
 
@@ -58,9 +75,11 @@ struct PushConstants {
     float     pressure_resistance;// 60
     float     local_density_cap;  // 64
     float     temperature;        // 68  — thermal noise strength
+    float     gravity_strength;   // 72  — scaled gravity (0 = off)
+    float     lorentz_strength;   // 76  — scaled Lorentz / magnetic force (0 = off)
 };
-// Size is 72 bytes
-static_assert(sizeof(PushConstants) == 72, "PushConstants layout mismatch");
+// Size is 80 bytes
+static_assert(sizeof(PushConstants) == 80, "PushConstants layout mismatch");
 
 struct SimConfig {
     uint32_t particle_count     = 22500;
@@ -90,6 +109,10 @@ struct SimConfig {
 
     // Thermal noise
     float    temperature              = 0.05f;  // Brownian motion strength (0 = off)
+
+    // Fundamental forces (off by default)
+    float    gravity_strength         = 0.0f;   // scaled gravitational attraction
+    float    lorentz_strength         = 0.0f;   // scaled Lorentz / magnetic deflection
 
     // Periodic particle spawn
     bool     spawn_enabled   = true;

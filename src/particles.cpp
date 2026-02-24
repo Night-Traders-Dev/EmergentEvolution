@@ -152,8 +152,10 @@ void Particles::apply_atom_defaults(uint32_t active_types) {
         for (uint32_t b = 0; b < n; ++b)
             forces[a + b * MAX_PARTICLE_TYPES] = CHEM_FORCE[a][b];
 
-    // Always set up photon type (type index 8) — zero forces, BEHAVIOR_PHOTON flag
+    // Always set up photon type (type index 18) — zero forces, BEHAVIOR_PHOTON flag
     setup_photon_type();
+    // Set up Standard Model free particle types (19-23)
+    setup_sm_types();
 }
 
 // ── setup_photon_type ─────────────────────────────────────────────────────────
@@ -168,6 +170,55 @@ void Particles::setup_photon_type() {
     for (uint32_t k = 0; k < MAX_PARTICLE_TYPES; ++k) {
         forces[PHOTON_TYPE + k * MAX_PARTICLE_TYPES] = 0.0f;
         forces[k + PHOTON_TYPE * MAX_PARTICLE_TYPES] = 0.0f;
+    }
+}
+
+// ── setup_sm_types ────────────────────────────────────────────────────────────
+// Standard Model free particle types 19-23: alpha, e-, e+, neutrino, muon.
+// Colors, behavior flags, and zero force-matrix rows. Not spawned by default.
+
+void Particles::setup_sm_types() {
+    // Zero force rows/columns for all SM types so they don't accidentally
+    // attract/repel through the chemistry force matrix.
+    static constexpr uint32_t SM_TYPES[] = {
+        ALPHA_TYPE, ELECTRON_TYPE, POSITRON_TYPE, NEUTRINO_TYPE, MUON_TYPE
+    };
+    for (uint32_t t : SM_TYPES) {
+        if (t >= MAX_PARTICLE_TYPES) continue;
+        for (uint32_t k = 0; k < MAX_PARTICLE_TYPES; ++k) {
+            forces[t + k * MAX_PARTICLE_TYPES] = 0.0f;
+            forces[k + t * MAX_PARTICLE_TYPES] = 0.0f;
+        }
+    }
+
+    // Alpha particle (He-4 nucleus): yellow-green, HEAVY + IONIC_POS
+    if (colors.size() > ALPHA_TYPE) {
+        colors[ALPHA_TYPE]         = { 0.75f, 0.95f, 0.3f, 1.0f };
+        behavior_flags[ALPHA_TYPE] = BEHAVIOR_HEAVY | BEHAVIOR_IONIC_POS | BEHAVIOR_ALPHA;
+    }
+
+    // Free electron: bright blue, light, negative charge
+    if (colors.size() > ELECTRON_TYPE) {
+        colors[ELECTRON_TYPE]         = { 0.2f, 0.6f, 1.0f, 1.0f };
+        behavior_flags[ELECTRON_TYPE] = BEHAVIOR_LEPTON | BEHAVIOR_IONIC_NEG;
+    }
+
+    // Positron (e+): hot orange, positive charge, annihilates with electron
+    if (colors.size() > POSITRON_TYPE) {
+        colors[POSITRON_TYPE]         = { 1.0f, 0.4f, 0.1f, 1.0f };
+        behavior_flags[POSITRON_TYPE] = BEHAVIOR_POSITRON | BEHAVIOR_IONIC_POS;
+    }
+
+    // Neutrino: near-invisible dim grey; no force interactions
+    if (colors.size() > NEUTRINO_TYPE) {
+        colors[NEUTRINO_TYPE]         = { 0.4f, 0.4f, 0.5f, 0.5f };
+        behavior_flags[NEUTRINO_TYPE] = BEHAVIOR_NEUTRINO;
+    }
+
+    // Muon: vivid purple heavy lepton; decays to electron (CPU-side TTL)
+    if (colors.size() > MUON_TYPE) {
+        colors[MUON_TYPE]         = { 0.7f, 0.2f, 0.9f, 1.0f };
+        behavior_flags[MUON_TYPE] = BEHAVIOR_MUON | BEHAVIOR_LEPTON | BEHAVIOR_IONIC_NEG;
     }
 }
 
