@@ -922,32 +922,199 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
 
     // ── Bio-molecule templates (Organics tab) ────────────────────────────────
     // Types: H=0 C=1 N=2 O=3 P=4 S=5
-    static const MolSpec ORGANICS[8] = {
+    static const MolSpec ORGANICS[] = {
+        // ── Amino Acids ─────────────────────────────────────────────────────────
+        // Backbone: N-Cα-C'(=O)(-OH), side chains off Cα downward
         // 0: Glycine — NH2-CH2-COOH (8 atoms)
         { {{-24,0,2},{0,0,1},{22,0,1},{32,-14,3},{32,14,3},{-34,-12,0},{-34,12,0},{0,-16,0}},
           {{0,1},{1,2},{2,3},{2,4},{0,5},{0,6},{1,7}} },
         // 1: Alanine — NH2-CH(CH3)-COOH (10 atoms)
         { {{-24,0,2},{0,0,1},{0,-22,1},{22,0,1},{32,-14,3},{32,14,3},{-34,-12,0},{-34,12,0},{-10,-32,0},{10,-32,0}},
           {{0,1},{1,2},{1,3},{3,4},{3,5},{0,6},{0,7},{2,8},{2,9}} },
-        // 2: Glucose — hexose ring (11 atoms: 5C + ring-O + 5 OH)
+        // 2: Serine — NH2-CH(CH2OH)-COOH (7 atoms, no explicit H)
+        { {{-22,0,2},{0,0,1},{22,0,1},{30,-14,3},{30,14,3},{0,-22,1},{0,-40,3}},
+          {{0,1},{1,2},{2,3},{2,4},{1,5},{5,6}} },
+        // 3: Cysteine — NH2-CH(CH2SH)-COOH (7 atoms)
+        { {{-22,0,2},{0,0,1},{22,0,1},{30,-14,3},{30,14,3},{0,-22,1},{0,-40,5}},
+          {{0,1},{1,2},{2,3},{2,4},{1,5},{5,6}} },
+        // 4: Valine — NH2-CH(CH(CH3)2)-COOH (8 atoms)
+        { {{-22,0,2},{0,0,1},{22,0,1},{30,-14,3},{30,14,3},{0,-22,1},{-14,-36,1},{14,-36,1}},
+          {{0,1},{1,2},{2,3},{2,4},{1,5},{5,6},{5,7}} },
+        // 5: Threonine — NH2-CH(CH(OH)CH3)-COOH (8 atoms)
+        { {{-22,0,2},{0,0,1},{22,0,1},{30,-14,3},{30,14,3},{0,-22,1},{-14,-36,3},{14,-36,1}},
+          {{0,1},{1,2},{2,3},{2,4},{1,5},{5,6},{5,7}} },
+        // 6: Leucine — NH2-CH(CH2CH(CH3)2)-COOH (9 atoms)
+        { {{-22,0,2},{0,0,1},{22,0,1},{30,-14,3},{30,14,3},{0,-22,1},{0,-44,1},{-14,-58,1},{14,-58,1}},
+          {{0,1},{1,2},{2,3},{2,4},{1,5},{5,6},{6,7},{6,8}} },
+        // 7: Proline — cyclic: N-Cα-Cβ-Cγ-Cδ-N ring + C'(=O)(-OH) (8 atoms)
+        { {{-22,0,2},{0,0,1},{22,0,1},{30,-14,3},{30,14,3},{0,-22,1},{-16,-34,1},{-26,-16,1}},
+          {{0,1},{1,2},{2,3},{2,4},{1,5},{5,6},{6,7},{7,0}} },
+        // 8: Phenylalanine — backbone + -CH2-C6H5 benzene ring (12 atoms)
+        { {{-22,0,2},{0,0,1},{22,0,1},{30,-14,3},{30,14,3},
+           {0,-22,1},{0,-44,1},{14,-52,1},{14,-68,1},{0,-76,1},{-14,-68,1},{-14,-52,1}},
+          {{0,1},{1,2},{2,3},{2,4},{1,5},{5,6},{6,7},{7,8},{8,9},{9,10},{10,11},{11,6}} },
+        // 9: Lysine — backbone + -(CH2)4-NH2 (10 atoms)
+        { {{-22,0,2},{0,0,1},{22,0,1},{30,-14,3},{30,14,3},
+           {0,-22,1},{14,-34,1},{0,-46,1},{14,-58,1},{0,-72,2}},
+          {{0,1},{1,2},{2,3},{2,4},{1,5},{5,6},{6,7},{7,8},{8,9}} },
+        // 10: Aspartate — backbone + -CH2-COO⁻ (9 atoms)
+        { {{-22,0,2},{0,0,1},{22,0,1},{30,-14,3},{30,14,3},{0,-22,1},{0,-44,1},{-12,-56,3},{12,-56,3}},
+          {{0,1},{1,2},{2,3},{2,4},{1,5},{5,6},{6,7},{6,8}} },
+        // 11: Glutamate — backbone + -CH2-CH2-COO⁻ (10 atoms)
+        { {{-22,0,2},{0,0,1},{22,0,1},{30,-14,3},{30,14,3},
+           {0,-22,1},{0,-44,1},{0,-66,1},{-12,-78,3},{12,-78,3}},
+          {{0,1},{1,2},{2,3},{2,4},{1,5},{5,6},{6,7},{7,8},{7,9}} },
+        // 12: Histidine — backbone + -CH2-imidazole ring (11 atoms)
+        { {{-22,0,2},{0,0,1},{22,0,1},{30,-14,3},{30,14,3},
+           {0,-22,1},{0,-44,1},{-14,-54,2},{-10,-68,1},{6,-70,2},{14,-56,1}},
+          {{0,1},{1,2},{2,3},{2,4},{1,5},{5,6},{6,7},{7,8},{8,9},{9,10},{10,6}} },
+        // 13: Tryptophan — backbone + -CH2-indole (fused 5+6 ring) (14 atoms)
+        { {{-22,0,2},{0,0,1},{22,0,1},{30,-14,3},{30,14,3},
+           {0,-22,1},{0,-44,1},{-12,-56,2},{-22,-44,1},{-22,-28,1},{-10,-66,1},
+           {-22,-72,1},{-32,-60,1},{-32,-44,1}},
+          {{0,1},{1,2},{2,3},{2,4},{1,5},{5,6},{6,7},{7,8},{8,9},{9,6},
+           {7,10},{10,11},{11,12},{12,13},{13,9}} },
+
+        // ── Peptides ─────────────────────────────────────────────────────────────
+        // 14: Gly-Ala dipeptide — H2N-CH2-CO-NH-CH(CH3)-COOH (10 atoms)
+        //  N(0)-Cα1(1)-C'1(2)=O(3)-N2(4)-Cα2(5)-Cβ(6)-C'2(7)=O(8)-OH(9)
+        { {{-44,0,2},{-22,0,1},{0,0,1},{8,-14,3},{22,0,2},{44,0,1},{44,-22,1},{66,0,1},{74,-14,3},{74,14,3}},
+          {{0,1},{1,2},{2,3},{2,4},{4,5},{5,6},{5,7},{7,8},{7,9}} },
+        // 15: Gly-Gly-Gly tripeptide — H2N-CH2-CO-NH-CH2-CO-NH-CH2-COOH (13 atoms)
+        //  N(0)-Cα1(1)-C'1(2)=O(3)-N2(4)-Cα2(5)-C'2(6)=O(7)-N3(8)-Cα3(9)-C'3(10)=O(11)-OH(12)
+        { {{-66,0,2},{-44,0,1},{-22,0,1},{-14,-14,3},{0,0,2},{22,0,1},{44,0,1},{52,-14,3},
+           {66,0,2},{88,0,1},{110,0,1},{118,-14,3},{118,14,3}},
+          {{0,1},{1,2},{2,3},{2,4},{4,5},{5,6},{6,7},{6,8},{8,9},{9,10},{10,11},{10,12}} },
+
+        // ── Carbohydrates ───────────────────────────────────────────────────────
+        // 16: Glucose — hexose ring (11 atoms: 5C + ring-O + 5 OH)
         { {{22,0,1},{11,19,1},{-11,19,1},{-22,0,1},{-11,-19,1},{11,-19,3},{34,-10,3},{18,30,3},{-18,30,3},{-34,-10,3},{-20,-28,3}},
           {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{0,6},{1,7},{2,8},{3,9},{4,10}} },
-        // 3: Ribose — pentose ring (9 atoms: 4C + ring-O + 4 OH)
+        // 17: Fructose — ketohexose ring (11 atoms: 5C + ring-O + CH2OH + 4 OH)
+        { {{22,0,1},{11,19,1},{-11,19,1},{-22,0,1},{-11,-19,1},{11,-19,3},
+           {34,-10,1},{48,-4,3},{18,30,3},{-18,30,3},{-34,-10,3}},
+          {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{0,6},{6,7},{1,8},{2,9},{3,10}} },
+        // 18: Galactose — hexose ring, C4 epimer of glucose (11 atoms)
+        { {{22,0,1},{11,19,1},{-11,19,1},{-22,0,1},{-11,-19,1},{11,-19,3},{34,-10,3},{18,30,3},{-18,30,3},{-34,10,3},{-20,-28,3}},
+          {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{0,6},{1,7},{2,8},{3,9},{4,10}} },
+        // 19: Ribose — pentose ring (9 atoms: 4C + ring-O + 4 OH)
         { {{20,0,1},{12,17,1},{-12,17,1},{-20,0,1},{0,-20,3},{32,-6,3},{18,28,3},{-18,28,3},{-32,-6,3}},
           {{0,1},{1,2},{2,3},{3,4},{4,0},{0,5},{1,6},{2,7},{3,8}} },
-        // 4: Butyric acid — CH3-CH2-CH2-COOH, short fatty acid (12 atoms)
+        // 20: Deoxyribose — pentose ring minus 2'-OH (8 atoms: 4C + ring-O + 3 OH)
+        { {{20,0,1},{12,17,1},{-12,17,1},{-20,0,1},{0,-20,3},{32,-6,3},{-18,28,3},{-32,-6,3}},
+          {{0,1},{1,2},{2,3},{3,4},{4,0},{0,5},{2,6},{3,7}} },
+        // 21: Sucrose — disaccharide: glucose + fructose rings linked by O-bridge (18 atoms)
+        //  Glc ring (0-4,O5), O-bridge(6), Fru ring (7-11,O12), + 5 OH groups
+        { {{-32,0,1},{-43,19,1},{-21,19,1},{-10,0,1},{-21,-19,1},{-43,-19,3},
+           {6,0,3},
+           {22,0,1},{33,19,1},{55,19,1},{55,0,1},{33,-19,1},{22,-19,3},
+           {-54,0,3},{-50,32,3},{66,0,3},{40,32,3},{40,-30,3}},
+          {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{3,6},{6,7},{7,8},{8,9},{9,10},{10,11},{11,12},{12,7},
+           {0,13},{1,14},{10,15},{8,16},{11,17}} },
+
+        // ── Lipids ──────────────────────────────────────────────────────────────
+        // 22: Butyric acid — CH3-CH2-CH2-COOH, short fatty acid (12 atoms)
         { {{-30,0,1},{-10,0,1},{10,0,1},{30,0,1},{44,-14,3},{44,14,3},{-40,14,0},{-40,-14,0},{-10,16,0},{-10,-16,0},{10,16,0},{10,-16,0}},
           {{0,1},{1,2},{2,3},{3,4},{3,5},{0,6},{0,7},{1,8},{1,9},{2,10},{2,11}} },
-        // 5: Glycerophosphate — lipid head (P + 4O + 3C + N, 10 atoms)
+        // 23: Glycerophosphate — lipid head (P + 4O + 3C + N, 10 atoms)
         { {{0,0,4},{-20,12,3},{-20,-12,3},{20,0,3},{0,-22,3},{36,0,1},{50,14,1},{50,-14,1},{66,0,2},{48,28,3}},
           {{0,1},{0,2},{0,3},{0,4},{3,5},{5,6},{5,7},{6,8},{5,9}} },
-        // 6: Adenine — purine base (10 atoms: 5C + 5N in fused 6-5 ring)
+        // 24: Palmitic acid — C16 saturated fatty acid chain (no H, 10 C + COOH, 13 atoms)
+        { {{-60,0,1},{-40,0,1},{-20,0,1},{0,0,1},{20,0,1},{40,0,1},{60,0,1},{80,0,1},
+           {100,0,1},{120,0,1},{134,-14,3},{134,14,3},{-80,0,1}},
+          {{12,0},{0,1},{1,2},{2,3},{3,4},{4,5},{5,6},{6,7},{7,8},{8,9},{9,10},{9,11}} },
+        // 25: Oleic acid — C18:1 unsaturated fatty acid (simplified 10 C chain + COOH, 13 atoms)
+        //  Kink at C9=C10 double bond represented by y-offset
+        { {{-60,0,1},{-40,0,1},{-20,0,1},{0,0,1},{20,10,1},{40,10,1},{60,0,1},{80,0,1},
+           {100,0,1},{120,0,1},{134,-14,3},{134,14,3},{-80,0,1}},
+          {{12,0},{0,1},{1,2},{2,3},{3,4},{4,5},{5,6},{6,7},{7,8},{8,9},{9,10},{9,11}} },
+        // 26: Phosphatidylcholine head — PC lipid head group (12 atoms)
+        //  N(CH3)3-CH2-CH2-O-PO4-O-glycerol
+        { {{-60,0,2},{-60,-16,1},{-60,16,1},{-38,0,1},{-16,0,1},{4,0,3},{26,0,4},
+           {26,-18,3},{26,18,3},{48,0,3},{66,0,1},{66,-20,3}},
+          {{0,1},{0,2},{0,3},{3,4},{4,5},{5,6},{6,7},{6,8},{6,9},{9,10},{10,11}} },
+        // 27: Cholesterol — steroid 4-ring skeleton (simplified 14 atoms)
+        //  A(6)-B(6)-C(6)-D(5) fused ring system + OH + tail
+        { {{-30,16,1},{-16,24,1},{0,16,1},{0,-2,1},{-16,-10,1},{-30,-2,1},
+           {16,24,1},{32,16,1},{32,-2,1},{16,-10,1},
+           {48,-2,1},{48,-20,1},{36,-28,1},
+           {-42,24,3}},
+          {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{2,6},{6,7},{7,8},{8,9},{9,3},
+           {8,10},{10,11},{11,12},{0,13}} },
+
+        // ── Nucleobases ─────────────────────────────────────────────────────────
+        // 28: Adenine — purine base (10 atoms: 5C + 5N in fused 6-5 ring)
         { {{0,22,2},{18,10,1},{22,-10,2},{8,-24,1},{-14,-20,1},{-20,6,1},{-30,-8,2},{-28,12,1},{-10,28,2},{-32,18,2}},
           {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{3,8},{8,7},{7,6},{6,4},{5,9}} },
-        // 7: Cytosine — pyrimidine base (8 atoms: 4C + 3N + 1O in 6-ring + NH2)
+        // 29: Guanine — purine base + =O + NH2 (11 atoms)
+        //  6-ring: N1(0)-C2(1)-N3(2)-C4(3)-C5(4)-C6(5); 5-ring: C4-C5-N7(6)-C8(7)-N9(8)
+        { {{-16,0,2},{-8,-14,1},{8,-14,2},{16,0,1},{8,14,1},{-8,14,1},
+           {22,22,2},{34,12,1},{28,-6,2},{-20,26,3},{-14,-28,2}},
+          {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{4,6},{6,7},{7,8},{8,3},{5,9},{1,10}} },
+        // 30: Cytosine — pyrimidine base (8 atoms: 4C + 3N + 1O in 6-ring + NH2)
         { {{-22,0,2},{0,18,1},{22,0,2},{22,-20,1},{0,-24,1},{-22,-14,1},{0,30,3},{34,-26,2}},
           {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{1,6},{3,7}} },
+        // 31: Thymine — pyrimidine base + CH3 + 2x =O (9 atoms)
+        //  6-ring: N1(0)-C2(1)-N3(2)-C4(3)-C5(4)-C6(5); O at C2(6), O at C4(7), CH3 at C5(8)
+        { {{0,18,2},{-16,9,1},{-16,-9,2},{0,-18,1},{16,-9,1},{16,9,1},
+           {-30,14,3},{0,-34,3},{30,-17,1}},
+          {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{1,6},{3,7},{4,8}} },
+        // 32: Uracil — pyrimidine base + 2x =O (8 atoms)
+        //  Like Thymine but no CH3 at C5
+        { {{0,18,2},{-16,9,1},{-16,-9,2},{0,-18,1},{16,-9,1},{16,9,1},
+           {-30,14,3},{0,-34,3}},
+          {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{1,6},{3,7}} },
+
+        // ── Nucleosides (RNA: base + ribose) ────────────────────────────────────
+        // Layout: ribose ring on right, base on left, N-glycosidic bond connects them
+        // Ribose: C1'(r0) C2'(r1) C3'(r2) C4'(r3) O4'(r4) + O2'(r5) O3'(r6) O5'(r7)
+        // 33: Adenosine — Adenine + Ribose (18 atoms)
+        { {{0,22,2},{18,10,1},{22,-10,2},{8,-24,1},{-14,-20,1},{-20,6,1},{-30,-8,2},{-28,12,1},{-10,28,2},{-32,18,2},
+           {36,18,1},{48,30,1},{62,22,1},{62,6,1},{42,6,3},{74,36,3},{76,18,3},{62,-12,3}},
+          {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{3,8},{8,7},{7,6},{6,4},{5,9},
+           {1,10},{10,11},{11,12},{12,13},{13,14},{14,10},{11,15},{12,16},{13,17}} },
+        // 34: Guanosine — Guanine + Ribose (19 atoms)
+        { {{-16,0,2},{-8,-14,1},{8,-14,2},{16,0,1},{8,14,1},{-8,14,1},
+           {22,22,2},{34,12,1},{28,-6,2},{-20,26,3},{-14,-28,2},
+           {46,0,1},{58,12,1},{72,4,1},{72,-12,1},{52,-12,3},{84,18,3},{86,0,3},{72,-30,3}},
+          {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{4,6},{6,7},{7,8},{8,3},{5,9},{1,10},
+           {8,11},{11,12},{12,13},{13,14},{14,15},{15,11},{12,16},{13,17},{14,18}} },
+        // 35: Cytidine — Cytosine + Ribose (16 atoms)
+        { {{-22,0,2},{0,18,1},{22,0,2},{22,-20,1},{0,-24,1},{-22,-14,1},{0,30,3},{34,-26,2},
+           {44,0,1},{56,12,1},{70,4,1},{70,-12,1},{50,-12,3},{82,18,3},{84,0,3},{70,-30,3}},
+          {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{1,6},{3,7},
+           {2,8},{8,9},{9,10},{10,11},{11,12},{12,8},{9,13},{10,14},{11,15}} },
+        // 36: Uridine — Uracil + Ribose (16 atoms)
+        { {{0,18,2},{-16,9,1},{-16,-9,2},{0,-18,1},{16,-9,1},{16,9,1},{-30,14,3},{0,-34,3},
+           {34,9,1},{46,21,1},{60,13,1},{60,-3,1},{40,-3,3},{72,27,3},{74,9,3},{60,-21,3}},
+          {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{1,6},{3,7},
+           {5,8},{8,9},{9,10},{10,11},{11,12},{12,8},{9,13},{10,14},{11,15}} },
+        // 37: Thymidine — Thymine + Deoxyribose (no 2'-OH) (15 atoms)
+        { {{0,18,2},{-16,9,1},{-16,-9,2},{0,-18,1},{16,-9,1},{16,9,1},{-30,14,3},{0,-34,3},{30,-17,1},
+           {34,9,1},{46,21,1},{60,13,1},{60,-3,1},{40,-3,3},{60,-21,3}},
+          {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{1,6},{3,7},{4,8},
+           {5,9},{9,10},{10,11},{11,12},{12,13},{13,9},{12,14}} },
+
+        // ── Nucleosides (DNA: base + deoxyribose) ──────────────────────────────
+        // Same layout but deoxyribose (no 2'-OH → one fewer atom)
+        // 38: Deoxyadenosine — Adenine + dRib (17 atoms)
+        { {{0,22,2},{18,10,1},{22,-10,2},{8,-24,1},{-14,-20,1},{-20,6,1},{-30,-8,2},{-28,12,1},{-10,28,2},{-32,18,2},
+           {36,18,1},{48,30,1},{62,22,1},{62,6,1},{42,6,3},{76,18,3},{62,-12,3}},
+          {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{3,8},{8,7},{7,6},{6,4},{5,9},
+           {1,10},{10,11},{11,12},{12,13},{13,14},{14,10},{12,15},{13,16}} },
+        // 39: Deoxyguanosine — Guanine + dRib (18 atoms)
+        { {{-16,0,2},{-8,-14,1},{8,-14,2},{16,0,1},{8,14,1},{-8,14,1},
+           {22,22,2},{34,12,1},{28,-6,2},{-20,26,3},{-14,-28,2},
+           {46,0,1},{58,12,1},{72,4,1},{72,-12,1},{52,-12,3},{86,0,3},{72,-30,3}},
+          {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{4,6},{6,7},{7,8},{8,3},{5,9},{1,10},
+           {8,11},{11,12},{12,13},{13,14},{14,15},{15,11},{13,16},{14,17}} },
+        // 40: Deoxycytidine — Cytosine + dRib (15 atoms)
+        { {{-22,0,2},{0,18,1},{22,0,2},{22,-20,1},{0,-24,1},{-22,-14,1},{0,30,3},{34,-26,2},
+           {44,0,1},{56,12,1},{70,4,1},{70,-12,1},{50,-12,3},{84,0,3},{70,-30,3}},
+          {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},{1,6},{3,7},
+           {2,8},{8,9},{9,10},{10,11},{11,12},{12,8},{10,13},{11,14}} },
     };
+    static constexpr int ORGANICS_COUNT = sizeof(ORGANICS) / sizeof(ORGANICS[0]);
 
     // ── Case: Atom(s) ─────────────────────────────────────────────────────────
     if (iface.spawn_tab == 0) {
@@ -1276,6 +1443,129 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
             tmpl_bonds.push_back({ 16, 18 }); // P-P
             tmpl_bonds.push_back({ 17, 19 }); // P-N base
             tmpl_bonds.push_back({ 18, 20 }); // P-C ribose
+        } else if (oi == -19) {
+            // ── Plant Cell ──────────────────────────────────────────────────
+            // Outer ring: 40-atom cellulose cell wall (C/O alternating)
+            // Inner ring: 32-atom phospholipid membrane (C/P alternating)
+            // Interior: nucleus, 4 chloroplasts, 2 mitochondria, ER, Golgi,
+            //           vacuole water, ribosomes  (125 atoms total)
+
+            // ── Cell Wall: 40 atoms, R=140px ──
+            constexpr int   WALL_N  = 40;
+            constexpr float WALL_R  = 140.0f;
+            constexpr float WALL_DA = 6.28318530f / WALL_N;
+            for (int i = 0; i < WALL_N; ++i)
+                tmpl_atoms.push_back({ std::cos(i * WALL_DA) * WALL_R,
+                                       std::sin(i * WALL_DA) * WALL_R,
+                                       (i % 2 == 0) ? 1u : 3u }); // C/O cellulose
+            for (int i = 0; i < WALL_N; ++i)
+                tmpl_bonds.push_back({ i, (i + 1) % WALL_N });
+            for (int i = 0; i < WALL_N; ++i)
+                tmpl_bonds.push_back({ i, (i + 2) % WALL_N });
+
+            // ── Cell Membrane: 32 atoms, R=112px  (indices 40-71) ──
+            constexpr int   MEM_N   = 32;
+            constexpr float MEM_R   = 112.0f;
+            constexpr float MEM_DA  = 6.28318530f / MEM_N;
+            for (int i = 0; i < MEM_N; ++i)
+                tmpl_atoms.push_back({ std::cos(i * MEM_DA) * MEM_R,
+                                       std::sin(i * MEM_DA) * MEM_R,
+                                       (i % 2 == 0) ? 1u : 4u }); // C/P phospholipid
+            for (int i = 0; i < MEM_N; ++i)
+                tmpl_bonds.push_back({ WALL_N + i, WALL_N + (i + 1) % MEM_N });
+            for (int i = 0; i < MEM_N; ++i)
+                tmpl_bonds.push_back({ WALL_N + i, WALL_N + (i + 2) % MEM_N });
+
+            // ── Radial tethers: wall↔membrane at 8 compass points ──
+            // Wall[0°,45°,...] → Membrane[0°,45°,...] (28px gap ≈ turgor pressure)
+            static const int TETHER[][2] = {
+                {0,40},{5,44},{10,48},{15,52},{20,56},{25,60},{30,64},{35,68}
+            };
+            for (const auto& t : TETHER)
+                tmpl_bonds.push_back({ t[0], t[1] });
+
+            // ── Nucleus: 8-ring at (-55,0), R=29px  (indices 72-79) ──
+            constexpr int   NUC_N  = 8;
+            constexpr float NUC_R  = 29.0f;
+            constexpr float NUC_DA = 6.28318530f / NUC_N;
+            constexpr float NUC_CX = -55.0f, NUC_CY = 0.0f;
+            static const uint32_t NUC_TYPES[8] = { 2,4,1,3, 2,4,1,3 }; // N,P,C,O
+            for (int i = 0; i < NUC_N; ++i)
+                tmpl_atoms.push_back({ NUC_CX + std::cos(i * NUC_DA) * NUC_R,
+                                       NUC_CY + std::sin(i * NUC_DA) * NUC_R,
+                                       NUC_TYPES[i] });
+            for (int i = 0; i < NUC_N; ++i)
+                tmpl_bonds.push_back({ 72 + i, 72 + (i + 1) % NUC_N });
+            for (int i = 0; i < NUC_N; ++i)
+                tmpl_bonds.push_back({ 72 + i, 72 + (i + 2) % NUC_N });
+            // Nucleolus: 2 atoms inside nucleus (indices 80-81)
+            tmpl_atoms.push_back({ NUC_CX, NUC_CY + 5.0f, 2u }); // N  rRNA
+            tmpl_atoms.push_back({ NUC_CX, NUC_CY - 5.0f, 1u }); // C  ribosomal
+            tmpl_bonds.push_back({ 80, 81 });
+            tmpl_bonds.push_back({ 80, 72 }); // link to ring
+            tmpl_bonds.push_back({ 81, 76 }); // link to opposite ring atom
+
+            // ── 4 Chloroplasts: Ca(Mg) center + 4 N arms (indices 82-101) ──
+            static const float CHLORO_POS[4][2] = {
+                { 70.f,  0.f}, {-70.f,  0.f}, { 0.f,  70.f}, { 0.f, -70.f}
+            };
+            for (int c = 0; c < 4; ++c) {
+                float cx = CHLORO_POS[c][0], cy = CHLORO_POS[c][1];
+                int base = 82 + c * 5;
+                tmpl_atoms.push_back({ cx, cy, 11u });          // Ca=Mg center
+                tmpl_atoms.push_back({ cx - 18.f, cy, 2u });    // N porphyrin
+                tmpl_atoms.push_back({ cx + 18.f, cy, 2u });    // N porphyrin
+                tmpl_atoms.push_back({ cx, cy + 18.f, 2u });    // N porphyrin
+                tmpl_atoms.push_back({ cx, cy - 18.f, 2u });    // N porphyrin
+                tmpl_bonds.push_back({ base, base + 1 });
+                tmpl_bonds.push_back({ base, base + 2 });
+                tmpl_bonds.push_back({ base, base + 3 });
+                tmpl_bonds.push_back({ base, base + 4 });
+            }
+
+            // ── 2 Mitochondria: Fe + C + S (indices 102-107) ──
+            static const float MITO_POS[2][2] = {
+                { 50.f, 50.f}, {-50.f, -50.f}
+            };
+            for (int m = 0; m < 2; ++m) {
+                float mx = MITO_POS[m][0], my = MITO_POS[m][1];
+                int base = 102 + m * 3;
+                tmpl_atoms.push_back({ mx, my, 8u });            // Fe heme
+                tmpl_atoms.push_back({ mx - 12.f, my, 1u });     // C
+                tmpl_atoms.push_back({ mx, my - 12.f, 5u });     // S
+                tmpl_bonds.push_back({ base, base + 1 });
+                tmpl_bonds.push_back({ base, base + 2 });
+            }
+
+            // ── ER: 4-atom chain near nucleus (indices 108-111) ──
+            tmpl_atoms.push_back({ -10.f, 40.f, 1u }); // C
+            tmpl_atoms.push_back({   8.f, 40.f, 2u }); // N
+            tmpl_atoms.push_back({  26.f, 40.f, 1u }); // C
+            tmpl_atoms.push_back({  44.f, 40.f, 3u }); // O
+            tmpl_bonds.push_back({ 108, 109 });
+            tmpl_bonds.push_back({ 109, 110 });
+            tmpl_bonds.push_back({ 110, 111 });
+
+            // ── Golgi: 3-atom stack (indices 112-114) ──
+            tmpl_atoms.push_back({  10.f, 55.f, 1u }); // C
+            tmpl_atoms.push_back({  28.f, 55.f, 4u }); // P
+            tmpl_atoms.push_back({  46.f, 55.f, 1u }); // C
+            tmpl_bonds.push_back({ 112, 113 });
+            tmpl_bonds.push_back({ 113, 114 });
+
+            // ── Central vacuole water: 6 sparse H/O (indices 115-120) ──
+            tmpl_atoms.push_back({   0.f,   0.f, 0u }); // H
+            tmpl_atoms.push_back({  15.f, -10.f, 3u }); // O
+            tmpl_atoms.push_back({ -18.f, -15.f, 0u }); // H
+            tmpl_atoms.push_back({  22.f,  18.f, 3u }); // O
+            tmpl_atoms.push_back({ -10.f,  22.f, 0u }); // H
+            tmpl_atoms.push_back({   8.f, -22.f, 3u }); // O
+
+            // ── Ribosomes: 4 scattered N atoms (indices 121-124) ──
+            tmpl_atoms.push_back({ -25.f, -35.f, 2u }); // N rRNA
+            tmpl_atoms.push_back({  35.f, -25.f, 2u }); // N
+            tmpl_atoms.push_back({ -30.f,  50.f, 2u }); // N
+            tmpl_atoms.push_back({  45.f,  35.f, 2u }); // N
         } else {
             return;
         }
@@ -1285,7 +1575,8 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
         // into the ring's DBSCAN cluster, diluting C fraction below the LIPID threshold.
         if (oi <= -13) {
             // clear_r covers ring_R + eps(40) + 20px drift buffer
-            const float CLEAR_R  = (oi == -15 || oi == -16) ? 130.0f : 118.0f;
+            const float CLEAR_R  = (oi == -19) ? 185.0f
+                                   : (oi == -15 || oi == -16) ? 130.0f : 118.0f;
             const float CLEAR_R2 = CLEAR_R * CLEAR_R;
             const float OUT_R    = CLEAR_R + 30.0f;  // scatter to just outside clear zone
             const float RW = static_cast<float>(REGION_W);
@@ -1331,7 +1622,8 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
 
         // Boost bond stiffness for ring atoms — eff_k = 80*(bond_str+0.5) → 120 (vs 80 default)
         if (oi <= -13) {
-            int rn = (oi == -15 || oi == -16) ? 20 : 16;
+            int rn = (oi == -19) ? 72
+                   : (oi == -15 || oi == -16) ? 20 : 16;
             for (int i = 0; i < rn && i < static_cast<int>(placed.size()); ++i)
                 particles.genomes[placed[i] * 4 + 3] = 1.0f;
         }
@@ -1349,7 +1641,7 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
 
     // ── Case: Organics (bio-molecules) ─────────────────────────────────────────
     if (iface.spawn_tab == 3) {
-        int oi = std::clamp(iface.spawn_organic_idx, 0, 7);
+        int oi = std::clamp(iface.spawn_organic_idx, 0, ORGANICS_COUNT - 1);
         const MolSpec& mol = ORGANICS[oi];
         uint32_t need = static_cast<uint32_t>(mol.atoms.size());
         if (candidates.size() < need) return;

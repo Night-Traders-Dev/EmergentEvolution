@@ -1126,7 +1126,7 @@ void Interface::draw_spawn_menu(const OrganismManager& org_manager,
             // ── Cell structures (3 proto-cells / 3 cells, 3-per-row) ──────────
             ImGui::Spacing();
             ImGui::SeparatorText("Cell Structures  (area cleared on spawn)");
-            static const OrgTemplate CELL_TMPL[6] = {
+            static const OrgTemplate CELL_TMPL[7] = {
                 { "Proto-Cell",
                   "16-C ring R=57 (spacing=bond_rest=22px) + glycine-like core\n"
                   "Core [N C2 O2]: (N+O)*2=6>5, C>0 \xe2\x86\x92 AMINO_ACID \xe2\x86\x92 PROTO_CELL\n"
@@ -1151,8 +1151,13 @@ void Interface::draw_spawn_menu(const OrganismManager& org_manager,
                   "16-C ring R=57 + P-rich nucleotide core\n"
                   "Core [P3 N C]: P*3=9>5 \xe2\x86\x92 NUCLEOTIDE \xe2\x86\x92 CELL\n"
                   "Cross-ring bonds. Clear=118px.",                  -18 },
+                { "Plant Cell",
+                  "Dual-ring plant cell: 40-atom cellulose wall (R=140)\n"
+                  "+ 32-atom phospholipid membrane (R=112) + 8 tethers\n"
+                  "Nucleus, 4 chloroplasts (Ca/N), 2 mitochondria (Fe/S),\n"
+                  "ER, Golgi, vacuole, ribosomes.  125 atoms. Clear=185px.", -19 },
             };
-            for (int i = 0; i < 6; ++i) {
+            for (int i = 0; i < 7; ++i) {
                 ImGui::PushID(i + 310);
                 bool sel = (spawn_organism_idx == CELL_TMPL[i].tidx && spawn_tab == 2);
                 if (sel) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.52f, 0.18f, 1.0f));
@@ -1174,102 +1179,116 @@ void Interface::draw_spawn_menu(const OrganismManager& org_manager,
             ImGui::TextDisabled("Bio-molecule templates:");
             ImGui::Spacing();
 
-            struct OrgTemplate { const char* label; const char* desc; };
-            static const OrgTemplate ORG_MOLS[8] = {
-                { "Gly",    "Glycine: simplest amino acid  NH2-CH2-COOH  (8 atoms)"            },
-                { "Ala",    "Alanine: amino acid w/ methyl side-chain  (10 atoms)"             },
-                { "Glc",    "Glucose: hexose sugar ring  C6H12O6 (simplified, 11 atoms)"       },
-                { "Rib",    "Ribose: pentose sugar ring  C5H10O4 (simplified, 9 atoms)"        },
-                { "ButAc",  "Butyric acid: short fatty acid chain  C4H8O2  (12 atoms)"         },
-                { "GlyP",   "Glycerophosphate: lipid head group  P+C+N  (10 atoms)"            },
-                { "Ade",    "Adenine: purine nucleobase (DNA/RNA)  C5H5N5  (10 atoms)"         },
-                { "Cyt",    "Cytosine: pyrimidine nucleobase (DNA/RNA)  C4H5N3O  (8 atoms)"    },
-            };
-
+            struct OrgEntry { const char* label; const char* desc; int idx; };
+            // Category colour palette
             static const ImVec4 ORG_COLORS[4] = {
                 { 0.45f, 0.22f, 0.52f, 1.0f },  // protein — purple
-                { 0.55f, 0.42f, 0.12f, 1.0f },  // lipid   — brown
                 { 0.22f, 0.50f, 0.28f, 1.0f },  // carb    — green
+                { 0.55f, 0.42f, 0.12f, 1.0f },  // lipid   — brown
                 { 0.22f, 0.36f, 0.58f, 1.0f },  // nucleic — blue
             };
-            // Category index: 0,1 = protein; 2,3 = carb; 4,5 = lipid; 6,7 = nucleic
-            static const int ORG_CAT[8] = { 0, 0, 2, 2, 1, 1, 3, 3 };
 
-            ImGui::SeparatorText("Proteins"); ImGui::Spacing();
-            for (int i = 0; i < 2; ++i) {
-                ImGui::PushID(i + 400);
-                bool sel = (spawn_organic_idx == i && spawn_tab == 3);
-                const ImVec4& base_col = ORG_COLORS[ORG_CAT[i]];
-                ImGui::PushStyleColor(ImGuiCol_Button,
-                    sel ? ImVec4(base_col.x*1.4f, base_col.y*1.4f, base_col.z*1.4f, 1.0f)
-                        : base_col);
-                if (ImGui::Button(ORG_MOLS[i].label, { 88.0f, 40.0f })) {
-                    spawn_organic_idx = i;
-                    spawn_tab         = 3;
-                    pending_spawn     = true;
+            // Helper lambda: render a row of organic buttons
+            auto org_row = [&](const OrgEntry* entries, int count,
+                               const ImVec4& col, int cols_per_row) {
+                for (int i = 0; i < count; ++i) {
+                    ImGui::PushID(entries[i].idx + 400);
+                    bool sel = (spawn_organic_idx == entries[i].idx && spawn_tab == 3);
+                    ImGui::PushStyleColor(ImGuiCol_Button,
+                        sel ? ImVec4(col.x*1.4f, col.y*1.4f, col.z*1.4f, 1.0f) : col);
+                    if (ImGui::Button(entries[i].label, { 88.0f, 36.0f })) {
+                        spawn_organic_idx = entries[i].idx;
+                        spawn_tab = 3; pending_spawn = true;
+                    }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", entries[i].desc);
+                    ImGui::PopStyleColor();
+                    ImGui::PopID();
+                    if ((i + 1) % cols_per_row != 0 && i < count - 1) ImGui::SameLine();
                 }
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", ORG_MOLS[i].desc);
-                ImGui::PopStyleColor();
-                ImGui::PopID();
-                if (i < 1) ImGui::SameLine();
-            }
+            };
 
+            // ── Amino Acids (indices 0-13) ──
+            static const OrgEntry AA[] = {
+                { "Gly", "Glycine: simplest amino acid  NH2-CH2-COOH  (8 atoms)",     0 },
+                { "Ala", "Alanine: methyl side-chain  (10 atoms)",                     1 },
+                { "Ser", "Serine: hydroxyl side-chain -CH2OH  (7 atoms)",              2 },
+                { "Cys", "Cysteine: thiol side-chain -CH2SH  (7 atoms)",               3 },
+                { "Val", "Valine: branched aliphatic -CH(CH3)2  (8 atoms)",            4 },
+                { "Thr", "Threonine: hydroxyl+methyl -CH(OH)CH3  (8 atoms)",           5 },
+                { "Leu", "Leucine: long branched -CH2CH(CH3)2  (9 atoms)",             6 },
+                { "Pro", "Proline: cyclic N-Cα-Cβ-Cγ-Cδ-N ring  (8 atoms)",         7 },
+                { "Phe", "Phenylalanine: -CH2-benzene ring  (12 atoms)",               8 },
+                { "Lys", "Lysine: long chain -(CH2)4-NH2  (10 atoms)",                 9 },
+                { "Asp", "Aspartate: acidic -CH2-COO\xe2\x81\xbb  (9 atoms)",        10 },
+                { "Glu", "Glutamate: acidic -CH2-CH2-COO\xe2\x81\xbb  (10 atoms)",   11 },
+                { "His", "Histidine: imidazole ring side-chain  (11 atoms)",           12 },
+                { "Trp", "Tryptophan: indole (fused 5+6 ring)  (14 atoms)",           13 },
+            };
+            ImGui::SeparatorText("Amino Acids"); ImGui::Spacing();
+            org_row(AA, 14, ORG_COLORS[0], 4);
+
+            // ── Peptides (indices 14-15) ──
+            static const OrgEntry PEPS[] = {
+                { "GlyAla", "Gly-Ala dipeptide: peptide bond  (10 atoms)",            14 },
+                { "Gly\xc2\xb3", "Gly-Gly-Gly tripeptide: 2 peptide bonds  (13 atoms)", 15 },
+            };
+            ImGui::Spacing(); ImGui::SeparatorText("Peptides"); ImGui::Spacing();
+            org_row(PEPS, 2, ORG_COLORS[0], 4);
+
+            // ── Carbohydrates (indices 16-21) ──
+            static const OrgEntry CARBS[] = {
+                { "Glc",  "Glucose: hexose sugar ring  C6H12O6  (11 atoms)",          16 },
+                { "Fru",  "Fructose: ketohexose ring  C6H12O6  (11 atoms)",           17 },
+                { "Gal",  "Galactose: hexose, C4 epimer of glucose  (11 atoms)",      18 },
+                { "Rib",  "Ribose: pentose sugar (RNA backbone)  (9 atoms)",          19 },
+                { "dRib", "Deoxyribose: pentose (DNA backbone, no 2'-OH)  (8 atoms)", 20 },
+                { "Suc",  "Sucrose: Glc-Fru disaccharide  (18 atoms)",               21 },
+            };
             ImGui::Spacing(); ImGui::SeparatorText("Carbohydrates"); ImGui::Spacing();
-            for (int i = 2; i < 4; ++i) {
-                ImGui::PushID(i + 400);
-                bool sel = (spawn_organic_idx == i && spawn_tab == 3);
-                const ImVec4& base_col = ORG_COLORS[ORG_CAT[i]];
-                ImGui::PushStyleColor(ImGuiCol_Button,
-                    sel ? ImVec4(base_col.x*1.4f, base_col.y*1.4f, base_col.z*1.4f, 1.0f)
-                        : base_col);
-                if (ImGui::Button(ORG_MOLS[i].label, { 88.0f, 40.0f })) {
-                    spawn_organic_idx = i;
-                    spawn_tab         = 3;
-                    pending_spawn     = true;
-                }
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", ORG_MOLS[i].desc);
-                ImGui::PopStyleColor();
-                ImGui::PopID();
-                if (i < 3) ImGui::SameLine();
-            }
+            org_row(CARBS, 6, ORG_COLORS[1], 4);
 
+            // ── Lipids (indices 22-27) ──
+            static const OrgEntry LIPIDS[] = {
+                { "ButAc", "Butyric acid: short fatty acid  C4H8O2  (12 atoms)",      22 },
+                { "GlyP",  "Glycerophosphate: lipid head group  P+C+N  (10 atoms)",   23 },
+                { "Palm",  "Palmitic acid: C16 saturated fatty acid  (8 atoms)",       24 },
+                { "Oleic", "Oleic acid: C18 monounsat fatty acid  (10 atoms)",         25 },
+                { "PC",    "Phosphatidylcholine head group  (12 atoms)",               26 },
+                { "Chol",  "Cholesterol: steroid 4-ring skeleton  (14 atoms)",         27 },
+            };
             ImGui::Spacing(); ImGui::SeparatorText("Lipids"); ImGui::Spacing();
-            for (int i = 4; i < 6; ++i) {
-                ImGui::PushID(i + 400);
-                bool sel = (spawn_organic_idx == i && spawn_tab == 3);
-                const ImVec4& base_col = ORG_COLORS[ORG_CAT[i]];
-                ImGui::PushStyleColor(ImGuiCol_Button,
-                    sel ? ImVec4(base_col.x*1.4f, base_col.y*1.4f, base_col.z*1.4f, 1.0f)
-                        : base_col);
-                if (ImGui::Button(ORG_MOLS[i].label, { 88.0f, 40.0f })) {
-                    spawn_organic_idx = i;
-                    spawn_tab         = 3;
-                    pending_spawn     = true;
-                }
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", ORG_MOLS[i].desc);
-                ImGui::PopStyleColor();
-                ImGui::PopID();
-                if (i < 5) ImGui::SameLine();
-            }
+            org_row(LIPIDS, 6, ORG_COLORS[2], 4);
 
-            ImGui::Spacing(); ImGui::SeparatorText("Nucleic Acids"); ImGui::Spacing();
-            for (int i = 6; i < 8; ++i) {
-                ImGui::PushID(i + 400);
-                bool sel = (spawn_organic_idx == i && spawn_tab == 3);
-                const ImVec4& base_col = ORG_COLORS[ORG_CAT[i]];
-                ImGui::PushStyleColor(ImGuiCol_Button,
-                    sel ? ImVec4(base_col.x*1.4f, base_col.y*1.4f, base_col.z*1.4f, 1.0f)
-                        : base_col);
-                if (ImGui::Button(ORG_MOLS[i].label, { 88.0f, 40.0f })) {
-                    spawn_organic_idx = i;
-                    spawn_tab         = 3;
-                    pending_spawn     = true;
-                }
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", ORG_MOLS[i].desc);
-                ImGui::PopStyleColor();
-                ImGui::PopID();
-                if (i < 7) ImGui::SameLine();
-            }
+            // ── Nucleobases (indices 28-32) ──
+            static const OrgEntry BASES[] = {
+                { "Ade", "Adenine: purine nucleobase (DNA/RNA)  (10 atoms)",           28 },
+                { "Gua", "Guanine: purine nucleobase (DNA/RNA)  (11 atoms)",           29 },
+                { "Cyt", "Cytosine: pyrimidine nucleobase (DNA/RNA)  (8 atoms)",       30 },
+                { "Thy", "Thymine: pyrimidine nucleobase (DNA only)  (9 atoms)",       31 },
+                { "Ura", "Uracil: pyrimidine nucleobase (RNA only)  (8 atoms)",        32 },
+            };
+            ImGui::Spacing(); ImGui::SeparatorText("Nucleobases"); ImGui::Spacing();
+            org_row(BASES, 5, ORG_COLORS[3], 4);
+
+            // ── Nucleosides RNA (indices 33-37) ──
+            static const OrgEntry NSRNA[] = {
+                { "Ado",  "Adenosine: Adenine + Ribose  (18 atoms)",                   33 },
+                { "Guo",  "Guanosine: Guanine + Ribose  (19 atoms)",                   34 },
+                { "Cyd",  "Cytidine: Cytosine + Ribose  (16 atoms)",                   35 },
+                { "Urd",  "Uridine: Uracil + Ribose  (16 atoms)",                      36 },
+                { "Thd",  "Thymidine: Thymine + Ribose  (17 atoms)",                   37 },
+            };
+            ImGui::Spacing(); ImGui::SeparatorText("Nucleosides (RNA)"); ImGui::Spacing();
+            org_row(NSRNA, 5, ORG_COLORS[3], 4);
+
+            // ── Nucleosides DNA (indices 38-40) ──
+            static const OrgEntry NSDNA[] = {
+                { "dAdo", "Deoxyadenosine: Adenine + Deoxyribose  (17 atoms)",         38 },
+                { "dGuo", "Deoxyguanosine: Guanine + Deoxyribose  (18 atoms)",         39 },
+                { "dCyd", "Deoxycytidine: Cytosine + Deoxyribose  (15 atoms)",         40 },
+            };
+            ImGui::Spacing(); ImGui::SeparatorText("Nucleosides (DNA)"); ImGui::Spacing();
+            org_row(NSDNA, 3, ORG_COLORS[3], 4);
 
             ImGui::EndTabItem();
         }
