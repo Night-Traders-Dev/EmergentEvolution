@@ -34,7 +34,7 @@ layout(set = 0, binding = 15, std430) readonly buffer Genomes { float data[]; } 
 // Layout: bond_partners[i * MAX_BONDS + slot] = partner index, 0xFFFFFFFF = empty
 layout(set = 0, binding = 16, std430) readonly buffer BondBuffer { uint data[]; } bond_buffer;
 
-const uint MAX_BONDS  = 5u;
+const uint MAX_BONDS  = 6u;
 const uint BOND_EMPTY = 0xFFFFFFFFu;
 
 // ── Push Constants ────────────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ const uint BEHAVIOR_IONIC_POS = 256u;  // positive ion Na (was PREDATOR)
 const uint BEHAVIOR_IONIC_NEG = 512u;  // negative ion Cl (was REPRODUCTIVE)
 const uint BEHAVIOR_PHOTON    = 1024u; // massless energy carrier; skips normal physics
 
-const uint  PHOTON_TYPE_IDX  = 8u;
+const uint  PHOTON_TYPE_IDX  = 18u;
 const float PHOTON_DRAIN     = 0.07f; // energy drained per second (~4-8s lifetime depending on start energy)
 
 float random(float v) {

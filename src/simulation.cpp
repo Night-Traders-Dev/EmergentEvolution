@@ -57,6 +57,10 @@ void Simulation::reset() {
 // ── Per-frame tick ────────────────────────────────────────────────────────────
 
 void Simulation::tick(GLFWwindow* window, double dt) {
+    // ── Spawn protection TTL ───────────────────────────────────────────────────
+    if (spawn_protect_ttl_ > 0 && --spawn_protect_ttl_ == 0)
+        spawn_protect_ids_.clear();
+
     // ── Input ──────────────────────────────────────────────────────────────────
     handle_input(window, dt);
 
@@ -316,7 +320,9 @@ void Simulation::do_particle_spawn() {
 
     // Atom abundance weights for type selection
     static const float RAW_ABUNDANCE[ATOM_COUNT] = {
-        0.40f, 0.25f, 0.10f, 0.15f, 0.02f, 0.02f, 0.03f, 0.03f
+        0.400f, 0.250f, 0.100f, 0.150f, 0.020f, 0.020f, 0.030f, 0.030f, // H C N O P S Na Cl
+        0.005f, 0.002f, 0.005f, 0.003f, 0.001f, 0.001f, 0.001f, 0.001f, // Fe Ni Si Ca Ti Sr Au Pb
+        0.001f, 0.001f                                                    // Eu U
     };
     uint32_t n_active = std::min(cfg.particle_types, static_cast<uint32_t>(ATOM_COUNT));
     float cum[ATOM_COUNT + 1]; cum[0] = 0.0f;
@@ -326,10 +332,26 @@ void Simulation::do_particle_spawn() {
     cum[n_active] = 1.0f;
 
     // Genome defaults per atom type
-    static const float BASE_CHARGE[ATOM_COUNT]    = { 0.3f, 0.0f,-0.1f,-0.4f,-0.1f,-0.2f, 0.8f,-0.8f };
-    static const float BASE_ELECTRONEG[ATOM_COUNT] = { 0.6f, 0.6f, 0.9f, 1.6f, 0.8f, 0.9f, 0.3f, 1.1f };
-    static const float BASE_REACTIVITY[ATOM_COUNT] = { 1.0f, 0.8f, 1.2f, 1.4f, 1.0f, 1.1f, 0.6f, 0.8f };
-    static const float BASE_BOND_STR[ATOM_COUNT]   = { 0.3f, 0.5f, 0.4f, 0.4f, 0.6f, 0.5f, 0.2f, 0.2f };
+    static const float BASE_CHARGE[ATOM_COUNT] = {
+         0.3f, 0.0f,-0.1f,-0.4f,-0.1f,-0.2f, 0.8f,-0.8f,
+         0.0f, 0.0f, 0.0f, 0.5f, 0.0f, 0.5f, 0.0f, 0.0f,
+         0.0f, 0.0f
+    };
+    static const float BASE_ELECTRONEG[ATOM_COUNT] = {
+         0.6f, 0.6f, 0.9f, 1.6f, 0.8f, 0.9f, 0.3f, 1.1f,
+         0.7f, 0.7f, 0.8f, 0.5f, 0.7f, 0.5f, 0.6f, 0.6f,
+         0.6f, 0.6f
+    };
+    static const float BASE_REACTIVITY[ATOM_COUNT] = {
+         1.0f, 0.8f, 1.2f, 1.4f, 1.0f, 1.1f, 0.6f, 0.8f,
+         0.8f, 0.7f, 0.6f, 0.5f, 0.7f, 0.5f, 0.5f, 0.4f,
+         1.0f, 1.2f
+    };
+    static const float BASE_BOND_STR[ATOM_COUNT] = {
+         0.3f, 0.5f, 0.4f, 0.4f, 0.6f, 0.5f, 0.2f, 0.2f,
+         0.4f, 0.3f, 0.4f, 0.2f, 0.3f, 0.2f, 0.2f, 0.3f,
+         0.3f, 0.4f
+    };
 
     std::uniform_real_distribution<float> jitter(-0.05f, 0.05f);
     std::uniform_real_distribution<float> scat(-scatter, scatter);
@@ -440,10 +462,26 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
     if (n == 0) return;
 
     // Genome defaults shared with do_particle_spawn
-    static const float BASE_CHARGE[ATOM_COUNT]     = {  0.3f, 0.0f,-0.1f,-0.4f,-0.1f,-0.2f, 0.8f,-0.8f };
-    static const float BASE_ELECTRONEG[ATOM_COUNT] = {  0.6f, 0.6f, 0.9f, 1.6f, 0.8f, 0.9f, 0.3f, 1.1f };
-    static const float BASE_REACTIVITY[ATOM_COUNT] = {  1.0f, 0.8f, 1.2f, 1.4f, 1.0f, 1.1f, 0.6f, 0.8f };
-    static const float BASE_BOND_STR[ATOM_COUNT]   = {  0.3f, 0.5f, 0.4f, 0.4f, 0.6f, 0.5f, 0.2f, 0.2f };
+    static const float BASE_CHARGE[ATOM_COUNT] = {
+         0.3f, 0.0f,-0.1f,-0.4f,-0.1f,-0.2f, 0.8f,-0.8f,
+         0.0f, 0.0f, 0.0f, 0.5f, 0.0f, 0.5f, 0.0f, 0.0f,
+         0.0f, 0.0f
+    };
+    static const float BASE_ELECTRONEG[ATOM_COUNT] = {
+         0.6f, 0.6f, 0.9f, 1.6f, 0.8f, 0.9f, 0.3f, 1.1f,
+         0.7f, 0.7f, 0.8f, 0.5f, 0.7f, 0.5f, 0.6f, 0.6f,
+         0.6f, 0.6f
+    };
+    static const float BASE_REACTIVITY[ATOM_COUNT] = {
+         1.0f, 0.8f, 1.2f, 1.4f, 1.0f, 1.1f, 0.6f, 0.8f,
+         0.8f, 0.7f, 0.6f, 0.5f, 0.7f, 0.5f, 0.5f, 0.4f,
+         1.0f, 1.2f
+    };
+    static const float BASE_BOND_STR[ATOM_COUNT] = {
+         0.3f, 0.5f, 0.4f, 0.4f, 0.6f, 0.5f, 0.2f, 0.2f,
+         0.4f, 0.3f, 0.4f, 0.2f, 0.3f, 0.2f, 0.2f, 0.3f,
+         0.3f, 0.4f
+    };
 
     // Read current GPU state
     std::vector<glm::vec2> cur_pos(n), cur_vel(n);
@@ -480,6 +518,7 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
     candidates.reserve(max_cands);
     for (uint32_t idx : sorted) {
         if (particles.types[idx] == PHOTON_TYPE) continue;
+        if (spawn_protect_ids_.count(idx)) continue;  // skip recently placed
         candidates.push_back(idx);
         if (static_cast<uint32_t>(candidates.size()) >= max_cands) break;
     }
@@ -496,11 +535,12 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
     };
 
     // ── Molecule template definitions (Groups tab) ────────────────────────────
+    // Types: H=0 C=1 N=2 O=3 P=4 S=5 Na=6 Cl=7 Fe=8 Ni=9 Si=10 Ca=11 Ti=12 Sr=13 Au=14 Pb=15 Eu=16 U=17
     struct AtomSpec { float rx, ry; uint32_t type; };
     struct BondSpec { int ai, bi; };
     struct MolSpec  { std::vector<AtomSpec> atoms; std::vector<BondSpec> bonds; };
 
-    static const MolSpec MOLECULES[6] = {
+    static const MolSpec MOLECULES[14] = {
         // 0: H2O — O + 2H, bent ~105°
         { {{0,0,3},{-14,12,0},{14,12,0}},
           {{0,1},{0,2}} },
@@ -519,6 +559,34 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
         // 5: Gly — simplified glycine backbone (8 atoms)
         { {{-28,0,2},{-8,0,1},{12,0,1},{26,10,3},{26,-10,3},{-36,12,0},{-36,-12,0},{-8,-16,0}},
           {{0,1},{1,2},{2,3},{2,4},{0,5},{0,6},{1,7}} },
+        // 6: C6H6 — benzene ring (12 atoms: 6 C + 6 H)
+        { {{22,0,1},{11,19,1},{-11,19,1},{-22,0,1},{-11,-19,1},{11,-19,1},
+           {34,0,0},{17,29,0},{-17,29,0},{-34,0,0},{-17,-29,0},{17,-29,0}},
+          {{0,1},{1,2},{2,3},{3,4},{4,5},{5,0},
+           {0,6},{1,7},{2,8},{3,9},{4,10},{5,11}} },
+        // 7: SiO4 — silicate tetrahedron (Si + 4 O in cross pattern)
+        { {{0,0,10},{0,-24,3},{0,24,3},{-24,0,3},{24,0,3}},
+          {{0,1},{0,2},{0,3},{0,4}} },
+        // 8: Fe2O3 — hematite (2 Fe + 3 O)
+        { {{-18,0,8},{18,0,8},{0,-20,3},{-26,16,3},{26,16,3}},
+          {{0,2},{0,3},{1,2},{1,4},{0,1}} },
+        // 9: C2H5OH — ethanol (2C + 6H + 1O = 9 atoms)
+        { {{-22,0,1},{0,0,1},{18,0,3},
+           {-32,-12,0},{-32,0,0},{-32,12,0},
+           {0,-15,0},{0,15,0},{26,12,0}},
+          {{0,1},{1,2},{0,3},{0,4},{0,5},{1,6},{1,7},{2,8}} },
+        // 10: CaCO3 — calcite (Ca + C + 3 O, trigonal)
+        { {{-24,0,11},{0,0,1},{18,-14,3},{18,14,3},{22,0,3}},
+          {{0,1},{1,2},{1,3},{1,4}} },
+        // 11: Au3 — gold trimer cluster (triangle)
+        { {{0,-22,14},{-19,11,14},{19,11,14}},
+          {{0,1},{1,2},{2,0}} },
+        // 12: UO2 — uranium dioxide (U + 2O, linear)
+        { {{0,0,17},{-26,0,3},{26,0,3}},
+          {{0,1},{0,2}} },
+        // 13: FeS2 — pyrite / fool's gold (Fe + 2S)
+        { {{0,0,8},{-20,0,5},{20,0,5}},
+          {{0,1},{0,2}} },
     };
 
     // ── Case: Atom(s) ─────────────────────────────────────────────────────────
@@ -527,8 +595,11 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
                                   static_cast<uint32_t>(candidates.size()));
         if (place == 0) return;
         uint32_t atom_type = static_cast<uint32_t>(iface.spawn_atom_type);
-        for (uint32_t k = 0; k < place; ++k)
+        for (uint32_t k = 0; k < place; ++k) {
             set_atom(candidates[k], atom_type, world_pos + scatter_offset());
+            spawn_protect_ids_.insert(candidates[k]);
+        }
+        spawn_protect_ttl_ = 90;
         compute.write_particle_state(vk, cur_pos, cur_vel, cur_nrg);
         compute.upload_dynamic_data(vk, particles);
         return;
@@ -536,7 +607,7 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
 
     // ── Case: Molecule template ───────────────────────────────────────────────
     if (iface.spawn_tab == 1) {
-        int gi = std::clamp(iface.spawn_group_idx, 0, 5);
+        int gi = std::clamp(iface.spawn_group_idx, 0, 13);
         const MolSpec& mol = MOLECULES[gi];
         uint32_t need = static_cast<uint32_t>(mol.atoms.size());
         if (candidates.size() < need) return;
@@ -548,7 +619,9 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
             set_atom(idx, mol.atoms[i].type,
                      world_pos + glm::vec2(mol.atoms[i].rx, mol.atoms[i].ry));
             placed.push_back(idx);
+            spawn_protect_ids_.insert(idx);
         }
+        spawn_protect_ttl_ = 90;
         for (const auto& b : mol.bonds) {
             if (b.ai < static_cast<int>(placed.size()) &&
                 b.bi < static_cast<int>(placed.size()))
@@ -609,6 +682,9 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
                 }
             }
 
+            for (uint32_t s = 0; s < m; ++s)
+                spawn_protect_ids_.insert(candidates[s]);
+            spawn_protect_ttl_ = 90;
             compute.write_particle_state(vk, cur_pos, cur_vel, cur_nrg);
             compute.upload_dynamic_data(vk, particles);
             return;
@@ -681,7 +757,9 @@ void Simulation::do_spawn_at_world(glm::vec2 world_pos) {
             set_atom(idx, tmpl_atoms[i].type,
                      world_pos + glm::vec2(tmpl_atoms[i].rx, tmpl_atoms[i].ry));
             placed.push_back(idx);
+            spawn_protect_ids_.insert(idx);
         }
+        spawn_protect_ttl_ = 90;
         for (const auto& b : tmpl_bonds) {
             if (b.ai < static_cast<int>(placed.size()) &&
                 b.bi < static_cast<int>(placed.size()))

@@ -8,17 +8,22 @@
 
 static constexpr uint32_t REGION_W           = 2560;
 static constexpr uint32_t REGION_H           = 1440;
-static constexpr uint32_t MAX_PARTICLE_TYPES = 10;
+static constexpr uint32_t MAX_PARTICLE_TYPES = 20;
 static constexpr uint32_t GROUP_DENSITY      = 256;
 static constexpr uint32_t GENOME_SIZE        = 4;   // floats per particle: charge, electronegativity, reactivity, bond_strength
 
 // ── Atom system ───────────────────────────────────────────────────────────────
-static constexpr uint32_t ATOM_COUNT             = 8;   // H C N O P S Na Cl
-static constexpr uint32_t MAX_BONDS_PER_PARTICLE = 5;   // P has valence 5
-static constexpr uint32_t PHOTON_TYPE            = 8u;  // particle type index for photons
+// H C N O P S Na Cl + Fe Ni Si Ca Ti Sr Au Pb Eu U  (18 atoms total)
+static constexpr uint32_t ATOM_COUNT             = 18;
+static constexpr uint32_t MAX_BONDS_PER_PARTICLE = 6;   // U has valence 6
+static constexpr uint32_t PHOTON_TYPE            = 18u; // particle type index for photons
 
-// Max covalent bonds per atom type (indexed 0-7: H C N O P S Na Cl)
-static constexpr uint32_t ATOM_VALENCE[ATOM_COUNT] = {1, 4, 3, 2, 5, 2, 1, 1};
+// Max covalent bonds per atom type (indexed 0-17)
+//                              H  C  N  O  P  S Na Cl Fe Ni Si Ca Ti Sr Au Pb Eu  U
+static constexpr uint32_t ATOM_VALENCE[ATOM_COUNT] = {
+    1, 4, 3, 2, 5, 2, 1, 1,  // original 8
+    3, 2, 4, 2, 4, 2, 1, 4, 3, 6   // new 10: Fe Ni Si Ca Ti Sr Au Pb Eu U
+};
 
 enum ParticleBehavior : uint32_t {
     BEHAVIOR_NONE      = 0,

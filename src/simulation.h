@@ -11,6 +11,7 @@
 #include "sub_atomic.h"
 #include <GLFW/glfw3.h>
 #include <vector>
+#include <unordered_set>
 
 class Simulation;
 // Call once after init() to hook the GLFW scroll callback
@@ -53,6 +54,10 @@ private:
     std::vector<glm::vec2> readback_positions_;
     std::vector<glm::vec2> readback_velocities_;
     std::vector<float>     readback_energies_;
+
+    // Spawn protection — prevents recently placed particles from being recycled
+    std::unordered_set<uint32_t> spawn_protect_ids_;
+    int                          spawn_protect_ttl_ = 0;
 
     // Periodic particle spawn
     double                 spawn_timer_ = 0.0;

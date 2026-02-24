@@ -16,9 +16,20 @@ const SubAtomicSim::NucleonComp SubAtomicSim::NUCLEUS[ATOM_COUNT] = {
     {16, 16},  // S
     {11, 12},  // Na
     {17, 18},  // Cl
+    // ── R-process / supernova elements ────────────────────────────────────────
+    {26, 30},  // Fe  — Iron-56     (visual cap applied in init_from_atom)
+    {28, 30},  // Ni  — Nickel-58
+    {14, 14},  // Si  — Silicon-28
+    {20, 20},  // Ca  — Calcium-40
+    {22, 26},  // Ti  — Titanium-48
+    {38, 50},  // Sr  — Strontium-88
+    {79,118},  // Au  — Gold-197    (visual cap applied)
+    {82,125},  // Pb  — Lead-207    (visual cap applied)
+    {63, 89},  // Eu  — Europium-152 (visual cap applied)
+    {92,146},  // U   — Uranium-238  (visual cap applied)
 };
 
-// Electrons per shell (up to 4 shells), real atomic electron configurations
+// Electrons per shell (up to 4 shells), real/simplified electron configurations
 const int SubAtomicSim::SHELLS[ATOM_COUNT][4] = {
     {1, 0, 0, 0},  // H:  1
     {2, 4, 0, 0},  // C:  2,4
@@ -28,6 +39,17 @@ const int SubAtomicSim::SHELLS[ATOM_COUNT][4] = {
     {2, 8, 6, 0},  // S:  2,8,6
     {2, 8, 1, 0},  // Na: 2,8,1
     {2, 8, 7, 0},  // Cl: 2,8,7
+    // ── R-process / supernova elements (4-shell simplified, visually capped) ──
+    {2, 8,14, 2},  // Fe: 2,8,14,2  (26e)
+    {2, 8,16, 2},  // Ni: 2,8,16,2  (28e)
+    {2, 8, 4, 0},  // Si: 2,8,4     (14e)
+    {2, 8, 8, 2},  // Ca: 2,8,8,2   (20e)
+    {2, 8,10, 2},  // Ti: 2,8,10,2  (22e)
+    {2, 8,18,10},  // Sr: 2,8,18,10 (38e)
+    {2, 8,18, 1},  // Au: 2,8,18,1  (outer shells only; 6s1 visible, inner implied)
+    {2, 8,18, 4},  // Pb: 2,8,18,4  (6s2 6p2)
+    {2, 8,15, 2},  // Eu: 2,8,15,2  (4f7 6s2 simplified)
+    {2, 8,18, 6},  // U:  2,8,18,6  (5f3 6d1 7s2 simplified)
 };
 
 // Electron shell radii (px) — visual Bohr model
@@ -102,21 +124,29 @@ void SubAtomicSim::init_from_atom(int atype) {
     const auto& nc = NUCLEUS[atype];
     int A = nc.p + nc.n;
 
+    // Cap displayed nucleons for performance (O(n²) physics); heavy elements
+    // are visually approximated with a proportional scaled-down nucleus.
+    static constexpr int MAX_NUCLEONS_DISPLAY = 56;
+    int A_display = std::min(A, MAX_NUCLEONS_DISPLAY);
+    int p_display = (A <= MAX_NUCLEONS_DISPLAY) ? nc.p
+                  : std::max(1, static_cast<int>(nc.p * float(MAX_NUCLEONS_DISPLAY) / float(A)));
+    int n_display = A_display - p_display;
+
     // Fibonacci spiral placement within nuclear radius
     // r_nuc = 10 * A^(1/3) gives ~10px inter-nucleon spacing at equilibrium
-    float r_nuc = (A <= 1) ? 0.f : 10.f * std::pow(float(A), 1.f/3.f);
+    float r_nuc = (A_display <= 1) ? 0.f : 10.f * std::pow(float(A_display), 1.f/3.f);
     const float golden_angle = 2.399963f;  // 2π/φ²
 
     int p_placed = 0, n_placed = 0;
-    for (int i = 0; i < A; ++i) {
-        float radius = (A <= 1) ? 0.f
-                                : r_nuc * std::sqrt(float(i + 0.5f) / float(A));
+    for (int i = 0; i < A_display; ++i) {
+        float radius = (A_display <= 1) ? 0.f
+                                : r_nuc * std::sqrt(float(i + 0.5f) / float(A_display));
         float theta  = i * golden_angle;
         glm::vec2 pos = { radius * std::cos(theta) + jit(rng),
                           radius * std::sin(theta) + jit(rng) };
 
-        bool is_proton = (p_placed < nc.p) &&
-                         (n_placed >= nc.n || (i % 2 == 0));
+        bool is_proton = (p_placed < p_display) &&
+                         (n_placed >= n_display || (i % 2 == 0));
         if (is_proton) ++p_placed; else ++n_placed;
 
         SubParticle sp;

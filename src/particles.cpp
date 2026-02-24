@@ -30,7 +30,8 @@ void Particles::gen_data(const SimConfig& cfg) {
 
 // ── CPK colors & chemistry force matrix ──────────────────────────────────────
 
-// CPK atom colors (standard chemistry palette), indexed 0-7: H C N O P S Na Cl
+// CPK atom colors (standard chemistry palette), indexed 0-17
+// H C N O P S Na Cl  + Fe Ni Si Ca Ti Sr Au Pb Eu U
 static const glm::vec4 CPK_COLORS[ATOM_COUNT] = {
     { 0.95f, 0.95f, 0.95f, 1.0f }, // H  — near-white
     { 0.33f, 0.33f, 0.33f, 1.0f }, // C  — dark grey
@@ -40,21 +41,42 @@ static const glm::vec4 CPK_COLORS[ATOM_COUNT] = {
     { 1.00f, 1.00f, 0.19f, 1.0f }, // S  — yellow
     { 0.67f, 0.36f, 0.95f, 1.0f }, // Na — violet
     { 0.12f, 0.94f, 0.12f, 1.0f }, // Cl — green
+    // ── R-process / supernova elements ────────────────────────────────────────
+    { 0.88f, 0.40f, 0.20f, 1.0f }, // Fe — rust orange-brown
+    { 0.31f, 0.82f, 0.31f, 1.0f }, // Ni — pale green
+    { 0.94f, 0.78f, 0.63f, 1.0f }, // Si — sandy tan
+    { 0.24f, 1.00f, 0.00f, 1.0f }, // Ca — bright lime
+    { 0.75f, 0.76f, 0.78f, 1.0f }, // Ti — silver
+    { 0.00f, 0.78f, 0.39f, 1.0f }, // Sr — teal green
+    { 1.00f, 0.82f, 0.14f, 1.0f }, // Au — gold
+    { 0.34f, 0.35f, 0.38f, 1.0f }, // Pb — dark slate
+    { 0.38f, 1.00f, 0.78f, 1.0f }, // Eu — aqua
+    { 0.00f, 0.56f, 1.00f, 1.0f }, // U  — steel blue
 };
 
 // Electrochemistry force matrix seed:
 // forces[a][b] = how strongly type a is attracted to type b (+attraction, -repulsion)
-// Indexed: 0=H 1=C 2=N 3=O 4=P 5=S 6=Na 7=Cl
+// Indexed: 0=H 1=C 2=N 3=O 4=P 5=S 6=Na 7=Cl 8=Fe 9=Ni 10=Si 11=Ca 12=Ti 13=Sr 14=Au 15=Pb 16=Eu 17=U
 static const float CHEM_FORCE[ATOM_COUNT][ATOM_COUNT] = {
-    //    H      C      N      O      P      S     Na     Cl
-    {  0.10f,  0.20f,  0.40f,  0.60f,  0.20f,  0.20f,  0.00f,  0.30f }, // H
-    {  0.20f,  0.50f,  0.20f,  0.10f,  0.30f,  0.30f, -0.20f, -0.20f }, // C
-    {  0.40f,  0.20f,  0.30f,  0.30f,  0.10f,  0.10f, -0.20f, -0.10f }, // N
-    {  0.60f,  0.10f,  0.30f,  0.20f, -0.10f,  0.00f, -0.30f, -0.10f }, // O
-    {  0.20f,  0.30f,  0.10f, -0.10f,  0.20f,  0.40f, -0.10f, -0.10f }, // P
-    {  0.20f,  0.30f,  0.10f,  0.00f,  0.40f,  0.40f, -0.10f, -0.10f }, // S
-    {  0.00f, -0.20f, -0.20f, -0.30f, -0.10f, -0.10f, -0.50f,  0.80f }, // Na
-    {  0.30f, -0.20f, -0.10f, -0.10f, -0.10f, -0.10f,  0.80f, -0.50f }, // Cl
+//    H      C      N      O      P      S     Na     Cl     Fe     Ni     Si     Ca     Ti     Sr     Au     Pb     Eu     U
+{ 0.10f, 0.20f, 0.40f, 0.60f, 0.20f, 0.20f, 0.00f, 0.30f, 0.10f, 0.10f, 0.10f, 0.10f, 0.00f, 0.00f, 0.10f, 0.00f, 0.00f, 0.00f }, // H
+{ 0.20f, 0.50f, 0.20f, 0.10f, 0.30f, 0.30f,-0.20f,-0.20f, 0.10f, 0.20f, 0.30f, 0.00f, 0.10f,-0.10f, 0.10f, 0.00f, 0.00f, 0.00f }, // C
+{ 0.40f, 0.20f, 0.30f, 0.30f, 0.10f, 0.10f,-0.20f,-0.10f, 0.20f, 0.10f, 0.10f,-0.10f, 0.00f,-0.10f, 0.00f, 0.00f, 0.00f, 0.10f }, // N
+{ 0.60f, 0.10f, 0.30f, 0.20f,-0.10f, 0.00f,-0.30f,-0.10f, 0.50f, 0.30f, 0.60f, 0.50f, 0.40f, 0.20f, 0.10f, 0.30f, 0.10f, 0.50f }, // O
+{ 0.20f, 0.30f, 0.10f,-0.10f, 0.20f, 0.40f,-0.10f,-0.10f, 0.20f, 0.10f, 0.20f, 0.10f, 0.10f, 0.00f, 0.10f, 0.00f, 0.00f, 0.10f }, // P
+{ 0.20f, 0.30f, 0.10f, 0.00f, 0.40f, 0.40f,-0.10f,-0.10f, 0.30f, 0.30f, 0.10f, 0.00f, 0.10f, 0.00f, 0.40f, 0.10f, 0.00f, 0.10f }, // S
+{ 0.00f,-0.20f,-0.20f,-0.30f,-0.10f,-0.10f,-0.50f, 0.80f,-0.10f,-0.10f,-0.10f,-0.30f,-0.10f,-0.30f, 0.00f,-0.10f, 0.00f, 0.00f }, // Na
+{ 0.30f,-0.20f,-0.10f,-0.10f,-0.10f,-0.10f, 0.80f,-0.50f, 0.20f, 0.20f, 0.30f,-0.10f, 0.20f,-0.10f, 0.10f, 0.20f, 0.00f, 0.10f }, // Cl
+{ 0.10f, 0.10f, 0.20f, 0.50f, 0.20f, 0.30f,-0.10f, 0.20f, 0.20f, 0.20f, 0.10f, 0.10f, 0.10f, 0.00f,-0.10f, 0.00f, 0.00f, 0.00f }, // Fe
+{ 0.10f, 0.20f, 0.10f, 0.30f, 0.10f, 0.30f,-0.10f, 0.20f, 0.20f, 0.20f, 0.10f, 0.00f, 0.20f, 0.00f,-0.10f, 0.00f, 0.00f, 0.00f }, // Ni
+{ 0.10f, 0.10f, 0.10f, 0.60f, 0.10f, 0.00f, 0.10f, 0.30f, 0.10f, 0.10f, 0.30f, 0.20f, 0.10f, 0.00f, 0.00f, 0.00f, 0.00f, 0.00f }, // Si
+{ 0.10f, 0.00f,-0.10f, 0.50f, 0.10f, 0.00f,-0.30f,-0.10f, 0.10f, 0.00f, 0.20f, 0.10f, 0.10f, 0.10f, 0.00f, 0.10f, 0.00f, 0.00f }, // Ca
+{ 0.00f, 0.10f, 0.00f, 0.40f, 0.10f, 0.10f,-0.10f, 0.20f, 0.10f, 0.20f, 0.10f, 0.10f, 0.20f, 0.00f, 0.00f, 0.00f, 0.00f, 0.00f }, // Ti
+{ 0.10f, 0.00f,-0.10f, 0.20f, 0.00f, 0.00f,-0.30f,-0.10f, 0.00f, 0.00f, 0.00f, 0.10f, 0.00f, 0.10f, 0.00f, 0.10f, 0.00f, 0.00f }, // Sr
+{ 0.10f, 0.10f, 0.00f, 0.10f, 0.10f, 0.40f, 0.00f, 0.10f,-0.10f,-0.10f, 0.00f, 0.00f, 0.00f, 0.00f, 0.30f, 0.00f, 0.00f, 0.00f }, // Au
+{ 0.00f, 0.00f, 0.00f, 0.30f, 0.00f, 0.10f,-0.10f, 0.20f, 0.00f, 0.00f, 0.00f, 0.10f, 0.00f, 0.10f, 0.00f, 0.10f, 0.00f, 0.00f }, // Pb
+{ 0.00f, 0.00f, 0.00f, 0.10f, 0.00f, 0.00f, 0.00f, 0.00f, 0.00f, 0.00f, 0.00f, 0.00f, 0.00f, 0.00f, 0.00f, 0.00f, 0.20f, 0.00f }, // Eu
+{ 0.00f, 0.00f, 0.10f, 0.50f, 0.10f, 0.10f, 0.00f, 0.10f, 0.00f, 0.00f, 0.00f, 0.00f, 0.00f, 0.00f, 0.00f, 0.00f, 0.00f, 0.20f }, // U
 };
 
 void Particles::gen_default_colors() {
@@ -83,14 +105,24 @@ void Particles::apply_atom_defaults(uint32_t active_types) {
         colors[t] = CPK_COLORS[t];
 
     // Chemistry behavior flags
-    //   H: POLAR (participates in hydrogen bonds)
-    //   C: NONE (neutral, nonpolar)
-    //   N: DONOR (electron lone pairs)
-    //   O: POLAR | ACCEPTOR (very electronegative)
-    //   P: HEAVY | CATALYST (enzymatic backbone)
-    //   S: HEAVY (disulfide bridges)
+    //   H:  POLAR (participates in hydrogen bonds)
+    //   C:  NONE (neutral, nonpolar)
+    //   N:  DONOR (electron lone pairs)
+    //   O:  POLAR | ACCEPTOR (very electronegative)
+    //   P:  HEAVY | CATALYST (enzymatic backbone)
+    //   S:  HEAVY (disulfide bridges)
     //   Na: HEAVY | IONIC_POS | ADHESIVE
     //   Cl: HEAVY | IONIC_NEG | ADHESIVE
+    //   Fe: HEAVY | POLAR (redox-active transition metal)
+    //   Ni: HEAVY | CATALYST (nickel catalyst)
+    //   Si: HEAVY (semiconductor, silicate network former)
+    //   Ca: HEAVY | IONIC_POS (alkaline earth, biological signalling)
+    //   Ti: HEAVY (refractory transition metal)
+    //   Sr: HEAVY | IONIC_POS (alkaline earth, r-process product)
+    //   Au: HEAVY | ADHESIVE (noble metal, inert but surface-reactive)
+    //   Pb: HEAVY (dense post-transition metal, r-process end product)
+    //   Eu: HEAVY | RADICAL (lanthanide, neutron star merger product)
+    //   U:  HEAVY | RADICAL | CATALYST (actinide, fission-relevant)
     static const uint32_t ATOM_FLAGS[ATOM_COUNT] = {
         BEHAVIOR_POLAR,
         BEHAVIOR_NONE,
@@ -100,6 +132,17 @@ void Particles::apply_atom_defaults(uint32_t active_types) {
         BEHAVIOR_HEAVY,
         BEHAVIOR_HEAVY | BEHAVIOR_IONIC_POS | BEHAVIOR_ADHESIVE,
         BEHAVIOR_HEAVY | BEHAVIOR_IONIC_NEG | BEHAVIOR_ADHESIVE,
+        // R-process / supernova elements
+        BEHAVIOR_HEAVY | BEHAVIOR_POLAR,                       // Fe
+        BEHAVIOR_HEAVY | BEHAVIOR_CATALYST,                    // Ni
+        BEHAVIOR_HEAVY,                                        // Si
+        BEHAVIOR_HEAVY | BEHAVIOR_IONIC_POS,                   // Ca
+        BEHAVIOR_HEAVY,                                        // Ti
+        BEHAVIOR_HEAVY | BEHAVIOR_IONIC_POS,                   // Sr
+        BEHAVIOR_HEAVY | BEHAVIOR_ADHESIVE,                    // Au
+        BEHAVIOR_HEAVY,                                        // Pb
+        BEHAVIOR_HEAVY | BEHAVIOR_RADICAL,                     // Eu
+        BEHAVIOR_HEAVY | BEHAVIOR_RADICAL | BEHAVIOR_CATALYST, // U
     };
     for (uint32_t t = 0; t < n; ++t)
         behavior_flags[t] = ATOM_FLAGS[t];
@@ -178,17 +221,29 @@ void Particles::gen_particles(const SimConfig& cfg) {
 
     // ── Atom abundance ratios (cumulative) ───────────────────────────────────
     // H=40%, C=25%, O=15%, N=10%, P=2%, S=2%, Na=3%, Cl=3%
+    // R-process / supernova elements are very rare (< 0.5% each)
     // Renormalise to the number of active types so the user's type-count slider
     // still determines which atoms appear.
     static const float RAW_ABUNDANCE[ATOM_COUNT] = {
-        0.40f, // H
-        0.25f, // C
-        0.10f, // N
-        0.15f, // O
-        0.02f, // P
-        0.02f, // S
-        0.03f, // Na
-        0.03f, // Cl
+        0.400f, // H
+        0.250f, // C
+        0.100f, // N
+        0.150f, // O
+        0.020f, // P
+        0.020f, // S
+        0.030f, // Na
+        0.030f, // Cl
+        // ── R-process / supernova elements ────────────────────────────────────
+        0.005f, // Fe  (most common heavy metal in cosmos after alpha process)
+        0.002f, // Ni
+        0.005f, // Si  (major silicate planet component)
+        0.003f, // Ca
+        0.001f, // Ti
+        0.001f, // Sr  (first confirmed kilonova r-process product)
+        0.001f, // Au  (gold, neutron star merger)
+        0.001f, // Pb  (r-process end point)
+        0.001f, // Eu  (lanthanide, neutron star diagnostic)
+        0.001f, // U   (actinide, r-process endpoint)
     };
     uint32_t n_active = std::min(cfg.particle_types, static_cast<uint32_t>(ATOM_COUNT));
     float cum[ATOM_COUNT + 1];
@@ -245,10 +300,26 @@ void Particles::gen_particles(const SimConfig& cfg) {
 
     // ── Chemistry genome defaults ─────────────────────────────────────────────
     // Per atom: [0]=charge [1]=electronegativity [2]=reactivity [3]=bond_strength
-    static const float BASE_CHARGE[ATOM_COUNT]    = { 0.3f, 0.0f,-0.1f,-0.4f,-0.1f,-0.2f, 0.8f,-0.8f };
-    static const float BASE_ELECTRONEG[ATOM_COUNT] = { 0.6f, 0.6f, 0.9f, 1.6f, 0.8f, 0.9f, 0.3f, 1.1f };
-    static const float BASE_REACTIVITY[ATOM_COUNT] = { 1.0f, 0.8f, 1.2f, 1.4f, 1.0f, 1.1f, 0.6f, 0.8f };
-    static const float BASE_BOND_STR[ATOM_COUNT]   = { 0.3f, 0.5f, 0.4f, 0.4f, 0.6f, 0.5f, 0.2f, 0.2f };
+    static const float BASE_CHARGE[ATOM_COUNT] = {
+         0.3f, 0.0f,-0.1f,-0.4f,-0.1f,-0.2f, 0.8f,-0.8f,  // H C N O P S Na Cl
+         0.0f, 0.0f, 0.0f, 0.5f, 0.0f, 0.5f, 0.0f, 0.0f,  // Fe Ni Si Ca Ti Sr Au Pb
+         0.0f, 0.0f                                         // Eu U
+    };
+    static const float BASE_ELECTRONEG[ATOM_COUNT] = {
+         0.6f, 0.6f, 0.9f, 1.6f, 0.8f, 0.9f, 0.3f, 1.1f,
+         0.7f, 0.7f, 0.8f, 0.5f, 0.7f, 0.5f, 0.6f, 0.6f,
+         0.6f, 0.6f
+    };
+    static const float BASE_REACTIVITY[ATOM_COUNT] = {
+         1.0f, 0.8f, 1.2f, 1.4f, 1.0f, 1.1f, 0.6f, 0.8f,
+         0.8f, 0.7f, 0.6f, 0.5f, 0.7f, 0.5f, 0.5f, 0.4f,
+         1.0f, 1.2f
+    };
+    static const float BASE_BOND_STR[ATOM_COUNT] = {
+         0.3f, 0.5f, 0.4f, 0.4f, 0.6f, 0.5f, 0.2f, 0.2f,
+         0.4f, 0.3f, 0.4f, 0.2f, 0.3f, 0.2f, 0.2f, 0.3f,
+         0.3f, 0.4f
+    };
 
     genomes.resize(cfg.particle_count * GENOME_SIZE);
     for (uint32_t i = 0; i < cfg.particle_count; ++i) {
@@ -301,6 +372,16 @@ void Particles::apply_preset_atom(uint32_t type, uint32_t active_types) {
         BEHAVIOR_HEAVY,
         BEHAVIOR_HEAVY | BEHAVIOR_IONIC_POS | BEHAVIOR_ADHESIVE,
         BEHAVIOR_HEAVY | BEHAVIOR_IONIC_NEG | BEHAVIOR_ADHESIVE,
+        BEHAVIOR_HEAVY | BEHAVIOR_POLAR,
+        BEHAVIOR_HEAVY | BEHAVIOR_CATALYST,
+        BEHAVIOR_HEAVY,
+        BEHAVIOR_HEAVY | BEHAVIOR_IONIC_POS,
+        BEHAVIOR_HEAVY,
+        BEHAVIOR_HEAVY | BEHAVIOR_IONIC_POS,
+        BEHAVIOR_HEAVY | BEHAVIOR_ADHESIVE,
+        BEHAVIOR_HEAVY,
+        BEHAVIOR_HEAVY | BEHAVIOR_RADICAL,
+        BEHAVIOR_HEAVY | BEHAVIOR_RADICAL | BEHAVIOR_CATALYST,
     };
     behavior_flags[type] = ATOM_FLAGS[type];
     uint32_t n = std::min(active_types, static_cast<uint32_t>(ATOM_COUNT));

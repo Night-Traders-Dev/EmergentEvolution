@@ -93,7 +93,7 @@ void Interface::render_imgui(SimConfig&       cfg,
     }
     if (cfg.start_empty) ImGui::EndDisabled();
 
-    ImGui::SliderFloat("Types Slider", &particle_types_slider, 1.0f, 10.0f, "%.0f");
+    ImGui::SliderFloat("Types Slider", &particle_types_slider, 1.0f, 18.0f, "%.0f");
     int pt = static_cast<int>(particle_types_slider);
     ImGui::Text("Particle Types:  %d", pt);
     cfg.particle_types = static_cast<uint32_t>(pt);
@@ -193,8 +193,11 @@ void Interface::render_imgui(SimConfig&       cfg,
 
 // ── Particle grid ─────────────────────────────────────────────────────────────
 
-// Element symbol labels (indexed 0-7: H C N O P S Na Cl)
-static const char* ATOM_SYMBOLS[8] = { "H", "C", "N", "O", "P", "S", "Na", "Cl" };
+// Element symbol labels (indexed 0-17: H C N O P S Na Cl Fe Ni Si Ca Ti Sr Au Pb Eu U)
+static const char* ATOM_SYMBOLS[ATOM_COUNT] = {
+    "H", "C", "N", "O", "P", "S", "Na", "Cl",
+    "Fe", "Ni", "Si", "Ca", "Ti", "Sr", "Au", "Pb", "Eu", "U"
+};
 
 void Interface::draw_particle_grid(SimConfig& cfg, Particles& particles) {
     uint32_t pt = cfg.particle_types;
@@ -697,11 +700,15 @@ void Interface::draw_spawn_menu(const OrganismManager& org_manager,
             ImGui::Spacing();
 
             static const char* ATOM_LABELS[ATOM_COUNT] = {
-                "H", "C", "N", "O", "P", "S", "Na", "Cl"
+                "H", "C", "N", "O", "P", "S", "Na", "Cl",
+                "Fe", "Ni", "Si", "Ca", "Ti", "Sr", "Au", "Pb", "Eu", "U"
             };
             static const char* ATOM_FULL[ATOM_COUNT] = {
                 "Hydrogen", "Carbon", "Nitrogen", "Oxygen",
-                "Phosphorus", "Sulfur", "Sodium", "Chlorine"
+                "Phosphorus", "Sulfur", "Sodium", "Chlorine",
+                "Iron", "Nickel", "Silicon", "Calcium",
+                "Titanium", "Strontium", "Gold", "Lead",
+                "Europium", "Uranium"
             };
 
             for (int t = 0; t < static_cast<int>(ATOM_COUNT); ++t) {
@@ -726,7 +733,7 @@ void Interface::draw_spawn_menu(const OrganismManager& org_manager,
 
                 ImGui::PopStyleColor(3);
                 ImGui::PopID();
-                if ((t + 1) % 4 != 0)
+                if ((t + 1) % 6 != 0)
                     ImGui::SameLine();
             }
 
@@ -739,23 +746,31 @@ void Interface::draw_spawn_menu(const OrganismManager& org_manager,
             ImGui::Spacing();
 
             struct MolTemplate { const char* label; const char* desc; };
-            static const MolTemplate TEMPLATES[6] = {
-                { "H2O",  "Water: 1 O + 2 H  (bent, ~105 deg)"        },
-                { "CH4",  "Methane: 1 C + 4 H  (tetrahedral)"         },
-                { "NaCl", "Salt: Na-Cl ionic pair"                     },
-                { "NH3",  "Ammonia: 1 N + 3 H  (trigonal pyramidal)"  },
-                { "CO2",  "Carbon dioxide: O=C=O  (linear)"            },
-                { "Gly",  "Glycine: N-C-C(=O)  amino acid backbone"   },
+            static const MolTemplate TEMPLATES[14] = {
+                { "H2O",   "Water: 1 O + 2 H  (bent, ~105 deg)"             },
+                { "CH4",   "Methane: 1 C + 4 H  (tetrahedral)"              },
+                { "NaCl",  "Salt: Na-Cl ionic pair"                          },
+                { "NH3",   "Ammonia: 1 N + 3 H  (trigonal pyramidal)"       },
+                { "CO2",   "Carbon dioxide: O=C=O  (linear)"                 },
+                { "Gly",   "Glycine: N-C-C(=O)  amino acid backbone"        },
+                { "C6H6",  "Benzene: 6-carbon aromatic ring + 6 H"          },
+                { "SiO4",  "Silicate: Si + 4 O  (tetrahedral, rock-forming)" },
+                { "Fe2O3", "Hematite: 2 Fe + 3 O  (iron oxide mineral)"     },
+                { "EtOH",  "Ethanol: 2 C + 6 H + 1 O  (alcohol)"           },
+                { "CaCO3", "Calcite: Ca + C + 3 O  (limestone mineral)"     },
+                { "Au3",   "Gold trimer: 3 Au  (metallic nano-cluster)"     },
+                { "UO2",   "Uranium oxide: U + 2 O  (nuclear fuel analog)"  },
+                { "FeS2",  "Pyrite: Fe + 2 S  (fool's gold mineral)"        },
             };
 
-            for (int i = 0; i < 6; ++i) {
+            for (int i = 0; i < 14; ++i) {
                 ImGui::PushID(i + 100);
                 bool sel = (spawn_group_idx == i && spawn_tab == 1);
                 ImGui::PushStyleColor(ImGuiCol_Button,
                     sel ? ImVec4(0.18f, 0.52f, 0.18f, 1.0f)
                         : ImVec4(0.22f, 0.28f, 0.38f, 1.0f));
 
-                if (ImGui::Button(TEMPLATES[i].label, { 80.0f, 44.0f })) {
+                if (ImGui::Button(TEMPLATES[i].label, { 78.0f, 44.0f })) {
                     spawn_group_idx = i;
                     spawn_tab       = 1;
                     pending_spawn   = true;
@@ -920,10 +935,14 @@ void Interface::draw_hover_tooltip(const OrganismManager& org_manager,
 
     static const char* ATOM_FULL[ATOM_COUNT] = {
         "Hydrogen","Carbon","Nitrogen","Oxygen",
-        "Phosphorus","Sulfur","Sodium","Chlorine"
+        "Phosphorus","Sulfur","Sodium","Chlorine",
+        "Iron","Nickel","Silicon","Calcium",
+        "Titanium","Strontium","Gold","Lead",
+        "Europium","Uranium"
     };
     static const char* ATOM_SYM[ATOM_COUNT] = {
-        "H","C","N","O","P","S","Na","Cl"
+        "H","C","N","O","P","S","Na","Cl",
+        "Fe","Ni","Si","Ca","Ti","Sr","Au","Pb","Eu","U"
     };
 
     const char* type_name = is_photon ? "Photon"
