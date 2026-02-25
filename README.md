@@ -19,8 +19,9 @@ Particle Playground ships two simulation modes sharing the same Vulkan compute e
 
 - **Particle Physics** (`particle_physics`) — 33 particle types spanning the Standard Model and
   beyond, with real quantum mechanics: Coulomb + Yukawa + QCD forces, centrifugal barrier orbitals,
-  nuclear fusion/fission, radioactive decay, Compton scattering, hard-sphere collisions, emergent
-  thermodynamics, virtual particle pair creation, and six per-force multiplier knobs
+  nuclear fusion/fission, radioactive decay with realistic isotope half-lives, Compton scattering,
+  hard-sphere collisions, emergent thermodynamics, virtual particle pair creation, element
+  detection with info cards, and six per-force multiplier knobs
 - **Particle Chemistry** (`particle_life`) — 18 elements with persistent covalent/ionic bonds,
   molecular aggregates, vesicles, proto-cells, and Darwinian evolution
 
@@ -39,6 +40,9 @@ pairwise GPU compute shaders.
   - [Nuclear Fusion](#nuclear-fusion)
   - [Nuclear Fission](#nuclear-fission)
   - [Radioactive Decay](#radioactive-decay)
+  - [Isotope Half-Lives](#isotope-half-lives)
+  - [Element Detection & Info Cards](#element-detection--info-cards)
+  - [Element List & Event Notifications](#element-list--event-notifications)
   - [Compton Scattering](#compton-scattering)
   - [Hard-Sphere Collisions](#hard-sphere-collisions)
   - [Virtual Particle Pairs](#virtual-particle-pairs)
@@ -234,6 +238,97 @@ annihilate to photons (+ neutrinos for lepton pairs).
 
 **Decay cascades** unfold naturally: Top -> Bottom + W+ -> Charm + W- + lepton + nu -> ...
 producing showers of lighter particles from a single heavy parent.
+
+---
+
+## Isotope Half-Lives
+
+A nuclear isotope decay system identifies nuclei dynamically via BFS clustering of
+protons and neutrons, then applies realistic half-life decay based on (Z, N) composition.
+
+### Decay Modes
+
+| Mode | Symbol | Process | Products |
+|---|---|---|---|
+| **Alpha** | &alpha; | Emit He-4 nucleus | 2p + 2n ejected at high velocity |
+| **Beta-minus** | &beta;&#8315; | n &rarr; p + e&#8315; + &nu;&#773;e | Proton count increases by 1 |
+| **Beta-plus** | &beta;&#8314; | p &rarr; n + e&#8314; + &nu;e | Proton count decreases by 1 |
+| **Neutron emission** | n-emit | Eject free neutron | Occurs at nuclear gaps (A=5) |
+| **Proton emission** | p-emit | Eject free proton | Proton-drip-line nuclei |
+
+### Key Isotopes
+
+| Isotope | Z | N | Mode | Sim Half-Life | Real Half-Life |
+|---|---|---|---|---|---|
+| Free neutron | 0 | 1 | &beta;&#8315; | 10 s | 10 min |
+| Tritium H-3 | 1 | 2 | &beta;&#8315; | 1 min | 12.3 yr |
+| He-5 | 2 | 3 | n-emit | instant | 7&times;10&#8315;&#178;&#178; s |
+| Be-8 | 4 | 4 | &alpha; | instant | 6.7&times;10&#8315;&#185;&#8311; s |
+| C-14 | 6 | 8 | &beta;&#8315; | 5 min | 5730 yr |
+| N-13 | 7 | 6 | &beta;&#8314; | 10 s | 10 min |
+| Co-60 | 27 | 33 | &beta;&#8315; | 2 min | 5.3 yr |
+| Sr-90 | 38 | 52 | &beta;&#8315; | 2 min | 28.8 yr |
+| U-235 | 92 | 143 | &alpha; | 3.3 min | 704 Myr |
+| U-238 | 92 | 146 | &alpha; | 5 min | 4.5 Gyr |
+
+Full table includes ~50 isotopes. Nuclei not in the explicit table fall through to
+**general stability rules**:
+
+- **Z > 83** (above bismuth): always alpha-decay
+- **N/Z > 1.5**: beta-minus decay toward stability valley
+- **N/Z < 0.7** (Z &ge; 3): beta-plus decay
+- **A = 5 or A = 8**: instant disintegration (known nuclear gaps)
+
+Decay probability per frame: P = 1 &minus; exp(&minus;ln(2) / t&frac12;)
+
+---
+
+## Element Detection & Info Cards
+
+Nuclei are dynamically detected each frame by BFS clustering protons and neutrons within
+a 10px radius. Each cluster yields an element identity (Z, N, A) with bound electrons
+counted by proximity.
+
+**Particle Info Card** (bottom-right notification):
+- Shows particle type, charge, spin, mass, energy, age, momentum
+- If the particle belongs to a nucleus: shows element name, composition, and a clickable
+  link to the **Element Detail Card**
+
+**Element Detail Card** (bottom-right, left of info card):
+- Full element name and symbol (all 118 elements)
+- Composition: Z, N, A, electron count, shell configuration
+- Net charge, total mass, momentum, age
+- **Stability indicator** with isotope half-life lookup (color-coded)
+- Clickable nucleon/electron particle list for navigation
+- **Move**: relocate entire element (all constituent particles) by clicking
+- **Delete**: remove all particles in the element
+- **Duplicate**: spawn a copy of the element nearby with correct orbital structure
+
+---
+
+## Element List & Event Notifications
+
+**Element List** — The bottom bar displays a clickable **"Elements: N"** counter showing
+the total number of detected elements in the simulation. Clicking opens a centered,
+scrollable window listing every element with:
+
+- **Stability dot**: green (stable), yellow (long-lived), orange (medium), red (short-lived)
+- **Composition**: symbol, mass number (A), element name, charge, electron count
+- **Tooltip**: Z, N, electrons, decay mode and half-life for unstable isotopes
+- **Click to inspect**: clicking any row navigates the camera to that element and opens
+  its Element Detail Card
+
+**Event Notifications** — Toast-style notifications appear in the top-right corner when
+nuclear events occur, stacking vertically with a 5-second timeout and fade-out:
+
+| Event | Example | Color |
+|---|---|---|
+| **Fusion** | `Fusion: p + p → d + e⁺ + ν` | Cyan |
+| **Fission** | `Fission: 8-nucleon cluster split + 3n` | Orange |
+| **Particle Decay** | `Decay: μ⁻ → e⁻ + νμ + ν̄e` | Warm yellow |
+| **Nuclear Decay** | `α Decay: U-238 → Th-234 + He-4` | Red-orange |
+
+Up to 8 notifications can stack simultaneously; oldest are dropped when the limit is reached.
 
 ---
 
@@ -535,8 +630,14 @@ CaCO3, Au3, UO2, FeS2.
 | Left click | Place particle (spawn mode) / Select particle (select mode) |
 
 > **Info Card** — Select a particle to see its type, charge, spin, energy, age, momentum,
-> temperature, magnetic moment, orbital parent, and bond partners. Click linked particles
-> to navigate the camera.
+> temperature, magnetic moment, orbital parent, and element membership. If the particle
+> belongs to a nucleus, click the element button to open the **Element Detail Card** with
+> full composition, stability info, and Move / Delete / Duplicate actions.
+>
+> **Element List** — Click the gold **"Elements: N"** counter in the bottom bar to open a
+> scrollable list of all detected elements. Each row shows symbol, mass number, name,
+> charge, electrons, and a stability indicator. Click any element to navigate to it and
+> open its detail card.
 
 ---
 
@@ -592,9 +693,9 @@ EmergentEvolution/
 │   ├── simulation.h/.cpp        # Chemistry main loop, input, camera, orchestration
 │   └── main.cpp                 # Chemistry entry point
 ├── src/physics/
-│   ├── phys_particles.h/.cpp    # 33 particle types, masses, charges, decay rates, environments
-│   ├── interface.h/.cpp         # Physics ImGui: spawn picker, force multipliers, save/load, pause menu
-│   ├── simulation.h/.cpp        # Physics main loop: fusion, fission, decay, virtual pairs, orbitals
+│   ├── phys_particles.h/.cpp    # 33 particle types, masses, charges, decay rates, isotope table, environments
+│   ├── interface.h/.cpp         # Physics ImGui: spawn picker, force multipliers, element cards, save/load
+│   ├── simulation.h/.cpp        # Physics main loop: fusion, fission, decay, nuclear isotope decay, orbitals
 │   ├── save_load.h/.cpp         # Binary .ppsg save/load serialization
 │   └── main.cpp                 # Physics entry point (borderless maximized window)
 ├── shaders/

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <random>
 #include <cstdio>
+#include <algorithm>
 
 void PhysicsInterface::init() {
     std::random_device rd;
@@ -503,6 +504,9 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         return;
     }
 
+    // Draw event notifications (top-right toast stack)
+    draw_notifications();
+
     // Draw bottom bar (always visible)
     draw_bottom_bar(cfg, request_reset);
 
@@ -518,16 +522,19 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     if (selected_force_obj_idx >= 0)
         draw_force_object_panel(force_objects);
 
-    // Draw particle info card (hover or pinned — offsets below force obj panel if both shown)
-    draw_info_card(particles);
-
-    // Draw element detail card (if open)
-    if (element_card_nucleus_rep >= 0)
-        draw_element_card(particles);
-
-    // Save/Load dialog
+    // Save/Load dialog (drawn before cards so cards render on top)
     if (show_save_dialog || show_load_dialog)
         draw_save_load_dialog();
+
+    // Draw element list window (center, drawn before cards so cards overlay)
+    draw_element_list();
+
+    // Draw particle info card (bottom-right, always on top)
+    draw_info_card(particles);
+
+    // Draw element detail card (bottom-right, always on top)
+    if (element_card_nucleus_rep >= 0)
+        draw_element_card(particles);
 
     // Fade save/load status message
     if (save_load_msg_timer > 0.0f)
@@ -766,6 +773,32 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
         ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
         ImGui::SameLine(0, 10);
         ImGui::Text("E: %.2f avg", avg_energy_display);
+
+        // Nuclear decays
+        if (nuclear_decay_count_display > 0) {
+            ImGui::SameLine(0, 20);
+            ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
+            ImGui::SameLine(0, 10);
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "Decays: %u", nuclear_decay_count_display);
+        }
+
+        // Element count (clickable)
+        if (!element_list.empty()) {
+            ImGui::SameLine(0, 20);
+            ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
+            ImGui::SameLine(0, 10);
+            char elem_btn[32];
+            snprintf(elem_btn, sizeof(elem_btn), "Elements: %d", static_cast<int>(element_list.size()));
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.3f, 0.5f, 0.5f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.2f, 0.4f, 0.7f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.85f, 0.6f, 1.0f));
+            if (ImGui::SmallButton(elem_btn))
+                show_element_list = !show_element_list;
+            ImGui::PopStyleColor(4);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Click to show element list");
+        }
 
         // Type counts (inline colored) — show only active ones
         ImGui::SameLine(0, 20);
@@ -1679,10 +1712,9 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
     }
 
     ImGuiIO& io = ImGui::GetIO();
-    float panel_y = 10.0f;
-    // If force object panel is showing, offset below it
-    if (selected_force_obj_idx >= 0) panel_y = 230.0f;
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 260, panel_y));
+    // Bottom-right, notification style — pivot (0,1) anchors bottom edge, grows upward
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 260, io.DisplaySize.y - 60),
+                            ImGuiCond_Always, ImVec2(0.0f, 1.0f));
 
     ImGuiWindowFlags card_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
         | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize
@@ -2046,11 +2078,10 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
         }
     }
 
-    // Window
+    // Window — bottom-right, to the left of info card
     ImGuiIO& io = ImGui::GetIO();
-    float card_x = io.DisplaySize.x * 0.5f - 160.0f;
-    float card_y = 60.0f;
-    ImGui::SetNextWindowPos(ImVec2(card_x, card_y), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 590, io.DisplaySize.y - 60),
+                            ImGuiCond_Always, ImVec2(0.0f, 1.0f));
     ImGui::SetNextWindowSize(ImVec2(320, 0));
 
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize
@@ -2128,13 +2159,41 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
             else ImGui::Text("%.1f min", age_sec / 60.0f);
         }
 
-        // Stability
+        // Stability — look up isotope decay table
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Stability");
         ImGui::SameLine(col_w);
-        if (N_count >= Z - 1 && N_count <= Z + 2 && Z <= 82)
-            ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.4f, 1.0f), "Stable");
-        else
-            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f), "Unstable");
+        {
+            const IsotopeDecayEntry* iso = lookup_isotope_decay(Z, N_count);
+            NuclearDecayMode dmode = NDECAY_NONE;
+            float hl = 0.0f;
+            if (iso) { dmode = iso->mode; hl = iso->half_life_frames; }
+            else dmode = general_stability_rule(Z, N_count, hl);
+
+            if (dmode == NDECAY_NONE) {
+                ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.4f, 1.0f), "Stable");
+            } else {
+                const char* mode_str = "?";
+                switch (dmode) {
+                    case NDECAY_ALPHA:            mode_str = "\xce\xb1"; break;
+                    case NDECAY_BETA_MINUS:       mode_str = "\xce\xb2\xe2\x81\xbb"; break;
+                    case NDECAY_BETA_PLUS:        mode_str = "\xce\xb2\xe2\x81\xba"; break;
+                    case NDECAY_NEUTRON_EMISSION: mode_str = "n-emit"; break;
+                    case NDECAY_PROTON_EMISSION:  mode_str = "p-emit"; break;
+                    default: break;
+                }
+                float hl_sec = hl / 60.0f;
+                ImVec4 color;
+                if (hl < 12.0f) color = ImVec4(1.0f, 0.2f, 0.2f, 1.0f);       // instant — red
+                else if (hl < 300.0f) color = ImVec4(1.0f, 0.5f, 0.2f, 1.0f);  // short — orange
+                else if (hl < 7200.0f) color = ImVec4(1.0f, 0.8f, 0.3f, 1.0f); // medium — yellow
+                else color = ImVec4(0.8f, 0.8f, 0.4f, 1.0f);                   // long — pale yellow
+
+                if (hl_sec < 60.0f)
+                    ImGui::TextColored(color, "%s  t\xc2\xbd=%.1fs", mode_str, hl_sec);
+                else
+                    ImGui::TextColored(color, "%s  t\xc2\xbd=%.1fmin", mode_str, hl_sec / 60.0f);
+            }
+        }
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -2173,20 +2232,244 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
             else ImGui::NewLine();
         }
 
-        // Navigate button
+        // Action buttons
         ImGui::Spacing();
+        ImGui::Separator();
+
+        if (element_move_mode) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.4f, 0.1f, 0.80f));
+            if (ImGui::Button("Moving...", ImVec2(86, 26))) {
+                element_move_mode = false;
+            }
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.2f, 1.0f), "Click to place");
+        } else {
+            if (ImGui::Button("Move", ImVec2(72, 26))) {
+                element_move_mode = true;
+            }
+            ImGui::SameLine();
+
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.1f, 0.1f, 0.80f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.2f, 0.2f, 0.90f));
+            if (ImGui::Button("Delete", ImVec2(72, 26))) {
+                request_element_delete = true;
+            }
+            ImGui::PopStyleColor(2);
+
+            ImGui::SameLine();
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.4f, 0.15f, 0.80f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.15f, 0.55f, 0.2f, 0.90f));
+            if (ImGui::Button("Duplicate", ImVec2(86, 26))) {
+                request_element_duplicate = true;
+            }
+            ImGui::PopStyleColor(2);
+        }
+
+        // Navigate + Close
         if (ImGui::Button("Navigate", ImVec2(100, 26))) {
             navigate_to_particle = nuc_rep;
         }
         ImGui::SameLine();
         if (ImGui::Button("Close", ImVec2(100, 26))) {
             element_card_nucleus_rep = -1;
+            element_move_mode = false;
         }
     }
     ImGui::End();
     ImGui::PopStyleColor(2);
 
     if (!open) element_card_nucleus_rep = -1;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Event Notifications (Top-Right Toast Stack) ─────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Element List Window ─────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_element_list() {
+    if (!show_element_list || element_list.empty()) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    float win_w = 320.0f;
+    float max_h = io.DisplaySize.y - 120.0f;
+    float win_h = std::min(40.0f + static_cast<float>(element_list.size()) * 28.0f + 40.0f, max_h);
+
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
+                                    io.DisplaySize.y * 0.5f - win_h * 0.5f),
+                            ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(win_w, win_h), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(280, 120), ImVec2(400, max_h));
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.05f, 0.09f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.08f, 0.06f, 0.03f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.14f, 0.10f, 0.04f, 0.95f));
+
+    char title[64];
+    snprintf(title, sizeof(title), "Elements (%d)###ElementList",
+             static_cast<int>(element_list.size()));
+
+    if (!ImGui::Begin(title, &show_element_list)) {
+        ImGui::End();
+        ImGui::PopStyleColor(3);
+        return;
+    }
+
+    // Column headers
+    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "%-6s %-12s %4s %6s %3s",
+                       "Sym", "Name", "A", "Charge", "e-");
+    ImGui::Separator();
+
+    // Scrollable list
+    ImGui::BeginChild("##ElemListScroll", ImVec2(0, 0), false);
+
+    for (size_t i = 0; i < element_list.size(); ++i) {
+        auto& elem = element_list[i];
+        int Z = elem.Z;
+        int A = elem.Z + elem.N;
+        int net_charge = Z - elem.electrons;
+
+        const char* sym = (Z >= 1 && Z <= FULL_ELEMENT_COUNT) ? ELEMENT_SYMBOLS[Z] : "?";
+        const char* name = (Z >= 1 && Z <= FULL_ELEMENT_COUNT) ? ELEMENT_NAMES[Z] : "Unknown";
+
+        // Stability color indicator
+        const IsotopeDecayEntry* decay = lookup_isotope_decay(Z, elem.N);
+        float hl = 0.0f;
+        NuclearDecayMode dmode = NDECAY_NONE;
+        if (decay) { dmode = decay->mode; hl = decay->half_life_frames; }
+        else { dmode = general_stability_rule(Z, elem.N, hl); }
+
+        ImVec4 stab_col;
+        if (dmode == NDECAY_NONE)       stab_col = ImVec4(0.3f, 0.9f, 0.4f, 1.0f);  // stable green
+        else if (hl > 7200.0f)          stab_col = ImVec4(0.9f, 0.9f, 0.5f, 1.0f);  // long-lived yellow
+        else if (hl > 60.0f)            stab_col = ImVec4(1.0f, 0.65f, 0.2f, 1.0f); // medium orange
+        else                            stab_col = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);  // short red
+
+        // Charge string
+        char charge_str[16];
+        if (net_charge == 0) snprintf(charge_str, sizeof(charge_str), "0");
+        else if (net_charge > 0) snprintf(charge_str, sizeof(charge_str), "+%d", net_charge);
+        else snprintf(charge_str, sizeof(charge_str), "%d", net_charge);
+
+        // Build clickable button label
+        char label[128];
+        snprintf(label, sizeof(label), "##elem_%zu", i);
+
+        // Stability dot + element row as a selectable
+        bool is_selected = (element_card_nucleus_rep == static_cast<int32_t>(elem.rep));
+        ImGui::PushID(static_cast<int>(i));
+
+        // Stability dot
+        ImVec2 cursor = ImGui::GetCursorScreenPos();
+        ImGui::GetWindowDrawList()->AddCircleFilled(
+            ImVec2(cursor.x + 5.0f, cursor.y + 10.0f), 4.0f,
+            ImGui::ColorConvertFloat4ToU32(stab_col));
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.0f);
+
+        // Selectable row
+        char row_text[128];
+        snprintf(row_text, sizeof(row_text), "%-3s %-2s-%-3d  %-12s  %3s  %2de-",
+                 sym, sym, A, name, charge_str, elem.electrons);
+
+        if (ImGui::Selectable(row_text, is_selected, ImGuiSelectableFlags_None, ImVec2(0, 22))) {
+            element_card_nucleus_rep = static_cast<int32_t>(elem.rep);
+            navigate_to_particle = static_cast<int32_t>(elem.rep);
+        }
+
+        // Tooltip with details
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::TextColored(ImVec4(0.9f, 0.85f, 0.6f, 1.0f), "%s-%d", sym, A);
+            ImGui::Text("Z=%d  N=%d  e-=%d", Z, elem.N, elem.electrons);
+            if (dmode == NDECAY_NONE) {
+                ImGui::TextColored(stab_col, "Stable");
+            } else {
+                const char* mode_str = "";
+                switch (dmode) {
+                    case NDECAY_ALPHA: mode_str = "alpha"; break;
+                    case NDECAY_BETA_MINUS: mode_str = "beta-"; break;
+                    case NDECAY_BETA_PLUS: mode_str = "beta+"; break;
+                    case NDECAY_NEUTRON_EMISSION: mode_str = "n-emit"; break;
+                    case NDECAY_PROTON_EMISSION: mode_str = "p-emit"; break;
+                    default: break;
+                }
+                ImGui::TextColored(stab_col, "Unstable (%s, t1/2=%.0f frames)", mode_str, hl);
+            }
+            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "Click to inspect");
+            ImGui::EndTooltip();
+        }
+
+        ImGui::PopID();
+    }
+
+    ImGui::EndChild();
+    ImGui::End();
+    ImGui::PopStyleColor(3);
+}
+
+void PhysicsInterface::push_notification(const char* text, ImVec4 color) {
+    if (static_cast<int>(notifications.size()) >= NOTIFY_MAX)
+        notifications.erase(notifications.begin());  // drop oldest
+    notifications.push_back({std::string(text), color, NOTIFY_DURATION});
+}
+
+void PhysicsInterface::draw_notifications() {
+    if (notifications.empty()) return;
+
+    float dt = ImGui::GetIO().DeltaTime;
+    ImGuiIO& io = ImGui::GetIO();
+
+    // Tick timers and remove expired
+    for (auto& n : notifications) n.timer -= dt;
+    notifications.erase(
+        std::remove_if(notifications.begin(), notifications.end(),
+                        [](const Notification& n) { return n.timer <= 0.0f; }),
+        notifications.end());
+
+    if (notifications.empty()) return;
+
+    // Draw stacked cards from top-right, growing downward
+    float card_w = 260.0f;
+    float card_pad = 4.0f;
+    float start_x = io.DisplaySize.x - card_w - 10.0f;
+    float start_y = 10.0f;
+
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize
+        | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav
+        | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBringToFrontOnFocus;
+
+    for (int i = 0; i < static_cast<int>(notifications.size()); ++i) {
+        auto& n = notifications[i];
+        float alpha = (n.timer < 1.0f) ? n.timer : 1.0f;  // fade out in last second
+
+        ImGui::SetNextWindowPos(ImVec2(start_x, start_y));
+        ImGui::SetNextWindowSize(ImVec2(card_w, 0));
+        ImGui::SetNextWindowBgAlpha(0.85f * alpha);
+
+        char wid[32];
+        snprintf(wid, sizeof(wid), "##notify%d", i);
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 6));
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.12f, 0.90f));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(n.color.x * 0.5f, n.color.y * 0.5f, n.color.z * 0.5f, alpha * 0.6f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+
+        if (ImGui::Begin(wid, nullptr, flags)) {
+            ImVec4 tc = n.color;
+            tc.w = alpha;
+            ImGui::TextColored(tc, "%s", n.text.c_str());
+            start_y += ImGui::GetWindowHeight() + card_pad;
+        }
+        ImGui::End();
+
+        ImGui::PopStyleVar(3);
+        ImGui::PopStyleColor(2);
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

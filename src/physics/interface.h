@@ -4,6 +4,8 @@
 #include "types.h"
 #include "particles.h"
 #include <cstdint>
+#include <vector>
+#include <string>
 #include <glm/glm.hpp>
 
 // ── Group template for spawning composite structures ─────────────────────────
@@ -70,6 +72,9 @@ public:
 
     // Element detail card
     int32_t element_card_nucleus_rep = -1;  // nucleus rep index for element card (-1=hidden)
+    bool request_element_delete    = false;
+    bool request_element_duplicate = false;
+    bool element_move_mode         = false;
 
     // Force object interaction
     bool force_obj_placement_mode = false;
@@ -96,6 +101,16 @@ public:
     // Emergent feedback display
     float emergent_temp_display   = 0.0f;
     float emergent_bfield_display = 0.0f;
+    uint32_t nuclear_decay_count_display = 0;
+
+    // Element list (populated by simulation from detected_nuclei_)
+    struct ElementSummary {
+        int Z, N;           // proton/neutron count
+        int electrons;      // bound electron count
+        uint32_t rep;       // nucleus representative index
+    };
+    std::vector<ElementSummary> element_list;
+    bool show_element_list = false;
 
     // Camera navigation (set by info card click, consumed by simulation)
     int32_t navigate_to_particle = -1;
@@ -112,6 +127,18 @@ public:
     float particle_count_slider = 70.0f;   // sqrt(5000) ~ 70
     int   seed_value = 0;
 
+    // Event notifications (top-right toast stack)
+    struct Notification {
+        std::string text;
+        ImVec4 color;
+        float timer;       // seconds remaining
+    };
+    static constexpr float NOTIFY_DURATION = 5.0f;
+    static constexpr int   NOTIFY_MAX = 8;
+    std::vector<Notification> notifications;
+
+    void push_notification(const char* text, ImVec4 color = ImVec4(1,1,1,1));
+
     void init();
     void render_imgui(SimConfig& cfg, Particles& particles, ForceObject* force_objects, bool& request_reset);
 
@@ -127,4 +154,6 @@ private:
     void draw_pause_menu(SimConfig& cfg, bool& request_reset);
     void draw_save_load_dialog();
     void draw_element_card(const Particles& particles);
+    void draw_element_list();
+    void draw_notifications();
 };

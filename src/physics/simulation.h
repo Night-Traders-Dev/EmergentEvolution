@@ -45,6 +45,17 @@ private:
     float emergent_temperature_ = 1.0f;   // EMA of kinetic temperature (Kelvin)
     float emergent_bfield_      = 0.0f;   // EMA of emergent B-field magnitude
 
+    // Detected nuclei (populated by update_orbitals each frame)
+    struct NucleusInfo {
+        glm::vec2 center;
+        int Z = 0, N = 0;
+        uint32_t rep = 0;
+        std::vector<uint32_t> proton_indices;
+        std::vector<uint32_t> neutron_indices;
+    };
+    std::vector<NucleusInfo> detected_nuclei_;
+    uint32_t nuclear_decay_count_ = 0;
+
     double fps_acc_       = 0.0;
     int    fps_frame_cnt_ = 0;
     uint32_t frame_counter_ = 0;
@@ -61,6 +72,7 @@ private:
     void check_decay();
     void check_virtual_pairs();
     void update_orbitals();
+    void check_nuclear_decay();
 
     void place_force_object(glm::vec2 world_pos, ForceObjectType type);
     int  hit_test_force_objects(glm::vec2 world_pos, float snap_radius);

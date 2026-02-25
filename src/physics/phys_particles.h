@@ -130,5 +130,201 @@ static constexpr float PHYS_DECAY_RATE[PHYS_PARTICLE_TYPES] = {
     0.0f, 0.0f, 0.0f,
 };
 
+// ── Nuclear isotope decay ────────────────────────────────────────────────────
+
+enum NuclearDecayMode : uint8_t {
+    NDECAY_NONE = 0,
+    NDECAY_ALPHA,            // emit He-4 (2p + 2n)
+    NDECAY_BETA_MINUS,       // n → p + e⁻ + ν̄e
+    NDECAY_BETA_PLUS,        // p → n + e⁺ + νe
+    NDECAY_NEUTRON_EMISSION, // eject 1 neutron
+    NDECAY_PROTON_EMISSION,  // eject 1 proton
+};
+
+struct IsotopeDecayEntry {
+    uint8_t Z;               // proton count
+    uint8_t N;               // neutron count
+    NuclearDecayMode mode;
+    float half_life_frames;  // at 60 FPS
+};
+
+// Isotope decay table — half-lives compressed to sim-friendly timescales.
+// Covers known unstable isotopes reachable in the simulation.
+// Nuclei not found here fall through to general stability rules in check_nuclear_decay().
+static constexpr IsotopeDecayEntry ISOTOPE_DECAY_TABLE[] = {
+    // ── Free neutron ─────────────────────────────────────────────────────
+    {0, 1, NDECAY_BETA_MINUS,       600.0f},   // n → p + e⁻ + ν̄e  (real: 10 min)
+
+    // ── Hydrogen isotopes ────────────────────────────────────────────────
+    {1, 2, NDECAY_BETA_MINUS,      3600.0f},   // H-3 tritium (real: 12.3 yr)
+
+    // ── Helium isotopes ──────────────────────────────────────────────────
+    {2, 1, NDECAY_PROTON_EMISSION,    6.0f},   // He-3 can p-emit if very neutron-poor — treat as unstable in sim
+    {2, 3, NDECAY_NEUTRON_EMISSION,   6.0f},   // He-5 — instantly ejects neutron
+    {2, 4, NDECAY_BETA_MINUS,        30.0f},   // He-6 (real: 807 ms)
+    {2, 6, NDECAY_BETA_MINUS,        12.0f},   // He-8 (real: 119 ms)
+
+    // ── Lithium isotopes ─────────────────────────────────────────────────
+    {3, 2, NDECAY_PROTON_EMISSION,    6.0f},   // Li-5 — unbound, instant
+    {3, 5, NDECAY_BETA_MINUS,        30.0f},   // Li-8 (real: 839 ms)
+    {3, 6, NDECAY_NEUTRON_EMISSION,   6.0f},   // Li-9 (real: 178 ms)
+
+    // ── Beryllium isotopes ───────────────────────────────────────────────
+    {4, 3, NDECAY_BETA_PLUS,       7200.0f},   // Be-7 electron capture (real: 53 d)
+    {4, 4, NDECAY_ALPHA,              6.0f},    // Be-8 → 2 He-4 (instant)
+    {4, 6, NDECAY_BETA_MINUS,        60.0f},   // Be-10 (real: 1.4 Myr → long-lived in sim)
+
+    // ── Boron isotopes ───────────────────────────────────────────────────
+    {5, 3, NDECAY_BETA_PLUS,         30.0f},   // B-8 (real: 770 ms)
+    {5, 7, NDECAY_BETA_MINUS,        60.0f},   // B-12 (real: 20 ms — fast in reality)
+
+    // ── Carbon isotopes ──────────────────────────────────────────────────
+    {6, 4, NDECAY_BETA_PLUS,         30.0f},   // C-10 (real: 19 s)
+    {6, 5, NDECAY_BETA_PLUS,        120.0f},   // C-11 (real: 20 min)
+    {6, 8, NDECAY_BETA_MINUS,     18000.0f},   // C-14 carbon dating (real: 5730 yr)
+    {6, 9, NDECAY_BETA_MINUS,        12.0f},   // C-15 (real: 2.4 s)
+
+    // ── Nitrogen isotopes ────────────────────────────────────────────────
+    {7, 6, NDECAY_BETA_PLUS,        600.0f},   // N-13 (real: 10 min)
+    {7, 9, NDECAY_BETA_MINUS,        30.0f},   // N-16 (real: 7.1 s)
+
+    // ── Oxygen isotopes ──────────────────────────────────────────────────
+    {8, 6, NDECAY_BETA_PLUS,         30.0f},   // O-14 (real: 71 s)
+    {8, 7, NDECAY_BETA_PLUS,        120.0f},   // O-15 (real: 122 s) PET isotope
+
+    // ── Fluorine ─────────────────────────────────────────────────────────
+    {9, 8, NDECAY_BETA_PLUS,        300.0f},   // F-17 (real: 64 s)
+    {9, 9, NDECAY_BETA_PLUS,       1800.0f},   // F-18 (real: 110 min) PET isotope
+
+    // ── Neon ─────────────────────────────────────────────────────────────
+    {10, 9, NDECAY_BETA_PLUS,       600.0f},   // Ne-19 (real: 17 s)
+
+    // ── Sodium ───────────────────────────────────────────────────────────
+    {11, 11, NDECAY_BETA_MINUS,    3600.0f},   // Na-22 (real: 2.6 yr)
+    {11, 13, NDECAY_BETA_MINUS,     300.0f},   // Na-24 (real: 15 hr)
+
+    // ── Magnesium ────────────────────────────────────────────────────────
+    {12, 15, NDECAY_BETA_MINUS,     300.0f},   // Mg-27 (real: 9.5 min)
+
+    // ── Aluminium ────────────────────────────────────────────────────────
+    {13, 13, NDECAY_BETA_PLUS,     3600.0f},   // Al-26 (real: 717 kyr)
+
+    // ── Silicon ──────────────────────────────────────────────────────────
+    {14, 18, NDECAY_BETA_MINUS,    7200.0f},   // Si-32 (real: 153 yr)
+
+    // ── Phosphorus ───────────────────────────────────────────────────────
+    {15, 17, NDECAY_BETA_MINUS,    1800.0f},   // P-32 (real: 14.3 d)
+    {15, 18, NDECAY_BETA_MINUS,    3600.0f},   // P-33 (real: 25.3 d)
+
+    // ── Sulfur ───────────────────────────────────────────────────────────
+    {16, 19, NDECAY_BETA_MINUS,    7200.0f},   // S-35 (real: 87 d)
+
+    // ── Chlorine ─────────────────────────────────────────────────────────
+    {17, 19, NDECAY_BETA_PLUS,    18000.0f},   // Cl-36 (real: 301 kyr)
+
+    // ── Potassium ────────────────────────────────────────────────────────
+    {19, 21, NDECAY_BETA_MINUS,   18000.0f},   // K-40 (real: 1.25 Gyr)
+
+    // ── Calcium ──────────────────────────────────────────────────────────
+    {20, 25, NDECAY_BETA_MINUS,    1200.0f},   // Ca-45 (real: 163 d)
+
+    // ── Iron ─────────────────────────────────────────────────────────────
+    {26, 29, NDECAY_BETA_PLUS,     3600.0f},   // Fe-55 EC (real: 2.7 yr)
+    {26, 33, NDECAY_BETA_MINUS,    1800.0f},   // Fe-59 (real: 44.5 d)
+
+    // ── Cobalt ───────────────────────────────────────────────────────────
+    {27, 33, NDECAY_BETA_MINUS,    7200.0f},   // Co-60 (real: 5.3 yr)
+
+    // ── Strontium ────────────────────────────────────────────────────────
+    {38, 52, NDECAY_BETA_MINUS,    7200.0f},   // Sr-90 (real: 28.8 yr)
+
+    // ── Iodine ───────────────────────────────────────────────────────────
+    {53, 78, NDECAY_BETA_MINUS,    1200.0f},   // I-131 (real: 8 d)
+
+    // ── Cesium ───────────────────────────────────────────────────────────
+    {55, 82, NDECAY_BETA_MINUS,   18000.0f},   // Cs-137 (real: 30.2 yr)
+
+    // ── Radon ────────────────────────────────────────────────────────────
+    {86, 136, NDECAY_ALPHA,         300.0f},    // Rn-222 (real: 3.8 d)
+
+    // ── Radium ───────────────────────────────────────────────────────────
+    {88, 138, NDECAY_ALPHA,        7200.0f},    // Ra-226 (real: 1600 yr)
+
+    // ── Thorium ──────────────────────────────────────────────────────────
+    {90, 142, NDECAY_ALPHA,       18000.0f},    // Th-232 (real: 14 Gyr)
+
+    // ── Uranium ──────────────────────────────────────────────────────────
+    {92, 143, NDECAY_ALPHA,       12000.0f},    // U-235 (real: 704 Myr)
+    {92, 146, NDECAY_ALPHA,       18000.0f},    // U-238 (real: 4.5 Gyr)
+
+    // ── Plutonium ────────────────────────────────────────────────────────
+    {94, 145, NDECAY_ALPHA,        7200.0f},    // Pu-239 (real: 24.1 kyr)
+};
+static constexpr int ISOTOPE_DECAY_TABLE_SIZE =
+    static_cast<int>(sizeof(ISOTOPE_DECAY_TABLE) / sizeof(ISOTOPE_DECAY_TABLE[0]));
+
+// Look up an isotope in the table. Returns nullptr if not found.
+inline const IsotopeDecayEntry* lookup_isotope_decay(int Z, int N) {
+    for (int i = 0; i < ISOTOPE_DECAY_TABLE_SIZE; ++i) {
+        if (ISOTOPE_DECAY_TABLE[i].Z == Z && ISOTOPE_DECAY_TABLE[i].N == N)
+            return &ISOTOPE_DECAY_TABLE[i];
+    }
+    return nullptr;
+}
+
+// General stability rules for nuclei not in the explicit table.
+// Returns decay mode and estimated half-life. NDECAY_NONE = stable.
+inline NuclearDecayMode general_stability_rule(int Z, int N, float& half_life_out) {
+    int A = Z + N;
+    if (Z == 0 && N == 0) return NDECAY_NONE;          // nothing
+    if (Z == 0 && N == 1) { half_life_out = 600.0f; return NDECAY_BETA_MINUS; } // free neutron
+    if (A == 1 && Z == 1) return NDECAY_NONE;           // lone proton = stable
+    if (Z == 1 && N == 0) return NDECAY_NONE;           // hydrogen
+
+    // Nuclear gaps: A=5 and A=8 are unbound
+    if (A == 5) { half_life_out = 6.0f; return (N > Z) ? NDECAY_NEUTRON_EMISSION : NDECAY_PROTON_EMISSION; }
+    if (A == 8 && Z == 4) { half_life_out = 6.0f; return NDECAY_ALPHA; }
+
+    // All elements above bismuth (Z>83) alpha-decay
+    if (Z > 83) { half_life_out = 1200.0f + Z * 60.0f; return NDECAY_ALPHA; }
+
+    // Neutron-rich: N/Z > 1.5 (for Z>=2) → beta-minus
+    if (Z >= 2 && N > 0) {
+        float ratio = static_cast<float>(N) / static_cast<float>(Z);
+        if (ratio > 1.5f) {
+            half_life_out = 60.0f + ratio * 120.0f;
+            return NDECAY_BETA_MINUS;
+        }
+        // Proton-rich: N/Z < 0.7 (for Z>=3) → beta-plus
+        if (Z >= 3 && ratio < 0.7f) {
+            half_life_out = 60.0f + (1.0f / ratio) * 120.0f;
+            return NDECAY_BETA_PLUS;
+        }
+    }
+
+    // Lone neutrons in a cluster without protons
+    if (Z == 0 && N > 1) { half_life_out = 30.0f; return NDECAY_BETA_MINUS; }
+
+    return NDECAY_NONE;  // stable
+}
+
+// Compact element symbol lookup for notifications (Z=0..118)
+inline const char* element_symbol(int Z) {
+    static const char* const SYM[] = {
+        "n","H","He","Li","Be","B","C","N","O","F","Ne",
+        "Na","Mg","Al","Si","P","S","Cl","Ar","K","Ca",
+        "Sc","Ti","V","Cr","Mn","Fe","Co","Ni","Cu","Zn",
+        "Ga","Ge","As","Se","Br","Kr","Rb","Sr","Y","Zr",
+        "Nb","Mo","Tc","Ru","Rh","Pd","Ag","Cd","In","Sn",
+        "Sb","Te","I","Xe","Cs","Ba","La","Ce","Pr","Nd",
+        "Pm","Sm","Eu","Gd","Tb","Dy","Ho","Er","Tm","Yb",
+        "Lu","Hf","Ta","W","Re","Os","Ir","Pt","Au","Pb",
+        "Tl","Bi","Po","At","Rn","Fr","Ra","Ac","Th","Pa",
+        "U","Np","Pu",
+    };
+    if (Z < 0 || Z >= static_cast<int>(sizeof(SYM)/sizeof(SYM[0]))) return "?";
+    return SYM[Z];
+}
+
 // Populate a Particles object for the sub-atomic physics simulation.
 void physics_gen_data(Particles& p, const SimConfig& cfg);
