@@ -29,30 +29,29 @@ void PhysicsSim_RegisterScrollCallback(GLFWwindow* window, PhysicsSimulation* si
 // ── Init / Destroy ───────────────────────────────────────────────────────────
 
 void PhysicsSimulation::init(GLFWwindow* window) {
-    // Lab Mode defaults — particle physics vacuum
-    // No gravity, no external fields, near-zero temperature
-    // Forces: Strong nuclear (Yukawa) >> Electromagnetic (Coulomb) at nuclear distances
-    cfg.particle_count   = 5000;
-    cfg.particle_types   = PHYS_PARTICLE_TYPES;
-    cfg.start_empty      = true;
-    cfg.environment_mode = 0;  // Lab Mode
-    cfg.pool_size        = 5000;
-    cfg.temperature      = 0.03f;   // computed from temperature_kelvin
-    cfg.temperature_kelvin = 2.7f;  // CMB temperature — near-vacuum
-    cfg.dampening        = 0.985f;  // minimal friction (vacuum); provides numerical stability
-    cfg.repulsion_radius = 5.0f;    // nucleon hard-core radius
-    cfg.interaction_radius = 120.0f; // EM range (electron binding)
-    cfg.pressure_resistance = 60.0f; // core repulsion strength
-    cfg.gravity_strength = 0.0f;    // negligible at particle scale
-    cfg.lorentz_strength = 0.0f;    // no external B field
-    cfg.radius           = 2.0f;
-    cfg.density_limit    = 0.0f;    // legacy field viz off
-    cfg.local_density_cap = 0.5f;
-    cfg.viscosity_strength = 0.0f;  // vacuum — no medium
-    cfg.string_tension   = 50.0f;   // quark confinement
-    cfg.weak_coupling    = 0.0f;    // weak force negligible at lab energies
-    cfg.higgs_vev        = 246.0f;  // standard Higgs VEV
-    cfg.field_flags      = 0;
+    // Defaults — all forces active, 1K temperature, all fields visualized
+    cfg.particle_count     = 5000;
+    cfg.particle_types     = PHYS_PARTICLE_TYPES;
+    cfg.start_empty        = true;
+    cfg.environment_mode   = 0;  // Lab Mode
+    cfg.pool_size          = 5000;
+    cfg.temperature_kelvin = 1000.0f;
+    cfg.temperature        = 0.30f;
+    cfg.dampening          = 0.990f;
+    cfg.repulsion_radius   = 1.0f;
+    cfg.interaction_radius = 200.0f;
+    cfg.pressure_resistance = 100.0f;
+    cfg.gravity_strength   = 0.0f;
+    cfg.lorentz_strength   = 1.0f;
+    cfg.radius             = 2.0f;
+    cfg.density_limit      = 0.0f;
+    cfg.local_density_cap  = 0.5f;
+    cfg.viscosity_strength = 0.0f;
+    cfg.string_tension     = 100.0f;
+    cfg.weak_coupling      = 1.0f;
+    cfg.higgs_vev          = 246.0f;
+    cfg.time_scale         = 1.0f;
+    cfg.field_flags        = 0;  // assembled from iface bools each frame
 
     iface.init();
     cfg.generation_seed = static_cast<uint32_t>(iface.seed_value);
@@ -84,9 +83,31 @@ void PhysicsSimulation::reset() {
     iface.selected_force_obj_idx = -1;
     iface.force_obj_placement_mode = false;
     iface.force_obj_move_mode = false;
+    iface.selected_particle_idx = -1;
+    iface.particle_move_mode = false;
+    iface.request_delete_particle = false;
 
     physics_gen_data(particles, cfg);
     cfg.particle_count = static_cast<uint32_t>(particles.positions.size());
+
+    // Particle Accelerator: auto-place EM force objects as bending magnets
+    if (cfg.environment_mode == 10) {
+        float cx = static_cast<float>(REGION_W) * 0.5f;
+        float cy = static_cast<float>(REGION_H) * 0.5f;
+        float rx = static_cast<float>(REGION_W) * 0.35f;
+        float ry = static_cast<float>(REGION_H) * 0.35f;
+        // Place 8 EM magnets evenly around the ring
+        for (uint32_t m = 0; m < MAX_FORCE_OBJECTS; ++m) {
+            float theta = static_cast<float>(m) * 6.2831853f / static_cast<float>(MAX_FORCE_OBJECTS);
+            force_objects_[m].x = cx + std::cos(theta) * rx;
+            force_objects_[m].y = cy + std::sin(theta) * ry;
+            force_objects_[m].strength = 3.0f;
+            force_objects_[m].radius = 120.0f;
+            force_objects_[m].force_type = FORCE_OBJ_EM_FIELD;
+            force_objects_[m].active = 1;
+        }
+        recount_force_objects();
+    }
 
     // No bonds in physics sim
     particles.bond_partners_ptr = nullptr;
@@ -157,7 +178,9 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
     }
     f2_was = f2_now;
 
-    // Click handling priority: force obj move > force obj place > force obj select > particle spawn
+    // Click handling priority:
+    // 1. Force obj move  2. Particle move  3. Force obj place  4. Particle spawn
+    // 5. Select force obj or particle
     if (lmb && !lmb_down_ && !ImGui::GetIO().WantCaptureMouse) {
         int win_w, win_h;
         glfwGetWindowSize(window, &win_w, &win_h);
@@ -171,8 +194,18 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
             force_objects_[idx].y = world_pos.y;
             iface.force_obj_move_mode = false;
         }
+        else if (iface.particle_move_mode && iface.selected_particle_idx >= 0) {
+            // 2. Reposition selected particle
+            uint32_t pi = static_cast<uint32_t>(iface.selected_particle_idx);
+            if (pi < readback_positions_.size()) {
+                readback_positions_[pi] = world_pos;
+                readback_velocities_[pi] = glm::vec2(0.0f);  // stop it
+                compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+            }
+            iface.particle_move_mode = false;
+        }
         else if (iface.force_obj_placement_mode) {
-            // 2. Place new force object
+            // 3. Place new force object
             place_force_object(world_pos, static_cast<ForceObjectType>(iface.force_obj_placement_type));
             iface.force_obj_placement_mode = false;
         }
@@ -181,12 +214,25 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
             do_spawn_at_world(world_pos);
         }
         else {
-            // 3. Try to select a force object
-            int hit = hit_test_force_objects(world_pos, 15.0f / cfg.current_camera_zoom);
-            if (hit >= 0) {
-                iface.selected_force_obj_idx = hit;
+            // 5. Try to select a force object first, then a particle
+            int fo_hit = hit_test_force_objects(world_pos, 15.0f / cfg.current_camera_zoom);
+            if (fo_hit >= 0) {
+                iface.selected_force_obj_idx = fo_hit;
+                iface.selected_particle_idx = -1;
             } else {
                 iface.selected_force_obj_idx = -1;
+                // Try to select a particle (same snap radius as hover)
+                float snap_r = std::max(cfg.radius * 3.0f + 4.0f, 15.0f / cfg.current_camera_zoom);
+                float min_d2 = snap_r * snap_r;
+                int32_t best = -1;
+                for (uint32_t pi = 0; pi < static_cast<uint32_t>(readback_positions_.size()); ++pi) {
+                    if (pi < readback_energies_.size() && readback_energies_[pi] <= 0.0f) continue;
+                    glm::vec2 d = readback_positions_[pi] - world_pos;
+                    float d2 = d.x * d.x + d.y * d.y;
+                    if (d2 < min_d2) { min_d2 = d2; best = static_cast<int32_t>(pi); }
+                }
+                iface.selected_particle_idx = best;
+                iface.particle_move_mode = false;
             }
         }
     }
@@ -1399,7 +1445,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     // Dispatch compute shader
     if (is_active && compute.is_ready()) {
         VkCommandBuffer compute_cmd = vk.begin_single_command();
-        float scaled_dt = static_cast<float>(dt) * 5.0f;
+        float scaled_dt = static_cast<float>(dt) * cfg.time_scale;
         compute.record(compute_cmd, cfg, scaled_dt);
         vk.end_single_command(compute_cmd);
     }
@@ -1416,9 +1462,11 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 + (glm::vec2(float(mx), float(my)) - glm::vec2(win_w * 0.5f, win_h * 0.5f))
                 / cfg.current_camera_zoom;
 
-            float snap_r = std::max(cfg.radius + 2.0f, 6.0f / cfg.current_camera_zoom);
+            float snap_r = std::max(cfg.radius * 3.0f + 4.0f, 15.0f / cfg.current_camera_zoom);
             float min_d2 = snap_r * snap_r;
             for (uint32_t pi = 0; pi < static_cast<uint32_t>(readback_positions_.size()); ++pi) {
+                // Skip dormant particles (energy <= 0)
+                if (pi < readback_energies_.size() && readback_energies_[pi] <= 0.0f) continue;
                 glm::vec2 d = readback_positions_[pi] - mw;
                 float d2 = d.x * d.x + d.y * d.y;
                 if (d2 < min_d2) { min_d2 = d2; iface.hover_particle_idx = static_cast<int32_t>(pi); }
@@ -1447,6 +1495,20 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         check_fission();
         check_decay();
         update_orbitals();
+
+        // Handle particle delete request from UI
+        if (iface.request_delete_particle && iface.selected_particle_idx >= 0) {
+            uint32_t pi = static_cast<uint32_t>(iface.selected_particle_idx);
+            if (pi < cfg.particle_count) {
+                readback_energies_[pi] = 0.0f;
+                readback_velocities_[pi] = glm::vec2(0.0f);
+                compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+            }
+            iface.selected_particle_idx = -1;
+            iface.particle_move_mode = false;
+            iface.request_delete_particle = false;
+        }
+        iface.request_delete_particle = false;  // always clear
 
         // Count active particles and type populations
         uint32_t active = 0;

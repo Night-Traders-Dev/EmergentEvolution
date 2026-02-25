@@ -27,7 +27,7 @@ extern const int HADRON_TEMPLATE_COUNT_VAL;
 class PhysicsInterface {
 public:
     bool settings_visible = true;
-    bool spawn_menu_visible = false;
+    bool spawn_menu_visible = true;
     bool pending_spawn = false;
     bool sim_running = true;
 
@@ -40,8 +40,11 @@ public:
     int   spawn_atom_Z  = -1;    // -1=not spawning atom, >0=atomic number
     int   spawn_atom_N  = -1;    // neutron count for spawn_atom_Z
 
-    // Hover inspection
-    int32_t hover_particle_idx = -1;
+    // Hover / selected particle inspection
+    int32_t hover_particle_idx    = -1;
+    int32_t selected_particle_idx = -1;  // pinned particle for info card (-1=hover mode)
+    bool    particle_move_mode    = false;
+    bool    request_delete_particle = false;  // set by UI, consumed by simulation
 
     // Force object interaction
     bool force_obj_placement_mode = false;
@@ -58,15 +61,15 @@ public:
     uint32_t type_counts_display[MAX_PARTICLE_TYPES] = {};
 
     // Field visualization (5 independent toggles)
-    bool  field_em      = false;
-    bool  field_strong  = false;
-    bool  field_weak    = false;
-    bool  field_gravity = false;
-    bool  field_higgs   = false;
+    bool  field_em      = true;
+    bool  field_strong  = true;
+    bool  field_weak    = true;
+    bool  field_gravity = true;
+    bool  field_higgs   = true;
     float field_intensity = 0.5f;
 
     // Temperature display
-    float log_temperature = 0.431f;  // log10(2.7) ≈ 0.431 → 2.7 K (vacuum/CMB)
+    float log_temperature = 3.0f;  // log10(1000) = 3.0 → 1000 K
 
     // Sliders
     float particle_count_slider = 70.0f;   // sqrt(5000) ~ 70

@@ -333,17 +333,17 @@ static constexpr int THEME_VAR_COUNT   = 10;
 
 void PhysicsInterface::push_theme() {
     // Colors
-    ImGui::PushStyleColor(ImGuiCol_WindowBg,        ImVec4(0.059f, 0.071f, 0.110f, 0.92f));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,          ImVec4(0.059f, 0.071f, 0.110f, 0.60f));
-    ImGui::PushStyleColor(ImGuiCol_PopupBg,          ImVec4(0.059f, 0.071f, 0.110f, 0.95f));
-    ImGui::PushStyleColor(ImGuiCol_Border,           ImVec4(0.180f, 0.220f, 0.349f, 0.60f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,        ImVec4(0.059f, 0.071f, 0.110f, 0.75f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,          ImVec4(0.059f, 0.071f, 0.110f, 0.45f));
+    ImGui::PushStyleColor(ImGuiCol_PopupBg,          ImVec4(0.059f, 0.071f, 0.110f, 0.80f));
+    ImGui::PushStyleColor(ImGuiCol_Border,           ImVec4(0.180f, 0.220f, 0.349f, 0.50f));
     ImGui::PushStyleColor(ImGuiCol_BorderShadow,     ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBg,          ImVec4(0.098f, 0.118f, 0.180f, 0.80f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,   ImVec4(0.137f, 0.165f, 0.259f, 0.80f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgActive,    ImVec4(0.180f, 0.220f, 0.349f, 0.80f));
-    ImGui::PushStyleColor(ImGuiCol_TitleBg,          ImVec4(0.039f, 0.051f, 0.090f, 0.95f));
-    ImGui::PushStyleColor(ImGuiCol_TitleBgActive,    ImVec4(0.059f, 0.071f, 0.130f, 0.95f));
-    ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, ImVec4(0.039f, 0.051f, 0.090f, 0.70f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg,          ImVec4(0.098f, 0.118f, 0.180f, 0.65f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,   ImVec4(0.137f, 0.165f, 0.259f, 0.70f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive,    ImVec4(0.180f, 0.220f, 0.349f, 0.70f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBg,          ImVec4(0.039f, 0.051f, 0.090f, 0.80f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive,    ImVec4(0.059f, 0.071f, 0.130f, 0.80f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, ImVec4(0.039f, 0.051f, 0.090f, 0.55f));
     ImGui::PushStyleColor(ImGuiCol_MenuBarBg,        ImVec4(0.059f, 0.071f, 0.110f, 0.95f));
     ImGui::PushStyleColor(ImGuiCol_ScrollbarBg,      ImVec4(0.039f, 0.051f, 0.090f, 0.60f));
     ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab,    ImVec4(0.180f, 0.220f, 0.349f, 0.80f));
@@ -438,11 +438,12 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     if (spawn_menu_visible)
         draw_spawn_menu(cfg);
 
-    // Draw force object panel OR info card (force object takes priority)
+    // Draw force object panel (if selected)
     if (selected_force_obj_idx >= 0)
         draw_force_object_panel(force_objects);
-    else
-        draw_info_card(particles);
+
+    // Draw particle info card (hover or pinned — offsets below force obj panel if both shown)
+    draw_info_card(particles);
 
     pop_theme();
 }
@@ -466,7 +467,7 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
         | ImGuiWindowFlags_NoBringToFrontOnFocus;
 
     // Darker background for bottom bar
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.039f, 0.051f, 0.090f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.039f, 0.051f, 0.090f, 0.80f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 8.0f));
 
@@ -477,6 +478,15 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
         } else {
             ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.2f, 1.0f), "|| PAUSED");
         }
+
+        // Timestep
+        ImGui::SameLine(0, 20);
+        ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
+        ImGui::SameLine(0, 10);
+        ImGui::SetNextItemWidth(80);
+        ImGui::SliderFloat("##TimeScale", &cfg.time_scale, 0.0f, 20.0f, "%.1fx");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Simulation speed\n0 = frozen, 5 = default, 20 = fast");
 
         // Temperature
         ImGui::SameLine(0, 20);
@@ -583,16 +593,17 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
             switch (env) {
                 case 0:  // Lab Mode
                     cfg.start_empty = true;
-                    cfg.temperature_kelvin = 2.7f;
-                    cfg.dampening = 0.985f;
-                    cfg.repulsion_radius = 5.0f;
-                    cfg.pressure_resistance = 60.0f;
-                    cfg.interaction_radius = 120.0f;
+                    cfg.temperature_kelvin = 1000.0f;
+                    cfg.dampening = 0.990f;
+                    cfg.repulsion_radius = 1.0f;
+                    cfg.pressure_resistance = 100.0f;
+                    cfg.interaction_radius = 200.0f;
                     cfg.gravity_strength = 0.0f;
-                    cfg.lorentz_strength = 0.0f;
-                    cfg.weak_coupling = 0.0f;
-                    cfg.string_tension = 50.0f;
+                    cfg.lorentz_strength = 1.0f;
+                    cfg.weak_coupling = 1.0f;
+                    cfg.string_tension = 100.0f;
                     cfg.viscosity_strength = 0.0f;
+                    cfg.time_scale = 1.0f;
                     break;
                 case 1:  // Hydrogen Plasma
                     cfg.start_empty = false;
@@ -689,6 +700,20 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.string_tension = 60.0f;
                     cfg.weak_coupling = 0.2f;
                     particle_count_slider = 90.0f;
+                    break;
+                case 10:  // Particle Accelerator
+                    cfg.start_empty = false;
+                    cfg.temperature_kelvin = 2.7f;
+                    cfg.dampening = 0.995f;
+                    cfg.repulsion_radius = 5.0f;
+                    cfg.pressure_resistance = 60.0f;
+                    cfg.interaction_radius = 120.0f;
+                    cfg.gravity_strength = 0.0f;
+                    cfg.lorentz_strength = 1.5f;
+                    cfg.weak_coupling = 0.0f;
+                    cfg.string_tension = 50.0f;
+                    cfg.time_scale = 3.0f;
+                    particle_count_slider = 60.0f;
                     break;
             }
             log_temperature = std::log10(std::max(1.0f, cfg.temperature_kelvin));
@@ -825,7 +850,7 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
     ImGuiIO& io = ImGui::GetIO();
     float max_h = io.DisplaySize.y - 64.0f;
 
-    ImGui::SetNextWindowPos(ImVec2(320, 10), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 330, 10), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(320, std::min(620.0f, max_h)), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(300, 200), ImVec2(360, max_h));
 
@@ -1210,9 +1235,15 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 void PhysicsInterface::draw_info_card(const Particles& particles) {
-    if (hover_particle_idx < 0) return;
-    uint32_t idx = static_cast<uint32_t>(hover_particle_idx);
-    if (idx >= particles.types.size()) return;
+    // Show pinned selection, or hover preview
+    bool pinned = (selected_particle_idx >= 0);
+    int32_t show_idx = pinned ? selected_particle_idx : hover_particle_idx;
+    if (show_idx < 0) return;
+    uint32_t idx = static_cast<uint32_t>(show_idx);
+    if (idx >= particles.types.size()) {
+        if (pinned) selected_particle_idx = -1;
+        return;
+    }
 
     uint32_t ptype = particles.types[idx];
     const char* name = (ptype < PHYS_PARTICLE_TYPES) ? PHYS_TYPE_NAMES[ptype] : "Unknown";
@@ -1226,7 +1257,10 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
     }
 
     ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 260, 10));
+    float panel_y = 10.0f;
+    // If force object panel is showing, offset below it
+    if (selected_force_obj_idx >= 0) panel_y = 230.0f;
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 260, panel_y));
 
     ImGuiWindowFlags card_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
         | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize
@@ -1240,6 +1274,10 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
         ImGui::TextColored(pcolor, "%s", name);
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "#%u", idx);
+        if (pinned) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 0.6f), "(selected)");
+        }
 
         ImGui::Separator();
 
@@ -1285,6 +1323,40 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
             ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Decay");
             ImGui::SameLine(col_w);
             ImGui::Text("%.3f", decay_rate);
+        }
+
+        // Action buttons (only when pinned/selected)
+        if (pinned) {
+            ImGui::Spacing();
+            ImGui::Separator();
+
+            if (particle_move_mode) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.4f, 0.1f, 0.80f));
+                if (ImGui::Button("Moving...", ImVec2(72, 26))) {
+                    particle_move_mode = false;
+                }
+                ImGui::PopStyleColor();
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.2f, 1.0f), "Click to place");
+            } else {
+                if (ImGui::Button("Move", ImVec2(72, 26))) {
+                    particle_move_mode = true;
+                }
+                ImGui::SameLine();
+
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.1f, 0.1f, 0.80f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.2f, 0.2f, 0.90f));
+                if (ImGui::Button("Delete", ImVec2(72, 26))) {
+                    request_delete_particle = true;
+                }
+                ImGui::PopStyleColor(2);
+
+                ImGui::SameLine();
+                if (ImGui::Button("Close", ImVec2(72, 26))) {
+                    selected_particle_idx = -1;
+                    particle_move_mode = false;
+                }
+            }
         }
     }
     ImGui::End();

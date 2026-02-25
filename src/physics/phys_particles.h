@@ -59,7 +59,7 @@ static constexpr uint32_t PHYS_PARTICLE_TYPES  = 30;
 
 // ── Environment presets ──────────────────────────────────────────────────────
 
-static constexpr int PHYS_ENV_COUNT = 10;
+static constexpr int PHYS_ENV_COUNT = 11;
 static const char* const PHYS_ENV_NAMES[PHYS_ENV_COUNT] = {
     "Lab Mode",
     "Hydrogen Plasma",
@@ -70,7 +70,8 @@ static const char* const PHYS_ENV_NAMES[PHYS_ENV_COUNT] = {
     "Heavy Nucleus",
     "Quark-Gluon Plasma",
     "Electroweak Era",
-    "Meson Factory"
+    "Meson Factory",
+    "Particle Accelerator"
 };
 
 // ── Per-type physics data ────────────────────────────────────────────────────

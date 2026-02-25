@@ -138,14 +138,14 @@ struct SimConfig {
     uint32_t generation_seed    = 0;
 
     float radius             = 2.0f;
-    float dampening          = 0.85f;
-    float repulsion_radius   = 20.0f;
-    float interaction_radius = 60.0f;
+    float dampening          = 0.990f;
+    float repulsion_radius   = 1.0f;
+    float interaction_radius = 200.0f;
     float density_limit      = 60.0f;
 
     // Soft-Body Parameters
     float viscosity_strength  = 0.15f;
-    float pressure_resistance = 25.0f;
+    float pressure_resistance = 100.0f;
     float local_density_cap   = 1.0f;
 
     // Bond parameters
@@ -159,19 +159,19 @@ struct SimConfig {
     // Thermal noise
     float    temperature              = 0.30f;  // Brownian motion strength (0 = off)
 
-    // Fundamental forces (off by default)
+    // Fundamental forces
     float    gravity_strength         = 0.0f;   // scaled gravitational attraction
-    float    lorentz_strength         = 0.0f;   // scaled Lorentz / magnetic deflection
+    float    lorentz_strength         = 1.0f;   // scaled Lorentz / magnetic deflection
     float    vacuum_energy            = 0.0f;   // vacuum fluctuation rate + ZPE floor (0=off)
 
     // Standard Model forces
     uint32_t field_flags              = 0;      // bitfield for field visualization toggles
-    float    weak_coupling            = 0.0f;   // weak force strength (0=off)
-    float    string_tension           = 50.0f;  // quark confinement linear potential coefficient
+    float    weak_coupling            = 1.0f;   // weak force strength
+    float    string_tension           = 100.0f; // quark confinement linear potential coefficient
     float    higgs_vev                = 246.0f; // Higgs vacuum expectation value
 
     // Temperature in Kelvin (for physics sim)
-    float    temperature_kelvin       = 300.0f; // actual temperature; converted to noise amplitude
+    float    temperature_kelvin       = 1000.0f; // actual temperature; converted to noise amplitude
 
     // Periodic particle spawn
     bool     spawn_enabled   = false;
@@ -186,6 +186,9 @@ struct SimConfig {
     // Environment presets
     uint32_t environment_mode = 0;  // 0=Lab 1=Tide Pool 2=Vent 3=Primordial
                                     // 4=Pond 5=Space 6=Nebula 7=Asteroid 8=Comet
+
+    // Timestep multiplier (UI-adjustable)
+    float    time_scale         = 1.0f;
 
     // Force objects (transient — set each frame before compute dispatch)
     uint32_t force_object_count = 0;

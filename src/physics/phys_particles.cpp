@@ -232,6 +232,12 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
             else if (r < 0.80f) type = NEUTRINO_TYPE_PHYS;
             else if (r < 0.90f) type = MUON_TYPE_PHYS;
             else type = ANTIMUON_TYPE_PHYS;
+        } else if (env == 10) {
+            // Particle Accelerator: proton beam + some electrons for diagnostics
+            float r = unit(rng);
+            if (r < 0.80f) type = PROTON_TYPE;
+            else if (r < 0.95f) type = ELECTRON_TYPE_PHYS;
+            else type = PHOTON_TYPE_PHYS;  // synchrotron radiation
         } else {
             // Meson Factory: quark-antiquark pairs
             float r = unit(rng);
@@ -292,6 +298,18 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
                 pos = glm::vec2(cx + gauss(rng) * sigma, cy + gauss(rng) * sigma);
                 break;
             }
+            case 10: {
+                // Particle Accelerator — beam ring (elliptical)
+                float cx = rw * 0.5f, cy = rh * 0.5f;
+                float rx = rw * 0.35f;  // ellipse semi-major
+                float ry = rh * 0.35f;  // ellipse semi-minor
+                float beam_width = 12.0f;
+                std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
+                float theta = angle_dist(rng);
+                pos = glm::vec2(cx + std::cos(theta) * rx + gauss(rng) * beam_width,
+                                cy + std::sin(theta) * ry + gauss(rng) * beam_width);
+                break;
+            }
             default:
                 pos = glm::vec2(dx(rng), dy(rng));
                 break;
@@ -302,11 +320,22 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
         pos.y = std::fmod(pos.y + rh, rh);
 
         // Random initial velocity (scaled by mass)
-        glm::vec2 vel = glm::vec2(gauss(rng) * 2.0f, gauss(rng) * 2.0f);
-        bool is_lepton = (type == ELECTRON_TYPE_PHYS || type == POSITRON_TYPE_PHYS ||
-                          type == MUON_TYPE_PHYS || type == ANTIMUON_TYPE_PHYS);
-        if (is_lepton) vel *= 5.0f;
-        if (type >= UP_QUARK_TYPE && type <= ANTI_BOTTOM_TYPE) vel *= 3.0f;
+        glm::vec2 vel;
+        if (env == 10) {
+            // Accelerator: tangential velocity along the beam ring
+            float cx = rw * 0.5f, cy = rh * 0.5f;
+            float dx_beam = pos.x - cx, dy_beam = pos.y - cy;
+            float dist = std::sqrt(dx_beam * dx_beam + dy_beam * dy_beam) + 1e-6f;
+            float nx = dx_beam / dist, ny = dy_beam / dist;
+            // Tangent = (-ny, nx) for counter-clockwise
+            vel = glm::vec2(-ny * 8.0f, nx * 8.0f);
+        } else {
+            vel = glm::vec2(gauss(rng) * 2.0f, gauss(rng) * 2.0f);
+            bool is_lepton = (type == ELECTRON_TYPE_PHYS || type == POSITRON_TYPE_PHYS ||
+                              type == MUON_TYPE_PHYS || type == ANTIMUON_TYPE_PHYS);
+            if (is_lepton) vel *= 5.0f;
+            if (type >= UP_QUARK_TYPE && type <= ANTI_BOTTOM_TYPE) vel *= 3.0f;
+        }
 
         p.positions.push_back(pos);
         p.velocities.push_back(vel);
