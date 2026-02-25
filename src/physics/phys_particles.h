@@ -5,7 +5,7 @@
 #include <glm/glm.hpp>
 #include <cstdint>
 
-// ── Sub-atomic particle type indices (within the shared MAX_PARTICLE_TYPES=32 space) ─
+// ── Sub-atomic particle type indices (within the shared MAX_PARTICLE_TYPES=36 space) ─
 
 // Composites (existing)
 static constexpr uint32_t PROTON_TYPE          = 0;
@@ -55,11 +55,16 @@ static constexpr uint32_t W_MINUS_TYPE_PHYS    = 27;
 static constexpr uint32_t Z_BOSON_TYPE_PHYS    = 28;
 static constexpr uint32_t HIGGS_TYPE_PHYS      = 29;
 
-static constexpr uint32_t PHYS_PARTICLE_TYPES  = 30;
+// Beyond Standard Model — hypothetical
+static constexpr uint32_t GRAVITON_TYPE_PHYS     = 30;  // spin-2 massless gravitational mediator
+static constexpr uint32_t DARK_MATTER_TYPE_PHYS  = 31;  // WIMP — gravity + weak only
+static constexpr uint32_t DARK_ENERGY_TYPE_PHYS  = 32;  // quintessence — repulsive field quantum
+
+static constexpr uint32_t PHYS_PARTICLE_TYPES  = 33;
 
 // ── Environment presets ──────────────────────────────────────────────────────
 
-static constexpr int PHYS_ENV_COUNT = 11;
+static constexpr int PHYS_ENV_COUNT = 12;
 static const char* const PHYS_ENV_NAMES[PHYS_ENV_COUNT] = {
     "Lab Mode",
     "Hydrogen Plasma",
@@ -71,7 +76,8 @@ static const char* const PHYS_ENV_NAMES[PHYS_ENV_COUNT] = {
     "Quark-Gluon Plasma",
     "Electroweak Era",
     "Meson Factory",
-    "Particle Accelerator"
+    "Particle Accelerator",
+    "Dark Sector"
 };
 
 // ── Per-type physics data ────────────────────────────────────────────────────
@@ -88,6 +94,8 @@ static constexpr float PHYS_CHARGE[PHYS_PARTICLE_TYPES] = {
     -0.667f,  0.333f,  0.333f, -0.667f, -0.667f,  0.333f,
     // 25:g  26:W+  27:W-  28:Z   29:H
      0.0f,  1.0f, -1.0f,  0.0f,  0.0f,
+    // 30:graviton  31:DM  32:DE
+     0.0f,  0.0f,  0.0f,
 };
 
 // Spin quantum number
@@ -102,6 +110,8 @@ static constexpr float PHYS_SPIN[PHYS_PARTICLE_TYPES] = {
      0.5f,  0.5f,  0.5f,  0.5f,  0.5f,  0.5f,
     // 25-29: bosons (gluon=1, W=1, Z=1, Higgs=0)
      1.0f,  1.0f,  1.0f,  1.0f,  0.0f,
+    // 30:graviton(spin-2)  31:DM(WIMP fermion)  32:DE(scalar)
+     2.0f,  0.5f,  0.0f,
 };
 
 // Decay rate (energy drain per dt, 0 = stable)
@@ -116,6 +126,8 @@ static constexpr float PHYS_DECAY_RATE[PHYS_PARTICLE_TYPES] = {
     0.0f, 0.0f, 0.02f, 0.12f, 0.50f, 0.10f,
     // 25:g  26:W+  27:W-  28:Z   29:H
     0.0f, 0.50f, 0.50f, 0.50f, 0.40f,
+    // 30:graviton  31:DM  32:DE  (all stable)
+    0.0f, 0.0f, 0.0f,
 };
 
 // Populate a Particles object for the sub-atomic physics simulation.

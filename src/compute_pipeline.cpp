@@ -506,13 +506,19 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     pc.local_density_cap    = cfg.local_density_cap;
     pc.temperature          = cfg.temperature;
     pc.gravity_strength     = cfg.gravity_strength;
-    pc.lorentz_strength     = cfg.lorentz_strength;
+    pc.lorentz_strength     = cfg.effective_lorentz;
     pc.vacuum_energy        = cfg.vacuum_energy;
     pc.field_flags          = cfg.field_flags;
     pc.weak_coupling        = cfg.weak_coupling;
     pc.string_tension       = cfg.string_tension;
     pc.higgs_vev            = cfg.higgs_vev;
     pc.force_object_count   = cfg.force_object_count;
+    pc.coulomb_strength     = cfg.coulomb_strength;
+    pc.yukawa_strength      = cfg.yukawa_strength;
+    pc.pauli_multiplier     = cfg.pauli_multiplier;
+    pc.alpha_s_scale        = cfg.alpha_s_scale;
+    pc.compton_strength     = cfg.compton_strength;
+    pc.annihilation_strength = cfg.annihilation_strength;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,

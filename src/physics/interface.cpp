@@ -257,6 +257,7 @@ static const char* const PHYS_TYPE_NAMES[PHYS_PARTICLE_TYPES] = {
     "Up", "Down", "Strange", "Charm", "Top", "Bottom",
     "Anti-up", "Anti-down", "Anti-strange", "Anti-charm", "Anti-top", "Anti-bottom",
     "Gluon", "W+", "W-", "Z0", "Higgs",
+    "Graviton", "Dark Matter", "Dark Energy",
 };
 
 static const char* const PHYS_TYPE_LABELS[PHYS_PARTICLE_TYPES] = {
@@ -266,6 +267,7 @@ static const char* const PHYS_TYPE_LABELS[PHYS_PARTICLE_TYPES] = {
     "u", "d", "s", "c", "t", "b",
     "u~", "d~", "s~", "c~", "t~", "b~",
     "g", "W+", "W-", "Z0", "H0",
+    "G", "DM", "DE",
 };
 
 static const ImVec4 PHYS_TYPE_UI_COLORS[PHYS_PARTICLE_TYPES] = {
@@ -308,6 +310,11 @@ static const ImVec4 PHYS_TYPE_UI_COLORS[PHYS_PARTICLE_TYPES] = {
     ImVec4(0.7f, 0.7f, 1.0f, 1.0f),   // W- — light blue
     ImVec4(0.8f, 0.8f, 0.9f, 1.0f),   // Z0 — silver-blue
     ImVec4(1.0f, 0.85f, 0.3f, 1.0f),  // Higgs — golden
+
+    // 30-32: hypothetical
+    ImVec4(0.7f, 0.8f, 1.0f, 1.0f),   // graviton — faint blue-white
+    ImVec4(0.3f, 0.1f, 0.5f, 1.0f),   // dark matter — deep purple
+    ImVec4(0.6f, 0.1f, 0.2f, 1.0f),   // dark energy — faint crimson
 };
 
 // ── Temperature formatting ───────────────────────────────────────────────────
@@ -421,11 +428,35 @@ static bool spawn_button(int type_idx, const char* label, ImVec4 color,
 // ══════════════════════════════════════════════════════════════════════════════
 
 void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceObject* force_objects, bool& request_reset) {
+    // Ctrl+S / Ctrl+L hotkeys
+    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false))
+        show_save_dialog = true;
+    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_L, false))
+        show_load_dialog = true;
+
     // F1 toggle settings panel
     if (ImGui::IsKeyPressed(ImGuiKey_F1, false))
         settings_visible = !settings_visible;
 
+    // Auto-disable select_mode when other modes activate
+    if (pending_spawn || force_obj_placement_mode)
+        select_mode = false;
+
     push_theme();
+
+    // Splash screen (blocks all other UI until dismissed)
+    if (show_splash) {
+        draw_splash_screen();
+        pop_theme();
+        return;
+    }
+
+    // Pause menu (blocks other UI when visible)
+    if (show_pause_menu) {
+        draw_pause_menu(cfg, request_reset);
+        pop_theme();
+        return;
+    }
 
     // Draw bottom bar (always visible)
     draw_bottom_bar(cfg, request_reset);
@@ -445,7 +476,178 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     // Draw particle info card (hover or pinned — offsets below force obj panel if both shown)
     draw_info_card(particles);
 
+    // Save/Load dialog
+    if (show_save_dialog || show_load_dialog)
+        draw_save_load_dialog();
+
+    // Fade save/load status message
+    if (save_load_msg_timer > 0.0f)
+        save_load_msg_timer -= ImGui::GetIO().DeltaTime;
+
     pop_theme();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Splash Screen ───────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_splash_screen() {
+    ImGuiIO& io = ImGui::GetIO();
+
+    // Check for dismiss: any mouse button or key
+    bool dismiss = ImGui::IsMouseClicked(ImGuiMouseButton_Left)
+                || ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+    if (!dismiss) {
+        for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k) {
+            if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(k), false)) {
+                dismiss = true;
+                break;
+            }
+        }
+    }
+    if (dismiss) { show_splash = false; return; }
+
+    // Fullscreen dark overlay
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
+        | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav;
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.03f, 0.06f, 0.88f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+
+    if (ImGui::Begin("##Splash", nullptr, flags)) {
+        // Title
+        float old_scale = ImGui::GetFont()->Scale;
+        ImGui::GetFont()->Scale = 2.5f;
+        ImGui::PushFont(ImGui::GetFont());
+
+        const char* title = "Particle Playground";
+        ImVec2 text_size = ImGui::CalcTextSize(title);
+        ImGui::SetCursorPos(ImVec2(
+            (io.DisplaySize.x - text_size.x) * 0.5f,
+            (io.DisplaySize.y - text_size.y) * 0.5f - 30.0f));
+        ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "%s", title);
+
+        ImGui::GetFont()->Scale = old_scale;
+        ImGui::PopFont();
+
+        // Subtitle
+        const char* subtitle = "Click or press any key to begin";
+        ImVec2 sub_size = ImGui::CalcTextSize(subtitle);
+        ImGui::SetCursorPosX((io.DisplaySize.x - sub_size.x) * 0.5f);
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.8f), "%s", subtitle);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Pause Menu (Escape key) ─────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) {
+    ImGuiIO& io = ImGui::GetIO();
+
+    // Semi-transparent fullscreen overlay
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGuiWindowFlags overlay_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
+        | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav;
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.03f, 0.06f, 0.85f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+
+    if (ImGui::Begin("##PauseOverlay", nullptr, overlay_flags)) {
+        float cx = io.DisplaySize.x * 0.5f;
+        float cy = io.DisplaySize.y * 0.5f;
+
+        // Title
+        float old_scale = ImGui::GetFont()->Scale;
+        ImGui::GetFont()->Scale = 2.0f;
+        ImGui::PushFont(ImGui::GetFont());
+        const char* title = "PAUSED";
+        ImVec2 title_size = ImGui::CalcTextSize(title);
+        ImGui::SetCursorPos(ImVec2(cx - title_size.x * 0.5f, cy - 140.0f));
+        ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "%s", title);
+        ImGui::GetFont()->Scale = old_scale;
+        ImGui::PopFont();
+
+        // Menu buttons (centered column)
+        float btn_w = 200.0f;
+        float btn_h = 40.0f;
+        float btn_x = cx - btn_w * 0.5f;
+        float btn_y = cy - 60.0f;
+        float btn_spacing = 52.0f;
+
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.14f, 0.22f, 0.90f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.25f, 0.40f, 0.95f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.20f, 0.35f, 1.0f));
+
+        // Resume
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y));
+        if (ImGui::Button("Resume", ImVec2(btn_w, btn_h))) {
+            show_pause_menu = false;
+            sim_running = true;
+        }
+
+        // New
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing));
+        if (ImGui::Button("New Simulation", ImVec2(btn_w, btn_h))) {
+            show_pause_menu = false;
+            request_reset = true;
+        }
+
+        // Save
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 2));
+        if (ImGui::Button("Save", ImVec2(btn_w, btn_h))) {
+            show_save_dialog = true;
+            show_load_dialog = false;
+            show_pause_menu = false;
+        }
+
+        // Load
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 3));
+        if (ImGui::Button("Load", ImVec2(btn_w, btn_h))) {
+            show_load_dialog = true;
+            show_save_dialog = false;
+            show_pause_menu = false;
+        }
+
+        // About
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 4));
+        if (ImGui::Button("About", ImVec2(btn_w, btn_h))) {
+            show_splash = true;
+            show_pause_menu = false;
+        }
+
+        // Quit
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 5));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.4f, 0.08f, 0.08f, 0.90f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.6f, 0.15f, 0.15f, 0.95f));
+        if (ImGui::Button("Quit", ImVec2(btn_w, btn_h))) {
+            request_quit = true;
+        }
+        ImGui::PopStyleColor(2);
+
+        ImGui::PopStyleColor(3);
+        ImGui::PopStyleVar();
+
+        // Hint text
+        const char* hint = "Press Escape to resume";
+        ImVec2 hint_size = ImGui::CalcTextSize(hint);
+        ImGui::SetCursorPos(ImVec2(cx - hint_size.x * 0.5f, btn_y + btn_spacing * 6 + 20.0f));
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.6f), "%s", hint);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -549,17 +751,51 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
             + type_counts_display[Z_BOSON_TYPE_PHYS] + type_counts_display[HIGGS_TYPE_PHYS];
         if (boson_total)
             { ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "B:%u", boson_total); ImGui::SameLine(0, 6); }
+        // Hypothetical
+        if (type_counts_display[GRAVITON_TYPE_PHYS])
+            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[GRAVITON_TYPE_PHYS], "G:%u", type_counts_display[GRAVITON_TYPE_PHYS]); ImGui::SameLine(0, 6); }
+        if (type_counts_display[DARK_MATTER_TYPE_PHYS])
+            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[DARK_MATTER_TYPE_PHYS], "DM:%u", type_counts_display[DARK_MATTER_TYPE_PHYS]); ImGui::SameLine(0, 6); }
+        if (type_counts_display[DARK_ENERGY_TYPE_PHYS])
+            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[DARK_ENERGY_TYPE_PHYS], "DE:%u", type_counts_display[DARK_ENERGY_TYPE_PHYS]); ImGui::SameLine(0, 6); }
 
-        // Right-aligned buttons
-        float btn_width = 80.0f;
-        float x_right = display_w - 12.0f - btn_width * 2 - 8.0f;
+        // Status indicators
+        if (select_mode) {
+            ImGui::SameLine(0, 12);
+            ImGui::TextColored(ImVec4(0.0f, 0.9f, 0.9f, 1.0f), "[SELECT]");
+        }
+
+        // Right-aligned buttons: Save, Load, Select(F4), Reset(F2), Spawn(F3)
+        float btn_sm = 60.0f;
+        float btn_lg = 80.0f;
+        float total_w = btn_sm * 2 + btn_lg * 3 + 8.0f * 4;  // 5 buttons, 4 gaps
+        float x_right = display_w - 12.0f - total_w;
         ImGui::SameLine(x_right);
 
-        if (ImGui::Button("Reset (F2)", ImVec2(btn_width, 26))) {
+        if (ImGui::Button("Save", ImVec2(btn_sm, 26))) {
+            show_save_dialog = true;
+        }
+        ImGui::SameLine(0, 8);
+        if (ImGui::Button("Load", ImVec2(btn_sm, 26))) {
+            show_load_dialog = true;
+        }
+        ImGui::SameLine(0, 8);
+        // Highlight Select button when active
+        if (select_mode) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.5f, 0.5f, 0.9f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f, 0.6f, 0.6f, 1.0f));
+        }
+        if (ImGui::Button("Select (F4)", ImVec2(btn_lg, 26))) {
+            select_mode = !select_mode;
+            if (select_mode) { pending_spawn = false; force_obj_placement_mode = false; }
+        }
+        if (select_mode) ImGui::PopStyleColor(2);
+        ImGui::SameLine(0, 8);
+        if (ImGui::Button("Reset (F2)", ImVec2(btn_lg, 26))) {
             request_reset = true;
         }
         ImGui::SameLine(0, 8);
-        if (ImGui::Button("Spawn (F3)", ImVec2(btn_width, 26))) {
+        if (ImGui::Button("Spawn (F3)", ImVec2(btn_lg, 26))) {
             spawn_menu_visible = !spawn_menu_visible;
         }
     }
@@ -593,7 +829,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
             switch (env) {
                 case 0:  // Lab Mode
                     cfg.start_empty = true;
-                    cfg.temperature_kelvin = 1000.0f;
+                    cfg.temperature_kelvin = 1.0f;
                     cfg.dampening = 0.990f;
                     cfg.repulsion_radius = 1.0f;
                     cfg.pressure_resistance = 100.0f;
@@ -754,6 +990,21 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
         if (cfg.temperature_kelvin > 1e11f) temp_context = "Quark-gluon plasma";
         if (cfg.temperature_kelvin > 1e15f) temp_context = "Electroweak epoch";
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "  %s", temp_context);
+
+        // Emergent temperature readout + feedback controls
+        if (cfg.thermo_feedback_enabled) {
+            char etemp_buf[64];
+            format_temperature(emergent_temp_display, etemp_buf, sizeof(etemp_buf));
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "  Measured: %s", etemp_buf);
+        }
+        ImGui::Checkbox("Thermodynamic Feedback", &cfg.thermo_feedback_enabled);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Temperature emerges from particle kinetic energies\n(statistical mechanics: T ~ <1/2 mv^2>)");
+        if (cfg.thermo_feedback_enabled) {
+            ImGui::SliderFloat("Coupling##thermo", &cfg.thermo_coupling, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("0 = slider only\n1 = fully emergent\n0.5 = blended");
+        }
     }
 
     // ── Fundamental Forces ───────────────────────────────────────────────────
@@ -763,6 +1014,16 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
         ImGui::SliderFloat("B Field", &cfg.lorentz_strength, 0.0f, 2.0f, "%.2f");
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("External magnetic field strength\nAffects charged particle trajectories");
+        if (cfg.magnetic_feedback_enabled)
+            ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "  Measured: %.3f T", emergent_bfield_display);
+        ImGui::Checkbox("Emergent B Field", &cfg.magnetic_feedback_enabled);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Magnetic field emerges from charged particle currents\n(moving charges generate B fields)");
+        if (cfg.magnetic_feedback_enabled) {
+            ImGui::SliderFloat("Coupling##mag", &cfg.magnetic_coupling, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("0 = slider only\n1 = fully emergent\n0.5 = blended");
+        }
 
         ImGui::Spacing();
 
@@ -791,6 +1052,38 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
         ImGui::SliderFloat("Strength##grav", &cfg.gravity_strength, 0.0f, 2.0f, "%.2f");
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Gravitational attraction between massive particles\n0 = off (negligible at particle scale)\nUseful for stellar/neutron star scenarios");
+    }
+
+    // ── Force Multipliers ─────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Force Multipliers")) {
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Scale individual force strengths (1.0 = SM)");
+        ImGui::SliderFloat("Coulomb (EM)", &cfg.coulomb_strength, 0.0f, 3.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Electromagnetic Coulomb force multiplier\n0 = no charge interaction\n1 = standard model\n>1 = enhanced EM");
+        ImGui::SliderFloat("Yukawa (Nuclear)", &cfg.yukawa_strength, 0.0f, 3.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Strong nuclear binding (Yukawa potential)\n0 = no nuclear binding\n1 = standard model\n>1 = enhanced binding");
+        ImGui::SliderFloat("Pauli Exclusion", &cfg.pauli_multiplier, 0.0f, 3.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Pauli exclusion repulsion strength\n0 = bosonic (particles overlap)\n1 = standard fermionic repulsion");
+        ImGui::SliderFloat("QCD Color", &cfg.alpha_s_scale, 0.0f, 3.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("QCD strong force (Cornell potential)\n0 = deconfined quarks\n1 = standard model\n>1 = enhanced confinement");
+        ImGui::SliderFloat("Compton", &cfg.compton_strength, 0.0f, 3.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Compton scattering (photon-matter)\n0 = photons don't push matter\n1 = standard model");
+        ImGui::SliderFloat("Annihilation", &cfg.annihilation_strength, 0.0f, 3.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Matter-antimatter annihilation rate\n0 = no annihilation\n1 = standard model\n>1 = faster annihilation");
+
+        if (ImGui::Button("Reset to SM##forces")) {
+            cfg.coulomb_strength = 1.0f;
+            cfg.yukawa_strength = 1.0f;
+            cfg.pauli_multiplier = 1.0f;
+            cfg.alpha_s_scale = 1.0f;
+            cfg.compton_strength = 1.0f;
+            cfg.annihilation_strength = 1.0f;
+        }
     }
 
     // ── World Settings ───────────────────────────────────────────────────────
@@ -836,6 +1129,25 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
         if (field_em || field_strong || field_weak || field_gravity || field_higgs) {
             ImGui::SliderFloat("Brightness", &field_intensity, 0.05f, 2.0f, "%.2f");
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Field visualization brightness");
+        }
+    }
+
+    // ── Virtual Particles ─────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Virtual Particles")) {
+        ImGui::Checkbox("Enable Virtual Pairs", &cfg.virtual_pairs_enabled);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Spontaneous particle-antiparticle pairs\nfrom high-energy close encounters\n(QFT vacuum fluctuations)");
+
+        if (cfg.virtual_pairs_enabled) {
+            ImGui::SliderFloat("Energy Threshold", &cfg.virtual_pair_threshold, 0.8f, 5.0f, "%.2f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Min combined energy for pair creation\nLower = more pairs, higher = rarer");
+
+            int max_pairs = static_cast<int>(cfg.virtual_pair_max_per_tick);
+            ImGui::SliderInt("Max Pairs/Tick", &max_pairs, 1, 16);
+            cfg.virtual_pair_max_per_tick = static_cast<uint32_t>(max_pairs);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Maximum virtual pairs spawned per frame\nHigher = more quantum foam activity");
         }
     }
 
@@ -1099,6 +1411,21 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
             { spawn_type = HIGGS_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
     }
 
+    // ── Hypothetical ────────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Hypothetical")) {
+        if (spawn_button(GRAVITON_TYPE_PHYS, "G", PHYS_TYPE_UI_COLORS[GRAVITON_TYPE_PHYS],
+                          spawn_type, spawn_group, "Graviton (spin-2, massless)"))
+            { spawn_type = GRAVITON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(DARK_MATTER_TYPE_PHYS, "DM", PHYS_TYPE_UI_COLORS[DARK_MATTER_TYPE_PHYS],
+                          spawn_type, spawn_group, "Dark Matter (WIMP, gravity-only)"))
+            { spawn_type = DARK_MATTER_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(DARK_ENERGY_TYPE_PHYS, "DE", PHYS_TYPE_UI_COLORS[DARK_ENERGY_TYPE_PHYS],
+                          spawn_type, spawn_group, "Dark Energy (repulsive field)"))
+            { spawn_type = DARK_ENERGY_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+    }
+
     // ── Hadrons ──────────────────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Hadrons")) {
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Baryons (3 quarks):");
@@ -1325,6 +1652,124 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
             ImGui::Text("%.3f", decay_rate);
         }
 
+        // ── Age ──────────────────────────────────────────────────────────
+        if (idx < particles.birth_frames.size()) {
+            uint32_t age_frames = frame_counter_display - particles.birth_frames[idx];
+            float age_sec = age_frames / 60.0f;
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Age");
+            ImGui::SameLine(col_w);
+            if (age_sec < 60.0f)
+                ImGui::Text("%.1f s", age_sec);
+            else
+                ImGui::Text("%.1f min", age_sec / 60.0f);
+        }
+
+        // ── Momentum, Temperature, Magnetic Moment (need readback velocity) ──
+        if (readback_velocities && idx < readback_count) {
+            glm::vec2 vel = readback_velocities[idx];
+            float speed = glm::length(vel);
+
+            // Mass lookup (mirrors shader get_mass_inv)
+            auto get_mass_display = [](uint32_t t) -> float {
+                if (t <= 1 || t == 5) return 40.0f;   // proton/neutron/antiproton
+                if (t == 2 || t == 4) return 1.0f;     // electron/positron
+                if (t == 7 || t == 8) return 200.0f;    // muon/antimuon
+                if (t == 9 || t == 10) return 3333.0f;  // tau/antitau
+                if (t == 6 || t == 11 || t == 12) return 0.01f;  // neutrinos
+                if (t == 3 || t == 25) return 0.01f;    // photon/gluon
+                if (t == 13 || t == 19) return 5.0f;    // up/anti-up
+                if (t == 14 || t == 20) return 6.7f;    // down/anti-down
+                if (t == 15 || t == 21) return 200.0f;  // strange
+                if (t == 16 || t == 22) return 2500.0f; // charm
+                if (t == 17 || t == 23) return 333333.0f; // top
+                if (t == 18 || t == 24) return 8333.0f; // bottom
+                if (t == 26 || t == 27) return 16667.0f; // W
+                if (t == 28) return 20000.0f;  // Z
+                if (t == 29) return 25000.0f;  // Higgs
+                return 1.0f;
+            };
+
+            float mass = get_mass_display(ptype);
+            float momentum = mass * speed;
+            float ke = 0.5f * mass * speed * speed;
+            float particle_temp = ke * 0.1f;
+
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Momentum");
+            ImGui::SameLine(col_w);
+            ImGui::Text("%.1f", momentum);
+
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Temp");
+            ImGui::SameLine(col_w);
+            if (particle_temp < 1000.0f)
+                ImGui::Text("%.1f K", particle_temp);
+            else
+                ImGui::Text("%.1fk K", particle_temp / 1000.0f);
+
+            // Magnetic moment: |charge| * speed * coupling
+            float mag_moment = std::abs(charge) * speed * 0.5f;
+            if (mag_moment > 0.001f) {
+                ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "B Moment");
+                ImGui::SameLine(col_w);
+                ImGui::Text("%.3f", mag_moment);
+            }
+        }
+
+        // ── Orbital relationship ─────────────────────────────────────────
+        if (idx < particles.orbital_parent.size()) {
+            int32_t parent = particles.orbital_parent[idx];
+            if (parent >= 0 && parent != static_cast<int32_t>(idx) &&
+                static_cast<uint32_t>(parent) < particles.types.size()) {
+                uint32_t parent_type = particles.types[parent];
+                const char* parent_name = (parent_type < PHYS_PARTICLE_TYPES)
+                    ? PHYS_TYPE_NAMES[parent_type] : "Unknown";
+                ImVec4 parent_color = (parent_type < PHYS_PARTICLE_TYPES)
+                    ? PHYS_TYPE_UI_COLORS[parent_type] : ImVec4(1,1,1,1);
+
+                // Determine relationship label
+                bool is_nucleon = (ptype <= 1 || ptype == 5);
+                const char* relation = is_nucleon ? "Bound to" : "Orbiting";
+
+                ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "%s", relation);
+                ImGui::SameLine(col_w);
+                ImGui::PushStyleColor(ImGuiCol_Text, parent_color);
+                char btn_label[64];
+                snprintf(btn_label, sizeof(btn_label), "%s #%d", parent_name, parent);
+                if (ImGui::SmallButton(btn_label)) {
+                    navigate_to_particle = parent;
+                }
+                ImGui::PopStyleColor();
+            }
+        }
+
+        // ── Bond partners ────────────────────────────────────────────────
+        if (particles.bond_partners_ptr && idx < particles.bond_partners_count / MAX_BONDS_PER_PARTICLE) {
+            bool has_bond = false;
+            for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+                uint32_t partner = particles.bond_partners_ptr[idx * MAX_BONDS_PER_PARTICLE + s];
+                if (partner != 0xFFFFFFFF && partner < particles.types.size()) {
+                    if (!has_bond) {
+                        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Bonds");
+                        ImGui::SameLine(col_w);
+                        has_bond = true;
+                    } else {
+                        ImGui::SameLine();
+                    }
+                    uint32_t bp_type = particles.types[partner];
+                    ImVec4 bp_color = (bp_type < PHYS_PARTICLE_TYPES)
+                        ? PHYS_TYPE_UI_COLORS[bp_type] : ImVec4(1,1,1,1);
+                    const char* bp_label = (bp_type < PHYS_PARTICLE_TYPES)
+                        ? PHYS_TYPE_LABELS[bp_type] : "?";
+                    char bp_btn[32];
+                    snprintf(bp_btn, sizeof(bp_btn), "%s##bp%u", bp_label, s);
+                    ImGui::PushStyleColor(ImGuiCol_Text, bp_color);
+                    if (ImGui::SmallButton(bp_btn)) {
+                        navigate_to_particle = static_cast<int32_t>(partner);
+                    }
+                    ImGui::PopStyleColor();
+                }
+            }
+        }
+
         // Action buttons (only when pinned/selected)
         if (pinned) {
             ImGui::Spacing();
@@ -1451,6 +1896,64 @@ void PhysicsInterface::draw_force_object_panel(ForceObject* objects) {
                 selected_force_obj_idx = -1;
                 force_obj_move_mode = false;
             }
+        }
+    }
+    ImGui::End();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Save / Load Dialog ──────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_save_load_dialog() {
+    ImGuiIO& io = ImGui::GetIO();
+    ImVec2 center(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+    ImVec2 size(360, 160);
+
+    ImGui::SetNextWindowPos(ImVec2(center.x - size.x * 0.5f, center.y - size.y * 0.5f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(size, ImGuiCond_Appearing);
+
+    const char* title = show_save_dialog ? "Save Simulation###SaveLoad" : "Load Simulation###SaveLoad";
+
+    if (ImGui::Begin(title, nullptr, ImGuiWindowFlags_NoCollapse)) {
+        ImGui::Text("Filename:");
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputText("##filename", save_filename, sizeof(save_filename));
+
+        ImGui::Spacing();
+
+        // Status message
+        if (save_load_msg_timer > 0.0f) {
+            ImVec4 color = (save_load_message[0] == 'S' || save_load_message[0] == 'L')
+                ? ImVec4(0.2f, 0.9f, 0.4f, std::min(1.0f, save_load_msg_timer))
+                : ImVec4(0.9f, 0.3f, 0.3f, std::min(1.0f, save_load_msg_timer));
+            ImGui::TextColored(color, "%s", save_load_message);
+        }
+
+        ImGui::Spacing();
+
+        float btn_w = 80.0f;
+        if (show_save_dialog) {
+            if (ImGui::Button("Save", ImVec2(btn_w, 28))) {
+                request_save = true;
+                show_save_dialog = false;
+            }
+        } else {
+            if (ImGui::Button("Load", ImVec2(btn_w, 28))) {
+                request_load = true;
+                show_load_dialog = false;
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(btn_w, 28))) {
+            show_save_dialog = false;
+            show_load_dialog = false;
+        }
+
+        // Escape to close
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            show_save_dialog = false;
+            show_load_dialog = false;
         }
     }
     ImGui::End();

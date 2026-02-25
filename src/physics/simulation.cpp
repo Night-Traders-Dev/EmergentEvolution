@@ -1,10 +1,12 @@
 #include "physics/simulation.h"
 #include "physics/phys_particles.h"
+#include "physics/save_load.h"
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 #include <cmath>
+#include <cstring>
 #include <algorithm>
 #include <iostream>
 #include <random>
@@ -35,14 +37,16 @@ void PhysicsSimulation::init(GLFWwindow* window) {
     cfg.start_empty        = true;
     cfg.environment_mode   = 0;  // Lab Mode
     cfg.pool_size          = 5000;
-    cfg.temperature_kelvin = 1000.0f;
+    cfg.temperature_kelvin = 1.0f;
     cfg.temperature        = 0.30f;
+    cfg.thermo_coupling    = 1.0f;
     cfg.dampening          = 0.990f;
     cfg.repulsion_radius   = 1.0f;
     cfg.interaction_radius = 200.0f;
     cfg.pressure_resistance = 100.0f;
     cfg.gravity_strength   = 0.0f;
-    cfg.lorentz_strength   = 1.0f;
+    cfg.lorentz_strength   = 0.0f;
+    cfg.magnetic_coupling  = 1.0f;
     cfg.radius             = 2.0f;
     cfg.density_limit      = 0.0f;
     cfg.local_density_cap  = 0.5f;
@@ -50,6 +54,8 @@ void PhysicsSimulation::init(GLFWwindow* window) {
     cfg.string_tension     = 100.0f;
     cfg.weak_coupling      = 1.0f;
     cfg.higgs_vev          = 246.0f;
+    cfg.virtual_pair_threshold    = 2.0f;
+    cfg.virtual_pair_max_per_tick = 2;
     cfg.time_scale         = 1.0f;
     cfg.field_flags        = 0;  // assembled from iface bools each frame
 
@@ -75,6 +81,8 @@ void PhysicsSimulation::destroy() {
 void PhysicsSimulation::reset() {
     vkDeviceWaitIdle(vk.device);
     frame_counter_ = 0;
+    emergent_temperature_ = 1.0f;
+    emergent_bfield_ = 0.0f;
 
     // Clear force objects
     force_object_count_ = 0;
@@ -86,6 +94,7 @@ void PhysicsSimulation::reset() {
     iface.selected_particle_idx = -1;
     iface.particle_move_mode = false;
     iface.request_delete_particle = false;
+    iface.select_mode = false;
 
     physics_gen_data(particles, cfg);
     cfg.particle_count = static_cast<uint32_t>(particles.positions.size());
@@ -157,6 +166,24 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
     }
     f3_was_down = f3_down;
 
+    // F4 toggle select mode
+    static bool f4_was_down = false;
+    bool f4_down = glfwGetKey(window, GLFW_KEY_F4) == GLFW_PRESS;
+    if (f4_down && !f4_was_down) {
+        iface.select_mode = !iface.select_mode;
+        if (iface.select_mode) { iface.pending_spawn = false; iface.force_obj_placement_mode = false; }
+    }
+    f4_was_down = f4_down;
+
+    // Escape to toggle pause menu
+    static bool esc_was = false;
+    bool esc_now = glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
+    if (esc_now && !esc_was) {
+        iface.show_pause_menu = !iface.show_pause_menu;
+        if (iface.show_pause_menu) is_active = false;  // pause on open
+    }
+    esc_was = esc_now;
+
     // Space to toggle sim
     static bool space_was = false;
     bool space_now = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
@@ -213,7 +240,7 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
             // 4. Spawn particle
             do_spawn_at_world(world_pos);
         }
-        else {
+        else if (iface.select_mode) {
             // 5. Try to select a force object first, then a particle
             int fo_hit = hit_test_force_objects(world_pos, 15.0f / cfg.current_camera_zoom);
             if (fo_hit >= 0) {
@@ -241,7 +268,8 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
 
 // ── Helper: write genome for a particle type ─────────────────────────────────
 
-static void write_spawn_genome(Particles& particles, uint32_t slot, uint32_t type, std::mt19937& rng) {
+static void write_spawn_genome(Particles& particles, uint32_t slot, uint32_t type,
+                               std::mt19937& rng, uint32_t frame = 0) {
     float charge = (type < PHYS_PARTICLE_TYPES) ? PHYS_CHARGE[type] : 0.0f;
     float spin   = (type < PHYS_PARTICLE_TYPES) ? PHYS_SPIN[type] : 0.0f;
     float decay  = (type < PHYS_PARTICLE_TYPES) ? PHYS_DECAY_RATE[type] : 0.0f;
@@ -267,6 +295,10 @@ static void write_spawn_genome(Particles& particles, uint32_t slot, uint32_t typ
     particles.genomes[slot * GENOME_SIZE + 1] = spin;
     particles.genomes[slot * GENOME_SIZE + 2] = color;
     particles.genomes[slot * GENOME_SIZE + 3] = decay;
+
+    // Stamp birth frame for age tracking
+    if (slot < particles.birth_frames.size())
+        particles.birth_frames[slot] = frame;
 }
 
 // ── Spawn at world position ──────────────────────────────────────────────────
@@ -349,7 +381,7 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
                 ptype = NEUTRON_TYPE;
                 neutrons_placed++;
             }
-            write_spawn_genome(particles, slot, ptype, rng);
+            write_spawn_genome(particles, slot, ptype, rng, frame_counter_);
             spawned_slots.push_back(slot);
         }
 
@@ -382,7 +414,7 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
                 readback_velocities_[slot] = tangent * v_orbital;
                 readback_energies_[slot] = iface.spawn_energy;
 
-                write_spawn_genome(particles, slot, ELECTRON_TYPE_PHYS, rng);
+                write_spawn_genome(particles, slot, ELECTRON_TYPE_PHYS, rng, frame_counter_);
                 // Write L_ground to genome[2] so shader uses correct orbital immediately
                 particles.genomes[slot * GENOME_SIZE + 2] = L_ground;
                 spawned_slots.push_back(slot);
@@ -499,7 +531,7 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
                 readback_velocities_[slot] = glm::vec2(0.0f);
             }
 
-            write_spawn_genome(particles, slot, t, rng);
+            write_spawn_genome(particles, slot, t, rng, frame_counter_);
 
             // Write L_ground to genome[2] for electrons
             if (is_electron && nucleon_count > 0) {
@@ -529,7 +561,7 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
             readback_velocities_[slot] = glm::vec2(0.0f);
             readback_energies_[slot] = iface.spawn_energy;
 
-            write_spawn_genome(particles, slot, type, rng);
+            write_spawn_genome(particles, slot, type, rng, frame_counter_);
         }
     }
     }  // end outer else (spawn_atom_Z not active)
@@ -642,7 +674,7 @@ void PhysicsSimulation::check_annihilation() {
             }
             if (nu_slot != UINT32_MAX) {
                 glm::vec2 dir3(-dir1.y, dir1.x);
-                write_spawn_genome(particles, nu_slot, NEUTRINO_TYPE_PHYS, rng);
+                write_spawn_genome(particles, nu_slot, NEUTRINO_TYPE_PHYS, rng, frame_counter_);
                 readback_positions_[nu_slot] = mid;
                 readback_velocities_[nu_slot] = dir3 * NEUTRINO_SPEED;
                 readback_energies_[nu_slot] = PRODUCT_ENERGY * 0.5f;
@@ -717,7 +749,7 @@ void PhysicsSimulation::check_fusion() {
             any_fused = true;
             fusion_count++;
 
-            write_spawn_genome(particles, j, NEUTRON_TYPE, rng);
+            write_spawn_genome(particles, j, NEUTRON_TYPE, rng, frame_counter_);
             readback_energies_[i] += 0.2f;
             readback_energies_[j] += 0.2f;
 
@@ -727,7 +759,7 @@ void PhysicsSimulation::check_fusion() {
                 used[e_slot] = true;
                 glm::vec2 mid = (readback_positions_[i] + readback_positions_[j]) * 0.5f;
                 glm::vec2 dir = rand_dir();
-                write_spawn_genome(particles, e_slot, POSITRON_TYPE_PHYS, rng);
+                write_spawn_genome(particles, e_slot, POSITRON_TYPE_PHYS, rng, frame_counter_);
                 readback_positions_[e_slot] = mid;
                 readback_velocities_[e_slot] = dir * 200.0f;
                 readback_energies_[e_slot] = 0.6f;
@@ -739,7 +771,7 @@ void PhysicsSimulation::check_fusion() {
                 used[nu_slot] = true;
                 glm::vec2 mid = (readback_positions_[i] + readback_positions_[j]) * 0.5f;
                 glm::vec2 dir = rand_dir();
-                write_spawn_genome(particles, nu_slot, NEUTRINO_TYPE_PHYS, rng);
+                write_spawn_genome(particles, nu_slot, NEUTRINO_TYPE_PHYS, rng, frame_counter_);
                 readback_positions_[nu_slot] = mid;
                 readback_velocities_[nu_slot] = dir * 280.0f;
                 readback_energies_[nu_slot] = 0.4f;
@@ -889,7 +921,7 @@ void PhysicsSimulation::check_fission() {
             uint32_t slot = find_dormant(0);
             if (slot == UINT32_MAX) break;
             used[slot] = true;
-            write_spawn_genome(particles, slot, NEUTRON_TYPE, rng);
+            write_spawn_genome(particles, slot, NEUTRON_TYPE, rng, frame_counter_);
             readback_positions_[slot] = center + rand_dir() * 5.0f;
             readback_velocities_[slot] = rand_dir() * 150.0f;
             readback_energies_[slot] = 0.7f;
@@ -924,11 +956,16 @@ void PhysicsSimulation::update_orbitals() {
     static const int NUM_SHELLS = 3;
     static const int MAX_ELECTRONS = 2 + 8 + 18;  // 28
 
+    // Clear orbital parent mapping for all particles
+    particles.orbital_parent.resize(n, -1);
+    std::fill(particles.orbital_parent.begin(), particles.orbital_parent.end(), -1);
+
     // ── Step 1: Cluster nucleons into nuclei ────────────────────────────
     struct Nucleus {
         glm::vec2 center;
-        int Z;      // proton count
-        int total;  // total nucleon count
+        int Z;          // proton count
+        int total;      // total nucleon count
+        uint32_t rep;   // representative proton index (for orbital_parent tracking)
     };
     std::vector<Nucleus> nuclei;
     std::vector<bool> clustered(n, false);
@@ -962,14 +999,23 @@ void PhysicsSimulation::update_orbitals() {
 
         // Compute nucleus centroid and proton count
         Nucleus nuc{};
+        nuc.rep = UINT32_MAX;
         for (uint32_t mi : members) {
             nuc.center += readback_positions_[mi];
             nuc.total++;
-            if (particles.types[mi] == PROTON_TYPE) nuc.Z++;
+            if (particles.types[mi] == PROTON_TYPE) {
+                nuc.Z++;
+                if (nuc.rep == UINT32_MAX) nuc.rep = mi;  // first proton = representative
+            }
         }
         nuc.center /= static_cast<float>(nuc.total);
 
-        if (nuc.Z > 0) nuclei.push_back(nuc);
+        // Mark nucleon members as belonging to this nucleus
+        if (nuc.Z > 0) {
+            for (uint32_t mi : members)
+                particles.orbital_parent[mi] = static_cast<int32_t>(nuc.rep);
+            nuclei.push_back(nuc);
+        }
     }
 
     // ── Step 2: Find electrons and assign to nearest nucleus ────────────
@@ -1007,6 +1053,7 @@ void PhysicsSimulation::update_orbitals() {
 
         if (best_nuc >= 0) {
             bindings.push_back({i, best_nuc, best_d});
+            particles.orbital_parent[i] = static_cast<int32_t>(nuclei[best_nuc].rep);
         } else {
             particles.genomes[i * GENOME_SIZE + 2] = 0.0f;  // free electron
         }
@@ -1122,11 +1169,11 @@ void PhysicsSimulation::check_decay() {
             // ── Top quark → W + bottom ──
             case TOP_QUARK_TYPE: {
                 uint32_t w_slot = find_dormant(i + 1);
-                write_spawn_genome(particles, i, BOTTOM_QUARK_TYPE, rng);
+                write_spawn_genome(particles, i, BOTTOM_QUARK_TYPE, rng, frame_counter_);
                 readback_energies_[i] = PRODUCT_ENERGY;
                 readback_velocities_[i] = dir * FAST_SPEED * 0.5f;
                 if (w_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, w_slot, W_PLUS_TYPE_PHYS, rng);
+                    write_spawn_genome(particles, w_slot, W_PLUS_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[w_slot] = pos;
                     readback_velocities_[w_slot] = -dir * FAST_SPEED;
                     readback_energies_[w_slot] = PRODUCT_ENERGY;
@@ -1135,11 +1182,11 @@ void PhysicsSimulation::check_decay() {
             }
             case ANTI_TOP_TYPE: {
                 uint32_t w_slot = find_dormant(i + 1);
-                write_spawn_genome(particles, i, ANTI_BOTTOM_TYPE, rng);
+                write_spawn_genome(particles, i, ANTI_BOTTOM_TYPE, rng, frame_counter_);
                 readback_energies_[i] = PRODUCT_ENERGY;
                 readback_velocities_[i] = dir * FAST_SPEED * 0.5f;
                 if (w_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, w_slot, W_MINUS_TYPE_PHYS, rng);
+                    write_spawn_genome(particles, w_slot, W_MINUS_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[w_slot] = pos;
                     readback_velocities_[w_slot] = -dir * FAST_SPEED;
                     readback_energies_[w_slot] = PRODUCT_ENERGY;
@@ -1150,11 +1197,11 @@ void PhysicsSimulation::check_decay() {
             // ── W+ → positron + neutrino ──
             case W_PLUS_TYPE_PHYS: {
                 uint32_t nu_slot = find_dormant(i + 1);
-                write_spawn_genome(particles, i, POSITRON_TYPE_PHYS, rng);
+                write_spawn_genome(particles, i, POSITRON_TYPE_PHYS, rng, frame_counter_);
                 readback_energies_[i] = PRODUCT_ENERGY;
                 readback_velocities_[i] = dir * FAST_SPEED;
                 if (nu_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, nu_slot, NEUTRINO_TYPE_PHYS, rng);
+                    write_spawn_genome(particles, nu_slot, NEUTRINO_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[nu_slot] = pos;
                     readback_velocities_[nu_slot] = -dir * FAST_SPEED;
                     readback_energies_[nu_slot] = PRODUCT_ENERGY * 0.5f;
@@ -1165,11 +1212,11 @@ void PhysicsSimulation::check_decay() {
             // ── W- → electron + neutrino ──
             case W_MINUS_TYPE_PHYS: {
                 uint32_t nu_slot = find_dormant(i + 1);
-                write_spawn_genome(particles, i, ELECTRON_TYPE_PHYS, rng);
+                write_spawn_genome(particles, i, ELECTRON_TYPE_PHYS, rng, frame_counter_);
                 readback_energies_[i] = PRODUCT_ENERGY;
                 readback_velocities_[i] = dir * FAST_SPEED;
                 if (nu_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, nu_slot, NEUTRINO_TYPE_PHYS, rng);
+                    write_spawn_genome(particles, nu_slot, NEUTRINO_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[nu_slot] = pos;
                     readback_velocities_[nu_slot] = -dir * FAST_SPEED;
                     readback_energies_[nu_slot] = PRODUCT_ENERGY * 0.5f;
@@ -1180,11 +1227,11 @@ void PhysicsSimulation::check_decay() {
             // ── Z0 → electron + positron ──
             case Z_BOSON_TYPE_PHYS: {
                 uint32_t e_slot = find_dormant(i + 1);
-                write_spawn_genome(particles, i, ELECTRON_TYPE_PHYS, rng);
+                write_spawn_genome(particles, i, ELECTRON_TYPE_PHYS, rng, frame_counter_);
                 readback_energies_[i] = PRODUCT_ENERGY;
                 readback_velocities_[i] = dir * FAST_SPEED;
                 if (e_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, e_slot, POSITRON_TYPE_PHYS, rng);
+                    write_spawn_genome(particles, e_slot, POSITRON_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[e_slot] = pos;
                     readback_velocities_[e_slot] = -dir * FAST_SPEED;
                     readback_energies_[e_slot] = PRODUCT_ENERGY;
@@ -1195,11 +1242,11 @@ void PhysicsSimulation::check_decay() {
             // ── Higgs → 2 photons ──
             case HIGGS_TYPE_PHYS: {
                 uint32_t g_slot = find_dormant(i + 1);
-                write_spawn_genome(particles, i, PHOTON_TYPE_PHYS, rng);
+                write_spawn_genome(particles, i, PHOTON_TYPE_PHYS, rng, frame_counter_);
                 readback_energies_[i] = PRODUCT_ENERGY;
                 readback_velocities_[i] = dir * 300.0f;
                 if (g_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, g_slot, PHOTON_TYPE_PHYS, rng);
+                    write_spawn_genome(particles, g_slot, PHOTON_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[g_slot] = pos;
                     readback_velocities_[g_slot] = -dir * 300.0f;
                     readback_energies_[g_slot] = PRODUCT_ENERGY;
@@ -1210,11 +1257,11 @@ void PhysicsSimulation::check_decay() {
             // ── Tau → electron + neutrino_tau ──
             case TAU_TYPE_PHYS: {
                 uint32_t nu_slot = find_dormant(i + 1);
-                write_spawn_genome(particles, i, ELECTRON_TYPE_PHYS, rng);
+                write_spawn_genome(particles, i, ELECTRON_TYPE_PHYS, rng, frame_counter_);
                 readback_energies_[i] = PRODUCT_ENERGY;
                 readback_velocities_[i] = dir * FAST_SPEED;
                 if (nu_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, nu_slot, TAU_NEUTRINO_TYPE_PHYS, rng);
+                    write_spawn_genome(particles, nu_slot, TAU_NEUTRINO_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[nu_slot] = pos;
                     readback_velocities_[nu_slot] = -dir * FAST_SPEED;
                     readback_energies_[nu_slot] = PRODUCT_ENERGY * 0.4f;
@@ -1223,11 +1270,11 @@ void PhysicsSimulation::check_decay() {
             }
             case ANTITAU_TYPE_PHYS: {
                 uint32_t nu_slot = find_dormant(i + 1);
-                write_spawn_genome(particles, i, POSITRON_TYPE_PHYS, rng);
+                write_spawn_genome(particles, i, POSITRON_TYPE_PHYS, rng, frame_counter_);
                 readback_energies_[i] = PRODUCT_ENERGY;
                 readback_velocities_[i] = dir * FAST_SPEED;
                 if (nu_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, nu_slot, TAU_NEUTRINO_TYPE_PHYS, rng);
+                    write_spawn_genome(particles, nu_slot, TAU_NEUTRINO_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[nu_slot] = pos;
                     readback_velocities_[nu_slot] = -dir * FAST_SPEED;
                     readback_energies_[nu_slot] = PRODUCT_ENERGY * 0.4f;
@@ -1238,11 +1285,11 @@ void PhysicsSimulation::check_decay() {
             // ── Bottom → charm + W ──
             case BOTTOM_QUARK_TYPE: {
                 uint32_t w_slot = find_dormant(i + 1);
-                write_spawn_genome(particles, i, CHARM_QUARK_TYPE, rng);
+                write_spawn_genome(particles, i, CHARM_QUARK_TYPE, rng, frame_counter_);
                 readback_energies_[i] = PRODUCT_ENERGY;
                 readback_velocities_[i] = dir * FAST_SPEED * 0.3f;
                 if (w_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, w_slot, W_MINUS_TYPE_PHYS, rng);
+                    write_spawn_genome(particles, w_slot, W_MINUS_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[w_slot] = pos;
                     readback_velocities_[w_slot] = -dir * FAST_SPEED;
                     readback_energies_[w_slot] = PRODUCT_ENERGY;
@@ -1251,11 +1298,11 @@ void PhysicsSimulation::check_decay() {
             }
             case ANTI_BOTTOM_TYPE: {
                 uint32_t w_slot = find_dormant(i + 1);
-                write_spawn_genome(particles, i, ANTI_CHARM_TYPE, rng);
+                write_spawn_genome(particles, i, ANTI_CHARM_TYPE, rng, frame_counter_);
                 readback_energies_[i] = PRODUCT_ENERGY;
                 readback_velocities_[i] = dir * FAST_SPEED * 0.3f;
                 if (w_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, w_slot, W_PLUS_TYPE_PHYS, rng);
+                    write_spawn_genome(particles, w_slot, W_PLUS_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[w_slot] = pos;
                     readback_velocities_[w_slot] = -dir * FAST_SPEED;
                     readback_energies_[w_slot] = PRODUCT_ENERGY;
@@ -1266,11 +1313,11 @@ void PhysicsSimulation::check_decay() {
             // ── Charm → strange + W ──
             case CHARM_QUARK_TYPE: {
                 uint32_t w_slot = find_dormant(i + 1);
-                write_spawn_genome(particles, i, STRANGE_QUARK_TYPE, rng);
+                write_spawn_genome(particles, i, STRANGE_QUARK_TYPE, rng, frame_counter_);
                 readback_energies_[i] = PRODUCT_ENERGY;
                 readback_velocities_[i] = dir * FAST_SPEED * 0.3f;
                 if (w_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, w_slot, W_PLUS_TYPE_PHYS, rng);
+                    write_spawn_genome(particles, w_slot, W_PLUS_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[w_slot] = pos;
                     readback_velocities_[w_slot] = -dir * FAST_SPEED;
                     readback_energies_[w_slot] = PRODUCT_ENERGY;
@@ -1279,11 +1326,11 @@ void PhysicsSimulation::check_decay() {
             }
             case ANTI_CHARM_TYPE: {
                 uint32_t w_slot = find_dormant(i + 1);
-                write_spawn_genome(particles, i, ANTI_STRANGE_TYPE, rng);
+                write_spawn_genome(particles, i, ANTI_STRANGE_TYPE, rng, frame_counter_);
                 readback_energies_[i] = PRODUCT_ENERGY;
                 readback_velocities_[i] = dir * FAST_SPEED * 0.3f;
                 if (w_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, w_slot, W_MINUS_TYPE_PHYS, rng);
+                    write_spawn_genome(particles, w_slot, W_MINUS_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[w_slot] = pos;
                     readback_velocities_[w_slot] = -dir * FAST_SPEED;
                     readback_energies_[w_slot] = PRODUCT_ENERGY;
@@ -1294,11 +1341,11 @@ void PhysicsSimulation::check_decay() {
             // ── Strange → up + W ──
             case STRANGE_QUARK_TYPE: {
                 uint32_t w_slot = find_dormant(i + 1);
-                write_spawn_genome(particles, i, UP_QUARK_TYPE, rng);
+                write_spawn_genome(particles, i, UP_QUARK_TYPE, rng, frame_counter_);
                 readback_energies_[i] = PRODUCT_ENERGY;
                 readback_velocities_[i] = dir * FAST_SPEED * 0.2f;
                 if (w_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, w_slot, W_MINUS_TYPE_PHYS, rng);
+                    write_spawn_genome(particles, w_slot, W_MINUS_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[w_slot] = pos;
                     readback_velocities_[w_slot] = -dir * FAST_SPEED;
                     readback_energies_[w_slot] = PRODUCT_ENERGY;
@@ -1307,11 +1354,11 @@ void PhysicsSimulation::check_decay() {
             }
             case ANTI_STRANGE_TYPE: {
                 uint32_t w_slot = find_dormant(i + 1);
-                write_spawn_genome(particles, i, ANTI_UP_TYPE, rng);
+                write_spawn_genome(particles, i, ANTI_UP_TYPE, rng, frame_counter_);
                 readback_energies_[i] = PRODUCT_ENERGY;
                 readback_velocities_[i] = dir * FAST_SPEED * 0.2f;
                 if (w_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, w_slot, W_PLUS_TYPE_PHYS, rng);
+                    write_spawn_genome(particles, w_slot, W_PLUS_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[w_slot] = pos;
                     readback_velocities_[w_slot] = -dir * FAST_SPEED;
                     readback_energies_[w_slot] = PRODUCT_ENERGY;
@@ -1323,17 +1370,17 @@ void PhysicsSimulation::check_decay() {
             case MUON_TYPE_PHYS: {
                 uint32_t nu1 = find_dormant(i + 1);
                 uint32_t nu2 = (nu1 != UINT32_MAX) ? find_dormant(nu1 + 1) : UINT32_MAX;
-                write_spawn_genome(particles, i, ELECTRON_TYPE_PHYS, rng);
+                write_spawn_genome(particles, i, ELECTRON_TYPE_PHYS, rng, frame_counter_);
                 readback_energies_[i] = PRODUCT_ENERGY;
                 readback_velocities_[i] = dir * FAST_SPEED;
                 if (nu1 != UINT32_MAX) {
-                    write_spawn_genome(particles, nu1, MU_NEUTRINO_TYPE_PHYS, rng);
+                    write_spawn_genome(particles, nu1, MU_NEUTRINO_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[nu1] = pos;
                     readback_velocities_[nu1] = glm::vec2(-dir.y, dir.x) * FAST_SPEED;
                     readback_energies_[nu1] = PRODUCT_ENERGY * 0.3f;
                 }
                 if (nu2 != UINT32_MAX) {
-                    write_spawn_genome(particles, nu2, NEUTRINO_TYPE_PHYS, rng);
+                    write_spawn_genome(particles, nu2, NEUTRINO_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[nu2] = pos;
                     readback_velocities_[nu2] = -dir * FAST_SPEED;
                     readback_energies_[nu2] = PRODUCT_ENERGY * 0.3f;
@@ -1343,17 +1390,17 @@ void PhysicsSimulation::check_decay() {
             case ANTIMUON_TYPE_PHYS: {
                 uint32_t nu1 = find_dormant(i + 1);
                 uint32_t nu2 = (nu1 != UINT32_MAX) ? find_dormant(nu1 + 1) : UINT32_MAX;
-                write_spawn_genome(particles, i, POSITRON_TYPE_PHYS, rng);
+                write_spawn_genome(particles, i, POSITRON_TYPE_PHYS, rng, frame_counter_);
                 readback_energies_[i] = PRODUCT_ENERGY;
                 readback_velocities_[i] = dir * FAST_SPEED;
                 if (nu1 != UINT32_MAX) {
-                    write_spawn_genome(particles, nu1, MU_NEUTRINO_TYPE_PHYS, rng);
+                    write_spawn_genome(particles, nu1, MU_NEUTRINO_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[nu1] = pos;
                     readback_velocities_[nu1] = glm::vec2(-dir.y, dir.x) * FAST_SPEED;
                     readback_energies_[nu1] = PRODUCT_ENERGY * 0.3f;
                 }
                 if (nu2 != UINT32_MAX) {
-                    write_spawn_genome(particles, nu2, NEUTRINO_TYPE_PHYS, rng);
+                    write_spawn_genome(particles, nu2, NEUTRINO_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[nu2] = pos;
                     readback_velocities_[nu2] = -dir * FAST_SPEED;
                     readback_energies_[nu2] = PRODUCT_ENERGY * 0.3f;
@@ -1372,6 +1419,141 @@ void PhysicsSimulation::check_decay() {
         compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
         compute.upload_dynamic_data(vk, particles);
     }
+}
+
+// ── Virtual particle pair creation ───────────────────────────────────────────
+
+void PhysicsSimulation::check_virtual_pairs() {
+    if (readback_positions_.empty()) return;
+
+    const uint32_t n = cfg.particle_count;
+    const float PAIR_RADIUS = 15.0f;
+    const float PAIR_RADIUS_SQ = PAIR_RADIUS * PAIR_RADIUS;
+    const float PAIR_ENERGY = 0.12f;
+    const float PAIR_SPEED = 80.0f;
+
+    uint32_t pairs_created = 0;
+    uint32_t max_pairs = cfg.virtual_pair_max_per_tick;
+    float threshold = cfg.virtual_pair_threshold;
+    float min_energy = threshold * 0.5f;  // each particle needs at least half threshold
+
+    std::mt19937 rng(frame_counter_ * 1664525u + 1013904223u);
+    std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
+    std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+
+    // Helper to find a dormant slot
+    auto find_dormant = [&](uint32_t start) -> uint32_t {
+        for (uint32_t k = start; k < n; ++k)
+            if (readback_energies_[k] < 0.01f) return k;
+        for (uint32_t k = 0; k < start; ++k)
+            if (readback_energies_[k] < 0.01f) return k;
+        return UINT32_MAX;
+    };
+
+    bool any_spawned = false;
+
+    // Scan for high-energy close encounters (sparse sampling for performance)
+    uint32_t step = std::max(1u, n / 500u);  // check ~500 particles per frame
+    for (uint32_t i = 0; i < n && pairs_created < max_pairs; i += step) {
+        float e_i = readback_energies_[i];
+        if (e_i < min_energy) continue;
+        if (particles.behavior_flags[particles.types[i]] & BEHAVIOR_VIRTUAL) continue;
+
+        uint32_t type_i = particles.types[i];
+        uint32_t flags_i = particles.behavior_flags[type_i];
+
+        // Find nearest high-energy neighbor
+        float best_d2 = PAIR_RADIUS_SQ;
+        uint32_t best_j = UINT32_MAX;
+        float e_j_best = 0.0f;
+        uint32_t flags_j_best = 0;
+
+        for (uint32_t j = 0; j < n; ++j) {
+            if (j == i) continue;
+            float e_j = readback_energies_[j];
+            if (e_j < min_energy) continue;
+            if (particles.behavior_flags[particles.types[j]] & BEHAVIOR_VIRTUAL) continue;
+
+            glm::vec2 d = readback_positions_[j] - readback_positions_[i];
+            float d2 = d.x * d.x + d.y * d.y;
+            if (d2 < best_d2) {
+                best_d2 = d2;
+                best_j = j;
+                e_j_best = e_j;
+                flags_j_best = particles.behavior_flags[particles.types[j]];
+            }
+        }
+
+        if (best_j == UINT32_MAX) continue;
+        float combined_e = e_i + e_j_best;
+        if (combined_e < threshold) continue;
+
+        // Determine virtual pair type based on interaction
+        uint32_t vtype_a, vtype_b;
+        bool both_quarks = (flags_i & BEHAVIOR_QUARK) && (flags_j_best & BEHAVIOR_QUARK);
+        bool has_charge = (std::abs(PHYS_CHARGE[type_i]) > 0.01f) ||
+                         (best_j < n && std::abs(PHYS_CHARGE[particles.types[best_j]]) > 0.01f);
+        bool has_weak = (flags_i & BEHAVIOR_WEAK_BOSON) || (flags_j_best & BEHAVIOR_WEAK_BOSON);
+
+        if (combined_e > 1.5f && unit(rng) < 0.3f) {
+            // Schwinger effect: virtual e+/e- pair
+            vtype_a = ELECTRON_TYPE_PHYS;
+            vtype_b = POSITRON_TYPE_PHYS;
+        } else if (both_quarks && unit(rng) < 0.5f) {
+            // QCD: virtual gluon pair
+            vtype_a = GLUON_TYPE_PHYS;
+            vtype_b = GLUON_TYPE_PHYS;
+        } else if (has_weak && unit(rng) < 0.3f) {
+            // Weak: virtual W+/W- pair
+            vtype_a = W_PLUS_TYPE_PHYS;
+            vtype_b = W_MINUS_TYPE_PHYS;
+        } else if (cfg.gravity_strength > 0.001f && unit(rng) < 0.2f) {
+            // Gravitational: virtual graviton pair
+            vtype_a = GRAVITON_TYPE_PHYS;
+            vtype_b = GRAVITON_TYPE_PHYS;
+        } else if (has_charge) {
+            // QED: virtual photon pair (most common)
+            vtype_a = PHOTON_TYPE_PHYS;
+            vtype_b = PHOTON_TYPE_PHYS;
+        } else {
+            continue;  // no suitable virtual pair for this interaction
+        }
+
+        // Find two dormant slots
+        uint32_t slot_a = find_dormant(i + 1);
+        if (slot_a == UINT32_MAX) break;
+        uint32_t slot_b = find_dormant(slot_a + 1);
+        if (slot_b == UINT32_MAX) break;
+
+        // Spawn at midpoint with opposite velocities
+        glm::vec2 mid = (readback_positions_[i] + readback_positions_[best_j]) * 0.5f;
+        float angle = angle_dist(rng);
+        glm::vec2 dir(std::cos(angle), std::sin(angle));
+
+        readback_positions_[slot_a] = mid + dir * 3.0f;
+        readback_positions_[slot_b] = mid - dir * 3.0f;
+        readback_velocities_[slot_a] = dir * PAIR_SPEED;
+        readback_velocities_[slot_b] = -dir * PAIR_SPEED;
+        readback_energies_[slot_a] = PAIR_ENERGY;
+        readback_energies_[slot_b] = PAIR_ENERGY;
+
+        // Set types and override genome decay for virtual lifetime
+        write_spawn_genome(particles, slot_a, vtype_a, rng, frame_counter_);
+        write_spawn_genome(particles, slot_b, vtype_b, rng, frame_counter_);
+        // High per-particle decay rate → shader drains energy fast (~15 frame lifetime)
+        particles.genomes[slot_a * GENOME_SIZE + 3] = 0.08f;
+        particles.genomes[slot_b * GENOME_SIZE + 3] = 0.08f;
+
+        pairs_created++;
+        any_spawned = true;
+    }
+
+    if (any_spawned) {
+        vkDeviceWaitIdle(vk.device);
+        compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+        compute.upload_dynamic_data(vk, particles);
+    }
+
 }
 
 // ── Force object management ──────────────────────────────────────────────────
@@ -1418,10 +1600,25 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     handle_input(window, dt);
     frame_counter_++;
 
-    // ── Temperature kelvin → noise amplitude ─────────────────────────────────
-    // 300K → 0.10, 10^7K → 0.76, 10^8K → 2.0 (capped)
+    // ── Temperature kelvin → noise amplitude (Berendsen thermostat) ─────────
+    // Negative feedback: when system is hotter than target → reduce noise (cool)
+    //                    when system is cooler than target → increase noise (heat)
+    float effective_kelvin = cfg.temperature_kelvin;
+    if (cfg.thermo_feedback_enabled && emergent_temperature_ > 0.1f) {
+        float correction = cfg.temperature_kelvin / emergent_temperature_;
+        // coupling controls correction strength: 0=no feedback, 1=full thermostat
+        effective_kelvin = cfg.temperature_kelvin
+                         * (1.0f + cfg.thermo_coupling * (correction - 1.0f));
+    }
     cfg.temperature = std::min(2.0f,
-        0.10f * std::pow(cfg.temperature_kelvin / 300.0f, 0.25f));
+        0.10f * std::pow(effective_kelvin / 300.0f, 0.25f));
+
+    // ── Effective Lorentz strength (with magnetic feedback) ──────────────────
+    cfg.effective_lorentz = cfg.lorentz_strength;
+    if (cfg.magnetic_feedback_enabled) {
+        cfg.effective_lorentz = cfg.lorentz_strength * (1.0f - cfg.magnetic_coupling)
+                              + emergent_bfield_ * cfg.magnetic_coupling;
+    }
 
     // ── Assemble field_flags bitfield from UI booleans ───────────────────────
     cfg.field_flags = 0;
@@ -1494,6 +1691,8 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         check_fusion();
         check_fission();
         check_decay();
+        if (cfg.virtual_pairs_enabled)
+            check_virtual_pairs();
         update_orbitals();
 
         // Handle particle delete request from UI
@@ -1528,6 +1727,62 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         iface.avg_energy_display = (active > 0) ? total_energy / active : 0.0f;
         for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t)
             iface.type_counts_display[t] = type_counts[t];
+
+        // ── Emergent kinetic temperature: T ∝ ⟨½mv²⟩ ────────────────────────
+        {
+            float total_ke = 0.0f;
+            uint32_t ke_count = 0;
+            for (uint32_t i = 0; i < cfg.particle_count; ++i) {
+                if (readback_energies_[i] < 0.01f) continue;
+                glm::vec2 v = readback_velocities_[i];
+                total_ke += 0.5f * glm::dot(v, v);
+                ke_count++;
+            }
+            float avg_ke = (ke_count > 0) ? total_ke / ke_count : 0.0f;
+            float measured_temp = avg_ke * 0.1f;  // scaling: avg_ke ~3000 → 300K
+            emergent_temperature_ = emergent_temperature_ * 0.98f + measured_temp * 0.02f;
+            iface.emergent_temp_display = emergent_temperature_;
+        }
+
+        // ── Emergent B-field from charged currents: J = Σ|q·v| ──────────────
+        {
+            float total_current = 0.0f;
+            uint32_t charged_count = 0;
+            for (uint32_t i = 0; i < cfg.particle_count; ++i) {
+                if (readback_energies_[i] < 0.01f) continue;
+                uint32_t t = particles.types[i];
+                if (t >= PHYS_PARTICLE_TYPES) continue;
+                float q = PHYS_CHARGE[t];
+                if (std::abs(q) < 0.01f) continue;
+                float speed = glm::length(readback_velocities_[i]);
+                total_current += std::abs(q) * speed;
+                charged_count++;
+            }
+            float avg_current = (charged_count > 0) ? total_current / charged_count : 0.0f;
+            float measured_bfield = avg_current * 0.02f;  // scaling: avg_current ~50 → 1.0 T
+            emergent_bfield_ = emergent_bfield_ * 0.98f + measured_bfield * 0.02f;
+            iface.emergent_bfield_display = emergent_bfield_;
+        }
+    }
+
+    // Thread readback data to interface for info card display
+    iface.frame_counter_display = frame_counter_;
+    iface.readback_velocities = readback_velocities_.data();
+    iface.readback_count = cfg.particle_count;
+
+    // ── Camera navigation (set by info card click) ─────────────────────────
+    if (iface.navigate_to_particle >= 0 &&
+        iface.navigate_to_particle < static_cast<int32_t>(cfg.particle_count)) {
+        glm::vec2 target = readback_positions_[iface.navigate_to_particle];
+        // camera_origin is the world-space center of the viewport
+        cfg.camera_origin += (target - cfg.camera_origin) * 0.15f;
+
+        // Snap when close enough, then select the target particle
+        if (glm::length(target - cfg.camera_origin) < 2.0f) {
+            cfg.camera_origin = target;
+            iface.selected_particle_idx = iface.navigate_to_particle;
+            iface.navigate_to_particle = -1;
+        }
     }
 
     // ImGui render
@@ -1538,6 +1793,8 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     bool request_reset = false;
     iface.sim_running = is_active;
     iface.render_imgui(cfg, particles, force_objects_, request_reset);
+    // Read back sim_running — pause menu Resume button sets it to true
+    is_active = iface.sim_running;
 
     if (request_reset) {
         if (!cfg.start_empty) {
@@ -1548,6 +1805,87 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             cfg.particle_count = cfg.pool_size;
         }
         reset();
+    }
+
+    // Quit request from pause menu
+    if (iface.request_quit) {
+        glfwSetWindowShouldClose(window, GLFW_TRUE);
+    }
+
+    // ── Save request ─────────────────────────────────────────────────────────
+    if (iface.request_save) {
+        iface.request_save = false;
+        // Ensure we have fresh readback data
+        if (readback_positions_.empty() && compute.is_ready()) {
+            readback_positions_.resize(cfg.particle_count);
+            readback_velocities_.resize(cfg.particle_count);
+            readback_energies_.resize(cfg.particle_count);
+            compute.read_current_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+        }
+        auto result = save_simulation(
+            iface.save_filename, cfg, particles,
+            readback_positions_, readback_velocities_, readback_energies_,
+            force_objects_, force_object_count_,
+            iface.field_em, iface.field_strong, iface.field_weak,
+            iface.field_gravity, iface.field_higgs,
+            iface.field_intensity, iface.log_temperature);
+        std::memset(iface.save_load_message, 0, sizeof(iface.save_load_message));
+        strncpy(iface.save_load_message, result.message.c_str(), sizeof(iface.save_load_message) - 1);
+        iface.save_load_msg_timer = 3.0f;
+    }
+
+    // ── Load request ─────────────────────────────────────────────────────────
+    if (iface.request_load) {
+        iface.request_load = false;
+        auto r = load_simulation(iface.save_filename);
+        if (r.success) {
+            vkDeviceWaitIdle(vk.device);
+            cfg = r.cfg;
+            // Restore particle CPU data
+            particles.positions = r.positions;
+            particles.velocities = r.velocities;
+            particles.types = r.types;
+            particles.energies = r.energies;
+            particles.angles = r.angles;
+            particles.angular_velocities = r.angular_velocities;
+            particles.genomes = r.genomes;
+            // Restore per-type data
+            std::memcpy(particles.forces.data(), r.forces,
+                        MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES * sizeof(float));
+            std::memcpy(particles.colors.data(), r.colors,
+                        MAX_PARTICLE_TYPES * sizeof(glm::vec4));
+            std::memcpy(particles.behavior_flags, r.behavior_flags,
+                        MAX_PARTICLE_TYPES * sizeof(uint32_t));
+            // Restore force objects
+            force_object_count_ = r.force_object_count;
+            std::memcpy(force_objects_, r.force_objects,
+                        MAX_FORCE_OBJECTS * sizeof(ForceObject));
+            // Restore UI state
+            iface.field_em        = r.field_em;
+            iface.field_strong    = r.field_strong;
+            iface.field_weak      = r.field_weak;
+            iface.field_gravity   = r.field_gravity;
+            iface.field_higgs     = r.field_higgs;
+            iface.field_intensity = r.field_intensity;
+            iface.log_temperature = r.log_temperature;
+            // Re-upload to GPU
+            compute.clear_buffers(vk);
+            compute.create_buffers(vk, particles);
+            // Reset interaction state
+            iface.selected_force_obj_idx = -1;
+            iface.force_obj_placement_mode = false;
+            iface.force_obj_move_mode = false;
+            iface.selected_particle_idx = -1;
+            iface.particle_move_mode = false;
+            iface.select_mode = false;
+            readback_positions_.clear();
+            readback_velocities_.clear();
+            readback_energies_.clear();
+            frame_counter_ = 0;
+        }
+        std::memset(iface.save_load_message, 0, sizeof(iface.save_load_message));
+        strncpy(iface.save_load_message, r.message.c_str(), sizeof(iface.save_load_message) - 1);
+        iface.save_load_msg_timer = 3.0f;
     }
 
     ImGui::Render();

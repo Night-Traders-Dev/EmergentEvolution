@@ -26,6 +26,9 @@ public:
     std::vector<float> energies;   // per-particle, 0.0–1.0
     std::vector<float> genomes;    // GENOME_SIZE floats per particle: charge, electronegativity, reactivity, bond_strength
 
+    std::vector<uint32_t> birth_frames;   // frame at which each particle was created
+    std::vector<int32_t>  orbital_parent;  // index of parent nucleus proton, or -1 if unbound
+
     // Bond data: pointer into BondManager.bond_partners — set by Simulation after BondManager::update()
     const uint32_t* bond_partners_ptr   = nullptr;
     uint32_t        bond_partners_count = 0;

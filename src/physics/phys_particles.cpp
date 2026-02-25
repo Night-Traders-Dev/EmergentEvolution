@@ -3,7 +3,7 @@
 #include <cmath>
 #include <algorithm>
 
-// ── Sub-atomic particle colors (30 types) ────────────────────────────────────
+// ── Sub-atomic particle colors (33 types) ────────────────────────────────────
 static const glm::vec4 PHYS_COLORS[PHYS_PARTICLE_TYPES] = {
     // 0: Composites + gen1
     { 0.9f, 0.2f, 0.2f, 1.0f },   // 0  Proton      — red
@@ -40,6 +40,10 @@ static const glm::vec4 PHYS_COLORS[PHYS_PARTICLE_TYPES] = {
     { 0.2f, 0.6f, 0.85f, 1.0f },  // 27 W-          — dark cyan
     { 0.85f, 0.85f, 0.9f, 1.0f }, // 28 Z0          — silver
     { 1.0f, 0.95f, 0.7f, 1.0f },  // 29 Higgs       — white-gold
+    // 30-32: Beyond Standard Model — hypothetical
+    { 0.7f, 0.8f, 1.0f, 0.5f },   // 30 Graviton    — faint blue-white
+    { 0.15f, 0.05f, 0.25f, 0.6f },// 31 Dark Matter — deep purple-black
+    { 0.4f, 0.05f, 0.1f, 0.4f },  // 32 Dark Energy — faint crimson glow
 };
 
 // ── Environment abundance tables ─────────────────────────────────────────────
@@ -107,7 +111,7 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
     for (uint32_t i = 0; i < PHYS_PARTICLE_TYPES; ++i)
         p.colors[i] = PHYS_COLORS[i];
 
-    // ── Behavior flags for all 30 types ──────────────────────────────────────
+    // ── Behavior flags for all 33 types ──────────────────────────────────────
     // Composites
     p.behavior_flags[PROTON_TYPE]          = BEHAVIOR_MASS_HEAVY | BEHAVIOR_IONIC_POS;
     p.behavior_flags[NEUTRON_TYPE]         = BEHAVIOR_MASS_HEAVY;
@@ -151,6 +155,11 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
     p.behavior_flags[W_MINUS_TYPE_PHYS]    = BEHAVIOR_WEAK_BOSON | BEHAVIOR_IONIC_NEG;
     p.behavior_flags[Z_BOSON_TYPE_PHYS]    = BEHAVIOR_WEAK_BOSON;
     p.behavior_flags[HIGGS_TYPE_PHYS]      = BEHAVIOR_HIGGS;
+
+    // Beyond Standard Model — hypothetical
+    p.behavior_flags[GRAVITON_TYPE_PHYS]     = BEHAVIOR_GRAVITON | BEHAVIOR_PHOTON;  // ballistic massless
+    p.behavior_flags[DARK_MATTER_TYPE_PHYS]  = BEHAVIOR_DARK_MATTER | BEHAVIOR_MASS_ULTRA;  // heavy, gravity-only
+    p.behavior_flags[DARK_ENERGY_TYPE_PHYS]  = BEHAVIOR_DARK_ENERGY;  // repulsive field
 
     // Force matrix: zeroed (physics is computed in shader, not from matrix)
     p.forces.resize(MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES, 0.0f);
@@ -238,6 +247,14 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
             if (r < 0.80f) type = PROTON_TYPE;
             else if (r < 0.95f) type = ELECTRON_TYPE_PHYS;
             else type = PHOTON_TYPE_PHYS;  // synchrotron radiation
+        } else if (env == 11) {
+            // Dark Sector: 40% DM, 30% protons, 15% electrons, 10% DE, 5% gravitons
+            float r = unit(rng);
+            if (r < 0.40f) type = DARK_MATTER_TYPE_PHYS;
+            else if (r < 0.70f) type = PROTON_TYPE;
+            else if (r < 0.85f) type = ELECTRON_TYPE_PHYS;
+            else if (r < 0.95f) type = DARK_ENERGY_TYPE_PHYS;
+            else type = GRAVITON_TYPE_PHYS;
         } else {
             // Meson Factory: quark-antiquark pairs
             float r = unit(rng);
@@ -291,8 +308,8 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
                 }
                 break;
             }
-            case 7: case 8: case 9: {
-                // QGP, Electroweak, Meson Factory — central Gaussian
+            case 7: case 8: case 9: case 11: {
+                // QGP, Electroweak, Meson Factory, Dark Sector — central Gaussian
                 float cx = rw * 0.5f, cy = rh * 0.5f;
                 float sigma = std::min(rw, rh) * 0.20f;
                 pos = glm::vec2(cx + gauss(rng) * sigma, cy + gauss(rng) * sigma);
@@ -335,6 +352,9 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
                               type == MUON_TYPE_PHYS || type == ANTIMUON_TYPE_PHYS);
             if (is_lepton) vel *= 5.0f;
             if (type >= UP_QUARK_TYPE && type <= ANTI_BOTTOM_TYPE) vel *= 3.0f;
+            if (type == GRAVITON_TYPE_PHYS) vel = glm::normalize(vel + glm::vec2(0.001f)) * 200.0f;  // light-speed
+            if (type == DARK_MATTER_TYPE_PHYS) vel *= 0.3f;  // cold dark matter
+            if (type == DARK_ENERGY_TYPE_PHYS) vel *= 0.1f;  // near-static field
         }
 
         p.positions.push_back(pos);

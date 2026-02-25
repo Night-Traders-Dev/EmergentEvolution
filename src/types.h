@@ -8,7 +8,7 @@
 
 static constexpr uint32_t REGION_W           = 2560;
 static constexpr uint32_t REGION_H           = 1440;
-static constexpr uint32_t MAX_PARTICLE_TYPES = 32;
+static constexpr uint32_t MAX_PARTICLE_TYPES = 36;
 static constexpr uint32_t GROUP_DENSITY      = 256;
 static constexpr uint32_t GENOME_SIZE        = 4;   // floats per particle: charge, electronegativity, reactivity, bond_strength
 
@@ -32,15 +32,16 @@ static constexpr uint32_t Z_BOSON_TYPE       = 28u;  // Z⁰ gauge boson (weak f
 static constexpr uint32_t HIGGS_TYPE         = 29u;  // Higgs boson (H⁰)
 
 // Max covalent bonds per particle type (indexed 0–MAX_PARTICLE_TYPES-1)
-// Atoms 0–17, photon 18, SM particles 19–29, reserved 30–31
-//                                H  C  N  O  P  S Na Cl Fe Ni Si Ca Ti Sr Au Pb Eu  U  γ  α  e- e+ νe μ  τ  νμ ντ W  Z  H  r  r
+// Atoms 0–17, photon 18, SM particles 19–29, hypothetical 30–32, reserved 33–35
+//                                H  C  N  O  P  S Na Cl Fe Ni Si Ca Ti Sr Au Pb Eu  U  γ  α  e- e+ νe μ  τ  νμ ντ W  Z  H  G DM DE  r  r  r
 static constexpr uint32_t ATOM_VALENCE[MAX_PARTICLE_TYPES] = {
     1, 4, 3, 2, 5, 2, 1, 1,  // H C N O P S Na Cl (0-7)
     3, 2, 4, 2, 4, 2, 1, 4, 3, 6,  // Fe Ni Si Ca Ti Sr Au Pb Eu U (8-17)
     0,                   // photon (18)
     0, 0, 0, 0, 0,       // α e- e+ νe μ (19-23)
     0, 0, 0, 0, 0, 0,    // τ νμ ντ W Z H (24-29)
-    0, 0                 // reserved (30-31)
+    0, 0, 0,             // graviton, dark matter, dark energy (30-32)
+    0, 0, 0              // reserved (33-35)
 };
 
 enum ParticleBehavior : uint32_t {
@@ -74,6 +75,11 @@ enum ParticleBehavior : uint32_t {
     BEHAVIOR_HIGGS       = 1u << 23, // Higgs boson — scalar field coupling
     BEHAVIOR_GLUON       = 1u << 24, // gluon — strong force mediator (massless, colored)
     BEHAVIOR_TAU         = 1u << 25, // tau lepton family (heavy, short-lived)
+    // Beyond Standard Model / hypothetical
+    BEHAVIOR_GRAVITON    = 1u << 26, // spin-2 massless boson — mediates gravity
+    BEHAVIOR_DARK_MATTER = 1u << 27, // WIMP — only gravity + weak, no EM/strong
+    BEHAVIOR_DARK_ENERGY = 1u << 28, // quintessence — repulsive field quantum
+    BEHAVIOR_VIRTUAL     = 1u << 29, // short-TTL virtual particle (fast energy drain)
 };
 
 // ── Force Objects (spawnable stationary force emitters) ──────────────────────
@@ -125,9 +131,16 @@ struct PushConstants {
     float     string_tension;     // 92  — quark confinement constant (Cornell potential)
     float     higgs_vev;          // 96  — Higgs vacuum expectation value
     uint32_t  force_object_count; // 100 — number of active force objects (0-8)
+    // Per-force multipliers (all default 1.0 = standard model strengths)
+    float     coulomb_strength;       // 104 — EM Coulomb force multiplier
+    float     yukawa_strength;        // 108 — Strong nuclear binding multiplier
+    float     pauli_multiplier;       // 112 — Pauli exclusion strength multiplier
+    float     alpha_s_scale;          // 116 — QCD color force multiplier
+    float     compton_strength;       // 120 — Compton scattering multiplier
+    float     annihilation_strength;  // 124 — Matter-antimatter interaction multiplier
 };
-// Size is 104 bytes (under 128 Vulkan minimum)
-static_assert(sizeof(PushConstants) == 104, "PushConstants layout mismatch");
+// Size is 128 bytes (Vulkan guaranteed minimum maxPushConstantsSize)
+static_assert(sizeof(PushConstants) == 128, "PushConstants layout mismatch");
 
 struct SimConfig {
     uint32_t particle_count     = 22500;
@@ -171,7 +184,7 @@ struct SimConfig {
     float    higgs_vev                = 246.0f; // Higgs vacuum expectation value
 
     // Temperature in Kelvin (for physics sim)
-    float    temperature_kelvin       = 1000.0f; // actual temperature; converted to noise amplitude
+    float    temperature_kelvin       = 1.0f;    // actual temperature; converted to noise amplitude
 
     // Periodic particle spawn
     bool     spawn_enabled   = false;
@@ -186,6 +199,26 @@ struct SimConfig {
     // Environment presets
     uint32_t environment_mode = 0;  // 0=Lab 1=Tide Pool 2=Vent 3=Primordial
                                     // 4=Pond 5=Space 6=Nebula 7=Asteroid 8=Comet
+
+    // Virtual particle pair creation
+    bool     virtual_pairs_enabled     = true;
+    float    virtual_pair_threshold    = 2.0f;   // min combined energy for pair creation
+    uint32_t virtual_pair_max_per_tick = 2;      // max pairs spawned per frame
+
+    // Thermodynamic feedback
+    bool  thermo_feedback_enabled   = true;
+    float thermo_coupling           = 1.0f;   // 0=slider only, 1=fully emergent
+    bool  magnetic_feedback_enabled = true;
+    float magnetic_coupling         = 1.0f;
+    float effective_lorentz         = 1.0f;   // computed each tick, used in push constants
+
+    // Per-force strength multipliers (1.0 = standard model, 0.0 = disabled)
+    float    coulomb_strength         = 1.0f;   // EM Coulomb force
+    float    yukawa_strength          = 1.0f;   // Strong nuclear binding (Yukawa)
+    float    pauli_multiplier         = 1.0f;   // Pauli exclusion repulsion
+    float    alpha_s_scale            = 1.0f;   // QCD color force (Cornell)
+    float    compton_strength         = 1.0f;   // Compton scattering (photon-matter)
+    float    annihilation_strength    = 1.0f;   // Matter-antimatter annihilation
 
     // Timestep multiplier (UI-adjustable)
     float    time_scale         = 1.0f;

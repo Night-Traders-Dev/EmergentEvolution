@@ -1,10 +1,10 @@
 <div align="center">
 
-# Emergent Evolution
+# Particle Playground
 
-**A GPU-accelerated quantum chemistry and particle physics sandbox**
+**A GPU-accelerated quantum particle physics and chemistry sandbox**
 
-Real atoms · Standard Model particles · Nuclear fusion & fission · Orbital mechanics · Emergent life
+Standard Model + Beyond · Nuclear fusion & fission · Orbital mechanics · Emergent thermodynamics · Save/Load
 
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
 [![Vulkan](https://img.shields.io/badge/Vulkan-1.3-red.svg)](https://www.vulkan.org/)
@@ -15,13 +15,14 @@ Real atoms · Standard Model particles · Nuclear fusion & fission · Orbital me
 
 ---
 
-Emergent Evolution ships two simulation modes sharing the same Vulkan compute engine:
+Particle Playground ships two simulation modes sharing the same Vulkan compute engine:
 
+- **Particle Physics** (`particle_physics`) — 33 particle types spanning the Standard Model and
+  beyond, with real quantum mechanics: Coulomb + Yukawa + QCD forces, centrifugal barrier orbitals,
+  nuclear fusion/fission, radioactive decay, Compton scattering, hard-sphere collisions, emergent
+  thermodynamics, virtual particle pair creation, and six per-force multiplier knobs
 - **Particle Chemistry** (`particle_life`) — 18 elements with persistent covalent/ionic bonds,
   molecular aggregates, vesicles, proto-cells, and Darwinian evolution
-- **Particle Physics** (`particle_physics`) — 30 Standard Model particle types with real quantum
-  mechanics: Coulomb + Yukawa + QCD forces, centrifugal barrier orbitals, nuclear fusion/fission,
-  radioactive decay, and five independent field visualizations
 
 Both simulate up to **22,500 particles** in real time on a toroidal 2560 x 1440 world using O(n^2)
 pairwise GPU compute shaders.
@@ -32,15 +33,20 @@ pairwise GPU compute shaders.
 
 - [Physics Engine](#physics-engine)
 - [Particle Physics Mode](#particle-physics-mode)
-  - [Standard Model — 30 Particle Types](#standard-model--30-particle-types)
-  - [Four Fundamental Forces](#four-fundamental-forces)
+  - [Standard Model + Beyond — 33 Particle Types](#standard-model--beyond--33-particle-types)
+  - [Four Fundamental Forces + Multipliers](#four-fundamental-forces--multipliers)
   - [Orbital Mechanics](#orbital-mechanics)
   - [Nuclear Fusion](#nuclear-fusion)
   - [Nuclear Fission](#nuclear-fission)
   - [Radioactive Decay](#radioactive-decay)
+  - [Compton Scattering](#compton-scattering)
+  - [Hard-Sphere Collisions](#hard-sphere-collisions)
+  - [Virtual Particle Pairs](#virtual-particle-pairs)
+  - [Emergent Thermodynamics](#emergent-thermodynamics)
   - [Field Visualization](#field-visualization)
   - [Environment Presets](#environment-presets-physics)
   - [Spawn Picker — Physics](#spawn-picker--physics)
+  - [Save / Load](#save--load)
 - [Particle Chemistry Mode](#particle-chemistry-mode)
   - [Periodic Table — 18 Elements](#periodic-table--18-elements)
   - [Environment Templates](#environment-templates)
@@ -64,19 +70,21 @@ Both modes share the same Vulkan compute pipeline dispatched each frame.
 | World | Toroidal 2560 x 1440 (seamless wrap) |
 | Buffers | Double-buffered ping-pong (position, velocity, angle, angular velocity, energy, genome) |
 | Genome | 4 floats per particle: charge, spin, color charge / orbital L, decay rate |
+| Push Constants | 128 bytes (Vulkan guaranteed minimum) — all simulation parameters per frame |
 
 ---
 
 # Particle Physics Mode
 
-A Standard Model particle sandbox where protons, neutrons, electrons, quarks, and gauge bosons
-interact through all four fundamental forces. Electrons orbit nuclei via quantum-mechanical
-centrifugal barriers, nucleons fuse under extreme temperature and pressure, and heavy nuclei
-undergo fission when struck by fast neutrons.
+A particle sandbox where protons, neutrons, electrons, quarks, gauge bosons, and hypothetical
+particles interact through all four fundamental forces. Electrons orbit nuclei via quantum-mechanical
+centrifugal barriers, nucleons fuse under extreme temperature and pressure, heavy nuclei undergo
+fission when struck by fast neutrons, and virtual particle-antiparticle pairs spontaneously appear
+from high-energy encounters.
 
 ---
 
-## Standard Model — 30 Particle Types
+## Standard Model + Beyond — 33 Particle Types
 
 <table>
 <thead><tr><th>Family</th><th>#</th><th>Particle</th><th>Mass (inv)</th><th>Charge</th><th>Spin</th><th>Notes</th></tr></thead>
@@ -89,7 +97,7 @@ undergo fission when struck by fast neutrons.
   <td>2</td><td><b>Electron</b> e&#8315;</td><td>1.0</td><td>-1</td><td>+0.5</td><td>Stable, orbits nuclei</td></tr>
 <tr><td>4</td><td><b>Positron</b> e&#8314;</td><td>1.0</td><td>+1</td><td>-0.5</td><td>Annihilates with e&#8315;</td></tr>
 <tr><td>6</td><td><b>Electron Neutrino</b> &nu;e</td><td>100.0</td><td>0</td><td>+0.5</td><td>Near-zero interaction</td></tr>
-<tr><td>3</td><td><b>Photon</b> &gamma;</td><td>100.0</td><td>0</td><td>+1</td><td>Decays over time</td></tr>
+<tr><td>3</td><td><b>Photon</b> &gamma;</td><td>100.0</td><td>0</td><td>+1</td><td>Compton scatters off charges</td></tr>
 <tr><td>7</td><td><b>Muon</b> &mu;&#8315;</td><td>0.005</td><td>-1</td><td>+0.5</td><td>Decays to e&#8315; + &nu;</td></tr>
 <tr><td>8</td><td><b>Anti-muon</b> &mu;&#8314;</td><td>0.005</td><td>+1</td><td>-0.5</td><td>Decays to e&#8314; + &nu;</td></tr>
 <tr><td rowspan="4"><b>Gen-2/3 Leptons</b></td>
@@ -117,25 +125,37 @@ undergo fission when struck by fast neutrons.
 <tr><td>27</td><td><b>W-</b></td><td>0.00012</td><td>-1</td><td>-1</td><td>Instant decay to lepton + &nu;</td></tr>
 <tr><td>28</td><td><b>Z0</b></td><td>0.00011</td><td>0</td><td>0</td><td>Instant decay to e&#8315; + e&#8314;</td></tr>
 <tr><td>29</td><td><b>Higgs</b> H0</td><td>0.00008</td><td>0</td><td>0</td><td>Instant decay to 2&gamma;</td></tr>
+<tr><td rowspan="3"><b>Beyond SM</b></td>
+  <td>30</td><td><b>Graviton</b> G</td><td>100.0</td><td>0</td><td>+2</td><td>Massless, ballistic (hypothetical)</td></tr>
+<tr><td>31</td><td><b>Dark Matter</b> DM</td><td>0.001</td><td>0</td><td>+0.5</td><td>WIMP — gravity only, no EM/strong</td></tr>
+<tr><td>32</td><td><b>Dark Energy</b> DE</td><td>100.0</td><td>0</td><td>0</td><td>Universal repulsive field quantum</td></tr>
 </tbody>
 </table>
 
 ---
 
-## Four Fundamental Forces
+## Four Fundamental Forces + Multipliers
 
-All four forces act simultaneously in the compute shader:
+All four forces act simultaneously in the compute shader. Each force has an independent
+**multiplier slider** (0.0x - 3.0x, default 1.0 = Standard Model) in the Force Multipliers panel.
 
-| Force | Implementation | Key Constants |
-|---|---|---|
-| **Electromagnetic** | Coulomb attraction/repulsion (K=1200) + Biot-Savart magnetic deflection (always on) | K_COULOMB=1200, SOFTEN=8px |
-| **Strong nuclear** | Yukawa potential (attractive, 8px range) + Pauli hard-core repulsion (6px) | YUKAWA=2000, PAULI=12000 |
-| **Weak nuclear** | Stochastic decay channels (CPU-side) + tunable coupling constant | Coupling 0.0-2.0 |
-| **Gravity** | Newtonian 1/r^2 between massive particles, tunable strength | 0.0-2.0 slider |
+| Force | Implementation | Key Constants | Multiplier |
+|---|---|---|---|
+| **Electromagnetic** | Coulomb attraction/repulsion + Biot-Savart magnetic deflection (1/r^2 falloff) | K_COULOMB=1200, K_MAGNETIC=3.0 | `coulomb_strength` |
+| **Strong nuclear** | Yukawa potential (attractive, 8px range) + Pauli hard-core repulsion (6px) | YUKAWA=2000, PAULI=12000 | `yukawa_strength`, `pauli_multiplier` |
+| **QCD color** | Cornell potential with running coupling (asymptotic freedom) | alpha_s running, string_tension 0-200 | `alpha_s_scale` |
+| **Weak nuclear** | Phenomenological short-range Yukawa (0.8px range) + stochastic decay (CPU) | Coupling 0.0-2.0 | -- |
+| **Gravity** | Newtonian 1/r^2 between massive particles | 0.0-2.0 slider | -- |
+| **Compton** | Photon radiation pressure + oscillating B-field on charged matter | 30px range | `compton_strength` |
+| **Annihilation** | Matter-antimatter attraction at contact range | 6px radius | `annihilation_strength` |
 
-**QCD Color Confinement**: Quarks carry RGB color charge (genome[2]). The Cornell potential
-`V(r) = -alpha/r + sigma*r` confines quarks — the linear string tension term prevents free quarks.
-String tension is tunable (0-200, default 50).
+**Running QCD coupling**: `alpha_eff = alpha_s * max(0.3, 1 + 0.3 * ln(r))` — quarks interact
+weakly at short distances (asymptotic freedom) and strongly at long distances (confinement).
+
+**Dark matter**: Only interacts via gravity (self-gravity always on at 20x, DM-normal at 5x).
+No electromagnetic, strong, or weak forces.
+
+**Dark energy**: Universal repulsive force that grows with distance (cosmological constant analog).
 
 **Higgs Field**: Tunable VEV (0-500) provides mass coupling to heavy particles.
 
@@ -146,24 +166,20 @@ String tension is tunable (0-200, default 50).
 Electrons orbit nuclei using real quantum-mechanical centrifugal barriers, not artificial springs.
 
 **GPU side (physics.comp):**
-- Each electron tracks the nearest nucleon and accumulates the total nuclear charge (Z)
-- **Centrifugal barrier**: `F = L_eff^2 / (r^3 + 1.0)` — derivative of the QM effective potential,
-  applied once per electron (not per-nucleon)
+- Each charged lepton (e/mu/tau) tracks the nearest nucleon
+- **Centrifugal barrier**: `F = L_eff^2 * mass_inv / (r^3 + 1.0)` — heavier leptons orbit tighter
 - **Spin-orbit coupling**: `F_SO = spin * L * K_SPIN_ORBIT / (r^4 + 1)` — fine structure correction
+- **Spin magnetic moment**: `F = mu * B_accumulated * grad_scale * (vy, -vx)` — dipole in external B-field
 - L_eff = max(L_actual, L_ground), where L_ground is computed CPU-side per orbital shell
-- Force capped at 300 to prevent catapulting on close approach
 
 **CPU side (update_orbitals):**
 - BFS clusters nucleons into nuclei (10px cluster radius)
+- Tracks orbital parent relationships (clickable in info card)
 - Assigns electrons to nearest nucleus within 60px binding radius
 - Sorts by distance, fills shells: **1s** (2), **2s2p** (8), **3s3p3d** (18)
 - Computes L_ground per shell using the Bohr model with screening:
   - `R_target = n^2 * R_BOHR / Z_eff` where `Z_eff = Z - inner_electrons`
   - `L_ground = sqrt(Z_eff * K_COULOMB * R^3 / (R^2 + SOFTEN^2))`
-- Stores L_ground in genome[2] for the shader to read
-
-**Equilibrium**: For hydrogen, Coulomb attraction `1200/(r^2+64)` balances centrifugal
-`120^2/(r^3+1)` at ~15px — the Bohr radius of the simulation.
 
 ---
 
@@ -177,9 +193,6 @@ Coulomb barrier. Max 5 fusions per frame to prevent chain reactions.
 | **Proton-proton chain** (p + p) | Energy > 0.8, relative speed > 60 px/frame | p + n + e&#8314; + &nu;e (one proton converts to neutron) |
 | **Deuteron formation** (p + n) | Energy > 0.6, relative speed > 30 px/frame | Bound p-n pair (matched velocities, 3px separation) |
 | **He-4 formation** | Implicit | Two bound p-n pairs form helium-4 nucleus |
-
-Fusion radius is 8px (within strong force range). Relative velocity thresholds simulate Coulomb
-barrier tunneling — freshly spawned cold nuclei will not fuse spontaneously.
 
 ---
 
@@ -217,17 +230,82 @@ probabilistic decay based on per-type decay rates.
 
 **Matter-antimatter annihilation** runs every frame at 5px contact radius:
 e&#8315;+e&#8314;, p+p&#773;, &mu;&#8315;+&mu;&#8314;, &tau;&#8315;+&tau;&#8314;, and quark-antiquark pairs all
-annihilate to photons.
+annihilate to photons (+ neutrinos for lepton pairs).
 
 **Decay cascades** unfold naturally: Top -> Bottom + W+ -> Charm + W- + lepton + nu -> ...
 producing showers of lighter particles from a single heavy parent.
 
 ---
 
+## Compton Scattering
+
+High-energy photons interact bidirectionally with charged matter:
+
+**Photon fast-path** (GPU):
+- Scans nearby charged particles (strided sampling, 30px radius)
+- Photon deflects toward closest charged particle, losing energy proportional to proximity
+- Maintains light speed after deflection
+
+**Matter response** (GPU j-loop):
+- Photon radiation pressure pushes charged matter along photon travel direction
+- Photon's oscillating B-field exerts Lorentz force: `F = q * Bz * (vy, -vx)`
+- Both scale with photon energy / r^2
+
+---
+
+## Hard-Sphere Collisions
+
+Massive particles undergo elastic hard-sphere collisions in addition to force-based physics:
+
+- Position correction: accumulated from ALL overlapping neighbors, applied as half-correction
+  (both particles push independently, net = full separation)
+- Velocity response: momentum-conserving elastic collision along strongest collision normal
+- Coefficient of restitution: 0.95 (slightly inelastic for stability)
+- Minimum separation: `2 * particle_radius`
+
+---
+
+## Virtual Particle Pairs
+
+QFT vacuum fluctuations modeled as spontaneous particle-antiparticle pair creation:
+
+| Interaction Type | Virtual Pair | Condition |
+|---|---|---|
+| Charged particles | e&#8315; + e&#8314; (Schwinger) | Combined energy > 1.5 |
+| Quark-quark | Gluon + gluon | QCD interaction |
+| Weak bosons present | W+ + W- | Weak sector |
+| Gravity active | Graviton + graviton | Gravity > 0 |
+| Default (charged) | &gamma; + &gamma; | QED vacuum |
+
+Virtual particles have high decay rate (genome[3] = 0.08) giving ~15 frame lifetime. They
+render with a flickering translucent effect. Configurable: energy threshold (0.8-5.0),
+max pairs per tick (1-16).
+
+---
+
+## Emergent Thermodynamics
+
+Two emergent feedback systems measure bulk properties from particle kinetics and feed them
+back into the simulation:
+
+**Emergent Temperature** (Berendsen thermostat):
+- Measures average kinetic energy: `T_measured = EMA(0.5 * |v|^2) * 0.1`
+- Thermostat correction: when system is hotter than target, reduce thermal noise (cool);
+  when cooler, increase noise (heat)
+- Coupling slider: 0 = slider only, 1 = fully emergent, 0.5 = blended
+
+**Emergent B-Field**:
+- Measures average charged current: `B_measured = EMA(|q| * |v|) * 0.02`
+- Feeds back into effective Lorentz strength for magnetic interactions
+- Moving charges generate the magnetic field that deflects other charges
+
+Both use exponential moving averages (alpha = 0.02) for smooth temporal filtering.
+
+---
+
 ## Field Visualization
 
-Five independent quantum field overlays, each toggled separately in the **Field Visualization**
-panel. All render as smooth gradients over the world.
+Five independent quantum field overlays, each toggled separately.
 
 | Field | Color | Source | Range |
 |---|---|---|---|
@@ -237,19 +315,16 @@ panel. All render as smooth gradients over the world.
 | **Gravity** | Grey | All massive particles | 1/r falloff |
 | **Higgs** | Gold | Mass coupling | Exponential (30px range) |
 
-Field intensity is adjustable (0.05x - 2.0x). Gravity field renders independently of the
-gravity strength slider — you can visualize the field even with gravity turned off.
-
 ---
 
 <a name="environment-presets-physics"></a>
 ## Environment Presets (Physics)
 
-Ten presets spanning vacuum to Big Bang conditions. Select from the **Environment** dropdown.
+Twelve presets spanning vacuum to dark sector. Select from the **Environment** dropdown.
 
 | # | Environment | Temperature | Key Features |
 |---|---|---|---|
-| 0 | **Lab Mode** | 2.7 K | Empty vacuum — manual spawning only |
+| 0 | **Lab Mode** | 1 K | Empty vacuum — manual spawning only |
 | 1 | **Hydrogen Plasma** | 1.5 x 10^7 K | Hot ionized hydrogen, fusion conditions |
 | 2 | **Neutron Star** | 10^9 K | Ultra-dense neutron matter |
 | 3 | **Solar Core** | 1.5 x 10^7 K | Hydrogen + gravity — stellar fusion |
@@ -259,15 +334,14 @@ Ten presets spanning vacuum to Big Bang conditions. Select from the **Environmen
 | 7 | **Quark-Gluon Plasma** | 2 x 10^12 K | Deconfined quarks and gluons |
 | 8 | **Electroweak Era** | 10^15 K | W/Z/Higgs bosons above symmetry breaking |
 | 9 | **Meson Factory** | 5 x 10^11 K | Quark-antiquark pairs forming mesons |
-
-Temperature uses a logarithmic slider from 1 K to 10^13 K. The conversion to simulation
-noise amplitude follows `T_amp = min(2.0, 0.10 * (T/300)^0.25)`.
+| 10 | **Particle Accelerator** | 10^8 K | High-energy protons + synchrotron radiation |
+| 11 | **Dark Sector** | 10^3 K | 40% DM, 30% p, 15% e, 10% DE, 5% gravitons |
 
 ---
 
 ## Spawn Picker — Physics
 
-Press **F3** to open the spawn menu with four tabs:
+Press **F3** to open the spawn menu with categorized sections:
 
 ### Leptons
 Gen-1: e&#8315;, e&#8314;, &nu;e | Gen-2: &mu;&#8315;, &mu;&#8314;, &nu;&mu; | Gen-3: &tau;&#8315;, &tau;&#8314;, &nu;&tau; | Composites: p, n, p&#773;
@@ -277,6 +351,9 @@ Matter: u, d, s, c, t, b | Antimatter: u&#773;, d&#773;, s&#773;, c&#773;, t&#77
 
 ### Bosons
 Gauge: &gamma; (photon), g (gluon) | Weak: W+, W-, Z0 | Scalar: H0 (Higgs)
+
+### Hypothetical
+G (Graviton), DM (Dark Matter), DE (Dark Energy)
 
 ### Atoms (Group Templates)
 
@@ -298,7 +375,20 @@ counts and orbital velocities:
 | **Pion-** &pi;- | d + u&#773; | 2 |
 | **Kaon+** K+ | u + s&#773; | 2 |
 
-Each tab has configurable count (1-100), energy (0.1-1.0), and scatter radius (1-100px).
+Each section has configurable count (1-100), energy (0.1-1.0), and scatter radius (1-100px).
+
+---
+
+## Save / Load
+
+Simulation state can be saved and loaded as binary `.ppsg` files.
+
+| Feature | Detail |
+|---|---|
+| **Hotkeys** | `Ctrl+S` save, `Ctrl+L` load |
+| **UI** | Save/Load buttons in bottom bar and pause menu |
+| **Format** | Binary `.ppsg` (magic `0x47535050`, version 1) |
+| **Contents** | Full SimConfig, particle positions/velocities/energies/types/angles/genomes, per-type data (forces, colors, behavior flags), force objects, UI field state |
 
 ---
 
@@ -336,9 +426,6 @@ Three nucleosynthesis groups spanning the periodic table:
 <tr><td>17</td><td><b>U</b> Uranium</td><td>r-process</td><td>6</td><td>Heavy, radical, catalyst, alpha unstable to Pb</td></tr>
 </tbody>
 </table>
-
-Particles initialise in **three well-separated seed clusters** so distinct chemistry zones
-evolve independently before merging.
 
 ---
 
@@ -381,20 +468,6 @@ Bond compatibility respects real chemistry:
 | Electronegativity | 0.2 to 2.0 | Electron-transfer energy yield |
 | Reactivity | 0.2 to 2.0 | Bond-strain cost; coupled to nuclear stability |
 | Bond strength | -0.5 to +0.5 | Spring constant multiplier |
-
-### Energy Metabolism
-
-| Source | Rate |
-|---|---|
-| Ambient gain | +0.010/s |
-| Passive drain | -0.015/s |
-| Movement cost | -speed * 0.00015/s |
-| Crowding penalty | -(density - limit) * 0.005/s |
-| Symbiotic gain | +attraction * proximity * 0.005/pair/s |
-| Catalyst boost | +0.008 * neighbour catalysts/s |
-| Donor to Acceptor transfer | +electronegativity * proximity/s |
-| Bond strain cost | -|ext|/rest * 0.002/s |
-| ZPE floor | +vacuum_energy * 0.003/s |
 
 ---
 
@@ -442,26 +515,28 @@ Press **F3** to open the spawn picker with tabs for **Atoms** (18 elements), **G
 Group templates include: H2O, CH4, NaCl, NH3, CO2, Glycine, Benzene, SiO4, Fe2O3, EtOH,
 CaCO3, Au3, UO2, FeS2.
 
-Organic templates include: Glycine, Alanine, Glucose, Ribose, Butyric Acid, Glycerophosphate,
-Adenine, Cytosine.
-
 ---
 
 ## Controls
 
 | Key / Input | Action |
 |---|---|
+| `Escape` | Pause menu (Resume / New / Save / Load / About / Quit) |
 | `F1` | Toggle settings panel |
 | `F2` | Reset simulation |
 | `F3` | Open / close Spawn Picker |
+| `F4` | Toggle Select mode (click to inspect particles) |
 | `Space` | Pause / unpause |
-| `F11` | Toggle fullscreen |
-| `Esc` | Quit |
+| `Ctrl+S` | Save simulation |
+| `Ctrl+L` | Load simulation |
 | `W A S D` | Pan camera |
 | Left drag | Pan camera (mouse) |
 | Scroll wheel | Zoom in / out |
+| Left click | Place particle (spawn mode) / Select particle (select mode) |
 
-> **Force grid** (chemistry mode) — hover a cell and scroll to tune; right-click to zero it.
+> **Info Card** — Select a particle to see its type, charge, spin, energy, age, momentum,
+> temperature, magnetic moment, orbital parent, and bond partners. Click linked particles
+> to navigate the camera.
 
 ---
 
@@ -485,7 +560,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ```
 
-Compiled SPIR-V shaders are written to `build/shaders/`.
+Compiled SPIR-V shaders are written to both `build/shaders/` and `shaders/` (source directory).
 
 ### Run
 
@@ -504,7 +579,7 @@ Compiled SPIR-V shaders are written to `build/shaders/`.
 ```
 EmergentEvolution/
 ├── src/
-│   ├── types.h                  # SimConfig, PushConstants (100 bytes), shared constants
+│   ├── types.h                  # SimConfig, PushConstants (128 bytes), shared constants
 │   ├── particles.h/.cpp         # CPU arrays, CPK colours, electrochemistry force matrix
 │   ├── bond_manager.h/.cpp      # Spatial-hash bond formation/breaking, BOND_COMPAT
 │   ├── decay_manager.h/.cpp     # Stochastic half-life decay, annihilation, DECAY_TABLE
@@ -517,13 +592,14 @@ EmergentEvolution/
 │   ├── simulation.h/.cpp        # Chemistry main loop, input, camera, orchestration
 │   └── main.cpp                 # Chemistry entry point
 ├── src/physics/
-│   ├── phys_particles.h/.cpp    # 30 Standard Model types, masses, charges, decay rates
-│   ├── interface.h/.cpp         # Physics ImGui panels, 4-tab spawn picker, field viz
-│   ├── simulation.h/.cpp        # Physics main loop: fusion, fission, decay, orbitals
-│   └── main.cpp                 # Physics entry point
+│   ├── phys_particles.h/.cpp    # 33 particle types, masses, charges, decay rates, environments
+│   ├── interface.h/.cpp         # Physics ImGui: spawn picker, force multipliers, save/load, pause menu
+│   ├── simulation.h/.cpp        # Physics main loop: fusion, fission, decay, virtual pairs, orbitals
+│   ├── save_load.h/.cpp         # Binary .ppsg save/load serialization
+│   └── main.cpp                 # Physics entry point (borderless maximized window)
 ├── shaders/
 │   ├── compute.comp             # Chemistry GPU: forces, bonds, metabolism
-│   ├── physics.comp             # Physics GPU: 4 forces, centrifugal barrier, 5 field viz
+│   ├── physics.comp             # Physics GPU: 7 forces, centrifugal barrier, hard-sphere, 5 field viz
 │   ├── fullscreen.vert          # Fullscreen triangle vertex shader
 │   └── fullscreen.frag          # Particle texture blit
 └── CMakeLists.txt
@@ -549,6 +625,28 @@ EmergentEvolution/
 | 16 | bond partners | read (CPU-managed) |
 
 A/B buffers ping-pong each tick. All buffers are HOST_VISIBLE + HOST_COHERENT for CPU readback.
+
+### Push Constants (128 bytes)
+
+| Offset | Field | Description |
+|---|---|---|
+| 0-7 | region_size | World dimensions (vec2) |
+| 8-15 | camera_origin | Camera center (vec2) |
+| 16-19 | particle_count | Active particles |
+| 20-23 | particle_types | MAX_PARTICLE_TYPES |
+| 24-27 | dt | Timestep |
+| 28-31 | step | Dispatch step (0=physics, 1=render) |
+| 32-35 | camera_zoom | Current zoom level |
+| 36-71 | physics params | radius, dampening, repulsion, interaction, density, viscosity, pressure, density_cap, temperature |
+| 72-75 | gravity_strength | Gravity multiplier |
+| 76-79 | lorentz_strength | Effective magnetic field |
+| 80-83 | vacuum_energy | ZPE floor |
+| 84-87 | field_flags | Field visualization bitmask |
+| 88-91 | weak_coupling | Weak force strength |
+| 92-95 | string_tension | QCD confinement |
+| 96-99 | higgs_vev | Higgs VEV |
+| 100-103 | force_object_count | Active force emitters |
+| 104-127 | force multipliers | coulomb, yukawa, pauli, alpha_s, compton, annihilation (6 x float) |
 
 ---
 

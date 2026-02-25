@@ -4,6 +4,7 @@
 #include "types.h"
 #include "particles.h"
 #include <cstdint>
+#include <glm/glm.hpp>
 
 // ── Group template for spawning composite structures ─────────────────────────
 struct SubAtomicSpec {
@@ -26,10 +27,25 @@ extern const int HADRON_TEMPLATE_COUNT_VAL;
 
 class PhysicsInterface {
 public:
+    bool show_splash = true;
+    bool show_pause_menu = false;
+    bool request_quit = false;
     bool settings_visible = true;
     bool spawn_menu_visible = true;
     bool pending_spawn = false;
     bool sim_running = true;
+
+    // Selection tool
+    bool select_mode = false;
+
+    // Save/Load
+    char save_filename[256] = "save.ppsg";
+    bool show_save_dialog = false;
+    bool show_load_dialog = false;
+    bool request_save = false;
+    bool request_load = false;
+    char save_load_message[256] = {};
+    float save_load_msg_timer = 0.0f;
 
     // Spawn settings
     int   spawn_type    = 0;     // phys_particles.h type index
@@ -68,8 +84,20 @@ public:
     bool  field_higgs   = true;
     float field_intensity = 0.5f;
 
+    // Emergent feedback display
+    float emergent_temp_display   = 0.0f;
+    float emergent_bfield_display = 0.0f;
+
+    // Camera navigation (set by info card click, consumed by simulation)
+    int32_t navigate_to_particle = -1;
+
+    // Readback data pointers (set by simulation each tick for info card display)
+    uint32_t frame_counter_display = 0;
+    const glm::vec2* readback_velocities = nullptr;
+    uint32_t readback_count = 0;
+
     // Temperature display
-    float log_temperature = 3.0f;  // log10(1000) = 3.0 → 1000 K
+    float log_temperature = 0.0f;  // log10(1) = 0.0 → 1 K
 
     // Sliders
     float particle_count_slider = 70.0f;   // sqrt(5000) ~ 70
@@ -86,4 +114,7 @@ private:
     void draw_spawn_menu(const SimConfig& cfg);
     void draw_info_card(const Particles& particles);
     void draw_force_object_panel(ForceObject* objects);
+    void draw_splash_screen();
+    void draw_pause_menu(SimConfig& cfg, bool& request_reset);
+    void draw_save_load_dialog();
 };

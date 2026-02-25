@@ -18,11 +18,14 @@ int main() {
     }
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+    glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
 
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    const GLFWvidmode* mode = glfwGetVideoMode(monitor);
     GLFWwindow* window = glfwCreateWindow(
-        static_cast<int>(REGION_W / 2),
-        static_cast<int>(REGION_H / 2),
-        "Particle Physics — Protons, Neutrons, Electrons",
+        mode->width, mode->height,
+        "Particle Playground",
         nullptr, nullptr);
 
     if (!window) {

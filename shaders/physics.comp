@@ -61,6 +61,13 @@ layout(push_constant, std430) uniform Params {
     float string_tension;
     float higgs_vev;
     uint  force_object_count;
+    // Per-force multipliers (all 1.0 = standard model strengths)
+    float coulomb_strength;
+    float yukawa_strength;
+    float pauli_multiplier;
+    float alpha_s_scale;
+    float compton_strength;
+    float annihilation_strength;
 } params;
 
 // ── Type indices (must match phys_particles.h) ──────────────────────────────
@@ -94,18 +101,27 @@ const uint W_PLUS_TYPE     = 26u;
 const uint W_MINUS_TYPE    = 27u;
 const uint Z_BOSON_TYPE    = 28u;
 const uint HIGGS_TYPE      = 29u;
+// Beyond Standard Model
+const uint GRAVITON_TYPE   = 30u;
+const uint DARK_MATTER_TYPE = 31u;
+const uint DARK_ENERGY_TYPE = 32u;
 
 // ── Behavior flags (must match types.h) ─────────────────────────────────────
-const uint BEHAVIOR_PHOTON     = 1024u;      // 1 << 10
-const uint BEHAVIOR_LEPTON     = 4096u;      // 1 << 12
-const uint BEHAVIOR_NEUTRINO   = 8192u;      // 1 << 13
-const uint BEHAVIOR_POSITRON   = 16384u;     // 1 << 14
-const uint BEHAVIOR_MASS_HEAVY = 131072u;    // 1 << 17
-const uint BEHAVIOR_QUARK      = 1048576u;   // 1 << 20
-const uint BEHAVIOR_ANTIQUARK  = 2097152u;   // 1 << 21
-const uint BEHAVIOR_WEAK_BOSON = 4194304u;   // 1 << 22
-const uint BEHAVIOR_HIGGS_FLAG = 8388608u;   // 1 << 23
-const uint BEHAVIOR_GLUON_FLAG = 16777216u;  // 1 << 24
+const uint BEHAVIOR_PHOTON      = 1024u;       // 1 << 10
+const uint BEHAVIOR_LEPTON      = 4096u;       // 1 << 12
+const uint BEHAVIOR_NEUTRINO    = 8192u;       // 1 << 13
+const uint BEHAVIOR_POSITRON    = 16384u;      // 1 << 14
+const uint BEHAVIOR_MASS_HEAVY  = 131072u;     // 1 << 17
+const uint BEHAVIOR_MASS_ULTRA  = 524288u;     // 1 << 19
+const uint BEHAVIOR_QUARK       = 1048576u;    // 1 << 20
+const uint BEHAVIOR_ANTIQUARK   = 2097152u;    // 1 << 21
+const uint BEHAVIOR_WEAK_BOSON  = 4194304u;    // 1 << 22
+const uint BEHAVIOR_HIGGS_FLAG  = 8388608u;    // 1 << 23
+const uint BEHAVIOR_GLUON_FLAG  = 16777216u;   // 1 << 24
+const uint BEHAVIOR_GRAVITON    = 67108864u;   // 1 << 26
+const uint BEHAVIOR_DARK_MATTER = 134217728u;  // 1 << 27
+const uint BEHAVIOR_DARK_ENERGY = 268435456u;  // 1 << 28
+const uint BEHAVIOR_VIRTUAL     = 536870912u;  // 1 << 29
 
 // ── Physics constants ───────────────────────────────────────────────────────
 // Force hierarchy: Strong > EM > Weak > Gravity (at nuclear distances)
@@ -119,7 +135,7 @@ const float SOFTEN_MIN       = 8.0;     // softening distance for Coulomb
 const float L_MIN              = 120.0;  // minimum angular momentum (ground state orbital)
 const float K_SPIN_ORBIT       = 0.3;   // spin-orbit coupling strength (fine structure)
 const float CENTRIFUGAL_SOFTEN = 1.0;   // softening for r→0 stability
-const float K_MAGNETIC         = 0.5;   // intrinsic Biot-Savart coupling (always on)
+const float K_MAGNETIC         = 3.0;   // intrinsic Biot-Savart coupling (scaled for 1/r²)
 const float ANNIHIL_RADIUS   = 6.0;
 const float ANNIHIL_ATTRACTION = 200.0;
 const float ANNIHIL_DRAIN    = 0.4;
@@ -191,6 +207,10 @@ float get_mass_inv(uint type) {
     if (type == Z_BOSON_TYPE) return 0.00005;
     // Higgs ~125 GeV
     if (type == HIGGS_TYPE) return 0.00004;
+    // BSM particles
+    if (type == GRAVITON_TYPE) return 100.0;   // massless
+    if (type == DARK_MATTER_TYPE) return 0.001; // ~1 TeV WIMP
+    if (type == DARK_ENERGY_TYPE) return 100.0; // massless field quantum
     return 1.0;
 }
 
@@ -233,13 +253,60 @@ void apply_physics(uint i) {
         return;
     }
 
-    // ── Photon/Gluon fast-path (ballistic, no forces) ────────────────────────
+    // ── Photon/Gluon fast-path ────────────────────────────────────────────────
     if ((flags_a & BEHAVIOR_PHOTON) != 0u) {
         float drain = (type_a == GLUON_TYPE) ? PHOTON_DRAIN * 1.5 : PHOTON_DRAIN;
         float ph_energy = max(energy - drain * params.dt, 0.0);
+        vec2  ph_vel = vel_a;
+
+        // High-energy photon Compton recoil: scan for nearest charged matter
+        // and deflect slightly + lose energy on close approach
+        if (ph_energy > 0.2 && type_a != GLUON_TYPE) {
+            float closest_ch_dist = 9999.0;
+            vec2  closest_ch_pos  = vec2(0.0);
+            float closest_ch_charge = 0.0;
+
+            // Scan particles (strided to cover full array evenly)
+            uint stride = max(1u, (params.particle_count + 1023u) / 1024u);
+            for (uint jj = 0u; jj < min(params.particle_count, 1024u); jj++) {
+                uint j = jj * stride;
+                if (j >= params.particle_count || j == i) continue;
+                float e_j = in_energy_buffer.data[j];
+                if (e_j < 0.001) continue;
+
+                vec2  p_j = in_pos_buffer.data[j];
+                vec2  d   = p_j - pos_a;
+                float d2  = dot(d, d);
+                if (d2 > 900.0 || d2 <= 0.0) continue;  // 30px radius
+
+                float q_j = genome_buffer.data[j * 4u + 0u];
+                if (abs(q_j) < 0.01) continue;  // only charged particles
+
+                float dd = sqrt(d2);
+                if (dd < closest_ch_dist) {
+                    closest_ch_dist = dd;
+                    closest_ch_pos  = p_j;
+                    closest_ch_charge = q_j;
+                }
+            }
+
+            // Compton recoil: deflect photon and transfer energy
+            if (closest_ch_dist < 30.0) {
+                vec2 to_matter = normalize(closest_ch_pos - pos_a);
+                // Deflection angle scales with 1/r and photon energy
+                float deflect = 0.15 * ph_energy / (closest_ch_dist + 2.0);
+                // Rotate velocity slightly toward the charged particle
+                ph_vel += to_matter * deflect * length(ph_vel);
+                ph_vel = normalize(ph_vel) * length(vel_a);  // maintain speed (c)
+                // Energy transfer: photon loses energy proportional to proximity
+                float e_loss = ph_energy * 0.02 / (closest_ch_dist * 0.1 + 1.0);
+                ph_energy = max(ph_energy - e_loss, 0.0);
+            }
+        }
+
         out_energy_buffer.data[i] = ph_energy;
-        out_pos_buffer.data[i]    = pos_a + vel_a * params.dt;
-        out_vel_buffer.data[i]    = vel_a;
+        out_pos_buffer.data[i]    = pos_a + ph_vel * params.dt;
+        out_vel_buffer.data[i]    = ph_vel;
         angle_out_buffer.data[i]  = angle_in_buffer.data[i];
         avel_out_buffer.data[i]   = avel_in_buffer.data[i];
         return;
@@ -289,10 +356,18 @@ void apply_physics(uint i) {
     float local_density = 0.0;
 
     // Centrifugal barrier tracking (electrons only) — applied ONCE after loop
-    bool  is_light_particle = mass_inv_a > 0.5 && abs(charge_a) > 0.01;  // electrons/positrons/muons
+    bool  is_light_particle = (flags_a & BEHAVIOR_LEPTON) != 0u && abs(charge_a) > 0.01;  // all charged leptons (e/mu/tau)
     float closest_nuc_dist  = 9999.0;
     vec2  closest_nuc_delta = vec2(0.0);
     float nearby_charge_sum = 0.0;  // sum of nearby charges (for magnetic moment gating)
+    float accumulated_Bz    = 0.0;  // total B-field from all neighbors (for spin coupling)
+
+    // Hard-sphere collision accumulation — corrected after integration
+    bool  is_massive_a    = mass_inv_a < 10.0;
+    vec2  collision_push   = vec2(0.0);       // accumulated position correction from ALL overlaps
+    float max_vn           = 0.0;             // max inward normal velocity (for elastic response)
+    vec2  max_vn_normal    = vec2(0.0);       // normal of strongest collision
+    float max_vn_mass_b    = 1.0;             // mass of strongest collision partner
 
     float MAX_RADIUS    = params.interaction_radius;
     float MAX_RADIUS_SQ = MAX_RADIUS * MAX_RADIUS;
@@ -314,28 +389,65 @@ void apply_physics(uint i) {
         uint  type_b = type_buffer.data[j];
         uint  flags_b = behavior_buffer.data[type_b];
 
-        // Skip non-interacting particles in force calculation
-        if ((flags_b & (BEHAVIOR_PHOTON | BEHAVIOR_NEUTRINO | BEHAVIOR_WEAK_BOSON | BEHAVIOR_HIGGS_FLAG)) != 0u) continue;
+        // Skip non-interacting particles (neutrinos, W/Z bosons, Higgs)
+        if ((flags_b & (BEHAVIOR_NEUTRINO | BEHAVIOR_WEAK_BOSON | BEHAVIOR_HIGGS_FLAG)) != 0u) continue;
+
+        // ── Photon-matter interaction (Compton scattering + EM field) ───────
+        if ((flags_b & BEHAVIOR_PHOTON) != 0u) {
+            float ph_energy = in_energy_buffer.data[j];
+            // High-energy photons interact with charged matter
+            if (ph_energy > 0.2 && abs(charge_a) > 0.01 && dist < 40.0) {
+                vec2  ph_vel = in_vel_buffer.data[j];
+                float ph_speed = length(ph_vel);
+                if (ph_speed > 0.1) {
+                    vec2 ph_dir = ph_vel / ph_speed;
+
+                    // Compton radiation pressure: photon pushes matter along its travel direction
+                    // Scales with photon energy and 1/r² (short range dominant)
+                    float compton_F = params.compton_strength * ph_energy * 30.0 / (dist_sq + 4.0);
+                    total_force += ph_dir * compton_F;
+
+                    // Photon's oscillating B-field (z-component, falls as 1/r²)
+                    // Lorentz force: F = q * (v × B) — in 2D, F = q*Bz*(vy,-vx)
+                    float ph_Bz = ph_energy * 15.0 / (dist_sq + 4.0);
+                    total_force += charge_a * ph_Bz * vec2(vel_a.y, -vel_a.x);
+                }
+            }
+            continue;  // photons don't participate in other force calculations
+        }
+
+        // Dark matter: only gravity + self-interaction, skip all EM/strong/weak
+        bool dm_a = (flags_a & BEHAVIOR_DARK_MATTER) != 0u;
+        bool dm_b = (flags_b & BEHAVIOR_DARK_MATTER) != 0u;
+        bool dm_interaction = dm_a || dm_b;
+
+        // Dark energy: universal repulsion
+        if ((flags_a & BEHAVIOR_DARK_ENERGY) != 0u || (flags_b & BEHAVIOR_DARK_ENERGY) != 0u) {
+            // Cosmological-constant-like repulsion: grows with distance
+            float de_force = 0.5 * dist / (MAX_RADIUS + 1.0);
+            total_force -= normal * de_force * params.dt;
+            continue;  // dark energy doesn't participate in other forces
+        }
 
         local_density += exp(-dist / (MAX_RADIUS * 0.5));
 
-        // ── 1. Soft-body repulsion (universal) ──────────────────────────────
-        if (dist < params.repulsion_radius) {
+        // ── 1. Soft-body repulsion (universal, skip for DM-normal interactions) ─
+        if (dist < params.repulsion_radius && !dm_interaction) {
             float overlap = 1.0 - (dist / params.repulsion_radius);
             total_force -= normal * overlap * params.pressure_resistance;
         }
 
-        // ── 2. Yukawa nuclear force (baryon-baryon) ─────────────────────────
-        if (is_baryon(type_a) && is_baryon(type_b)) {
+        // ── 2. Yukawa nuclear force (baryon-baryon, skip for DM) ─────────────
+        if (is_baryon(type_a) && is_baryon(type_b) && !dm_interaction) {
             if (dist < YUKAWA_RANGE * 3.0) {
                 float inv_r = 1.0 / max(dist, 0.5);
-                float yukawa_F = YUKAWA_COUPLING * exp(-dist / YUKAWA_RANGE)
+                float yukawa_F = params.yukawa_strength * YUKAWA_COUPLING * exp(-dist / YUKAWA_RANGE)
                                  * (inv_r + 1.0 / YUKAWA_RANGE) * inv_r;
                 total_force += normal * yukawa_F;
 
                 if (dist < PAULI_CORE) {
                     float overlap = 1.0 - dist / PAULI_CORE;
-                    float pauli = PAULI_STRENGTH * overlap * overlap / (dist * dist + 0.05);
+                    float pauli = params.pauli_multiplier * PAULI_STRENGTH * overlap * overlap / (dist * dist + 0.05);
                     total_force -= normal * pauli;
                 }
 
@@ -345,14 +457,14 @@ void apply_physics(uint i) {
             }
         }
 
-        // ── 3. Coulomb electrostatic force ──────────────────────────────────
-        {
+        // ── 3. Coulomb electrostatic force (skip for DM) ──────────────────
+        if (!dm_interaction) {
             float charge_b = get_charge(uint(j));
             float q_prod = charge_a * charge_b;
             if (abs(q_prod) > 0.001) {
                 float soften_sq = max(SOFTEN_MIN * SOFTEN_MIN,
                                       params.repulsion_radius * 0.5 * params.repulsion_radius * 0.5);
-                float coulomb = K_COULOMB * q_prod / (dist_sq + soften_sq);
+                float coulomb = params.coulomb_strength * K_COULOMB * q_prod / (dist_sq + soften_sq);
                 coulomb = clamp(coulomb, -50.0, 50.0);
                 total_force -= normal * coulomb;
 
@@ -384,10 +496,12 @@ void apply_physics(uint i) {
                 float sigma = params.string_tension;
                 float inv_r = 1.0 / max(dist, 0.5);
 
-                // Short-range color Coulomb (asymptotic freedom — weaker at close range)
-                float short_range = COLOR_ALPHA_S * inv_r * inv_r;
-                // Linear confinement (force increases with distance)
-                float confine = sigma * dist * 0.1;
+                // Short-range color Coulomb with running coupling (asymptotic freedom)
+                // α_s decreases at short distances, increases at long distances
+                float alpha_eff = params.alpha_s_scale * COLOR_ALPHA_S * max(0.3, 1.0 + 0.3 * log(max(dist, 0.5)));
+                float short_range = alpha_eff * inv_r * inv_r;
+                // Linear confinement: V=σr → F=σ (constant string tension)
+                float confine = sigma * 0.1;
 
                 float cornell_F = cf * (-short_range - confine);
                 total_force += normal * cornell_F;
@@ -411,30 +525,47 @@ void apply_physics(uint i) {
         }
 
         // ── 5. Gravity (optional) ───────────────────────────────────────────
-        if (params.gravity_strength > 0.001) {
+        {
             float mass_a = get_mass(type_a);
             float mass_b = get_mass(type_b);
-            float f_grav = params.gravity_strength * mass_a * mass_b * 8.0
-                           / (dist_sq + 25.0);
-            total_force += normal * f_grav;
+            // DM self-gravity: always on, enhanced (forms halos)
+            if (dm_a && dm_b) {
+                float f_grav = 20.0 * mass_a * mass_b / (dist_sq + 25.0);
+                total_force += normal * f_grav;
+            }
+            // DM-normal gravity: always on but weaker
+            else if (dm_interaction) {
+                float f_grav = 5.0 * mass_a * mass_b / (dist_sq + 25.0);
+                total_force += normal * f_grav;
+            }
+            // Normal gravity (slider-controlled)
+            else if (params.gravity_strength > 0.001) {
+                float f_grav = params.gravity_strength * mass_a * mass_b * 8.0
+                               / (dist_sq + 25.0);
+                total_force += normal * f_grav;
+            }
         }
 
-        // ── 6. Magnetic force (Biot-Savart, always on) ─────────────────────
+        // ── 6. Magnetic force (Biot-Savart, skip for DM) ─────────────────────
         // Each moving charge generates a B field; other charges feel Lorentz force.
         // K_MAGNETIC is the intrinsic coupling; slider amplifies on top.
-        {
+        if (!dm_interaction) {
             float charge_b = get_charge(uint(j));
             if (abs(charge_a) > 0.01 && abs(charge_b) > 0.01) {
                 nearby_charge_sum += abs(charge_b);
                 vec2  vel_b   = in_vel_buffer.data[j];
                 float cross_j = vel_b.x * (-normal.y) - vel_b.y * (-normal.x);
                 float coupling = K_MAGNETIC + params.lorentz_strength * 5.0;
-                float B_z     = coupling * charge_b * cross_j / (dist + 1.0);
+                float B_z     = coupling * charge_b * cross_j / (dist_sq + 1.0);
                 total_force  += charge_a * B_z * vec2(vel_a.y, -vel_a.x);
+                accumulated_Bz += B_z;
             }
         }
 
-        // ── 7. Weak force (very short range) ────────────────────────────────
+        // ── 7. Weak force (phenomenological short-range contact interaction) ─
+        // NOTE: Real weak force mediates flavor-changing currents (beta decay),
+        // not a classical pairwise potential. This Yukawa form is the best
+        // classical approximation for simulation purposes.
         if (params.weak_coupling > 0.001 && dist < 3.0) {
             float weak_F = params.weak_coupling * 200.0 * exp(-dist / 0.8) / max(dist_sq, 0.1);
             total_force += normal * weak_F;
@@ -445,15 +576,40 @@ void apply_physics(uint i) {
             float spin_b = get_spin(uint(j));
             if (abs(spin_a - spin_b) < 0.1) {
                 // Same type + same spin → extra repulsion (capped for light particles)
-                float pauli_extra = 150.0 / (dist * dist + 1.0);
+                float pauli_extra = params.pauli_multiplier * 150.0 / (dist * dist + 1.0);
                 total_force -= normal * pauli_extra;
             }
         }
 
+        // ── 8b. Hard-sphere collision accumulation (all massive pairs) ────
+        // Accumulate position corrections from ALL overlapping neighbors.
+        // After integration, pos_a is snapped outward to resolve ALL overlaps.
+        if (!dm_interaction) {
+            float mi_b = get_mass_inv(type_b);
+            if (is_massive_a && mi_b < 10.0) {
+                float MIN_SEP = params.radius * 2.0;
+                float penetration = MIN_SEP - dist;
+                if (penetration > 0.0) {
+                    // Push away from each overlapping neighbor
+                    collision_push -= normal * penetration;
+
+                    // Track strongest inward collision for elastic velocity response
+                    float vn = dot(vel_a, normal);  // velocity toward neighbor
+                    if (vn > max_vn) {
+                        max_vn = vn;
+                        max_vn_normal = normal;
+                        max_vn_mass_b = get_mass(type_b);
+                    }
+                }
+            }
+        }
+
         // ── 10. Matter-antimatter annihilation ──────────────────────────────
+        // NOTE: Annihilation is a quantum process at zero range. The constant
+        // attraction here aids pair collision; real attraction is EM (Coulomb above).
         if (is_annihilation_pair(type_a, type_b) && dist < ANNIHIL_RADIUS) {
-            total_force += normal * ANNIHIL_ATTRACTION;
-            interaction_energy -= energy * ANNIHIL_DRAIN * params.dt;
+            total_force += normal * ANNIHIL_ATTRACTION * params.annihilation_strength;
+            interaction_energy -= energy * ANNIHIL_DRAIN * params.annihilation_strength * params.dt;
         }
     }
 
@@ -469,9 +625,9 @@ void apply_physics(uint i) {
         float L_actual = abs(closest_nuc_delta.x * vel_a.y - closest_nuc_delta.y * vel_a.x);
         float L_eff = max(L_actual, L_ground);
 
-        // Centrifugal barrier: F = L²/r³ (capped to prevent catapulting)
+        // Centrifugal barrier: F = L²/(m·r³) — heavier leptons orbit tighter
         float r3 = closest_nuc_dist * closest_nuc_dist * closest_nuc_dist + CENTRIFUGAL_SOFTEN;
-        float F_centrifugal = min(L_eff * L_eff / r3, 300.0);
+        float F_centrifugal = min(L_eff * L_eff * mass_inv_a / r3, 300.0);
         total_force -= nuc_normal * F_centrifugal;
 
         // Spin-orbit coupling
@@ -480,11 +636,12 @@ void apply_physics(uint i) {
         total_force -= nuc_normal * F_SO;
     }
 
-    // ── 9. Spin magnetic moment (applied ONCE, only near other charges) ────
-    if (abs(spin_a * charge_a) > 0.01 && nearby_charge_sum > 0.01) {
-        float mu = spin_a * charge_a * 0.5;
-        float mag_coupling = K_MAGNETIC * 0.02 + params.lorentz_strength * 0.01;
-        total_force += mu * mag_coupling * vec2(vel_a.y, -vel_a.x);
+    // ── 9. Spin magnetic moment: μ·∇B (force in external B-field) ─────
+    // Magnetic dipole feels F = ∇(μ·B) — only in external field, not self-force
+    if (abs(spin_a * charge_a) > 0.01 && abs(accumulated_Bz) > 0.001) {
+        float mu = spin_a * charge_a * 0.5 * mass_inv_a;  // μ = g·q·S/(2m)
+        float grad_scale = 0.05;  // phenomenological B-gradient length scale
+        total_force += mu * accumulated_Bz * grad_scale * vec2(vel_a.y, -vel_a.x);
     }
 
     // ── Force Object effects (stationary emitters, max 8) ──────────────────
@@ -565,6 +722,8 @@ void apply_physics(uint i) {
             delta_e -= decay_rate * params.dt;
         }
 
+        // Virtual particles handled via genome[3] decay_rate above
+
         energy = clamp(energy + delta_e, 0.0, 1.0);
     }
     out_energy_buffer.data[i] = energy;
@@ -594,6 +753,22 @@ void apply_physics(uint i) {
     }
 
     pos_a += vel_a * params.dt;
+
+    // ── Hard-sphere collision: absolute position + elastic velocity ─────
+    // Both particles independently push → each applies half correction → net = full.
+    // Momentum-conserving elastic collision with slight inelasticity for stability.
+    if (length(collision_push) > 0.001) {
+        // Position: half-correction (both particles push independently)
+        pos_a += collision_push * 0.5;
+
+        // Velocity: elastic collision impulse along strongest collision normal
+        if (max_vn > 0.0) {
+            float mass_a = get_mass(type_a);
+            float e = 0.95;  // coefficient of restitution (slightly inelastic)
+            float impulse = (1.0 + e) * max_vn * max_vn_mass_b / (mass_a + max_vn_mass_b);
+            vel_a -= max_vn_normal * impulse;
+        }
+    }
 
     out_pos_buffer.data[i] = pos_a;
     out_vel_buffer.data[i] = vel_a;
@@ -706,12 +881,17 @@ void render_particle(uint i) {
                            type == ANTIMUON_TYPE || type == ANTITAU_TYPE ||
                            (type >= ANTI_UP && type <= ANTI_BOTTOM));
     bool is_boson_heavy = (flags & (BEHAVIOR_WEAK_BOSON | BEHAVIOR_HIGGS_FLAG)) != 0u;
+    bool is_dark_matter = (flags & BEHAVIOR_DARK_MATTER) != 0u;
+    bool is_dark_energy = (flags & BEHAVIOR_DARK_ENERGY) != 0u;
+    bool is_virtual     = get_decay(i) > 0.05;  // per-particle: high decay = virtual
 
     // Size by particle type
     float base_radius = params.radius * params.camera_zoom;
     float render_radius;
     if (is_photon_p)        render_radius = max(base_radius * 4.0, 5.0);
     else if (is_neutrino_p) render_radius = max(base_radius * 2.0, 3.0);
+    else if (is_dark_matter) render_radius = max(base_radius * 3.0, 4.0);  // diffuse halo
+    else if (is_dark_energy) render_radius = max(base_radius * 5.0, 6.0);  // wide field
     else if (is_nucleon)    render_radius = base_radius * 0.7;
     else if (is_quark_p)    render_radius = base_radius * 0.45;
     else if (is_boson_heavy) render_radius = max(base_radius * 3.0, 4.0);
@@ -741,6 +921,13 @@ void render_particle(uint i) {
     }
 
     base_col.rgb *= mix(0.15, 1.0, energy);
+
+    // Virtual particles flicker (use step + position hash for pseudo-random)
+    if (is_virtual) {
+        float flicker = 0.4 + 0.6 * fract(sin(float(i) * 12.9898 + float(params.step) * 0.7) * 43758.5453);
+        base_col.rgb *= flicker;
+        base_col.a *= 0.6;  // translucent
+    }
 
     for (int x = -range; x <= range; x++) {
         for (int y = -range; y <= range; y++) {
@@ -788,6 +975,28 @@ void render_particle(uint i) {
                         col.rgb = mix(col.rgb, vec3(0.8, 0.9, 1.0), glow * 0.7);
                     }
                     col.rgb *= glow * 2.0;
+                    vec4 existing = imageLoad(out_render_texture, pixel_pos);
+                    imageStore(out_render_texture, pixel_pos,
+                               vec4(min(existing.rgb + col.rgb, vec3(1.0)), 1.0));
+                    continue;
+                }
+
+                // ── Dark matter: diffuse purple halo ─────────────────────────
+                if (is_dark_matter) {
+                    float norm_d = d / render_radius;
+                    float glow = max(0.0, 1.0 - norm_d * norm_d) * 0.4;
+                    col.rgb *= glow;
+                    vec4 existing = imageLoad(out_render_texture, pixel_pos);
+                    imageStore(out_render_texture, pixel_pos,
+                               vec4(min(existing.rgb + col.rgb, vec3(1.0)), 1.0));
+                    continue;
+                }
+
+                // ── Dark energy: wide faint field ────────────────────────────
+                if (is_dark_energy) {
+                    float norm_d = d / render_radius;
+                    float glow = max(0.0, 1.0 - norm_d) * 0.25;
+                    col.rgb *= glow;
                     vec4 existing = imageLoad(out_render_texture, pixel_pos);
                     imageStore(out_render_texture, pixel_pos,
                                vec4(min(existing.rgb + col.rgb, vec3(1.0)), 1.0));

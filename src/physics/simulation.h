@@ -42,6 +42,9 @@ private:
     std::vector<glm::vec2> readback_velocities_;
     std::vector<float>     readback_energies_;
 
+    float emergent_temperature_ = 1.0f;   // EMA of kinetic temperature (Kelvin)
+    float emergent_bfield_      = 0.0f;   // EMA of emergent B-field magnitude
+
     double fps_acc_       = 0.0;
     int    fps_frame_cnt_ = 0;
     uint32_t frame_counter_ = 0;
@@ -56,6 +59,7 @@ private:
     void check_fusion();
     void check_fission();
     void check_decay();
+    void check_virtual_pairs();
     void update_orbitals();
 
     void place_force_object(glm::vec2 world_pos, ForceObjectType type);

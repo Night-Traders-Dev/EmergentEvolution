@@ -69,6 +69,7 @@ add_executable(particle_physics
     src/physics/simulation.cpp
     src/physics/phys_particles.cpp
     src/physics/interface.cpp
+    src/physics/save_load.cpp
 
     # Shared infrastructure
     src/vulkan_context.cpp
@@ -119,12 +120,15 @@ set(SHADER_SRC_DIR ${CMAKE_SOURCE_DIR}/shaders)
 set(SHADER_BIN_DIR ${CMAKE_BINARY_DIR}/shaders)
 file(MAKE_DIRECTORY ${SHADER_BIN_DIR})
 
-# Helper macro
+# Helper macro — compile into BOTH build dir and source dir
+# (runtime loads from source-relative paths like "shaders/physics.spv")
 macro(compile_shader INPUT OUTPUT)
     add_custom_command(
         OUTPUT  ${SHADER_BIN_DIR}/${OUTPUT}
         COMMAND ${Vulkan_GLSLC_EXECUTABLE} ${SHADER_SRC_DIR}/${INPUT}
                 -o ${SHADER_BIN_DIR}/${OUTPUT}
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${SHADER_BIN_DIR}/${OUTPUT} ${SHADER_SRC_DIR}/${OUTPUT}
         DEPENDS ${SHADER_SRC_DIR}/${INPUT}
         COMMENT "Compiling shader: ${INPUT} -> ${OUTPUT}"
         VERBATIM
