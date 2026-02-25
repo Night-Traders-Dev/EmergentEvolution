@@ -208,7 +208,114 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
     std::mt19937 rng(static_cast<uint32_t>(world_pos.x * 1000.0f + world_pos.y));
     std::normal_distribution<float> gauss(0.0f, 1.0f);
 
-    // Group template spawn
+    // ── Helper: find a dormant particle slot ────────────────────────────────
+    auto find_dormant = [&](uint32_t start_from) -> uint32_t {
+        for (uint32_t i = start_from; i < n; ++i) {
+            if (readback_energies_[i] < 0.01f) return i;
+        }
+        return UINT32_MAX;
+    };
+
+    // ── Helper: wrap position into toroidal world ─────────────────────────
+    float rw = static_cast<float>(REGION_W);
+    float rh = static_cast<float>(REGION_H);
+    auto wrap_pos = [&](glm::vec2 p) -> glm::vec2 {
+        p.x = std::fmod(p.x + rw, rw);
+        p.y = std::fmod(p.y + rh, rh);
+        return p;
+    };
+
+    // ── Orbital constants (must match shader + update_orbitals) ────────────
+    const float R_BOHR_SPAWN = 15.0f;
+    const float K_COULOMB_SPAWN = 1200.0f;
+    const float SOFTEN_SQ_SPAWN = 64.0f;
+    const int SHELL_CAP_SPAWN[] = {2, 8, 18};
+
+    // ── Dynamic atom spawn (periodic table) ───────────────────────────────
+    if (iface.spawn_atom_Z > 0) {
+        int Z = iface.spawn_atom_Z;
+        int N = iface.spawn_atom_N;
+        if (N < 0) N = Z;  // fallback: equal protons and neutrons
+        int A = Z + N;
+
+        // Generate nucleon positions in compact cluster
+        float nuc_spacing = 5.0f;
+        int cols = std::max(1, static_cast<int>(std::ceil(std::sqrt(static_cast<float>(A)))));
+        int rows_n = (A + cols - 1) / cols;
+        float cx = (cols - 1) * 0.5f * nuc_spacing;
+        float cy = (rows_n - 1) * 0.5f * nuc_spacing;
+
+        // Place nucleons: alternate proton/neutron
+        int protons_placed = 0, neutrons_placed = 0;
+        uint32_t search_start = 0;
+        std::vector<uint32_t> spawned_slots;
+
+        for (int k = 0; k < A; ++k) {
+            uint32_t slot = find_dormant(search_start);
+            if (slot == UINT32_MAX) break;
+            search_start = slot + 1;
+
+            float x = (k % cols) * nuc_spacing - cx;
+            float y = (k / cols) * nuc_spacing - cy;
+            readback_positions_[slot] = wrap_pos(world_pos + glm::vec2(x, y));
+            readback_velocities_[slot] = glm::vec2(0.0f);
+            readback_energies_[slot] = iface.spawn_energy;
+
+            // Alternate: fill protons first, then neutrons
+            uint32_t ptype;
+            if (protons_placed < Z) {
+                ptype = PROTON_TYPE;
+                protons_placed++;
+            } else {
+                ptype = NEUTRON_TYPE;
+                neutrons_placed++;
+            }
+            write_spawn_genome(particles, slot, ptype, rng);
+            spawned_slots.push_back(slot);
+        }
+
+        // Place electrons in proper orbital shells
+        int electrons_left = Z;
+        int inner_electrons = 0;
+        for (int shell = 0; shell < 3 && electrons_left > 0; ++shell) {
+            int cap = std::min(SHELL_CAP_SPAWN[shell], electrons_left);
+            float n_shell = static_cast<float>(shell + 1);
+            float Z_eff = std::max(1.0f, static_cast<float>(Z - inner_electrons));
+            float R_target = n_shell * n_shell * R_BOHR_SPAWN / Z_eff;
+            R_target = std::max(R_target, 8.0f);
+
+            // Compute L_ground for this shell (equilibrium: Coulomb = centrifugal)
+            float R3 = R_target * R_target * R_target;
+            float R2_soft = R_target * R_target + SOFTEN_SQ_SPAWN;
+            float L_ground = std::sqrt(Z_eff * K_COULOMB_SPAWN * R3 / R2_soft);
+            float v_orbital = L_ground / R_target;
+
+            for (int e = 0; e < cap; ++e) {
+                uint32_t slot = find_dormant(search_start);
+                if (slot == UINT32_MAX) break;
+                search_start = slot + 1;
+
+                float angle = 2.0f * 3.14159265f * static_cast<float>(e) / static_cast<float>(cap);
+                glm::vec2 offset(R_target * std::cos(angle), R_target * std::sin(angle));
+                glm::vec2 tangent(-std::sin(angle), std::cos(angle));
+
+                readback_positions_[slot] = wrap_pos(world_pos + offset);
+                readback_velocities_[slot] = tangent * v_orbital;
+                readback_energies_[slot] = iface.spawn_energy;
+
+                write_spawn_genome(particles, slot, ELECTRON_TYPE_PHYS, rng);
+                // Write L_ground to genome[2] so shader uses correct orbital immediately
+                particles.genomes[slot * GENOME_SIZE + 2] = L_ground;
+                spawned_slots.push_back(slot);
+            }
+
+            inner_electrons += cap;
+            electrons_left -= cap;
+        }
+    }
+
+    // ── Group template spawn ──────────────────────────────────────────────
+    else {
     const GroupTemplate* resolved_tmpl = nullptr;
     if (iface.spawn_group >= 0 && iface.spawn_group < GROUP_TEMPLATE_COUNT_VAL) {
         resolved_tmpl = &GROUP_TEMPLATES[iface.spawn_group];
@@ -220,18 +327,61 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
     if (resolved_tmpl) {
         const auto& tmpl = *resolved_tmpl;
 
-        // Find nucleus center (average position of nucleons in template)
+        // Find nucleus center and count protons for Z
         glm::vec2 nucleus_center(0.0f);
         int nucleon_count = 0;
+        int template_Z = 0;
         for (uint32_t a = 0; a < tmpl.count; ++a) {
             uint32_t t = tmpl.atoms[a].type;
             if (t == PROTON_TYPE || t == NEUTRON_TYPE || t == ANTIPROTON_TYPE_PHYS) {
                 nucleus_center += glm::vec2(tmpl.atoms[a].dx, tmpl.atoms[a].dy);
                 nucleon_count++;
+                if (t == PROTON_TYPE) template_Z++;
             }
         }
         if (nucleon_count > 0) nucleus_center /= static_cast<float>(nucleon_count);
 
+        // Collect electron offsets sorted by distance (for shell assignment)
+        struct ElectronEntry { float dx, dy, dist; uint32_t type; };
+        std::vector<ElectronEntry> electron_entries;
+        for (uint32_t a = 0; a < tmpl.count; ++a) {
+            uint32_t t = tmpl.atoms[a].type;
+            if (t == ELECTRON_TYPE_PHYS || t == POSITRON_TYPE_PHYS) {
+                glm::vec2 d = glm::vec2(tmpl.atoms[a].dx, tmpl.atoms[a].dy) - nucleus_center;
+                electron_entries.push_back({tmpl.atoms[a].dx, tmpl.atoms[a].dy,
+                                            glm::length(d), t});
+            }
+        }
+        std::sort(electron_entries.begin(), electron_entries.end(),
+            [](const ElectronEntry& a, const ElectronEntry& b) { return a.dist < b.dist; });
+
+        // Pre-compute shell assignments for electrons
+        int shell_fill[3] = {0, 0, 0};
+        struct ShellInfo { float L_ground; int shell; };
+        std::vector<ShellInfo> electron_shells;
+        for (size_t ei = 0; ei < electron_entries.size(); ++ei) {
+            int shell = -1;
+            for (int s = 0; s < 3; ++s) {
+                if (shell_fill[s] < SHELL_CAP_SPAWN[s]) { shell = s; break; }
+            }
+            if (shell < 0) {
+                electron_shells.push_back({120.0f, 0});
+                continue;
+            }
+            shell_fill[shell]++;
+            int inner = 0;
+            for (int s = 0; s < shell; ++s) inner += shell_fill[s];
+            float Z_eff = std::max(1.0f, static_cast<float>(template_Z - inner));
+            float n_shell = static_cast<float>(shell + 1);
+            float R_target = n_shell * n_shell * R_BOHR_SPAWN / Z_eff;
+            R_target = std::max(R_target, 8.0f);
+            float R3 = R_target * R_target * R_target;
+            float R2_soft = R_target * R_target + SOFTEN_SQ_SPAWN;
+            float L_ground = std::sqrt(Z_eff * K_COULOMB_SPAWN * R3 / R2_soft);
+            electron_shells.push_back({L_ground, shell});
+        }
+
+        // Spawn all particles
         for (uint32_t a = 0; a < tmpl.count; ++a) {
             uint32_t slot = UINT32_MAX;
             for (uint32_t i = 0; i < n; ++i) {
@@ -239,27 +389,29 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
             }
             if (slot == UINT32_MAX) break;
 
-            glm::vec2 pos = world_pos + glm::vec2(tmpl.atoms[a].dx, tmpl.atoms[a].dy);
-            float rw = static_cast<float>(REGION_W);
-            float rh = static_cast<float>(REGION_H);
-            pos.x = std::fmod(pos.x + rw, rw);
-            pos.y = std::fmod(pos.y + rh, rh);
-
-            readback_positions_[slot] = pos;
+            readback_positions_[slot] = wrap_pos(
+                world_pos + glm::vec2(tmpl.atoms[a].dx, tmpl.atoms[a].dy));
             readback_energies_[slot] = iface.spawn_energy;
 
             uint32_t t = tmpl.atoms[a].type;
             bool is_electron = (t == ELECTRON_TYPE_PHYS || t == POSITRON_TYPE_PHYS);
             if (is_electron && nucleon_count > 0) {
-                // Give electron initial orbital velocity (tangent to nucleus)
                 glm::vec2 to_electron = glm::vec2(tmpl.atoms[a].dx, tmpl.atoms[a].dy)
                                       - nucleus_center;
                 float r = glm::length(to_electron);
                 if (r > 1.0f) {
-                    // Orbital velocity: v = L_MIN / r (centrifugal barrier ground state)
-                    float v_orbital = 120.0f / std::max(r, 3.0f);
+                    // Find this electron's shell info
+                    float L_g = 120.0f;
+                    for (size_t ei = 0; ei < electron_entries.size(); ++ei) {
+                        if (std::abs(electron_entries[ei].dx - tmpl.atoms[a].dx) < 0.1f &&
+                            std::abs(electron_entries[ei].dy - tmpl.atoms[a].dy) < 0.1f) {
+                            L_g = electron_shells[ei].L_ground;
+                            break;
+                        }
+                    }
+                    float v_orbital = L_g / std::max(r, 3.0f);
                     glm::vec2 radial = to_electron / r;
-                    glm::vec2 tangent(-radial.y, radial.x);  // perpendicular
+                    glm::vec2 tangent(-radial.y, radial.x);
                     readback_velocities_[slot] = tangent * v_orbital;
                 } else {
                     readback_velocities_[slot] = glm::vec2(0.0f);
@@ -269,6 +421,17 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
             }
 
             write_spawn_genome(particles, slot, t, rng);
+
+            // Write L_ground to genome[2] for electrons
+            if (is_electron && nucleon_count > 0) {
+                for (size_t ei = 0; ei < electron_entries.size(); ++ei) {
+                    if (std::abs(electron_entries[ei].dx - tmpl.atoms[a].dx) < 0.1f &&
+                        std::abs(electron_entries[ei].dy - tmpl.atoms[a].dy) < 0.1f) {
+                        particles.genomes[slot * GENOME_SIZE + 2] = electron_shells[ei].L_ground;
+                        break;
+                    }
+                }
+            }
         }
     } else {
         // Single particle spawn
@@ -283,19 +446,14 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
             if (count > 1)
                 offset = glm::vec2(gauss(rng) * scatter, gauss(rng) * scatter);
 
-            glm::vec2 pos = world_pos + offset;
-            float rw = static_cast<float>(REGION_W);
-            float rh = static_cast<float>(REGION_H);
-            pos.x = std::fmod(pos.x + rw, rw);
-            pos.y = std::fmod(pos.y + rh, rh);
-
-            readback_positions_[slot] = pos;
+            readback_positions_[slot] = wrap_pos(world_pos + offset);
             readback_velocities_[slot] = glm::vec2(0.0f);
             readback_energies_[slot] = iface.spawn_energy;
 
             write_spawn_genome(particles, slot, type, rng);
         }
     }
+    }  // end outer else (spawn_atom_Z not active)
 
     vkDeviceWaitIdle(vk.device);
     compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
@@ -1242,6 +1400,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     ImGui::NewFrame();
 
     bool request_reset = false;
+    iface.sim_running = is_active;
     iface.render_imgui(cfg, particles, request_reset);
 
     if (request_reset) {

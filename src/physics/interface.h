@@ -29,6 +29,7 @@ public:
     bool settings_visible = true;
     bool spawn_menu_visible = false;
     bool pending_spawn = false;
+    bool sim_running = true;
 
     // Spawn settings
     int   spawn_type    = 0;     // phys_particles.h type index
@@ -36,6 +37,8 @@ public:
     float spawn_energy  = 0.7f;
     float spawn_scatter = 20.0f;
     int   spawn_group   = -1;    // -1=single particle, 0+=group template
+    int   spawn_atom_Z  = -1;    // -1=not spawning atom, >0=atomic number
+    int   spawn_atom_N  = -1;    // neutron count for spawn_atom_Z
 
     // Hover inspection
     int32_t hover_particle_idx = -1;
@@ -67,6 +70,10 @@ public:
     void render_imgui(SimConfig& cfg, Particles& particles, bool& request_reset);
 
 private:
+    void push_theme();
+    void pop_theme();
+    void draw_bottom_bar(SimConfig& cfg, bool& request_reset);
+    void draw_settings_panel(SimConfig& cfg);
     void draw_spawn_menu(const SimConfig& cfg);
-    void draw_hover_tooltip(const Particles& particles);
+    void draw_info_card(const Particles& particles);
 };
