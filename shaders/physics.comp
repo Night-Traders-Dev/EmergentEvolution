@@ -278,6 +278,7 @@ void apply_physics(uint i) {
     float closest_nuc_dist  = 9999.0;
     vec2  closest_nuc_delta = vec2(0.0);
     float nearby_Z          = 0.0;  // total positive charge from nearby protons
+    float nearby_charge_sum = 0.0;  // sum of nearby charges (for magnetic moment gating)
 
     float MAX_RADIUS    = params.interaction_radius;
     float MAX_RADIUS_SQ = MAX_RADIUS * MAX_RADIUS;
@@ -412,6 +413,7 @@ void apply_physics(uint i) {
         {
             float charge_b = get_charge(uint(j));
             if (abs(charge_a) > 0.01 && abs(charge_b) > 0.01) {
+                nearby_charge_sum += abs(charge_b);
                 vec2  vel_b   = in_vel_buffer.data[j];
                 float cross_j = vel_b.x * (-normal.y) - vel_b.y * (-normal.x);
                 float coupling = K_MAGNETIC + params.lorentz_strength * 5.0;
@@ -434,13 +436,6 @@ void apply_physics(uint i) {
                 float pauli_extra = 150.0 / (dist * dist + 1.0);
                 total_force -= normal * pauli_extra;
             }
-        }
-
-        // ── 9. Spin magnetic moment (always on) ──────────────────────────────
-        if (abs(spin_a * charge_a) > 0.01) {
-            float mu = spin_a * charge_a * 0.5;
-            float mag_coupling = K_MAGNETIC * 0.02 + params.lorentz_strength * 0.01;
-            total_force += mu * mag_coupling * vec2(vel_a.y, -vel_a.x);
         }
 
         // ── 10. Matter-antimatter annihilation ──────────────────────────────
@@ -471,6 +466,13 @@ void apply_physics(uint i) {
         float F_SO = spin_a * L_actual * K_SPIN_ORBIT
                    / (closest_nuc_dist * closest_nuc_dist * closest_nuc_dist * closest_nuc_dist + 1.0);
         total_force -= nuc_normal * F_SO;
+    }
+
+    // ── 9. Spin magnetic moment (applied ONCE, only near other charges) ────
+    if (abs(spin_a * charge_a) > 0.01 && nearby_charge_sum > 0.01) {
+        float mu = spin_a * charge_a * 0.5;
+        float mag_coupling = K_MAGNETIC * 0.02 + params.lorentz_strength * 0.01;
+        total_force += mu * mag_coupling * vec2(vel_a.y, -vel_a.x);
     }
 
     // ── Energy metabolism ────────────────────────────────────────────────────

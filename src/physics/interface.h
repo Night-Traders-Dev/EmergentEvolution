@@ -21,6 +21,8 @@ struct GroupTemplate {
 // Defined in interface.cpp
 extern const GroupTemplate GROUP_TEMPLATES[];
 extern const int GROUP_TEMPLATE_COUNT_VAL;
+extern const GroupTemplate HADRON_TEMPLATES[];
+extern const int HADRON_TEMPLATE_COUNT_VAL;
 
 class PhysicsInterface {
 public:

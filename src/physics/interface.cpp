@@ -95,6 +95,59 @@ static const SubAtomicSpec O16_ATOM[] = {
     { -30, 30, ELECTRON_TYPE_PHYS }, { 30, -30, ELECTRON_TYPE_PHYS },
 };
 
+// ── Quark-level baryons (3 quarks in triangle formation) ────────────────────
+
+// Proton as quarks: uud
+static const SubAtomicSpec PROTON_QUARKS[] = {
+    {  0, -2, UP_QUARK_TYPE },
+    { -2,  2, UP_QUARK_TYPE },
+    {  2,  2, DOWN_QUARK_TYPE },
+};
+
+// Neutron as quarks: udd
+static const SubAtomicSpec NEUTRON_QUARKS[] = {
+    {  0, -2, UP_QUARK_TYPE },
+    { -2,  2, DOWN_QUARK_TYPE },
+    {  2,  2, DOWN_QUARK_TYPE },
+};
+
+// Antiproton as quarks: u-bar u-bar d-bar
+static const SubAtomicSpec ANTIPROTON_QUARKS[] = {
+    {  0, -2, ANTI_UP_TYPE },
+    { -2,  2, ANTI_UP_TYPE },
+    {  2,  2, ANTI_DOWN_TYPE },
+};
+
+// Antineutron as quarks: u-bar d-bar d-bar
+static const SubAtomicSpec ANTINEUTRON_QUARKS[] = {
+    {  0, -2, ANTI_UP_TYPE },
+    { -2,  2, ANTI_DOWN_TYPE },
+    {  2,  2, ANTI_DOWN_TYPE },
+};
+
+// Delta++ (uuu) — doubly charged baryon
+static const SubAtomicSpec DELTA_PP_QUARKS[] = {
+    {  0, -2, UP_QUARK_TYPE },
+    { -2,  2, UP_QUARK_TYPE },
+    {  2,  2, UP_QUARK_TYPE },
+};
+
+// Lambda0 (uds) — all different light quarks
+static const SubAtomicSpec LAMBDA_QUARKS[] = {
+    {  0, -2, UP_QUARK_TYPE },
+    { -2,  2, DOWN_QUARK_TYPE },
+    {  2,  2, STRANGE_QUARK_TYPE },
+};
+
+// Omega- (sss) — triple strange baryon
+static const SubAtomicSpec OMEGA_QUARKS[] = {
+    {  0, -2, STRANGE_QUARK_TYPE },
+    { -2,  2, STRANGE_QUARK_TYPE },
+    {  2,  2, STRANGE_QUARK_TYPE },
+};
+
+// ── Quark-level mesons (quark-antiquark pairs) ──────────────────────────────
+
 // Pion (π+): u + d-bar
 static const SubAtomicSpec PION_PLUS[] = {
     { -3, 0, UP_QUARK_TYPE },
@@ -113,6 +166,12 @@ static const SubAtomicSpec KAON_PLUS[] = {
     {  3, 0, ANTI_STRANGE_TYPE },
 };
 
+// J/psi: c + c-bar (charmonium)
+static const SubAtomicSpec JPSI[] = {
+    { -3, 0, CHARM_QUARK_TYPE },
+    {  3, 0, ANTI_CHARM_TYPE },
+};
+
 const GroupTemplate GROUP_TEMPLATES[] = {
     { "H atom",       "H",    H_ATOM,        2 },
     { "Deuterium",    "D",    DEUTERIUM,      3 },
@@ -128,6 +187,24 @@ const GroupTemplate GROUP_TEMPLATES[] = {
     { "Kaon+",        "K+",   KAON_PLUS,      2 },
 };
 extern const int GROUP_TEMPLATE_COUNT_VAL = sizeof(GROUP_TEMPLATES) / sizeof(GROUP_TEMPLATES[0]);
+
+// ── Hadron templates (quark-level composites) ────────────────────────────────
+const GroupTemplate HADRON_TEMPLATES[] = {
+    // Baryons (3 quarks)
+    { "Proton (uud)",       "p",    PROTON_QUARKS,      3 },
+    { "Neutron (udd)",      "n",    NEUTRON_QUARKS,     3 },
+    { "Antiproton",         "p-",   ANTIPROTON_QUARKS,  3 },
+    { "Antineutron",        "n-",   ANTINEUTRON_QUARKS, 3 },
+    { "Delta++ (uuu)",      "D++",  DELTA_PP_QUARKS,    3 },
+    { "Lambda0 (uds)",      "L0",   LAMBDA_QUARKS,      3 },
+    { "Omega- (sss)",       "O-",   OMEGA_QUARKS,       3 },
+    // Mesons (quark-antiquark)
+    { "Pion+ (ud~)",        "pi+",  PION_PLUS,          2 },
+    { "Pion- (du~)",        "pi-",  PION_MINUS,         2 },
+    { "Kaon+ (us~)",        "K+",   KAON_PLUS,          2 },
+    { "J/psi (cc~)",        "J/p",  JPSI,               2 },
+};
+extern const int HADRON_TEMPLATE_COUNT_VAL = sizeof(HADRON_TEMPLATES) / sizeof(HADRON_TEMPLATES[0]);
 
 // ── Particle name/color tables for all 30 types ─────────────────────────────
 
@@ -721,10 +798,53 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
             if ((g + 1) % 4 != 0 && g < GROUP_TEMPLATE_COUNT_VAL - 1) ImGui::SameLine();
         }
 
-        if (pending_spawn && spawn_group >= 0) {
+        if (pending_spawn && spawn_group >= 0 && spawn_group < GROUP_TEMPLATE_COUNT_VAL) {
             ImGui::Separator();
             ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.3f, 1.0f),
                 "Click to place %s", GROUP_TEMPLATES[spawn_group].name);
+        }
+
+        ImGui::EndTabItem();
+    }
+
+    // ── Hadrons tab (quark-level composites) ─────────────────────────────────
+    if (ImGui::BeginTabItem("Hadrons")) {
+        ImGui::Text("Baryons (3 quarks):");
+        for (int h = 0; h < HADRON_TEMPLATE_COUNT_VAL; ++h) {
+            // Separator between baryons and mesons
+            if (h == 7) {
+                ImGui::Separator();
+                ImGui::Text("Mesons (quark + antiquark):");
+            }
+
+            int group_id = GROUP_TEMPLATE_COUNT_VAL + h;
+            bool selected = (spawn_group == group_id);
+            if (selected) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.0f));
+            }
+
+            if (ImGui::Button(HADRON_TEMPLATES[h].label, ImVec2(50, 30))) {
+                spawn_group = group_id;
+                pending_spawn = true;
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s (%u quarks)", HADRON_TEMPLATES[h].name, HADRON_TEMPLATES[h].count);
+
+            if (selected) ImGui::PopStyleColor();
+
+            // Layout: 4 per row for baryons, 4 per row for mesons
+            int row_idx = (h < 7) ? h : (h - 7);
+            int row_count = (h < 7) ? 7 : (HADRON_TEMPLATE_COUNT_VAL - 7);
+            if ((row_idx + 1) % 4 != 0 && row_idx < row_count - 1) ImGui::SameLine();
+        }
+
+        if (pending_spawn && spawn_group >= GROUP_TEMPLATE_COUNT_VAL) {
+            int h_idx = spawn_group - GROUP_TEMPLATE_COUNT_VAL;
+            if (h_idx < HADRON_TEMPLATE_COUNT_VAL) {
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.3f, 1.0f),
+                    "Click to place %s", HADRON_TEMPLATES[h_idx].name);
+            }
         }
 
         ImGui::EndTabItem();

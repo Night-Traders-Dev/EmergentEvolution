@@ -209,8 +209,16 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
     std::normal_distribution<float> gauss(0.0f, 1.0f);
 
     // Group template spawn
+    const GroupTemplate* resolved_tmpl = nullptr;
     if (iface.spawn_group >= 0 && iface.spawn_group < GROUP_TEMPLATE_COUNT_VAL) {
-        const auto& tmpl = GROUP_TEMPLATES[iface.spawn_group];
+        resolved_tmpl = &GROUP_TEMPLATES[iface.spawn_group];
+    } else if (iface.spawn_group >= GROUP_TEMPLATE_COUNT_VAL &&
+               iface.spawn_group < GROUP_TEMPLATE_COUNT_VAL + HADRON_TEMPLATE_COUNT_VAL) {
+        resolved_tmpl = &HADRON_TEMPLATES[iface.spawn_group - GROUP_TEMPLATE_COUNT_VAL];
+    }
+
+    if (resolved_tmpl) {
+        const auto& tmpl = *resolved_tmpl;
 
         // Find nucleus center (average position of nucleons in template)
         glm::vec2 nucleus_center(0.0f);
