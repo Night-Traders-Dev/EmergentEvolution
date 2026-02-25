@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <iostream>
 #include <chrono>
+#include <omp.h>
 
 static PhysicsSimulation* g_sim_resize = nullptr;
 
@@ -12,6 +13,8 @@ static void framebuffer_resize_callback(GLFWwindow*, int, int) {
 }
 
 int main() {
+    omp_set_num_threads(std::min(omp_get_max_threads(), 8));
+
     if (!glfwInit()) {
         std::cerr << "Failed to initialise GLFW\n";
         return 1;

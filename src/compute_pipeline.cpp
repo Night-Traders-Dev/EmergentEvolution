@@ -538,22 +538,48 @@ void ComputePipeline::record(VkCommandBuffer cmd,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         0, 1, &mem_barrier, 0, nullptr, 0, nullptr);
 
-    // ── Clear render texture ──────────────────────────────────────────────────
-    VkClearColorValue clear_color{};
-    clear_color.float32[0] = 0.01f;
-    clear_color.float32[1] = 0.01f;
-    clear_color.float32[2] = 0.04f;  // deep space blue-black
-    clear_color.float32[3] = 1.0f;
+    // ── Clear or fade render texture ────────────────────────────────────────────
     VkImageSubresourceRange range{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-    vkCmdClearColorImage(cmd,
-        particle_texture.handle,
-        VK_IMAGE_LAYOUT_GENERAL,
-        &clear_color, 1, &range);
 
-    // Barrier: clear → storage image write
+    if (cfg.show_trails) {
+        // Trail mode: fade existing pixels via compute pass (step=3)
+        PushConstants fade_pc = pc;
+        fade_pc.step = 3;
+        uint32_t pixel_count = REGION_W * REGION_H;
+        uint32_t fade_groups = pixel_count / 256 + 1;
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                pipeline_layout_, 0, 1, &active_set, 0, nullptr);
+        vkCmdPushConstants(cmd, pipeline_layout_,
+                           VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, sizeof(PushConstants), &fade_pc);
+        vkCmdDispatch(cmd, fade_groups, 1, 1);
+
+        // Barrier: fade writes → render reads
+        VkMemoryBarrier fade_barrier{};
+        fade_barrier.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        fade_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        fade_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 1, &fade_barrier, 0, nullptr, 0, nullptr);
+    } else {
+        // Normal mode: clear to background
+        VkClearColorValue clear_color{};
+        clear_color.float32[0] = 0.01f;
+        clear_color.float32[1] = 0.01f;
+        clear_color.float32[2] = 0.04f;  // deep space blue-black
+        clear_color.float32[3] = 1.0f;
+        vkCmdClearColorImage(cmd,
+            particle_texture.handle,
+            VK_IMAGE_LAYOUT_GENERAL,
+            &clear_color, 1, &range);
+    }
+
+    // Barrier: clear/fade → storage image write
     VkImageMemoryBarrier img_barrier{};
     img_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    img_barrier.srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
+    img_barrier.srcAccessMask       = cfg.show_trails ? VK_ACCESS_SHADER_WRITE_BIT : VK_ACCESS_TRANSFER_WRITE_BIT;
     img_barrier.dstAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
     img_barrier.oldLayout           = VK_IMAGE_LAYOUT_GENERAL;
     img_barrier.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
@@ -562,7 +588,7 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     img_barrier.image               = particle_texture.handle;
     img_barrier.subresourceRange    = range;
     vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        cfg.show_trails ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         0, 0, nullptr, 0, nullptr, 1, &img_barrier);
 

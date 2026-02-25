@@ -135,7 +135,7 @@ const float SOFTEN_MIN       = 8.0;     // softening distance for Coulomb
 const float L_MIN              = 120.0;  // minimum angular momentum (ground state orbital)
 const float K_SPIN_ORBIT       = 0.3;   // spin-orbit coupling strength (fine structure)
 const float CENTRIFUGAL_SOFTEN = 1.0;   // softening for r→0 stability
-const float K_MAGNETIC         = 3.0;   // intrinsic Biot-Savart coupling (scaled for 1/r²)
+const float K_MAGNETIC         = 1.0;   // intrinsic Biot-Savart coupling (scaled for 1/r²)
 const float ANNIHIL_RADIUS   = 6.0;
 const float ANNIHIL_ATTRACTION = 200.0;
 const float ANNIHIL_DRAIN    = 0.4;
@@ -581,10 +581,14 @@ void apply_physics(uint i) {
             }
         }
 
-        // ── 8b. Hard-sphere collision accumulation (all massive pairs) ────
+        // ── 8b. Hard-sphere collision accumulation (massive pairs) ────────
         // Accumulate position corrections from ALL overlapping neighbors.
         // After integration, pos_a is snapped outward to resolve ALL overlaps.
-        if (!dm_interaction) {
+        // Skip for baryon-baryon (governed by Yukawa + Pauli core) and
+        // colored pairs (governed by Cornell + QCD hard-core repulsion).
+        bool both_baryons = is_baryon(type_a) && is_baryon(type_b);
+        bool both_colored = is_colored(flags_a) && is_colored(flags_b);
+        if (!dm_interaction && !both_baryons && !both_colored) {
             float mi_b = get_mass_inv(type_b);
             if (is_massive_a && mi_b < 10.0) {
                 float MIN_SEP = params.radius * 2.0;
@@ -1198,8 +1202,28 @@ void render_field(uint i) {
 //  ENTRY POINT
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// ── Trail fade pass (step=3): per-pixel darken toward background ─────────────
+void fade_pixel(uint pixel_idx) {
+    uint tex_w = uint(params.region_size.x);
+    uint tex_h = uint(params.region_size.y);
+    if (pixel_idx >= tex_w * tex_h) return;
+
+    ivec2 px = ivec2(pixel_idx % tex_w, pixel_idx / tex_w);
+    vec4 existing = imageLoad(out_render_texture, px);
+    vec3 bg = vec3(0.01, 0.01, 0.04);
+    existing.rgb = mix(bg, existing.rgb, 0.93);
+    imageStore(out_render_texture, px, existing);
+}
+
 void main() {
     uint i = gl_GlobalInvocationID.x;
+
+    // Step 3 (trail fade) uses pixel index, not particle index
+    if (params.step == 3u) {
+        fade_pixel(i);
+        return;
+    }
+
     if (i >= params.particle_count) return;
 
     switch (params.step) {

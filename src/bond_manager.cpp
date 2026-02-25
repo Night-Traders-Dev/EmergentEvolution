@@ -99,24 +99,38 @@ void BondManager::break_stretched_bonds(
 {
     float break_dist_sq = (rest_length * break_factor) * (rest_length * break_factor);
 
-    for (uint32_t i = 0; i < n_particles_; ++i) {
-        uint32_t base = i * MAX_BONDS_PER_PARTICLE;
-        for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
-            uint32_t j = bond_partners[base + s];
-            if (j == 0xFFFFFFFFu || j <= i) continue; // process each pair once
+    // Phase 1: Parallel detection — collect pairs to break
+    struct BrokenPair { uint32_t i, j; glm::vec2 midpoint; };
+    std::vector<BrokenPair> broken_pairs;
 
-            glm::vec2 d = positions[j] - positions[i];
-            float d2 = glm::dot(d, d);
-            if (d2 > break_dist_sq) {
-                remove_bond(i, j);
-                // Bond break → UV/visible photon emitted (higher energy)
-                pending_photons.push_back({
-                    (positions[i] + positions[j]) * 0.5f,
-                    random_unit_vec(),
-                    0.60f
-                });
+    #pragma omp parallel if(n_particles_ > 2000)
+    {
+        std::vector<BrokenPair> local_broken;
+
+        #pragma omp for nowait
+        for (uint32_t i = 0; i < n_particles_; ++i) {
+            uint32_t base = i * MAX_BONDS_PER_PARTICLE;
+            for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+                uint32_t j = bond_partners[base + s];
+                if (j == 0xFFFFFFFFu || j <= i) continue;
+
+                glm::vec2 d = positions[j] - positions[i];
+                if (glm::dot(d, d) > break_dist_sq) {
+                    local_broken.push_back({i, j,
+                        (positions[i] + positions[j]) * 0.5f});
+                }
             }
         }
+
+        #pragma omp critical
+        broken_pairs.insert(broken_pairs.end(),
+                           local_broken.begin(), local_broken.end());
+    }
+
+    // Phase 2: Sequential removal (modifies shared bond arrays)
+    for (const auto& bp : broken_pairs) {
+        remove_bond(bp.i, bp.j);
+        pending_photons.push_back({bp.midpoint, random_unit_vec(), 0.60f});
     }
 }
 
@@ -132,7 +146,7 @@ void BondManager::form_new_bonds(
     float form_r2   = form_radius * form_radius;
     float cell_size = form_radius;
 
-    // Build spatial hash of particles that still have free valence slots
+    // Phase 1: Build spatial hash (sequential — fast O(N))
     std::unordered_map<int64_t, std::vector<uint32_t>> grid;
     grid.reserve(n_particles_ / 4 + 1);
 
@@ -146,54 +160,73 @@ void BondManager::form_new_bonds(
         grid[cell_key(cx, cy)].push_back(i);
     }
 
-    for (uint32_t i = 0; i < n_particles_; ++i) {
-        uint32_t ti  = (i < types.size()) ? types[i] : 0;
-        uint32_t cap = (ti < ATOM_COUNT) ? ATOM_VALENCE[ti] : 1u;
-        if (bond_counts[i] >= cap) continue;
+    // Phase 2: Parallel candidate detection (read-only grid, snapshot bond_counts)
+    struct BondCandidate { uint32_t i, j; glm::vec2 midpoint; };
+    std::vector<BondCandidate> candidates;
+    std::vector<uint32_t> snap_counts(bond_counts);
 
-        int cx = static_cast<int>(std::floor(positions[i].x / cell_size));
-        int cy = static_cast<int>(std::floor(positions[i].y / cell_size));
+    #pragma omp parallel if(n_particles_ > 2000)
+    {
+        std::vector<BondCandidate> local_cands;
 
-        bool saturated = false;
-        for (int dy = -1; dy <= 1 && !saturated; ++dy) {
-            for (int dx = -1; dx <= 1 && !saturated; ++dx) {
-                auto it = grid.find(cell_key(cx + dx, cy + dy));
-                if (it == grid.end()) continue;
+        #pragma omp for nowait schedule(dynamic, 64)
+        for (uint32_t i = 0; i < n_particles_; ++i) {
+            uint32_t ti  = (i < types.size()) ? types[i] : 0;
+            uint32_t cap = (ti < ATOM_COUNT) ? ATOM_VALENCE[ti] : 1u;
+            if (snap_counts[i] >= cap) continue;
 
-                for (uint32_t j : it->second) {
-                    if (j <= i) continue; // each pair once; also skips j==i
+            int cx = static_cast<int>(std::floor(positions[i].x / cell_size));
+            int cy = static_cast<int>(std::floor(positions[i].y / cell_size));
 
-                    // Re-check i's cap (may have changed in this loop)
-                    if (bond_counts[i] >= cap) { saturated = true; break; }
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    auto it = grid.find(cell_key(cx + dx, cy + dy));
+                    if (it == grid.end()) continue;
 
-                    uint32_t tj  = (j < types.size()) ? types[j] : 0;
-                    uint32_t capj = (tj < ATOM_COUNT) ? ATOM_VALENCE[tj] : 1u;
-                    if (bond_counts[j] >= capj) continue;
+                    for (uint32_t j : it->second) {
+                        if (j <= i) continue;
 
-                    if (are_bonded(i, j)) continue;
-                    if (!can_bond(ti, tj))  continue;
-                    if (bond_cooldown[i] > 0 || bond_cooldown[j] > 0) continue;
+                        uint32_t tj  = (j < types.size()) ? types[j] : 0;
+                        uint32_t capj = (tj < ATOM_COUNT) ? ATOM_VALENCE[tj] : 1u;
+                        if (snap_counts[j] >= capj) continue;
 
-                    glm::vec2 d = positions[j] - positions[i];
-                    if (glm::dot(d, d) >= form_r2) continue;
+                        if (!can_bond(ti, tj))  continue;
+                        if (bond_cooldown[i] > 0 || bond_cooldown[j] > 0) continue;
 
-                    // Activation energy: require minimum relative kinetic energy
-                    if (activation_energy > 0.0f && i < velocities.size() && j < velocities.size()) {
-                        glm::vec2 dv  = velocities[i] - velocities[j];
-                        float     rke = 0.5f * glm::dot(dv, dv);
-                        if (rke < activation_energy) continue;
-                    }
+                        glm::vec2 d = positions[j] - positions[i];
+                        if (glm::dot(d, d) >= form_r2) continue;
 
-                    if (add_bond(i, j)) {
-                        // Bond formation → IR photon emitted (exothermic)
-                        pending_photons.push_back({
-                            (positions[i] + positions[j]) * 0.5f,
-                            random_unit_vec(),
-                            0.30f
-                        });
+                        if (activation_energy > 0.0f && i < velocities.size() && j < velocities.size()) {
+                            glm::vec2 dv  = velocities[i] - velocities[j];
+                            if (0.5f * glm::dot(dv, dv) < activation_energy) continue;
+                        }
+
+                        local_cands.push_back({i, j,
+                            (positions[i] + positions[j]) * 0.5f});
                     }
                 }
             }
+        }
+
+        #pragma omp critical
+        candidates.insert(candidates.end(),
+                         local_cands.begin(), local_cands.end());
+    }
+
+    // Phase 3: Sequential bond formation (re-check live bond_counts)
+    for (const auto& c : candidates) {
+        uint32_t ti  = (c.i < types.size()) ? types[c.i] : 0;
+        uint32_t capi = (ti < ATOM_COUNT) ? ATOM_VALENCE[ti] : 1u;
+        if (bond_counts[c.i] >= capi) continue;
+
+        uint32_t tj  = (c.j < types.size()) ? types[c.j] : 0;
+        uint32_t capj = (tj < ATOM_COUNT) ? ATOM_VALENCE[tj] : 1u;
+        if (bond_counts[c.j] >= capj) continue;
+
+        if (are_bonded(c.i, c.j)) continue;
+
+        if (add_bond(c.i, c.j)) {
+            pending_photons.push_back({c.midpoint, random_unit_vec(), 0.30f});
         }
     }
 }

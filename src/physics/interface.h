@@ -38,6 +38,12 @@ public:
     // Selection tool
     bool select_mode = false;
 
+    // Tools popup
+    bool show_tools_popup = false;
+    bool request_halt_velocities = false;
+    bool request_remove_massless = false;
+    bool request_remove_massive  = false;
+
     // Save/Load
     char save_filename[256] = "save.ppsg";
     bool show_save_dialog = false;
@@ -61,6 +67,9 @@ public:
     int32_t selected_particle_idx = -1;  // pinned particle for info card (-1=hover mode)
     bool    particle_move_mode    = false;
     bool    request_delete_particle = false;  // set by UI, consumed by simulation
+
+    // Element detail card
+    int32_t element_card_nucleus_rep = -1;  // nucleus rep index for element card (-1=hidden)
 
     // Force object interaction
     bool force_obj_placement_mode = false;
@@ -117,4 +126,5 @@ private:
     void draw_splash_screen();
     void draw_pause_menu(SimConfig& cfg, bool& request_reset);
     void draw_save_load_dialog();
+    void draw_element_card(const Particles& particles);
 };

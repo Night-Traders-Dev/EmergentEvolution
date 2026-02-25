@@ -248,6 +248,51 @@ static const int PT_LAYOUT[4][10] = {
     { 18, 19, -1, -1, -1, -1, -1, -1, -1, 20},  // K Ca ... Fe
 };
 
+// ── Element names by atomic number (Z=1..118) ────────────────────────────────
+static const char* const ELEMENT_NAMES[] = {
+    "?",        // 0 (unused)
+    "Hydrogen",  "Helium",     "Lithium",    "Beryllium",  "Boron",
+    "Carbon",    "Nitrogen",   "Oxygen",     "Fluorine",   "Neon",
+    "Sodium",    "Magnesium",  "Aluminium",  "Silicon",    "Phosphorus",
+    "Sulfur",    "Chlorine",   "Argon",      "Potassium",  "Calcium",
+    "Scandium",  "Titanium",   "Vanadium",   "Chromium",   "Manganese",
+    "Iron",      "Cobalt",     "Nickel",     "Copper",     "Zinc",
+    "Gallium",   "Germanium",  "Arsenic",    "Selenium",   "Bromine",
+    "Krypton",   "Rubidium",   "Strontium",  "Yttrium",    "Zirconium",
+    "Niobium",   "Molybdenum", "Technetium", "Ruthenium",  "Rhodium",
+    "Palladium", "Silver",     "Cadmium",    "Indium",     "Tin",
+    "Antimony",  "Tellurium",  "Iodine",     "Xenon",      "Cesium",
+    "Barium",    "Lanthanum",  "Cerium",     "Praseodymium","Neodymium",
+    "Promethium","Samarium",   "Europium",   "Gadolinium", "Terbium",
+    "Dysprosium","Holmium",    "Erbium",     "Thulium",    "Ytterbium",
+    "Lutetium",  "Hafnium",    "Tantalum",   "Tungsten",   "Rhenium",
+    "Osmium",    "Iridium",    "Platinum",   "Gold",       "Mercury",
+    "Thallium",  "Lead",       "Bismuth",    "Polonium",   "Astatine",
+    "Radon",     "Francium",   "Radium",     "Actinium",   "Thorium",
+    "Protactinium","Uranium",  "Neptunium",  "Plutonium",  "Americium",
+    "Curium",    "Berkelium",  "Californium","Einsteinium", "Fermium",
+    "Mendelevium","Nobelium",  "Lawrencium", "Rutherfordium","Dubnium",
+    "Seaborgium","Bohrium",    "Hassium",    "Meitnerium", "Darmstadtium",
+    "Roentgenium","Copernicium","Nihonium",  "Flerovium",  "Moscovium",
+    "Livermorium","Tennessine","Oganesson",
+};
+static const char* const ELEMENT_SYMBOLS[] = {
+    "?",
+    "H",  "He", "Li", "Be", "B",  "C",  "N",  "O",  "F",  "Ne",
+    "Na", "Mg", "Al", "Si", "P",  "S",  "Cl", "Ar", "K",  "Ca",
+    "Sc", "Ti", "V",  "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn",
+    "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y",  "Zr",
+    "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn",
+    "Sb", "Te", "I",  "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd",
+    "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb",
+    "Lu", "Hf", "Ta", "W",  "Re", "Os", "Ir", "Pt", "Au", "Hg",
+    "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th",
+    "Pa", "U",  "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm",
+    "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds",
+    "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og",
+};
+static constexpr int FULL_ELEMENT_COUNT = 118;
+
 // ── Particle name/color tables for all 30 types ─────────────────────────────
 
 static const char* const PHYS_TYPE_NAMES[PHYS_PARTICLE_TYPES] = {
@@ -475,6 +520,10 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
 
     // Draw particle info card (hover or pinned — offsets below force obj panel if both shown)
     draw_info_card(particles);
+
+    // Draw element detail card (if open)
+    if (element_card_nucleus_rep >= 0)
+        draw_element_card(particles);
 
     // Save/Load dialog
     if (show_save_dialog || show_load_dialog)
@@ -765,13 +814,59 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
             ImGui::TextColored(ImVec4(0.0f, 0.9f, 0.9f, 1.0f), "[SELECT]");
         }
 
-        // Right-aligned buttons: Save, Load, Select(F4), Reset(F2), Spawn(F3)
+        // Right-aligned buttons: Tools, Save, Load, Select(F4), Reset(F2), Spawn(F3)
         float btn_sm = 60.0f;
         float btn_lg = 80.0f;
-        float total_w = btn_sm * 2 + btn_lg * 3 + 8.0f * 4;  // 5 buttons, 4 gaps
+        float total_w = btn_sm * 3 + btn_lg * 3 + 8.0f * 5;  // 6 buttons, 5 gaps
         float x_right = display_w - 12.0f - total_w;
         ImGui::SameLine(x_right);
 
+        if (ImGui::Button("Tools", ImVec2(btn_sm, 26))) {
+            show_tools_popup = !show_tools_popup;
+        }
+        // Tools popup (rendered above the button)
+        if (show_tools_popup) {
+            float popup_w = 200.0f;
+            float popup_h = 130.0f;
+            float popup_x = x_right;
+            float popup_y = display_h - bar_h - popup_h - 4.0f;
+            ImGui::SetNextWindowPos(ImVec2(popup_x, popup_y));
+            ImGui::SetNextWindowSize(ImVec2(popup_w, popup_h));
+            ImGuiWindowFlags popup_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+                | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar;
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.059f, 0.071f, 0.130f, 0.95f));
+            if (ImGui::Begin("##ToolsPopup", &show_tools_popup, popup_flags)) {
+                ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Tools");
+                ImGui::Separator();
+                if (ImGui::Button("Halt Velocities", ImVec2(-1, 0))) {
+                    request_halt_velocities = true;
+                    show_tools_popup = false;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Set all particle velocities to zero");
+
+                if (ImGui::Checkbox("Show Trails", &cfg.show_trails)) {}
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Draw particle paths (fade effect)");
+
+                if (ImGui::Button("Remove Massless", ImVec2(-1, 0))) {
+                    request_remove_massless = true;
+                    show_tools_popup = false;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Remove all massless particles\n(photons, gluons, gravitons, neutrinos)");
+
+                if (ImGui::Button("Remove Massive", ImVec2(-1, 0))) {
+                    request_remove_massive = true;
+                    show_tools_popup = false;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Remove all massive particles\n(everything except photons, gluons, etc.)");
+            }
+            ImGui::End();
+            ImGui::PopStyleColor();
+        }
+        ImGui::SameLine(0, 8);
         if (ImGui::Button("Save", ImVec2(btn_sm, 26))) {
             show_save_dialog = true;
         }
@@ -1770,6 +1865,73 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
             }
         }
 
+        // ── Element membership ─────────────────────────────────────────
+        if (idx < particles.orbital_parent.size()) {
+            // Find nucleus representative for this particle
+            int32_t nuc_rep = -1;
+            bool is_nucleon = (ptype == PROTON_TYPE || ptype == NEUTRON_TYPE || ptype == ANTIPROTON_TYPE_PHYS);
+            bool is_electron = (ptype == ELECTRON_TYPE_PHYS);
+
+            if (is_nucleon || is_electron) {
+                int32_t op = particles.orbital_parent[idx];
+                if (op >= 0 && static_cast<uint32_t>(op) < particles.types.size()) {
+                    // For nucleons, orbital_parent points to the nucleus rep proton
+                    // For electrons, orbital_parent points to the nucleus rep proton
+                    nuc_rep = op;
+                }
+                // If this IS a nucleus rep proton (orbital_parent == self or -1 for solo)
+                if (is_nucleon && nuc_rep < 0 && ptype == PROTON_TYPE) {
+                    // Check if any other particle references this one as parent
+                    nuc_rep = static_cast<int32_t>(idx);
+                }
+            }
+
+            if (nuc_rep >= 0) {
+                // Count protons, neutrons, electrons for this nucleus
+                int Z = 0, N_count = 0, e_count = 0;
+                uint32_t n_total = static_cast<uint32_t>(particles.types.size());
+                for (uint32_t pi = 0; pi < n_total; ++pi) {
+                    if (particles.orbital_parent.size() <= pi) break;
+                    int32_t their_parent = particles.orbital_parent[pi];
+                    if (their_parent != nuc_rep && static_cast<int32_t>(pi) != nuc_rep) continue;
+                    uint32_t pt = particles.types[pi];
+                    if (pt == PROTON_TYPE) Z++;
+                    else if (pt == NEUTRON_TYPE) N_count++;
+                    else if (pt == ELECTRON_TYPE_PHYS) e_count++;
+                }
+
+                if (Z > 0 && Z <= FULL_ELEMENT_COUNT) {
+                    int A = Z + N_count;
+                    int net_charge = Z - e_count;
+
+                    ImGui::Spacing();
+                    ImGui::Separator();
+
+                    // Element header with symbol
+                    ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "Element");
+                    ImGui::SameLine(col_w);
+
+                    // Clickable element button
+                    char elem_label[64];
+                    if (net_charge == 0)
+                        snprintf(elem_label, sizeof(elem_label), "%s-%d (%s)",
+                                 ELEMENT_SYMBOLS[Z], A, ELEMENT_NAMES[Z]);
+                    else
+                        snprintf(elem_label, sizeof(elem_label), "%s-%d %s%d",
+                                 ELEMENT_SYMBOLS[Z], A,
+                                 net_charge > 0 ? "+" : "", net_charge);
+
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.85f, 0.6f, 1.0f));
+                    if (ImGui::SmallButton(elem_label)) {
+                        element_card_nucleus_rep = nuc_rep;
+                    }
+                    ImGui::PopStyleColor();
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Click for element details");
+                }
+            }
+        }
+
         // Action buttons (only when pinned/selected)
         if (pinned) {
             ImGui::Spacing();
@@ -1805,6 +1967,226 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
         }
     }
     ImGui::End();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Element Detail Card ──────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_element_card(const Particles& particles) {
+    int32_t nuc_rep = element_card_nucleus_rep;
+    if (nuc_rep < 0 || static_cast<uint32_t>(nuc_rep) >= particles.types.size()) {
+        element_card_nucleus_rep = -1;
+        return;
+    }
+
+    // Gather all particles belonging to this nucleus
+    uint32_t n_total = static_cast<uint32_t>(particles.types.size());
+    int Z = 0, N_count = 0, e_count = 0;
+    std::vector<uint32_t> nucleon_indices;
+    std::vector<uint32_t> electron_indices;
+    glm::vec2 sum_pos(0.0f), sum_mom(0.0f);
+    uint32_t oldest_birth = UINT32_MAX;
+
+    auto get_mass_elem = [](uint32_t t) -> float {
+        if (t <= 1 || t == 5) return 40.0f;
+        if (t == 2 || t == 4) return 1.0f;
+        return 1.0f;
+    };
+
+    for (uint32_t pi = 0; pi < n_total; ++pi) {
+        if (pi >= particles.orbital_parent.size()) break;
+        int32_t their_parent = particles.orbital_parent[pi];
+        if (their_parent != nuc_rep && static_cast<int32_t>(pi) != nuc_rep) continue;
+
+        uint32_t pt = particles.types[pi];
+        if (pt == PROTON_TYPE) {
+            Z++;
+            nucleon_indices.push_back(pi);
+        } else if (pt == NEUTRON_TYPE) {
+            N_count++;
+            nucleon_indices.push_back(pi);
+        } else if (pt == ELECTRON_TYPE_PHYS) {
+            e_count++;
+            electron_indices.push_back(pi);
+        } else {
+            continue;
+        }
+
+        sum_pos += particles.positions[pi];
+
+        if (readback_velocities && pi < readback_count) {
+            float mass = get_mass_elem(pt);
+            sum_mom += readback_velocities[pi] * mass;
+        }
+
+        if (pi < particles.birth_frames.size()) {
+            if (particles.birth_frames[pi] < oldest_birth)
+                oldest_birth = particles.birth_frames[pi];
+        }
+    }
+
+    if (Z == 0) { element_card_nucleus_rep = -1; return; }
+
+    int A = Z + N_count;
+    int net_charge = Z - e_count;
+    float total_mass = Z * 40.0f + N_count * 40.0f + e_count * 1.0f;
+    float momentum = glm::length(sum_mom);
+    // Shell configuration string
+    const int SHELL_CAP[] = {2, 8, 18, 32, 32, 18, 8};
+    char shell_str[64] = {};
+    {
+        int remaining = e_count;
+        int pos = 0;
+        for (int s = 0; s < 7 && remaining > 0; ++s) {
+            int in_shell = std::min(remaining, SHELL_CAP[s]);
+            if (s > 0) shell_str[pos++] = '/';
+            pos += snprintf(shell_str + pos, sizeof(shell_str) - pos, "%d", in_shell);
+            remaining -= in_shell;
+        }
+    }
+
+    // Window
+    ImGuiIO& io = ImGui::GetIO();
+    float card_x = io.DisplaySize.x * 0.5f - 160.0f;
+    float card_y = 60.0f;
+    ImGui::SetNextWindowPos(ImVec2(card_x, card_y), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(320, 0));
+
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize
+        | ImGuiWindowFlags_NoNav;
+
+    bool open = true;
+    char title[64];
+    snprintf(title, sizeof(title), "%s (%s-%d)###ElementCard",
+             (Z <= FULL_ELEMENT_COUNT) ? ELEMENT_NAMES[Z] : "?",
+             (Z <= FULL_ELEMENT_COUNT) ? ELEMENT_SYMBOLS[Z] : "?", A);
+
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.12f, 0.10f, 0.05f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.20f, 0.16f, 0.06f, 0.95f));
+
+    if (ImGui::Begin(title, &open, flags)) {
+        float col_w = 110.0f;
+
+        // Big element symbol + name
+        if (Z <= FULL_ELEMENT_COUNT) {
+            ImGui::TextColored(ImVec4(0.9f, 0.85f, 0.6f, 1.0f), "%s", ELEMENT_SYMBOLS[Z]);
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.8f, 0.75f, 0.5f, 1.0f), "%s", ELEMENT_NAMES[Z]);
+        }
+
+        ImGui::Separator();
+
+        // Composition
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Atomic No.");
+        ImGui::SameLine(col_w); ImGui::Text("Z = %d", Z);
+
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Neutrons");
+        ImGui::SameLine(col_w); ImGui::Text("N = %d", N_count);
+
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Mass No.");
+        ImGui::SameLine(col_w); ImGui::Text("A = %d", A);
+
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Electrons");
+        ImGui::SameLine(col_w); ImGui::Text("%d", e_count);
+
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Shells");
+        ImGui::SameLine(col_w); ImGui::Text("%s", shell_str);
+
+        ImGui::Spacing();
+        ImGui::Separator();
+
+        // Charge
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Net Charge");
+        ImGui::SameLine(col_w);
+        if (net_charge == 0)
+            ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f), "0 (neutral)");
+        else if (net_charge > 0)
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "+%d (ion)", net_charge);
+        else
+            ImGui::TextColored(ImVec4(0.4f, 0.6f, 1.0f, 1.0f), "%d (ion)", net_charge);
+
+        // Mass
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Total Mass");
+        ImGui::SameLine(col_w); ImGui::Text("%.0f u", total_mass);
+
+        // Particles
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Particles");
+        ImGui::SameLine(col_w); ImGui::Text("%d", Z + N_count + e_count);
+
+        // Momentum
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Momentum");
+        ImGui::SameLine(col_w); ImGui::Text("%.1f", momentum);
+
+        // Age
+        if (oldest_birth != UINT32_MAX) {
+            uint32_t age_frames = frame_counter_display - oldest_birth;
+            float age_sec = age_frames / 60.0f;
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Age");
+            ImGui::SameLine(col_w);
+            if (age_sec < 60.0f) ImGui::Text("%.1f s", age_sec);
+            else ImGui::Text("%.1f min", age_sec / 60.0f);
+        }
+
+        // Stability
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Stability");
+        ImGui::SameLine(col_w);
+        if (N_count >= Z - 1 && N_count <= Z + 2 && Z <= 82)
+            ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.4f, 1.0f), "Stable");
+        else
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f), "Unstable");
+
+        ImGui::Spacing();
+        ImGui::Separator();
+
+        // Clickable constituent list
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Nucleons:");
+        ImGui::SameLine(col_w);
+        for (size_t ni = 0; ni < nucleon_indices.size() && ni < 12; ++ni) {
+            uint32_t pi = nucleon_indices[ni];
+            uint32_t pt = particles.types[pi];
+            ImVec4 c = (pt < PHYS_PARTICLE_TYPES) ? PHYS_TYPE_UI_COLORS[pt] : ImVec4(1,1,1,1);
+            const char* lb = (pt < PHYS_PARTICLE_TYPES) ? PHYS_TYPE_LABELS[pt] : "?";
+            char btn[32];
+            snprintf(btn, sizeof(btn), "%s##en%zu", lb, ni);
+            ImGui::PushStyleColor(ImGuiCol_Text, c);
+            if (ImGui::SmallButton(btn)) navigate_to_particle = static_cast<int32_t>(pi);
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+        }
+        if (nucleon_indices.size() > 12) ImGui::Text("+%zu", nucleon_indices.size() - 12);
+        else ImGui::NewLine();
+
+        if (!electron_indices.empty()) {
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Electrons:");
+            ImGui::SameLine(col_w);
+            for (size_t ei = 0; ei < electron_indices.size() && ei < 12; ++ei) {
+                uint32_t pi = electron_indices[ei];
+                char btn[32];
+                snprintf(btn, sizeof(btn), "e-##ee%zu", ei);
+                ImGui::PushStyleColor(ImGuiCol_Text, PHYS_TYPE_UI_COLORS[ELECTRON_TYPE_PHYS]);
+                if (ImGui::SmallButton(btn)) navigate_to_particle = static_cast<int32_t>(pi);
+                ImGui::PopStyleColor();
+                ImGui::SameLine();
+            }
+            if (electron_indices.size() > 12) ImGui::Text("+%zu", electron_indices.size() - 12);
+            else ImGui::NewLine();
+        }
+
+        // Navigate button
+        ImGui::Spacing();
+        if (ImGui::Button("Navigate", ImVec2(100, 26))) {
+            navigate_to_particle = nuc_rep;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Close", ImVec2(100, 26))) {
+            element_card_nucleus_rep = -1;
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleColor(2);
+
+    if (!open) element_card_nucleus_rep = -1;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

@@ -149,13 +149,20 @@ void Simulation::tick(GLFWwindow* window, double dt) {
             fps_frame_cnt_    = 0;
         }
 
-        // Active / dormant / energy / photon / SM particle counts
+        // Active / dormant / energy / photon / SM particle counts (parallel reduction)
         uint32_t active = 0, dormant = 0, photons = 0;
         uint32_t sm[5]  = {};
         uint32_t type_counts[MAX_PARTICLE_TYPES] = {};
         double   e_sum = 0.0, en_sum = 0.0, re_sum = 0.0;
         uint32_t genome_n = 0;
         const uint32_t np = static_cast<uint32_t>(readback_energies_.size());
+        const size_t genome_limit = particles.genomes.size();
+
+        #pragma omp parallel for \
+            reduction(+:active, dormant, photons, genome_n, \
+                        e_sum, en_sum, re_sum, \
+                        sm[:5], type_counts[:MAX_PARTICLE_TYPES]) \
+            if(np > 2000)
         for (uint32_t pi = 0; pi < np; ++pi) {
             float    e = readback_energies_[pi];
             uint32_t t = particles.types[pi];
@@ -165,13 +172,13 @@ void Simulation::tick(GLFWwindow* window, double dt) {
             if (t < MAX_PARTICLE_TYPES) ++type_counts[t];
             if (t == PHOTON_TYPE)                        { ++photons; continue; }
             if (t >= ALPHA_TYPE && t <= MUON_TYPE)       { ++sm[t - ALPHA_TYPE]; continue; }
-            // Genome averages (normal atoms only)
-            if (pi * GENOME_SIZE + 2 < particles.genomes.size()) {
+            if (pi * GENOME_SIZE + 2 < genome_limit) {
                 en_sum += particles.genomes[pi * GENOME_SIZE + 1];
                 re_sum += particles.genomes[pi * GENOME_SIZE + 2];
                 ++genome_n;
             }
         }
+
         iface.active_particle_display  = active;
         iface.dormant_particle_display = dormant;
         iface.total_energy_display     = static_cast<float>(e_sum);
@@ -185,7 +192,10 @@ void Simulation::tick(GLFWwindow* window, double dt) {
         }
         // Bond count (each bond stored twice — once per endpoint)
         uint32_t bond_sum = 0;
-        for (uint32_t bc : bond_manager.bond_counts) bond_sum += bc;
+        const uint32_t bc_n = static_cast<uint32_t>(bond_manager.bond_counts.size());
+        #pragma omp parallel for reduction(+:bond_sum) if(bc_n > 2000)
+        for (uint32_t bci = 0; bci < bc_n; ++bci)
+            bond_sum += bond_manager.bond_counts[bci];
         iface.total_bonds_display = bond_sum / 2;
     }
 

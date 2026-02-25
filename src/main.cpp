@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <iostream>
 #include <chrono>
+#include <omp.h>
 
 // Resize callback sets a dirty flag on the renderer
 static Simulation* g_sim_resize = nullptr;
@@ -13,6 +14,8 @@ static void framebuffer_resize_callback(GLFWwindow*, int, int) {
 }
 
 int main() {
+    omp_set_num_threads(std::min(omp_get_max_threads(), 8));
+
     // ── GLFW ──────────────────────────────────────────────────────────────────
     if (!glfwInit()) {
         std::cerr << "Failed to initialise GLFW\n";

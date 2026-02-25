@@ -292,15 +292,29 @@ void OrganismManager::update(
     for (uint32_t i = 0; i < n; ++i)
         root_map[parent[i]].push_back(i);
 
-    // 2. Build new organisms
-    std::vector<Organism> new_orgs;
-    new_orgs.reserve(root_map.size());
-
+    // 2. Build new organisms (parallel per-organism property computation)
+    // Convert root_map to indexed vector for parallel access
+    struct ClusterEntry {
+        int root;
+        std::vector<uint32_t> members;
+    };
+    std::vector<ClusterEntry> cluster_list;
+    cluster_list.reserve(root_map.size());
     for (auto& [root, members] : root_map) {
         if (members.size() < ORGANISM_MIN_SIZE) continue;
+        cluster_list.push_back({root, std::move(members)});
+    }
 
-        Organism org{};
-        org.id               = next_id_++;
+    std::vector<Organism> new_orgs(cluster_list.size());
+    const size_t genome_limit = particles.genomes.size();
+    const size_t bc_limit = bond_manager.bond_counts.size();
+    const size_t e_limit = energies.size();
+    const auto& behavior_flags = particles.behavior_flags;
+
+    #pragma omp parallel for schedule(dynamic) if(cluster_list.size() > 16)
+    for (size_t ci = 0; ci < cluster_list.size(); ++ci) {
+        const auto& members = cluster_list[ci].members;
+        Organism& org = new_orgs[ci];
         org.particle_indices = members;
         org.traits.size      = static_cast<uint32_t>(members.size());
 
@@ -312,7 +326,7 @@ void OrganismManager::update(
             uint32_t t = types[idx];
             if (t < MAX_PARTICLE_TYPES) {
                 org.traits.type_counts[t]++;
-                if (particles.behavior_flags[t] & BEHAVIOR_RADICAL)
+                if (behavior_flags[t] & BEHAVIOR_RADICAL)
                     has_radical = true;
             }
         }
@@ -321,18 +335,16 @@ void OrganismManager::update(
         org.centroid         = sum_pos * inv;
         org.traits.avg_speed = glm::length(sum_vel * inv);
 
-        // Average GPU-readback energy across all member particles
         float total_energy = 0.0f;
         for (uint32_t idx : members)
-            total_energy += (idx < energies.size() ? energies[idx] : 1.0f);
+            total_energy += (idx < e_limit ? energies[idx] : 1.0f);
         org.traits.energy = total_energy * inv;
 
-        // Average genome traits: charge, electroneg, reactivity, bond_str
         float sum_charge = 0.0f, sum_electroneg = 0.0f,
               sum_reactivity = 0.0f, sum_bond_str = 0.0f;
         for (uint32_t idx : members) {
             uint32_t base = idx * GENOME_SIZE;
-            if (base + 3 < static_cast<uint32_t>(particles.genomes.size())) {
+            if (base + 3 < static_cast<uint32_t>(genome_limit)) {
                 sum_charge      += particles.genomes[base + 0];
                 sum_electroneg  += particles.genomes[base + 1];
                 sum_reactivity  += particles.genomes[base + 2];
@@ -347,15 +359,13 @@ void OrganismManager::update(
         org.traits.avg_reactivity    = sum_reactivity    * inv;
         org.traits.avg_bond_strength = sum_bond_str      * inv;
 
-        // Bond count: sum bond_counts of all member particles
         uint32_t total_bonds = 0;
         for (uint32_t idx : members) {
-            if (idx < static_cast<uint32_t>(bond_manager.bond_counts.size()))
+            if (idx < static_cast<uint32_t>(bc_limit))
                 total_bonds += bond_manager.bond_counts[idx];
         }
         org.traits.bond_count = total_bonds;
 
-        // Dominant type
         org.traits.dominant_type = 0;
         uint32_t max_count = 0;
         for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
@@ -365,12 +375,10 @@ void OrganismManager::update(
             }
         }
 
-        // Molecular class from atom composition
         org.traits.mol_class = classify_molecule(org.traits.type_counts,
                                                   org.traits.size,
                                                   has_radical);
 
-        // Spread (RMS) and ring_factor (mean_dist/max_dist — high value = ring topology)
         float sum_d2 = 0.0f;
         float sum_d  = 0.0f;
         float max_d  = 0.0f;
@@ -387,7 +395,6 @@ void OrganismManager::update(
             org.traits.ring_factor = max_d > 1e-6f ? mean_d / max_d : 0.0f;
         }
 
-        // Complexity: promote LIPID clusters with ring topology to VESICLE
         static constexpr float    VESICLE_RING_THRESHOLD = 0.65f;
         static constexpr uint32_t VESICLE_MIN_SIZE        = 8;
         if (org.traits.mol_class == MoleculeClass::LIPID
@@ -395,9 +402,11 @@ void OrganismManager::update(
             && org.traits.size >= VESICLE_MIN_SIZE) {
             org.traits.complexity = ComplexityLevel::VESICLE;
         }
-
-        new_orgs.push_back(std::move(org));
     }
+
+    // Assign IDs sequentially (next_id_ is not thread-safe)
+    for (size_t ci = 0; ci < new_orgs.size(); ++ci)
+        new_orgs[ci].id = next_id_++;
 
     // 3. Match new to previous
     std::vector<bool> prev_matched(prev_organisms_.size(), false);

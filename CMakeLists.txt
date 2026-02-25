@@ -10,6 +10,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(Vulkan REQUIRED)
 find_package(glfw3  REQUIRED)
 find_package(glm    REQUIRED)
+find_package(OpenMP REQUIRED)
 
 # ImGui via FetchContent (no install needed)
 include(FetchContent)
@@ -55,6 +56,7 @@ target_link_libraries(particle_life PRIVATE
     Vulkan::Vulkan
     glfw
     glm::glm
+    OpenMP::OpenMP_CXX
 )
 
 target_compile_options(particle_life PRIVATE
@@ -98,6 +100,7 @@ target_link_libraries(particle_physics PRIVATE
     Vulkan::Vulkan
     glfw
     glm::glm
+    OpenMP::OpenMP_CXX
 )
 
 target_compile_options(particle_physics PRIVATE

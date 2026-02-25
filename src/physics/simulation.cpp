@@ -1727,57 +1727,108 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         }
         iface.request_delete_particle = false;  // always clear
 
-        // Count active particles and type populations
-        uint32_t active = 0;
-        float total_energy = 0.0f;
-        uint32_t type_counts[MAX_PARTICLE_TYPES] = {};
-        for (uint32_t i = 0; i < cfg.particle_count; ++i) {
-            if (readback_energies_[i] > 0.01f) {
-                active++;
-                total_energy += readback_energies_[i];
-                uint32_t t = particles.types[i];
-                if (t < MAX_PARTICLE_TYPES) type_counts[t]++;
-            }
+        // Handle halt velocities request
+        if (iface.request_halt_velocities) {
+            for (uint32_t i = 0; i < cfg.particle_count; ++i)
+                readback_velocities_[i] = glm::vec2(0.0f);
+            compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+            iface.request_halt_velocities = false;
         }
-        iface.active_particle_display = active;
-        iface.dormant_particle_display = cfg.particle_count - active;
-        iface.total_energy_display = total_energy;
-        iface.avg_energy_display = (active > 0) ? total_energy / active : 0.0f;
-        for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t)
-            iface.type_counts_display[t] = type_counts[t];
 
-        // ── Emergent kinetic temperature: T ∝ ⟨½mv²⟩ ────────────────────────
+        // Handle remove massless request (photon, neutrinos, gluon, graviton, dark energy)
+        if (iface.request_remove_massless) {
+            bool changed = false;
+            for (uint32_t i = 0; i < cfg.particle_count; ++i) {
+                uint32_t t = particles.types[i];
+                if (t == PHOTON_TYPE_PHYS || t == NEUTRINO_TYPE_PHYS
+                    || t == MU_NEUTRINO_TYPE_PHYS || t == TAU_NEUTRINO_TYPE_PHYS
+                    || t == GLUON_TYPE_PHYS || t == GRAVITON_TYPE_PHYS
+                    || t == DARK_ENERGY_TYPE_PHYS) {
+                    if (readback_energies_[i] > 0.0f) {
+                        readback_energies_[i] = 0.0f;
+                        readback_velocities_[i] = glm::vec2(0.0f);
+                        changed = true;
+                    }
+                }
+            }
+            if (changed)
+                compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+            iface.request_remove_massless = false;
+        }
+
+        // Handle remove massive request (everything except massless types)
+        if (iface.request_remove_massive) {
+            bool changed = false;
+            for (uint32_t i = 0; i < cfg.particle_count; ++i) {
+                uint32_t t = particles.types[i];
+                bool massless = (t == PHOTON_TYPE_PHYS || t == NEUTRINO_TYPE_PHYS
+                    || t == MU_NEUTRINO_TYPE_PHYS || t == TAU_NEUTRINO_TYPE_PHYS
+                    || t == GLUON_TYPE_PHYS || t == GRAVITON_TYPE_PHYS
+                    || t == DARK_ENERGY_TYPE_PHYS);
+                if (!massless && readback_energies_[i] > 0.0f) {
+                    readback_energies_[i] = 0.0f;
+                    readback_velocities_[i] = glm::vec2(0.0f);
+                    changed = true;
+                }
+            }
+            if (changed)
+                compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+            iface.request_remove_massive = false;
+        }
+
+        // ── Fused stats + temperature + B-field (single parallel reduction) ──
         {
+            uint32_t active = 0;
+            float total_energy = 0.0f;
+            uint32_t type_counts[MAX_PARTICLE_TYPES] = {};
             float total_ke = 0.0f;
             uint32_t ke_count = 0;
-            for (uint32_t i = 0; i < cfg.particle_count; ++i) {
-                if (readback_energies_[i] < 0.01f) continue;
+            float total_current = 0.0f;
+            uint32_t charged_count = 0;
+            const uint32_t n = cfg.particle_count;
+
+            #pragma omp parallel for \
+                reduction(+:active, total_energy, total_ke, ke_count, \
+                            total_current, charged_count, \
+                            type_counts[:MAX_PARTICLE_TYPES]) \
+                if(n > 2000)
+            for (uint32_t i = 0; i < n; ++i) {
+                float e = readback_energies_[i];
+                if (e < 0.01f) continue;
+
+                active++;
+                total_energy += e;
+
+                uint32_t t = particles.types[i];
+                if (t < MAX_PARTICLE_TYPES) type_counts[t]++;
+
                 glm::vec2 v = readback_velocities_[i];
                 total_ke += 0.5f * glm::dot(v, v);
                 ke_count++;
+
+                if (t < PHYS_PARTICLE_TYPES) {
+                    float q = PHYS_CHARGE[t];
+                    if (std::abs(q) > 0.01f) {
+                        total_current += std::abs(q) * glm::length(v);
+                        charged_count++;
+                    }
+                }
             }
+
+            iface.active_particle_display = active;
+            iface.dormant_particle_display = n - active;
+            iface.total_energy_display = total_energy;
+            iface.avg_energy_display = (active > 0) ? total_energy / active : 0.0f;
+            for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t)
+                iface.type_counts_display[t] = type_counts[t];
+
             float avg_ke = (ke_count > 0) ? total_ke / ke_count : 0.0f;
-            float measured_temp = avg_ke * 0.1f;  // scaling: avg_ke ~3000 → 300K
+            float measured_temp = avg_ke * 0.1f;
             emergent_temperature_ = emergent_temperature_ * 0.98f + measured_temp * 0.02f;
             iface.emergent_temp_display = emergent_temperature_;
-        }
 
-        // ── Emergent B-field from charged currents: J = Σ|q·v| ──────────────
-        {
-            float total_current = 0.0f;
-            uint32_t charged_count = 0;
-            for (uint32_t i = 0; i < cfg.particle_count; ++i) {
-                if (readback_energies_[i] < 0.01f) continue;
-                uint32_t t = particles.types[i];
-                if (t >= PHYS_PARTICLE_TYPES) continue;
-                float q = PHYS_CHARGE[t];
-                if (std::abs(q) < 0.01f) continue;
-                float speed = glm::length(readback_velocities_[i]);
-                total_current += std::abs(q) * speed;
-                charged_count++;
-            }
             float avg_current = (charged_count > 0) ? total_current / charged_count : 0.0f;
-            float measured_bfield = avg_current * 0.02f;  // scaling: avg_current ~50 → 1.0 T
+            float measured_bfield = avg_current * 0.02f;
             emergent_bfield_ = emergent_bfield_ * 0.98f + measured_bfield * 0.02f;
             iface.emergent_bfield_display = emergent_bfield_;
         }

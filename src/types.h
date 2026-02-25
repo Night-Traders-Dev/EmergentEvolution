@@ -220,6 +220,9 @@ struct SimConfig {
     float    compton_strength         = 1.0f;   // Compton scattering (photon-matter)
     float    annihilation_strength    = 1.0f;   // Matter-antimatter annihilation
 
+    // Visual
+    bool     show_trails        = false;  // particle trail rendering (fade instead of clear)
+
     // Timestep multiplier (UI-adjustable)
     float    time_scale         = 1.0f;
 
