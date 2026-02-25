@@ -4,7 +4,7 @@
 
 **A GPU-accelerated quantum particle physics and chemistry sandbox**
 
-Standard Model + Beyond · Nuclear fusion & fission · Orbital mechanics · Emergent thermodynamics · Save/Load
+Standard Model + Beyond · Nuclear fusion & fission · Orbital mechanics · Emergent thermodynamics · Quantum entanglement · Tools · Save/Load
 
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
 [![Vulkan](https://img.shields.io/badge/Vulkan-1.3-red.svg)](https://www.vulkan.org/)
@@ -20,8 +20,9 @@ Particle Playground ships two simulation modes sharing the same Vulkan compute e
 - **Particle Physics** (`particle_physics`) — 33 particle types spanning the Standard Model and
   beyond, with real quantum mechanics: Coulomb + Yukawa + QCD forces, centrifugal barrier orbitals,
   nuclear fusion/fission, radioactive decay with realistic isotope half-lives, Compton scattering,
-  hard-sphere collisions, emergent thermodynamics, virtual particle pair creation, element
-  detection with info cards, and six per-force multiplier knobs
+  hard-sphere collisions, emergent thermodynamics, virtual particle pair creation, quantum
+  entanglement, element detection with info cards, interactive tools (particle accelerator, mirrors),
+  and six per-force multiplier knobs
 - **Particle Chemistry** (`particle_life`) — 18 elements with persistent covalent/ionic bonds,
   molecular aggregates, vesicles, proto-cells, and Darwinian evolution
 
@@ -46,10 +47,12 @@ pairwise GPU compute shaders.
   - [Compton Scattering](#compton-scattering)
   - [Hard-Sphere Collisions](#hard-sphere-collisions)
   - [Virtual Particle Pairs](#virtual-particle-pairs)
+  - [Quantum Entanglement](#quantum-entanglement)
   - [Emergent Thermodynamics](#emergent-thermodynamics)
   - [Field Visualization](#field-visualization)
   - [Environment Presets](#environment-presets-physics)
   - [Spawn Picker — Physics](#spawn-picker--physics)
+  - [Tools](#tools)
   - [Save / Load](#save--load)
 - [Particle Chemistry Mode](#particle-chemistry-mode)
   - [Periodic Table — 18 Elements](#periodic-table--18-elements)
@@ -149,7 +152,7 @@ All four forces act simultaneously in the compute shader. Each force has an inde
 | **Strong nuclear** | Yukawa potential (attractive, 8px range) + Pauli hard-core repulsion (6px) | YUKAWA=2000, PAULI=12000 | `yukawa_strength`, `pauli_multiplier` |
 | **QCD color** | Cornell potential with running coupling (asymptotic freedom) | alpha_s running, string_tension 0-200 | `alpha_s_scale` |
 | **Weak nuclear** | Phenomenological short-range Yukawa (0.8px range) + stochastic decay (CPU) | Coupling 0.0-2.0 | -- |
-| **Gravity** | Newtonian 1/r^2 between massive particles | 0.0-2.0 slider | -- |
+| **Gravity** | Newtonian 1/r^2 between massive particles | 0.0-2.0 slider (default 1.0) | -- |
 | **Compton** | Photon radiation pressure + oscillating B-field on charged matter | 30px range | `compton_strength` |
 | **Annihilation** | Matter-antimatter attraction at contact range | 6px radius | `annihilation_strength` |
 
@@ -378,6 +381,34 @@ max pairs per tick (1-16).
 
 ---
 
+## Quantum Entanglement
+
+An optional subsystem that entangles particle pairs created during virtual pair production.
+Entangled pairs exhibit non-local correlations — "spooky action at a distance". Toggle on/off
+in the **Entanglement** settings panel.
+
+| Property | Detail |
+|---|---|
+| **Creation** | Virtual particle pairs are automatically entangled at birth with anti-correlated spins |
+| **Velocity coupling** | Fraction of velocity difference applied mutually each tick — entangled particles mirror each other's motion |
+| **Spin anti-correlation** | Entangled partners maintain opposite spin values (if one flips, the other follows) |
+| **Decoherence** | Stochastic per-tick probability of entanglement breaking |
+| **Death** | Entanglement breaks instantly if either partner dies |
+| **Visualization** | Dashed blue lines connect entangled pairs on screen |
+
+**Settings** (Entanglement panel):
+
+| Parameter | Range | Default | Effect |
+|---|---|---|---|
+| Enable Entanglement | on/off | on | Master toggle for entanglement |
+| Coupling | 0.0 - 0.5 | 0.15 | Velocity coupling fraction — higher = stronger non-local correlation |
+| Decoherence | 0.0 - 0.05 | 0.005 | Probability per tick of breaking — 0 = permanent, higher = faster decay |
+
+The active entangled pair count is displayed in the panel. Pairs are transient — they form
+naturally when virtual particles spawn and decay over time through decoherence or particle death.
+
+---
+
 ## Emergent Thermodynamics
 
 Two emergent feedback systems measure bulk properties from particle kinetics and feed them
@@ -471,6 +502,57 @@ counts and orbital velocities:
 | **Kaon+** K+ | u + s&#773; | 2 |
 
 Each section has configurable count (1-100), energy (0.1-1.0), and scatter radius (1-100px).
+
+---
+
+## Tools
+
+Interactive tools accessible from **Menu > Tools** in the top menu bar. Only one tool can be
+active at a time; activating a tool disables select mode and spawn mode.
+
+### Particle Accelerator
+
+Fire high-energy projectiles at a target particle.
+
+1. Activate via **Menu > Tools > Accelerator**
+2. **Click a particle** to set it as the target (gold crosshair indicator)
+3. **Click anywhere** to fire projectiles from that position toward the target
+
+The target particle is tracked across frames with a persistent gold crosshair. If the target
+dies or is lost, a notification appears and you can select a new target.
+
+| Setting | Range | Default | Effect |
+|---|---|---|---|
+| Projectile Type | Any particle type | Proton | Type of fired projectile |
+| Speed | 50 - 500 px/frame | 200 | Launch velocity toward target |
+| Fire Mode | Single / Triple / Stream | Single | Projectiles per shot |
+
+- **Single**: one projectile per click
+- **Triple**: three projectiles in a narrow spread pattern
+- **Stream**: continuous fire while holding left mouse button (configurable interval)
+
+A dashed aim line is drawn from the mouse position toward the target, with an arrowhead
+indicating the fire direction.
+
+### Mirror
+
+Place reflective line segments that particles bounce off with specular reflection.
+
+1. Activate via **Menu > Tools > Mirror**
+2. **Click** to place the first endpoint
+3. **Click again** to place the second endpoint — the mirror appears immediately
+
+Mirrors are force objects and persist until deleted. They render as silver-blue glowing lines
+with a shimmer animation. Particles reflect with configurable elasticity (coefficient of
+restitution). Mirrors can be moved and deleted from the **Force Objects** panel like any other
+force object.
+
+| Property | Detail |
+|---|---|
+| **Reflection** | Specular — velocity component normal to mirror surface is reversed |
+| **Elasticity** | Configurable coefficient of restitution (default 0.9) |
+| **Rendering** | Silver-blue core with glow falloff and animated shimmer |
+| **GPU-side** | Post-integration reflection in compute shader (not a force — particles bounce) |
 
 ---
 
@@ -627,7 +709,10 @@ CaCO3, Au3, UO2, FeS2.
 | `W A S D` | Pan camera |
 | Left drag | Pan camera (mouse) |
 | Scroll wheel | Zoom in / out |
-| Left click | Place particle (spawn mode) / Select particle (select mode) |
+| Left click | Place particle (spawn mode) / Select particle (select mode) / Fire accelerator / Place mirror endpoint |
+
+> **Tools** — Open **Menu > Tools** to access the Particle Accelerator (fire projectiles at a
+> target particle) and Mirror (place reflective line segments). Only one tool is active at a time.
 
 > **Info Card** — Select a particle to see its type, charge, spin, energy, age, momentum,
 > temperature, magnetic moment, orbital parent, and element membership. If the particle
@@ -686,21 +771,23 @@ EmergentEvolution/
 │   ├── decay_manager.h/.cpp     # Stochastic half-life decay, annihilation, DECAY_TABLE
 │   ├── organism.h/.cpp          # DBSCAN clustering, molecule classification, trait feedback
 │   ├── sub_atomic.h/.cpp        # Sub-atomic LOD: Bohr nucleon/electron, Cornell quark
+│   ├── stb_image.h              # Single-header image loading (window icon)
+│   ├── stb_image_impl.cpp       # stb_image implementation unit
 │   ├── vulkan_context.h/.cpp    # Vulkan instance, device, swapchain, buffer helpers
-│   ├── compute_pipeline.h/.cpp  # 17-binding descriptor layout, buffer lifecycle, readback
+│   ├── compute_pipeline.h/.cpp  # 18-binding descriptor layout, buffer lifecycle, readback
 │   ├── renderer.h/.cpp          # Fullscreen-quad pipeline, ImGui integration
 │   ├── interface.h/.cpp         # Chemistry ImGui panels, F3 spawn picker
 │   ├── simulation.h/.cpp        # Chemistry main loop, input, camera, orchestration
 │   └── main.cpp                 # Chemistry entry point
 ├── src/physics/
 │   ├── phys_particles.h/.cpp    # 33 particle types, masses, charges, decay rates, isotope table, environments
-│   ├── interface.h/.cpp         # Physics ImGui: spawn picker, force multipliers, element cards, save/load
-│   ├── simulation.h/.cpp        # Physics main loop: fusion, fission, decay, nuclear isotope decay, orbitals
+│   ├── interface.h/.cpp         # Physics ImGui: spawn picker, force multipliers, element cards, tools, save/load
+│   ├── simulation.h/.cpp        # Physics main loop: fusion, fission, decay, orbitals, entanglement, accelerator
 │   ├── save_load.h/.cpp         # Binary .ppsg save/load serialization
-│   └── main.cpp                 # Physics entry point (borderless maximized window)
+│   └── main.cpp                 # Physics entry point (borderless maximized, window icon via stb_image)
 ├── shaders/
 │   ├── compute.comp             # Chemistry GPU: forces, bonds, metabolism
-│   ├── physics.comp             # Physics GPU: 7 forces, centrifugal barrier, hard-sphere, 5 field viz
+│   ├── physics.comp             # Physics GPU: 7 forces, centrifugal barrier, hard-sphere, mirror reflection, 5 field viz
 │   ├── fullscreen.vert          # Fullscreen triangle vertex shader
 │   └── fullscreen.frag          # Particle texture blit
 └── CMakeLists.txt
@@ -724,6 +811,7 @@ EmergentEvolution/
 | 14 | energy B (pong) | write |
 | 15 | genome | read |
 | 16 | bond partners | read (CPU-managed) |
+| 17 | force objects | read (gravity wells, repulsors, attractors, heat sources, vortices, mirrors) |
 
 A/B buffers ping-pong each tick. All buffers are HOST_VISIBLE + HOST_COHERENT for CPU readback.
 

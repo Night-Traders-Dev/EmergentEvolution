@@ -485,7 +485,7 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         settings_visible = !settings_visible;
 
     // Auto-disable select_mode when other modes activate
-    if (pending_spawn || force_obj_placement_mode)
+    if (pending_spawn || force_obj_placement_mode || accel_mode || mirror_placement_mode)
         select_mode = false;
 
     push_theme();
@@ -522,6 +522,10 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     if (selected_force_obj_idx >= 0)
         draw_force_object_panel(force_objects);
 
+    // Draw accelerator panel
+    if (accel_mode)
+        draw_accelerator_panel();
+
     // Save/Load dialog (drawn before cards so cards render on top)
     if (show_save_dialog || show_load_dialog)
         draw_save_load_dialog();
@@ -539,6 +543,164 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     // Fade save/load status message
     if (save_load_msg_timer > 0.0f)
         save_load_msg_timer -= ImGui::GetIO().DeltaTime;
+
+    // ── Accelerator aim visualization overlay ──
+    if (accel_mode && accel_phase == 1 && accel_source_idx >= 0) {
+        ImGuiIO& io = ImGui::GetIO();
+        float win_w = io.DisplaySize.x;
+        float win_h = io.DisplaySize.y;
+
+        // World-to-screen
+        auto w2s = [&](glm::vec2 w) -> ImVec2 {
+            glm::vec2 s = glm::vec2(win_w, win_h) * 0.5f
+                        + (w - cfg.camera_origin) * cfg.current_camera_zoom;
+            return ImVec2(s.x, s.y);
+        };
+
+        ImVec2 tgt_scr = w2s(accel_source_world_pos);
+        ImVec2 mouse = io.MousePos;
+
+        // Direction from mouse toward target
+        float dx = tgt_scr.x - mouse.x;
+        float dy = tgt_scr.y - mouse.y;
+        float len = std::sqrt(dx * dx + dy * dy);
+
+        if (len > 1.0f) {
+            float nx = dx / len;
+            float ny = dy / len;
+
+            ImVec4 tc = PHYS_TYPE_UI_COLORS[accel_fire_type];
+            ImU32 line_col = ImGui::ColorConvertFloat4ToU32(ImVec4(tc.x, tc.y, tc.z, 0.6f));
+            ImU32 dot_col  = ImGui::ColorConvertFloat4ToU32(ImVec4(tc.x, tc.y, tc.z, 1.0f));
+
+            ImDrawList* fg = ImGui::GetForegroundDrawList();
+
+            // Target indicator circle (crosshair)
+            fg->AddCircle(tgt_scr, 14.0f, dot_col, 16, 2.0f);
+            fg->AddCircle(tgt_scr, 6.0f, dot_col, 12, 1.5f);
+
+            // Dashed aim line from mouse toward target
+            float line_len = len;
+            float dash = 8.0f, gap = 4.0f, t = 0.0f;
+            bool draw_seg = true;
+            while (t < line_len) {
+                float seg = draw_seg ? dash : gap;
+                seg = std::min(seg, line_len - t);
+                if (draw_seg) {
+                    ImVec2 a(mouse.x + nx * t, mouse.y + ny * t);
+                    ImVec2 b(mouse.x + nx * (t + seg), mouse.y + ny * (t + seg));
+                    fg->AddLine(a, b, line_col, 2.0f);
+                }
+                t += seg;
+                draw_seg = !draw_seg;
+            }
+
+            // Arrowhead pointing at target (near target end)
+            float as = 10.0f;
+            ImVec2 tip = tgt_scr;
+            ImVec2 left(tip.x - nx*as + ny*as*0.5f, tip.y - ny*as - nx*as*0.5f);
+            ImVec2 right(tip.x - nx*as - ny*as*0.5f, tip.y - ny*as + nx*as*0.5f);
+            fg->AddTriangleFilled(tip, left, right, dot_col);
+
+            // Triple shot spread lines (from mouse toward target)
+            if (accel_fire_mode == 1) {
+                float spread = 5.0f * 3.14159265f / 180.0f;
+                float base_a = std::atan2(ny, nx);
+                ImU32 spread_col = ImGui::ColorConvertFloat4ToU32(ImVec4(tc.x, tc.y, tc.z, 0.25f));
+                for (int s = -1; s <= 1; s += 2) {
+                    float a = base_a + s * spread;
+                    ImVec2 end(mouse.x + std::cos(a) * line_len,
+                              mouse.y + std::sin(a) * line_len);
+                    fg->AddLine(mouse, end, spread_col, 1.0f);
+                }
+            }
+
+            // Stream mode: pulsing indicator at mouse (fire origin)
+            if (accel_fire_mode == 2) {
+                float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(ImGui::GetFrameCount()) * 0.15f);
+                ImU32 pulse_col = ImGui::ColorConvertFloat4ToU32(ImVec4(tc.x, tc.y, tc.z, pulse * 0.4f));
+                fg->AddCircleFilled(mouse, 8.0f, pulse_col);
+            }
+        }
+    }
+
+    // ── Mirror placement preview overlay ──
+    if (mirror_placement_mode && mirror_placement_phase == 1) {
+        ImGuiIO& mio = ImGui::GetIO();
+        float win_w = mio.DisplaySize.x;
+        float win_h = mio.DisplaySize.y;
+        auto w2s = [&](glm::vec2 w) -> ImVec2 {
+            glm::vec2 s = glm::vec2(win_w, win_h) * 0.5f
+                        + (w - cfg.camera_origin) * cfg.current_camera_zoom;
+            return ImVec2(s.x, s.y);
+        };
+        ImVec2 p1 = w2s(mirror_endpoint1);
+        ImVec2 p2 = mio.MousePos;
+        ImU32 line_col = ImGui::ColorConvertFloat4ToU32(ImVec4(0.7f, 0.7f, 0.8f, 0.6f));
+        ImU32 dot_col  = ImGui::ColorConvertFloat4ToU32(ImVec4(0.9f, 0.9f, 1.0f, 1.0f));
+        ImDrawList* fg = ImGui::GetForegroundDrawList();
+        fg->AddLine(p1, p2, line_col, 2.5f);
+        fg->AddCircleFilled(p1, 4.0f, dot_col);
+        fg->AddCircleFilled(p2, 4.0f, dot_col);
+    }
+    if (mirror_placement_mode) {
+        ImDrawList* fg = ImGui::GetForegroundDrawList();
+        ImGuiIO& mio = ImGui::GetIO();
+        const char* txt = (mirror_placement_phase == 0)
+            ? "Click to set mirror start point"
+            : "Click to set mirror end point";
+        ImVec2 ts = ImGui::CalcTextSize(txt);
+        ImVec2 pos(mio.DisplaySize.x * 0.5f - ts.x * 0.5f, 30.0f);
+        fg->AddText(pos, ImGui::ColorConvertFloat4ToU32(ImVec4(0.7f, 0.7f, 0.8f, 1.0f)), txt);
+    }
+
+    // ── Entanglement visualization overlay ──
+    if (cfg.entanglement_enabled && readback_positions_ptr && entangled_partners_ptr
+        && readback_count > 0) {
+        ImGuiIO& eio = ImGui::GetIO();
+        float win_w = eio.DisplaySize.x, win_h = eio.DisplaySize.y;
+        auto w2s_ent = [&](glm::vec2 w) -> ImVec2 {
+            glm::vec2 s = glm::vec2(win_w, win_h) * 0.5f
+                        + (w - cfg.camera_origin) * cfg.current_camera_zoom;
+            return ImVec2(s.x, s.y);
+        };
+
+        ImDrawList* fg = ImGui::GetForegroundDrawList();
+        ImU32 ent_col = ImGui::ColorConvertFloat4ToU32(ImVec4(0.4f, 0.7f, 1.0f, 0.35f));
+
+        for (uint32_t ei = 0; ei < readback_count; ++ei) {
+            uint32_t ep = entangled_partners_ptr[ei];
+            if (ep == 0xFFFFFFFFu || ep >= readback_count || ei > ep) continue;
+
+            ImVec2 a = w2s_ent(readback_positions_ptr[ei]);
+            ImVec2 b = w2s_ent(readback_positions_ptr[ep]);
+
+            // Skip if both off screen
+            if (a.x < -50.0f || a.x > win_w + 50.0f ||
+                a.y < -50.0f || a.y > win_h + 50.0f) continue;
+            if (b.x < -50.0f || b.x > win_w + 50.0f ||
+                b.y < -50.0f || b.y > win_h + 50.0f) continue;
+
+            float edx = b.x - a.x, edy = b.y - a.y;
+            float elen = std::sqrt(edx * edx + edy * edy);
+            if (elen < 1.0f || elen > 800.0f) continue;
+
+            float enx = edx / elen, eny = edy / elen;
+            float dash = 6.0f, gap = 4.0f, et = 0.0f;
+            bool draw_seg = true;
+            while (et < elen) {
+                float seg = draw_seg ? dash : gap;
+                seg = std::min(seg, elen - et);
+                if (draw_seg) {
+                    fg->AddLine(ImVec2(a.x + enx * et, a.y + eny * et),
+                               ImVec2(a.x + enx * (et + seg), a.y + eny * (et + seg)),
+                               ent_col, 1.0f);
+                }
+                et += seg;
+                draw_seg = !draw_seg;
+            }
+        }
+    }
 
     pop_theme();
 }
@@ -847,84 +1009,124 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
             ImGui::TextColored(ImVec4(0.0f, 0.9f, 0.9f, 1.0f), "[SELECT]");
         }
 
-        // Right-aligned buttons: Tools, Save, Load, Select(F4), Reset(F2), Spawn(F3)
-        float btn_sm = 60.0f;
-        float btn_lg = 80.0f;
-        float total_w = btn_sm * 3 + btn_lg * 3 + 8.0f * 5;  // 6 buttons, 5 gaps
-        float x_right = display_w - 12.0f - total_w;
+        // Right-aligned Menu button
+        float menu_btn_w = 70.0f;
+        float x_right = display_w - 12.0f - menu_btn_w;
         ImGui::SameLine(x_right);
 
-        if (ImGui::Button("Tools", ImVec2(btn_sm, 26))) {
+        if (ImGui::Button("Menu", ImVec2(menu_btn_w, 26))) {
             show_tools_popup = !show_tools_popup;
         }
-        // Tools popup (rendered above the button)
+
+        // Menu popup (rendered above the button)
         if (show_tools_popup) {
-            float popup_w = 200.0f;
-            float popup_h = 130.0f;
-            float popup_x = x_right;
+            float popup_w = 220.0f;
+            float popup_h = 350.0f;
+            float popup_x = display_w - 12.0f - popup_w;
             float popup_y = display_h - bar_h - popup_h - 4.0f;
             ImGui::SetNextWindowPos(ImVec2(popup_x, popup_y));
             ImGui::SetNextWindowSize(ImVec2(popup_w, popup_h));
             ImGuiWindowFlags popup_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
                 | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar;
             ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.059f, 0.071f, 0.130f, 0.95f));
-            if (ImGui::Begin("##ToolsPopup", &show_tools_popup, popup_flags)) {
-                ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Tools");
-                ImGui::Separator();
-                if (ImGui::Button("Halt Velocities", ImVec2(-1, 0))) {
-                    request_halt_velocities = true;
-                    show_tools_popup = false;
-                }
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Set all particle velocities to zero");
+            ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.12f, 0.14f, 0.22f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.18f, 0.20f, 0.32f, 1.0f));
+            if (ImGui::Begin("##MenuPopup", &show_tools_popup, popup_flags)) {
 
-                if (ImGui::Checkbox("Show Trails", &cfg.show_trails)) {}
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Draw particle paths (fade effect)");
-
-                if (ImGui::Button("Remove Massless", ImVec2(-1, 0))) {
-                    request_remove_massless = true;
-                    show_tools_popup = false;
+                // ── Simulation ──
+                if (ImGui::TreeNodeEx("Simulation", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    if (ImGui::MenuItem("Spawn (F3)", nullptr, spawn_menu_visible)) {
+                        spawn_menu_visible = !spawn_menu_visible;
+                    }
+                    if (ImGui::MenuItem("Select (F4)", nullptr, select_mode)) {
+                        select_mode = !select_mode;
+                        if (select_mode) { pending_spawn = false; force_obj_placement_mode = false; }
+                    }
+                    if (ImGui::MenuItem("Reset (F2)")) {
+                        request_reset = true;
+                        show_tools_popup = false;
+                    }
+                    ImGui::TreePop();
                 }
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Remove all massless particles\n(photons, gluons, gravitons, neutrinos)");
 
-                if (ImGui::Button("Remove Massive", ImVec2(-1, 0))) {
-                    request_remove_massive = true;
-                    show_tools_popup = false;
+                ImGui::Spacing();
+
+                // ── File ──
+                if (ImGui::TreeNodeEx("File", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    if (ImGui::MenuItem("Save (Ctrl+S)")) {
+                        show_save_dialog = true;
+                        show_tools_popup = false;
+                    }
+                    if (ImGui::MenuItem("Load (Ctrl+L)")) {
+                        show_load_dialog = true;
+                        show_tools_popup = false;
+                    }
+                    ImGui::TreePop();
                 }
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Remove all massive particles\n(everything except photons, gluons, etc.)");
+
+                ImGui::Spacing();
+
+                // ── Tools ──
+                if (ImGui::TreeNodeEx("Tools", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    if (ImGui::MenuItem("Halt Velocities")) {
+                        request_halt_velocities = true;
+                        show_tools_popup = false;
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Set all particle velocities to zero");
+
+                    ImGui::MenuItem("Show Trails", nullptr, &cfg.show_trails);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Draw particle paths (fade effect)");
+
+                    if (ImGui::MenuItem("Remove Massless")) {
+                        request_remove_massless = true;
+                        show_tools_popup = false;
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Remove all massless particles\n(photons, gluons, gravitons, neutrinos)");
+
+                    if (ImGui::MenuItem("Remove Massive")) {
+                        request_remove_massive = true;
+                        show_tools_popup = false;
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Remove all massive particles\n(everything except photons, gluons, etc.)");
+
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Accelerator", nullptr, accel_mode)) {
+                        accel_mode = !accel_mode;
+                        if (accel_mode) {
+                            accel_phase = 0;
+                            accel_source_idx = -1;
+                            pending_spawn = false;
+                            select_mode = false;
+                            force_obj_placement_mode = false;
+                        }
+                        show_tools_popup = false;
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Particle accelerator tool\nSelect a target and fire particles at it");
+
+                    if (ImGui::MenuItem("Mirror", nullptr, mirror_placement_mode)) {
+                        mirror_placement_mode = !mirror_placement_mode;
+                        if (mirror_placement_mode) {
+                            mirror_placement_phase = 0;
+                            pending_spawn = false;
+                            select_mode = false;
+                            force_obj_placement_mode = false;
+                            accel_mode = false;
+                        }
+                        show_tools_popup = false;
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Reflective mirror tool\nTwo clicks define a line segment\nParticles bounce off reflectively");
+
+                    ImGui::TreePop();
+                }
             }
             ImGui::End();
-            ImGui::PopStyleColor();
-        }
-        ImGui::SameLine(0, 8);
-        if (ImGui::Button("Save", ImVec2(btn_sm, 26))) {
-            show_save_dialog = true;
-        }
-        ImGui::SameLine(0, 8);
-        if (ImGui::Button("Load", ImVec2(btn_sm, 26))) {
-            show_load_dialog = true;
-        }
-        ImGui::SameLine(0, 8);
-        // Highlight Select button when active
-        if (select_mode) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.5f, 0.5f, 0.9f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f, 0.6f, 0.6f, 1.0f));
-        }
-        if (ImGui::Button("Select (F4)", ImVec2(btn_lg, 26))) {
-            select_mode = !select_mode;
-            if (select_mode) { pending_spawn = false; force_obj_placement_mode = false; }
-        }
-        if (select_mode) ImGui::PopStyleColor(2);
-        ImGui::SameLine(0, 8);
-        if (ImGui::Button("Reset (F2)", ImVec2(btn_lg, 26))) {
-            request_reset = true;
-        }
-        ImGui::SameLine(0, 8);
-        if (ImGui::Button("Spawn (F3)", ImVec2(btn_lg, 26))) {
-            spawn_menu_visible = !spawn_menu_visible;
+            ImGui::PopStyleColor(3);
         }
     }
     ImGui::End();
@@ -1276,6 +1478,30 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
             cfg.virtual_pair_max_per_tick = static_cast<uint32_t>(max_pairs);
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Maximum virtual pairs spawned per frame\nHigher = more quantum foam activity");
+        }
+    }
+
+    // ── Entanglement ─────────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Entanglement")) {
+        ImGui::Checkbox("Enable Entanglement", &cfg.entanglement_enabled);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Quantum entanglement between particle pairs\n"
+                             "Created during virtual pair production\n"
+                             "Correlated spins + velocity coupling");
+
+        if (cfg.entanglement_enabled) {
+            ImGui::SliderFloat("Coupling", &cfg.entanglement_coupling, 0.0f, 0.5f, "%.3f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Velocity coupling fraction between entangled pairs\n"
+                                 "0 = no coupling, higher = stronger 'spooky action'");
+
+            ImGui::SliderFloat("Decoherence", &cfg.entanglement_decoherence, 0.0f, 0.05f, "%.4f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Probability per tick of entanglement breaking\n"
+                                 "0 = permanent, higher = faster decay");
+
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f),
+                "Active pairs: %u", entangled_pair_count_display);
         }
     }
 
@@ -1639,6 +1865,38 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
                 ImGui::SetTooltip("%s", fo_tips[fi]);
 
             if (active) {
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor();
+            }
+            ImGui::PopStyleColor(3);
+        }
+
+        // Mirror button (separate — uses two-click placement)
+        {
+            ImVec4 mc(0.7f, 0.7f, 0.8f, 1.0f);
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                ImVec4(mc.x * 0.3f, mc.y * 0.3f, mc.z * 0.3f, 0.80f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                ImVec4(mc.x * 0.5f, mc.y * 0.5f, mc.z * 0.5f, 0.90f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                ImVec4(mc.x * 0.7f, mc.y * 0.7f, mc.z * 0.7f, 1.0f));
+            if (mirror_placement_mode) {
+                ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(mc.x, mc.y, mc.z, 1.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
+            }
+            if (ImGui::Button("Mirror##fo5", ImVec2(70, 30))) {
+                mirror_placement_mode = !mirror_placement_mode;
+                if (mirror_placement_mode) {
+                    mirror_placement_phase = 0;
+                    force_obj_placement_mode = false;
+                    pending_spawn = false;
+                    select_mode = false;
+                    accel_mode = false;
+                }
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Reflective mirror\nTwo clicks define a line segment");
+            if (mirror_placement_mode) {
                 ImGui::PopStyleVar();
                 ImGui::PopStyleColor();
             }
@@ -2287,6 +2545,122 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ══════════════════════════════════════════════════════════════════════════════
+// ── Particle Accelerator Panel ──────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_accelerator_panel() {
+    ImGuiIO& io = ImGui::GetIO();
+    float max_h = io.DisplaySize.y - 64.0f;
+
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 650, 10), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(300, std::min(420.0f, max_h)), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(260, 200), ImVec2(340, max_h));
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.05f, 0.09f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.10f, 0.04f, 0.02f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.18f, 0.06f, 0.03f, 0.95f));
+
+    bool panel_open = accel_mode;
+    if (!ImGui::Begin("Particle Accelerator", &panel_open)) {
+        ImGui::End();
+        ImGui::PopStyleColor(3);
+        if (!panel_open) {
+            accel_mode = false;
+            accel_phase = 0;
+            accel_source_idx = -1;
+        }
+        return;
+    }
+    if (!panel_open) {
+        accel_mode = false;
+        accel_phase = 0;
+        accel_source_idx = -1;
+    }
+
+    // ── Status ──
+    if (accel_phase == 0) {
+        ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.3f, 1.0f), "Click a particle to set as target");
+    } else {
+        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "Click to fire at target!");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Change Target")) {
+            accel_phase = 0;
+            accel_source_idx = -1;
+        }
+    }
+
+    ImGui::Separator();
+
+    // ── Projectile Type ──
+    if (ImGui::CollapsingHeader("Projectile", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // Common types in rows
+        static const int ROW1[] = { PROTON_TYPE, NEUTRON_TYPE, ELECTRON_TYPE_PHYS,
+                                     PHOTON_TYPE_PHYS, POSITRON_TYPE_PHYS, NEUTRINO_TYPE_PHYS };
+        static const int ROW2[] = { MUON_TYPE_PHYS, ANTIMUON_TYPE_PHYS,
+                                     UP_QUARK_TYPE, DOWN_QUARK_TYPE,
+                                     GLUON_TYPE_PHYS, HIGGS_TYPE_PHYS };
+
+        auto draw_type_row = [&](const int* types, int count) {
+            for (int r = 0; r < count; ++r) {
+                int t = types[r];
+                ImVec4 col = PHYS_TYPE_UI_COLORS[t];
+                bool selected = (accel_fire_type == t);
+                if (selected) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(col.x*0.6f, col.y*0.6f, col.z*0.6f, 0.95f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(col.x*0.7f, col.y*0.7f, col.z*0.7f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_Border, col);
+                    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(col.x*0.25f, col.y*0.25f, col.z*0.25f, 0.7f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(col.x*0.4f, col.y*0.4f, col.z*0.4f, 0.9f));
+                    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0,0,0,0));
+                    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+                }
+                char id[32];
+                snprintf(id, sizeof(id), "%s##acc%d", PHYS_TYPE_LABELS[t], t);
+                if (ImGui::Button(id, ImVec2(38, 24)))
+                    accel_fire_type = t;
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", PHYS_TYPE_NAMES[t]);
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor(3);
+                if (r < count - 1) ImGui::SameLine(0, 4);
+            }
+        };
+
+        draw_type_row(ROW1, 6);
+        draw_type_row(ROW2, 6);
+
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "Selected: %s",
+                           PHYS_TYPE_NAMES[accel_fire_type]);
+    }
+
+    // ── Speed ──
+    if (ImGui::CollapsingHeader("Speed", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::SliderFloat("##AccelSpeed", &accel_speed, 10.0f, 300.0f, "%.0f px/s");
+        if (accel_speed >= 295.0f) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.5f, 1.0f), "(c)");
+        }
+    }
+
+    // ── Fire Mode ──
+    if (ImGui::CollapsingHeader("Fire Mode", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::RadioButton("Single Shot",  &accel_fire_mode, 0);
+        ImGui::RadioButton("Triple Shot",  &accel_fire_mode, 1);
+        ImGui::RadioButton("Stream",       &accel_fire_mode, 2);
+        if (accel_fire_mode == 2) {
+            int interval = static_cast<int>(accel_stream_interval);
+            ImGui::SliderInt("Rate##stream", &interval, 1, 10, "every %d frames");
+            accel_stream_interval = static_cast<uint32_t>(interval);
+        }
+    }
+
+    ImGui::End();
+    ImGui::PopStyleColor(3);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // ── Element List Window ─────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -2486,13 +2860,14 @@ void PhysicsInterface::draw_force_object_panel(ForceObject* objects) {
 
     ForceObject& obj = objects[idx];
 
-    static const char* fo_type_names[] = { "EM Field", "Strong Force", "Weak Force", "Gravity Well", "Heat Source" };
+    static const char* fo_type_names[] = { "EM Field", "Strong Force", "Weak Force", "Gravity Well", "Heat Source", "Mirror" };
     static const ImVec4 fo_type_colors[] = {
         ImVec4(0.3f, 0.5f, 1.0f, 1.0f),
         ImVec4(0.3f, 0.9f, 0.4f, 1.0f),
         ImVec4(0.7f, 0.3f, 0.9f, 1.0f),
         ImVec4(0.9f, 0.7f, 0.2f, 1.0f),
         ImVec4(1.0f, 0.4f, 0.2f, 1.0f),
+        ImVec4(0.7f, 0.7f, 0.8f, 1.0f),
     };
 
     const char* type_name = (obj.force_type < FORCE_OBJ_COUNT) ? fo_type_names[obj.force_type] : "Unknown";
@@ -2513,20 +2888,33 @@ void PhysicsInterface::draw_force_object_panel(ForceObject* objects) {
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "#%d", idx);
         ImGui::Separator();
 
-        // Position
-        float col_w = 80.0f;
-        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Position");
-        ImGui::SameLine(col_w);
-        ImGui::Text("%.0f, %.0f", obj.x, obj.y);
+        float col_w = 90.0f;
+        if (obj.force_type == FORCE_OBJ_MIRROR) {
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Endpoint 1");
+            ImGui::SameLine(col_w);
+            ImGui::Text("%.0f, %.0f", obj.x, obj.y);
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Endpoint 2");
+            ImGui::SameLine(col_w);
+            ImGui::Text("%.0f, %.0f", obj._pad0, obj._pad1);
 
-        // Strength slider
-        ImGui::Spacing();
-        ImGui::TextColored(type_color, "Strength");
-        ImGui::SliderFloat("##fo_str", &obj.strength, 0.1f, 10.0f, "%.2f");
+            ImGui::Spacing();
+            ImGui::TextColored(type_color, "Elasticity");
+            ImGui::SliderFloat("##fo_str", &obj.strength, 0.0f, 1.0f, "%.2f");
 
-        // Radius slider
-        ImGui::TextColored(type_color, "Radius");
-        ImGui::SliderFloat("##fo_rad", &obj.radius, 10.0f, 200.0f, "%.0f");
+            ImGui::TextColored(type_color, "Thickness");
+            ImGui::SliderFloat("##fo_rad", &obj.radius, 1.0f, 20.0f, "%.1f");
+        } else {
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Position");
+            ImGui::SameLine(col_w);
+            ImGui::Text("%.0f, %.0f", obj.x, obj.y);
+
+            ImGui::Spacing();
+            ImGui::TextColored(type_color, "Strength");
+            ImGui::SliderFloat("##fo_str", &obj.strength, 0.1f, 10.0f, "%.2f");
+
+            ImGui::TextColored(type_color, "Radius");
+            ImGui::SliderFloat("##fo_rad", &obj.radius, 10.0f, 200.0f, "%.0f");
+        }
 
         // Action buttons
         ImGui::Spacing();

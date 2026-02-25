@@ -92,7 +92,8 @@ enum ForceObjectType : uint32_t {
     FORCE_OBJ_WEAK         = 2,   // Short-range weak force boost
     FORCE_OBJ_GRAVITY_WELL = 3,   // Gravitational attraction on massive particles
     FORCE_OBJ_HEAT_SOURCE  = 4,   // Local thermal noise / temperature boost
-    FORCE_OBJ_COUNT        = 5
+    FORCE_OBJ_MIRROR       = 5,   // Reflective line segment (endpoints in x,y and _pad0,_pad1)
+    FORCE_OBJ_COUNT        = 6
 };
 
 // GPU-aligned struct (must match GLSL std430 layout). 32 bytes per object.
@@ -150,7 +151,7 @@ struct SimConfig {
     float    force_randomness   = 0.0f;    // 0=pure chemistry  1=pure random
     uint32_t generation_seed    = 0;
 
-    float radius             = 2.0f;
+    float radius             = 1.0f;
     float dampening          = 0.990f;
     float repulsion_radius   = 1.0f;
     float interaction_radius = 200.0f;
@@ -202,8 +203,13 @@ struct SimConfig {
 
     // Virtual particle pair creation
     bool     virtual_pairs_enabled     = true;
-    float    virtual_pair_threshold    = 2.0f;   // min combined energy for pair creation
+    float    virtual_pair_threshold    = 2.1f;   // min combined energy for pair creation
     uint32_t virtual_pair_max_per_tick = 2;      // max pairs spawned per frame
+
+    // Quantum Entanglement
+    bool     entanglement_enabled       = true;
+    float    entanglement_coupling      = 0.15f;  // velocity coupling fraction (0=none, 1=full mirror)
+    float    entanglement_decoherence   = 0.005f; // probability per tick of breaking (0=permanent)
 
     // Thermodynamic feedback
     bool  thermo_feedback_enabled   = true;

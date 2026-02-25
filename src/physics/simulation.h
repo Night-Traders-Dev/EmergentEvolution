@@ -55,6 +55,7 @@ private:
     };
     std::vector<NucleusInfo> detected_nuclei_;
     uint32_t nuclear_decay_count_ = 0;
+    uint32_t entangled_pair_count_ = 0;
 
     double fps_acc_       = 0.0;
     int    fps_frame_cnt_ = 0;
@@ -71,10 +72,13 @@ private:
     void check_fission();
     void check_decay();
     void check_virtual_pairs();
+    void update_entanglement();
     void update_orbitals();
     void check_nuclear_decay();
 
     void place_force_object(glm::vec2 world_pos, ForceObjectType type);
+    void place_mirror(glm::vec2 endpoint1, glm::vec2 endpoint2);
     int  hit_test_force_objects(glm::vec2 world_pos, float snap_radius);
     void recount_force_objects();
+    void do_accelerator_fire(glm::vec2 aim_world_pos);
 };

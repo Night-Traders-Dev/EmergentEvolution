@@ -82,6 +82,22 @@ public:
     int  selected_force_obj_idx   = -1;
     bool force_obj_move_mode      = false;
 
+    // Mirror placement (two-click: endpoint 1 → endpoint 2)
+    bool      mirror_placement_mode = false;
+    int       mirror_placement_phase = 0;    // 0=click endpoint 1, 1=click endpoint 2
+    glm::vec2 mirror_endpoint1 = {};
+
+    // Particle Accelerator tool
+    bool     accel_mode = false;            // tool active
+    int      accel_phase = 0;               // 0=select source, 1=aim/fire
+    int32_t  accel_source_idx = -1;         // source particle index
+    int      accel_fire_type = 0;           // projectile type index
+    float    accel_speed = 300.0f;          // projectile speed (max 300 = "c")
+    int      accel_fire_mode = 0;           // 0=single, 1=triple, 2=stream
+    uint32_t accel_stream_timer = 0;        // frame counter for stream rate
+    uint32_t accel_stream_interval = 3;     // fire every N frames in stream
+    glm::vec2 accel_source_world_pos = {};  // updated each tick for aim rendering
+
     // Stats display
     float    fps_display = 0.0f;
     uint32_t active_particle_display  = 0;
@@ -102,6 +118,11 @@ public:
     float emergent_temp_display   = 0.0f;
     float emergent_bfield_display = 0.0f;
     uint32_t nuclear_decay_count_display = 0;
+    uint32_t entangled_pair_count_display = 0;
+
+    // Readback data pointers for entanglement visualization
+    const glm::vec2*  readback_positions_ptr = nullptr;
+    const uint32_t*   entangled_partners_ptr = nullptr;
 
     // Element list (populated by simulation from detected_nuclei_)
     struct ElementSummary {
@@ -155,5 +176,6 @@ private:
     void draw_save_load_dialog();
     void draw_element_card(const Particles& particles);
     void draw_element_list();
+    void draw_accelerator_panel();
     void draw_notifications();
 };

@@ -44,17 +44,17 @@ void PhysicsSimulation::init(GLFWwindow* window) {
     cfg.repulsion_radius   = 1.0f;
     cfg.interaction_radius = 200.0f;
     cfg.pressure_resistance = 100.0f;
-    cfg.gravity_strength   = 0.0f;
+    cfg.gravity_strength   = 1.0f;
     cfg.lorentz_strength   = 0.0f;
     cfg.magnetic_coupling  = 1.0f;
-    cfg.radius             = 2.0f;
+    cfg.radius             = 1.0f;
     cfg.density_limit      = 0.0f;
     cfg.local_density_cap  = 0.5f;
     cfg.viscosity_strength = 0.0f;
     cfg.string_tension     = 100.0f;
     cfg.weak_coupling      = 1.0f;
     cfg.higgs_vev          = 246.0f;
-    cfg.virtual_pair_threshold    = 2.0f;
+    cfg.virtual_pair_threshold    = 2.1f;
     cfg.virtual_pair_max_per_tick = 2;
     cfg.time_scale         = 1.0f;
     cfg.field_flags        = 0;  // assembled from iface bools each frame
@@ -95,6 +95,13 @@ void PhysicsSimulation::reset() {
     iface.particle_move_mode = false;
     iface.request_delete_particle = false;
     iface.select_mode = false;
+    iface.accel_mode = false;
+    iface.accel_phase = 0;
+    iface.accel_source_idx = -1;
+    iface.accel_stream_timer = 0;
+    iface.mirror_placement_mode = false;
+    iface.mirror_placement_phase = 0;
+    entangled_pair_count_ = 0;
 
     physics_gen_data(particles, cfg);
     cfg.particle_count = static_cast<uint32_t>(particles.positions.size());
@@ -217,8 +224,19 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
         if (iface.force_obj_move_mode && iface.selected_force_obj_idx >= 0) {
             // 1. Reposition selected force object
             int idx = iface.selected_force_obj_idx;
-            force_objects_[idx].x = world_pos.x;
-            force_objects_[idx].y = world_pos.y;
+            if (force_objects_[idx].force_type == FORCE_OBJ_MIRROR) {
+                // Translate both endpoints by delta from midpoint
+                glm::vec2 mid((force_objects_[idx].x + force_objects_[idx]._pad0) * 0.5f,
+                              (force_objects_[idx].y + force_objects_[idx]._pad1) * 0.5f);
+                glm::vec2 delta = world_pos - mid;
+                force_objects_[idx].x     += delta.x;
+                force_objects_[idx].y     += delta.y;
+                force_objects_[idx]._pad0 += delta.x;
+                force_objects_[idx]._pad1 += delta.y;
+            } else {
+                force_objects_[idx].x = world_pos.x;
+                force_objects_[idx].y = world_pos.y;
+            }
             iface.force_obj_move_mode = false;
         }
         else if (iface.element_move_mode && iface.element_card_nucleus_rep >= 0) {
@@ -261,6 +279,41 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
             }
             iface.particle_move_mode = false;
         }
+        else if (iface.accel_mode) {
+            // 3.5. Particle Accelerator (fire AT the selected target)
+            if (iface.accel_phase == 0) {
+                // Select target particle
+                float snap_r = std::max(cfg.radius * 3.0f + 4.0f, 15.0f / cfg.current_camera_zoom);
+                float min_d2 = snap_r * snap_r;
+                int32_t best = -1;
+                for (uint32_t pi = 0; pi < static_cast<uint32_t>(readback_positions_.size()); ++pi) {
+                    if (pi < readback_energies_.size() && readback_energies_[pi] <= 0.0f) continue;
+                    glm::vec2 d = readback_positions_[pi] - world_pos;
+                    float d2 = d.x * d.x + d.y * d.y;
+                    if (d2 < min_d2) { min_d2 = d2; best = static_cast<int32_t>(pi); }
+                }
+                if (best >= 0) {
+                    iface.accel_source_idx = best;
+                    iface.accel_phase = 1;
+                    iface.push_notification("Target set - aim and fire!",
+                                            ImVec4(0.3f, 1.0f, 0.5f, 1.0f));
+                }
+            } else if (iface.accel_phase == 1 && iface.accel_fire_mode != 2) {
+                // Single or Triple shot on click
+                do_accelerator_fire(world_pos);
+            }
+        }
+        else if (iface.mirror_placement_mode) {
+            // 3.6. Mirror placement (two-click)
+            if (iface.mirror_placement_phase == 0) {
+                iface.mirror_endpoint1 = world_pos;
+                iface.mirror_placement_phase = 1;
+            } else {
+                place_mirror(iface.mirror_endpoint1, world_pos);
+                iface.mirror_placement_phase = 0;
+                iface.mirror_placement_mode = false;
+            }
+        }
         else if (iface.force_obj_placement_mode) {
             // 3. Place new force object
             place_force_object(world_pos, static_cast<ForceObjectType>(iface.force_obj_placement_type));
@@ -294,6 +347,26 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
         }
     }
     lmb_down_ = lmb;
+
+    // ── Accelerator stream mode (continuous fire while LMB held) ────────────
+    if (lmb && lmb_down_ && iface.accel_mode && iface.accel_phase == 1
+        && iface.accel_fire_mode == 2 && !ImGui::GetIO().WantCaptureMouse)
+    {
+        iface.accel_stream_timer++;
+        if (iface.accel_stream_timer >= iface.accel_stream_interval) {
+            iface.accel_stream_timer = 0;
+            // Recompute world_pos from current mouse
+            double mx, my;
+            glfwGetCursorPos(window, &mx, &my);
+            int ww, wh;
+            glfwGetFramebufferSize(window, &ww, &wh);
+            glm::vec2 aim_world = cfg.camera_origin +
+                (glm::vec2(static_cast<float>(mx), static_cast<float>(my))
+                 - glm::vec2(ww * 0.5f, wh * 0.5f)) / cfg.current_camera_zoom;
+            do_accelerator_fire(aim_world);
+        }
+    }
+    if (!lmb) iface.accel_stream_timer = 0;
 }
 
 // ── Helper: write genome for a particle type ─────────────────────────────────
@@ -329,6 +402,86 @@ static void write_spawn_genome(Particles& particles, uint32_t slot, uint32_t typ
     // Stamp birth frame for age tracking
     if (slot < particles.birth_frames.size())
         particles.birth_frames[slot] = frame;
+}
+
+// ── Accelerator fire ─────────────────────────────────────────────────────────
+
+void PhysicsSimulation::do_accelerator_fire(glm::vec2 aim_world_pos) {
+    if (!compute.is_ready()) return;
+    int32_t src = iface.accel_source_idx;
+    if (src < 0 || src >= static_cast<int32_t>(cfg.particle_count)) return;
+
+    uint32_t n = cfg.particle_count;
+    readback_positions_.resize(n);
+    readback_velocities_.resize(n);
+    readback_energies_.resize(n);
+    compute.read_current_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+
+    // Validate target is still alive
+    if (readback_energies_[src] < 0.01f) {
+        iface.accel_phase = 0;
+        iface.accel_source_idx = -1;
+        iface.push_notification("Target particle died!", ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+        return;
+    }
+
+    glm::vec2 target_pos = readback_positions_[src];
+    glm::vec2 dir = target_pos - aim_world_pos;  // from click toward target
+    float dist = glm::length(dir);
+    if (dist < 1.0f) return;  // too close
+    dir /= dist;
+
+    uint32_t fire_type = static_cast<uint32_t>(iface.accel_fire_type);
+    float speed = iface.accel_speed;
+
+    // Build shot directions
+    std::vector<glm::vec2> shot_dirs;
+    if (iface.accel_fire_mode == 1) {
+        // Triple: -5°, 0°, +5°
+        float spread = 5.0f * 3.14159265f / 180.0f;
+        for (int s = -1; s <= 1; ++s) {
+            float a = static_cast<float>(s) * spread;
+            float cs = std::cos(a), sn = std::sin(a);
+            shot_dirs.push_back({dir.x * cs - dir.y * sn,
+                                 dir.x * sn + dir.y * cs});
+        }
+    } else {
+        shot_dirs.push_back(dir);
+    }
+
+    float rw = static_cast<float>(REGION_W);
+    float rh = static_cast<float>(REGION_H);
+    float offset_dist = cfg.radius * 4.0f + 8.0f;
+
+    std::mt19937 rng(static_cast<uint32_t>(aim_world_pos.x * 1000.0f + aim_world_pos.y + frame_counter_));
+    uint32_t search_from = 0;
+    bool any_spawned = false;
+
+    for (auto& sd : shot_dirs) {
+        // Find dormant slot
+        uint32_t slot = UINT32_MAX;
+        for (uint32_t i = search_from; i < n; ++i) {
+            if (readback_energies_[i] < 0.01f) { slot = i; break; }
+        }
+        if (slot == UINT32_MAX) break;
+        search_from = slot + 1;
+
+        glm::vec2 spawn_pos = aim_world_pos + sd * offset_dist;
+        spawn_pos.x = std::fmod(spawn_pos.x + rw, rw);
+        spawn_pos.y = std::fmod(spawn_pos.y + rh, rh);
+
+        readback_positions_[slot] = spawn_pos;
+        readback_velocities_[slot] = sd * speed;
+        readback_energies_[slot] = 0.7f;
+
+        write_spawn_genome(particles, slot, fire_type, rng, frame_counter_);
+        any_spawned = true;
+    }
+
+    if (any_spawned) {
+        compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+        compute.upload_dynamic_data(vk, particles);
+    }
 }
 
 // ── Spawn at world position ──────────────────────────────────────────────────
@@ -1878,6 +2031,17 @@ void PhysicsSimulation::check_virtual_pairs() {
         particles.genomes[slot_a * GENOME_SIZE + 3] = 0.08f;
         particles.genomes[slot_b * GENOME_SIZE + 3] = 0.08f;
 
+        // Entangle the pair
+        if (cfg.entanglement_enabled) {
+            particles.entangled_partner[slot_a] = slot_b;
+            particles.entangled_partner[slot_b] = slot_a;
+            // Ensure anti-correlated spins for fermions
+            float spin_a = particles.genomes[slot_a * GENOME_SIZE + 1];
+            if (std::abs(spin_a) > 0.01f) {
+                particles.genomes[slot_b * GENOME_SIZE + 1] = -spin_a;
+            }
+        }
+
         pairs_created++;
         any_spawned = true;
     }
@@ -1888,6 +2052,60 @@ void PhysicsSimulation::check_virtual_pairs() {
         compute.upload_dynamic_data(vk, particles);
     }
 
+}
+
+// ── Quantum entanglement update ──────────────────────────────────────────────
+
+void PhysicsSimulation::update_entanglement() {
+    if (!cfg.entanglement_enabled) return;
+    const uint32_t n = cfg.particle_count;
+    if (n == 0 || readback_positions_.empty()) return;
+
+    std::mt19937 rng(frame_counter_ * 7919u + 104729u);
+    std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+    uint32_t active_count = 0;
+    bool any_changed = false;
+
+    for (uint32_t i = 0; i < n; ++i) {
+        uint32_t p = particles.entangled_partner[i];
+        if (p == 0xFFFFFFFFu || p >= n) continue;
+        if (i > p) continue;  // process each pair once (lower index only)
+
+        // Check both alive
+        if (readback_energies_[i] < 0.01f || readback_energies_[p] < 0.01f) {
+            particles.entangled_partner[i] = 0xFFFFFFFFu;
+            particles.entangled_partner[p] = 0xFFFFFFFFu;
+            continue;
+        }
+
+        // Decoherence check
+        if (unit(rng) < cfg.entanglement_decoherence) {
+            particles.entangled_partner[i] = 0xFFFFFFFFu;
+            particles.entangled_partner[p] = 0xFFFFFFFFu;
+            continue;
+        }
+
+        active_count++;
+
+        // Velocity coupling — fraction of velocity difference applied mutually
+        glm::vec2 dv = readback_velocities_[p] - readback_velocities_[i];
+        float c = cfg.entanglement_coupling;
+        readback_velocities_[i] += dv * c * 0.5f;
+        readback_velocities_[p] -= dv * c * 0.5f;
+        any_changed = true;
+
+        // Spin anti-correlation maintenance
+        float spin_i = particles.genomes[i * GENOME_SIZE + 1];
+        float spin_p = particles.genomes[p * GENOME_SIZE + 1];
+        if (std::abs(spin_i) > 0.01f && spin_i * spin_p > 0.0f) {
+            particles.genomes[p * GENOME_SIZE + 1] = -spin_i;
+        }
+    }
+
+    if (any_changed) {
+        compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+    }
+    entangled_pair_count_ = active_count;
 }
 
 // ── Force object management ──────────────────────────────────────────────────
@@ -1910,13 +2128,49 @@ void PhysicsSimulation::place_force_object(glm::vec2 world_pos, ForceObjectType 
     }
 }
 
+void PhysicsSimulation::place_mirror(glm::vec2 endpoint1, glm::vec2 endpoint2) {
+    for (uint32_t i = 0; i < MAX_FORCE_OBJECTS; ++i) {
+        if (!force_objects_[i].active) {
+            force_objects_[i].x          = endpoint1.x;
+            force_objects_[i].y          = endpoint1.y;
+            force_objects_[i].strength   = 1.0f;   // elasticity (1.0 = perfect bounce)
+            force_objects_[i].radius     = 5.0f;    // collision thickness
+            force_objects_[i].force_type = FORCE_OBJ_MIRROR;
+            force_objects_[i].active     = 1;
+            force_objects_[i]._pad0      = endpoint2.x;
+            force_objects_[i]._pad1      = endpoint2.y;
+            recount_force_objects();
+            iface.selected_force_obj_idx = static_cast<int>(i);
+            iface.push_notification("Mirror placed",
+                                    ImVec4(0.7f, 0.7f, 0.8f, 1.0f));
+            return;
+        }
+    }
+    iface.push_notification("Max force objects reached!",
+                            ImVec4(1.0f, 0.4f, 0.3f, 1.0f));
+}
+
 int PhysicsSimulation::hit_test_force_objects(glm::vec2 world_pos, float snap_radius) {
     float best_d2 = snap_radius * snap_radius;
     int best = -1;
     for (uint32_t i = 0; i < MAX_FORCE_OBJECTS; ++i) {
         if (!force_objects_[i].active) continue;
-        glm::vec2 d(force_objects_[i].x - world_pos.x, force_objects_[i].y - world_pos.y);
-        float d2 = d.x * d.x + d.y * d.y;
+        float d2;
+        if (force_objects_[i].force_type == FORCE_OBJ_MIRROR) {
+            // Point-to-segment distance for mirrors
+            glm::vec2 a(force_objects_[i].x, force_objects_[i].y);
+            glm::vec2 b(force_objects_[i]._pad0, force_objects_[i]._pad1);
+            glm::vec2 ab = b - a;
+            float ab_len2 = glm::dot(ab, ab);
+            float t = (ab_len2 > 0.001f)
+                ? glm::clamp(glm::dot(world_pos - a, ab) / ab_len2, 0.0f, 1.0f) : 0.0f;
+            glm::vec2 closest = a + t * ab;
+            glm::vec2 diff = world_pos - closest;
+            d2 = glm::dot(diff, diff);
+        } else {
+            glm::vec2 d(force_objects_[i].x - world_pos.x, force_objects_[i].y - world_pos.y);
+            d2 = d.x * d.x + d.y * d.y;
+        }
         if (d2 < best_d2) { best_d2 = d2; best = static_cast<int>(i); }
     }
     return best;
@@ -2027,6 +2281,8 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         check_decay();
         if (cfg.virtual_pairs_enabled)
             check_virtual_pairs();
+        if (cfg.entanglement_enabled)
+            update_entanglement();
         update_orbitals();
         check_nuclear_decay();
 
@@ -2284,6 +2540,9 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     iface.readback_velocities = readback_velocities_.data();
     iface.readback_count = cfg.particle_count;
     iface.nuclear_decay_count_display = nuclear_decay_count_;
+    iface.entangled_pair_count_display = entangled_pair_count_;
+    iface.readback_positions_ptr = readback_positions_.data();
+    iface.entangled_partners_ptr = particles.entangled_partner.data();
 
     // Populate element list for UI (skip free neutrons / Z==0)
     iface.element_list.clear();
@@ -2296,6 +2555,18 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 electrons++;
         }
         iface.element_list.push_back({nuc.Z, nuc.N, electrons, nuc.rep});
+    }
+
+    // ── Accelerator: track source particle position ─────────────────────────
+    if (iface.accel_mode && iface.accel_source_idx >= 0) {
+        uint32_t si = static_cast<uint32_t>(iface.accel_source_idx);
+        if (si < readback_positions_.size() && readback_energies_[si] > 0.01f) {
+            iface.accel_source_world_pos = readback_positions_[si];
+        } else {
+            iface.accel_phase = 0;
+            iface.accel_source_idx = -1;
+            iface.push_notification("Target particle lost!", ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+        }
     }
 
     // ── Camera navigation (set by info card click) ─────────────────────────

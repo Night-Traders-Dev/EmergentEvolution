@@ -72,6 +72,7 @@ add_executable(particle_physics
     src/physics/phys_particles.cpp
     src/physics/interface.cpp
     src/physics/save_load.cpp
+    src/stb_image_impl.cpp
 
     # Shared infrastructure
     src/vulkan_context.cpp

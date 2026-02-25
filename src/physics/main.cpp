@@ -1,4 +1,5 @@
 #include "physics/simulation.h"
+#include "stb_image.h"
 #include <GLFW/glfw3.h>
 #include <stdexcept>
 #include <iostream>
@@ -35,6 +36,17 @@ int main() {
         glfwTerminate();
         std::cerr << "Failed to create GLFW window\n";
         return 1;
+    }
+
+    // Set window icon
+    {
+        int w, h, channels;
+        unsigned char* pixels = stbi_load("ParticlePlayground.jpg", &w, &h, &channels, 4);
+        if (pixels) {
+            GLFWimage icon = { w, h, pixels };
+            glfwSetWindowIcon(window, 1, &icon);
+            stbi_image_free(pixels);
+        }
     }
 
     PhysicsSimulation sim;

@@ -28,6 +28,7 @@ public:
 
     std::vector<uint32_t> birth_frames;   // frame at which each particle was created
     std::vector<int32_t>  orbital_parent;  // index of parent nucleus proton, or -1 if unbound
+    std::vector<uint32_t> entangled_partner;  // index of entangled partner, 0xFFFFFFFF = none
 
     // Bond data: pointer into BondManager.bond_partners — set by Simulation after BondManager::update()
     const uint32_t* bond_partners_ptr   = nullptr;

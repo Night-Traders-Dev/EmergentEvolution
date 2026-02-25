@@ -656,6 +656,7 @@ void apply_physics(uint i) {
         float fo_str    = force_objects.data[fo].strength;
         float fo_radius = force_objects.data[fo].radius;
         uint  fo_type   = force_objects.data[fo].force_type;
+        if (fo_type == 5u) continue;  // mirror — handled post-integration
 
         vec2  fo_delta  = fo_pos - pos_a;
         float fo_dist   = length(fo_delta);
@@ -774,6 +775,38 @@ void apply_physics(uint i) {
         }
     }
 
+    // ── Mirror reflection (post-integration) ─────────────────────────────
+    for (uint mfo = 0u; mfo < params.force_object_count; mfo++) {
+        if (force_objects.data[mfo].is_active == 0u) continue;
+        if (force_objects.data[mfo].force_type != 5u) continue;
+
+        vec2  m_a = vec2(force_objects.data[mfo].x, force_objects.data[mfo].y);
+        vec2  m_b = vec2(force_objects.data[mfo]._pad0, force_objects.data[mfo]._pad1);
+        float elasticity = force_objects.data[mfo].strength;
+        float thickness  = force_objects.data[mfo].radius;
+
+        vec2  seg = m_b - m_a;
+        float seg_len2 = dot(seg, seg);
+        if (seg_len2 < 0.001) continue;
+
+        float t = clamp(dot(pos_a - m_a, seg) / seg_len2, 0.0, 1.0);
+        vec2  closest = m_a + t * seg;
+        vec2  delta = pos_a - closest;
+        float dist = length(delta);
+
+        if (dist < thickness && dist > 0.001) {
+            vec2 seg_dir = normalize(seg);
+            vec2 normal = vec2(-seg_dir.y, seg_dir.x);
+            if (dot(normal, delta) < 0.0) normal = -normal;
+
+            float vn = dot(vel_a, normal);
+            if (vn < 0.0) {
+                vel_a -= (1.0 + elasticity) * vn * normal;
+                pos_a = closest + normal * (thickness + 0.1);
+            }
+        }
+    }
+
     out_pos_buffer.data[i] = pos_a;
     out_vel_buffer.data[i] = vel_a;
     angle_out_buffer.data[i] = angle_in_buffer.data[i];
@@ -859,13 +892,76 @@ void render_force_object(uint fo_idx) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+//  MIRROR RENDERING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void render_mirror(uint fo_idx) {
+    vec2 m_a = vec2(force_objects.data[fo_idx].x, force_objects.data[fo_idx].y);
+    vec2 m_b = vec2(force_objects.data[fo_idx]._pad0, force_objects.data[fo_idx]._pad1);
+
+    vec2 screen_center = params.region_size * 0.5;
+    vec2 sa = screen_center + (m_a - params.camera_origin) * params.camera_zoom;
+    vec2 sb = screen_center + (m_b - params.camera_origin) * params.camera_zoom;
+
+    float glow_radius = max(4.0, 2.0 * params.camera_zoom);
+
+    vec2 lo = min(sa, sb) - glow_radius;
+    vec2 hi = max(sa, sb) + glow_radius;
+    lo = max(lo, vec2(0.0));
+    hi = min(hi, params.region_size - 1.0);
+    if (lo.x > hi.x || lo.y > hi.y) return;
+
+    vec2 seg = sb - sa;
+    float seg_len2 = dot(seg, seg);
+    if (seg_len2 < 1.0) return;
+
+    vec3 mirror_color = vec3(0.6, 0.65, 0.85);
+    float pulse = 0.85 + 0.15 * sin(float(params.step) * 0.04 + float(fo_idx) * 2.1);
+    float core_w = max(1.5, 0.8 * params.camera_zoom);
+
+    for (int px = int(floor(lo.x)); px <= int(ceil(hi.x)); px++) {
+        for (int py = int(floor(lo.y)); py <= int(ceil(hi.y)); py++) {
+            vec2 p = vec2(float(px) + 0.5, float(py) + 0.5);
+
+            float t = clamp(dot(p - sa, seg) / seg_len2, 0.0, 1.0);
+            vec2 closest = sa + t * seg;
+            float d = length(p - closest);
+
+            if (d > glow_radius) continue;
+
+            ivec2 pixel = ivec2(px, py);
+            if (pixel.x < 0 || pixel.x >= int(params.region_size.x)) continue;
+            if (pixel.y < 0 || pixel.y >= int(params.region_size.y)) continue;
+
+            vec4 existing = imageLoad(out_render_texture, pixel);
+
+            if (d < core_w) {
+                float inner = 1.0 - d / core_w;
+                vec3 col = mix(mirror_color * 0.9, vec3(1.0), inner * inner * 0.6) * pulse;
+                imageStore(out_render_texture, pixel, vec4(max(existing.rgb, col), 1.0));
+            } else {
+                float glow_t = (d - core_w) / (glow_radius - core_w);
+                float glow = (1.0 - glow_t) * (1.0 - glow_t);
+                vec3 glow_col = mirror_color * glow * 0.25 * pulse;
+                imageStore(out_render_texture, pixel,
+                    vec4(min(existing.rgb + glow_col, vec3(1.0)), 1.0));
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 //  RENDER STEP
 // ═══════════════════════════════════════════════════════════════════════════════
 
 void render_particle(uint i) {
-    // Render force objects (only first N threads)
+    // Render force objects / mirrors (only first N threads)
     if (i < params.force_object_count && force_objects.data[i].is_active != 0u) {
-        render_force_object(i);
+        if (force_objects.data[i].force_type == 5u) {
+            render_mirror(i);
+        } else {
+            render_force_object(i);
+        }
     }
 
     vec2  pos    = in_pos_buffer.data[i];
