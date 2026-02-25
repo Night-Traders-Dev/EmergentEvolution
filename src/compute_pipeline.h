@@ -38,6 +38,10 @@ public:
     void upload_dynamic_data(VulkanContext& ctx,
                              const Particles& particles);
 
+    // Upload force objects (called each frame before record())
+    void upload_force_objects(VulkanContext& ctx,
+                              const ForceObject* objects);
+
     bool is_ready() const { return pos_buffer_a_.handle != VK_NULL_HANDLE; }
 
     // Read current particle positions, velocities, and energies back to CPU.
@@ -88,6 +92,9 @@ private:
     // Bond partners (binding 16, readonly, CPU-managed by BondManager)
     // Layout: bond_partners[i * MAX_BONDS_PER_PARTICLE + slot] = partner index
     Buffer bond_buffer_{};
+
+    // Force objects (binding 17, readonly, CPU-managed, not double-buffered)
+    Buffer force_obj_buffer_{};
 
     // Actual particle count the buffers were allocated for (safe dispatch cap)
     uint32_t live_particle_count_ = 0;

@@ -28,6 +28,10 @@ public:
     Renderer        renderer{};
     PhysicsInterface iface{};
 
+    // Force objects (stationary force emitters)
+    ForceObject  force_objects_[MAX_FORCE_OBJECTS] = {};
+    uint32_t     force_object_count_ = 0;
+
 private:
     glm::vec2 last_mouse_pos_      = {};
     glm::vec2 mouse_change_        = {};
@@ -53,4 +57,8 @@ private:
     void check_fission();
     void check_decay();
     void update_orbitals();
+
+    void place_force_object(glm::vec2 world_pos, ForceObjectType type);
+    int  hit_test_force_objects(glm::vec2 world_pos, float snap_radius);
+    void recount_force_objects();
 };

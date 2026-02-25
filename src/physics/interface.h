@@ -43,6 +43,12 @@ public:
     // Hover inspection
     int32_t hover_particle_idx = -1;
 
+    // Force object interaction
+    bool force_obj_placement_mode = false;
+    int  force_obj_placement_type = 0;
+    int  selected_force_obj_idx   = -1;
+    bool force_obj_move_mode      = false;
+
     // Stats display
     float    fps_display = 0.0f;
     uint32_t active_particle_display  = 0;
@@ -67,7 +73,7 @@ public:
     int   seed_value = 0;
 
     void init();
-    void render_imgui(SimConfig& cfg, Particles& particles, bool& request_reset);
+    void render_imgui(SimConfig& cfg, Particles& particles, ForceObject* force_objects, bool& request_reset);
 
 private:
     void push_theme();
@@ -76,4 +82,5 @@ private:
     void draw_settings_panel(SimConfig& cfg);
     void draw_spawn_menu(const SimConfig& cfg);
     void draw_info_card(const Particles& particles);
+    void draw_force_object_panel(ForceObject* objects);
 };

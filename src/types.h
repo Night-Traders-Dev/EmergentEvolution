@@ -76,6 +76,29 @@ enum ParticleBehavior : uint32_t {
     BEHAVIOR_TAU         = 1u << 25, // tau lepton family (heavy, short-lived)
 };
 
+// ── Force Objects (spawnable stationary force emitters) ──────────────────────
+
+static constexpr uint32_t MAX_FORCE_OBJECTS = 8;
+
+enum ForceObjectType : uint32_t {
+    FORCE_OBJ_EM_FIELD     = 0,   // Coulomb-like radial force on charged particles
+    FORCE_OBJ_STRONG       = 1,   // Yukawa short-range attraction on baryons
+    FORCE_OBJ_WEAK         = 2,   // Short-range weak force boost
+    FORCE_OBJ_GRAVITY_WELL = 3,   // Gravitational attraction on massive particles
+    FORCE_OBJ_HEAT_SOURCE  = 4,   // Local thermal noise / temperature boost
+    FORCE_OBJ_COUNT        = 5
+};
+
+// GPU-aligned struct (must match GLSL std430 layout). 32 bytes per object.
+struct ForceObject {
+    float    x, y;          // world position
+    float    strength;      // force multiplier (slider-adjustable, 0.1 to 10.0)
+    float    radius;        // effective radius in world units
+    uint32_t force_type;    // ForceObjectType enum
+    uint32_t active;        // 1=active, 0=inactive
+    float    _pad0, _pad1;  // padding to 32 bytes
+};
+static_assert(sizeof(ForceObject) == 32, "ForceObject must be 32 bytes for std430");
 
 struct PushConstants {
     glm::vec2 region_size;        // 0
@@ -101,9 +124,10 @@ struct PushConstants {
     float     weak_coupling;      // 88  — weak force strength
     float     string_tension;     // 92  — quark confinement constant (Cornell potential)
     float     higgs_vev;          // 96  — Higgs vacuum expectation value
+    uint32_t  force_object_count; // 100 — number of active force objects (0-8)
 };
-// Size is 100 bytes (under 128 Vulkan minimum)
-static_assert(sizeof(PushConstants) == 100, "PushConstants layout mismatch");
+// Size is 104 bytes (under 128 Vulkan minimum)
+static_assert(sizeof(PushConstants) == 104, "PushConstants layout mismatch");
 
 struct SimConfig {
     uint32_t particle_count     = 22500;
@@ -162,6 +186,9 @@ struct SimConfig {
     // Environment presets
     uint32_t environment_mode = 0;  // 0=Lab 1=Tide Pool 2=Vent 3=Primordial
                                     // 4=Pond 5=Space 6=Nebula 7=Asteroid 8=Comet
+
+    // Force objects (transient — set each frame before compute dispatch)
+    uint32_t force_object_count = 0;
 
     glm::vec2 camera_origin      = { REGION_W / 2.0f, REGION_H / 2.0f };
     float     camera_zoom        = 1.0f;

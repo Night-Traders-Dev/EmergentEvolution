@@ -77,6 +77,14 @@ void PhysicsSimulation::reset() {
     vkDeviceWaitIdle(vk.device);
     frame_counter_ = 0;
 
+    // Clear force objects
+    force_object_count_ = 0;
+    for (uint32_t i = 0; i < MAX_FORCE_OBJECTS; ++i)
+        force_objects_[i] = {};
+    iface.selected_force_obj_idx = -1;
+    iface.force_obj_placement_mode = false;
+    iface.force_obj_move_mode = false;
+
     physics_gen_data(particles, cfg);
     cfg.particle_count = static_cast<uint32_t>(particles.positions.size());
 
@@ -149,13 +157,38 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
     }
     f2_was = f2_now;
 
-    // Click to spawn (when spawn menu pending)
-    if (lmb && !lmb_down_ && iface.pending_spawn && !ImGui::GetIO().WantCaptureMouse) {
+    // Click handling priority: force obj move > force obj place > force obj select > particle spawn
+    if (lmb && !lmb_down_ && !ImGui::GetIO().WantCaptureMouse) {
         int win_w, win_h;
         glfwGetWindowSize(window, &win_w, &win_h);
         glm::vec2 world_pos = cfg.camera_origin
             + (mouse_pos - glm::vec2(win_w * 0.5f, win_h * 0.5f)) / cfg.current_camera_zoom;
-        do_spawn_at_world(world_pos);
+
+        if (iface.force_obj_move_mode && iface.selected_force_obj_idx >= 0) {
+            // 1. Reposition selected force object
+            int idx = iface.selected_force_obj_idx;
+            force_objects_[idx].x = world_pos.x;
+            force_objects_[idx].y = world_pos.y;
+            iface.force_obj_move_mode = false;
+        }
+        else if (iface.force_obj_placement_mode) {
+            // 2. Place new force object
+            place_force_object(world_pos, static_cast<ForceObjectType>(iface.force_obj_placement_type));
+            iface.force_obj_placement_mode = false;
+        }
+        else if (iface.pending_spawn) {
+            // 4. Spawn particle
+            do_spawn_at_world(world_pos);
+        }
+        else {
+            // 3. Try to select a force object
+            int hit = hit_test_force_objects(world_pos, 15.0f / cfg.current_camera_zoom);
+            if (hit >= 0) {
+                iface.selected_force_obj_idx = hit;
+            } else {
+                iface.selected_force_obj_idx = -1;
+            }
+        }
     }
     lmb_down_ = lmb;
 }
@@ -1295,6 +1328,44 @@ void PhysicsSimulation::check_decay() {
     }
 }
 
+// ── Force object management ──────────────────────────────────────────────────
+
+void PhysicsSimulation::place_force_object(glm::vec2 world_pos, ForceObjectType type) {
+    for (uint32_t i = 0; i < MAX_FORCE_OBJECTS; ++i) {
+        if (!force_objects_[i].active) {
+            force_objects_[i].x          = world_pos.x;
+            force_objects_[i].y          = world_pos.y;
+            force_objects_[i].strength   = 1.0f;
+            force_objects_[i].radius     = 80.0f;
+            force_objects_[i].force_type = static_cast<uint32_t>(type);
+            force_objects_[i].active     = 1;
+            force_objects_[i]._pad0      = 0.0f;
+            force_objects_[i]._pad1      = 0.0f;
+            recount_force_objects();
+            iface.selected_force_obj_idx = static_cast<int>(i);
+            return;
+        }
+    }
+}
+
+int PhysicsSimulation::hit_test_force_objects(glm::vec2 world_pos, float snap_radius) {
+    float best_d2 = snap_radius * snap_radius;
+    int best = -1;
+    for (uint32_t i = 0; i < MAX_FORCE_OBJECTS; ++i) {
+        if (!force_objects_[i].active) continue;
+        glm::vec2 d(force_objects_[i].x - world_pos.x, force_objects_[i].y - world_pos.y);
+        float d2 = d.x * d.x + d.y * d.y;
+        if (d2 < best_d2) { best_d2 = d2; best = static_cast<int>(i); }
+    }
+    return best;
+}
+
+void PhysicsSimulation::recount_force_objects() {
+    force_object_count_ = 0;
+    for (uint32_t i = 0; i < MAX_FORCE_OBJECTS; ++i)
+        if (force_objects_[i].active) force_object_count_++;
+}
+
 // ── Per-frame tick ───────────────────────────────────────────────────────────
 
 void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
@@ -1319,8 +1390,11 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     cfg.local_density_cap = iface.field_intensity;
 
     // Upload dynamic GPU data
-    if (is_active)
+    cfg.force_object_count = force_object_count_;
+    if (is_active) {
         compute.upload_dynamic_data(vk, particles);
+        compute.upload_force_objects(vk, force_objects_);
+    }
 
     // Dispatch compute shader
     if (is_active && compute.is_ready()) {
@@ -1401,7 +1475,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
 
     bool request_reset = false;
     iface.sim_running = is_active;
-    iface.render_imgui(cfg, particles, request_reset);
+    iface.render_imgui(cfg, particles, force_objects_, request_reset);
 
     if (request_reset) {
         if (!cfg.start_empty) {

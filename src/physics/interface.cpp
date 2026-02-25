@@ -420,7 +420,7 @@ static bool spawn_button(int type_idx, const char* label, ImVec4 color,
 // ── Main UI entry point ─────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
-void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, bool& request_reset) {
+void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceObject* force_objects, bool& request_reset) {
     // F1 toggle settings panel
     if (ImGui::IsKeyPressed(ImGuiKey_F1, false))
         settings_visible = !settings_visible;
@@ -438,8 +438,11 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, bool& 
     if (spawn_menu_visible)
         draw_spawn_menu(cfg);
 
-    // Draw info card (hover)
-    draw_info_card(particles);
+    // Draw force object panel OR info card (force object takes priority)
+    if (selected_force_obj_idx >= 0)
+        draw_force_object_panel(force_objects);
+    else
+        draw_info_card(particles);
 
     pop_theme();
 }
@@ -705,55 +708,110 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
         cfg.generation_seed = static_cast<uint32_t>(seed_value);
     }
 
-    // ── Physics ──────────────────────────────────────────────────────────────
-    if (ImGui::CollapsingHeader("Physics", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::SliderFloat("Temp (log)", &log_temperature, 0.0f, 13.0f, "%.2f");
+    // ── Temperature ──────────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Temperature", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::SliderFloat("##TempSlider", &log_temperature, 0.0f, 13.0f, "");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Logarithmic temperature scale\n1 = 10 K, 3 = 1000 K, 7 = 10 MK");
         cfg.temperature_kelvin = std::pow(10.0f, log_temperature);
 
         char temp_buf[64];
         format_temperature(cfg.temperature_kelvin, temp_buf, sizeof(temp_buf));
-        float celsius = cfg.temperature_kelvin - 273.15f;
-        ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "  %s  (%.0f C)", temp_buf, celsius);
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "%s", temp_buf);
 
-        ImGui::SliderFloat("Dampening", &cfg.dampening, 0.50f, 0.99f, "%.3f");
-        ImGui::SliderFloat("Gravity", &cfg.gravity_strength, 0.0f, 2.0f, "%.2f");
-        ImGui::SliderFloat("Magnetism", &cfg.lorentz_strength, 0.0f, 2.0f, "%.2f");
-        ImGui::Spacing();
-        ImGui::SliderFloat("Repulsion R", &cfg.repulsion_radius, 1.0f, 40.0f, "%.1f");
-        ImGui::SliderFloat("Interact R", &cfg.interaction_radius, 20.0f, 200.0f, "%.0f");
-        ImGui::SliderFloat("Pressure", &cfg.pressure_resistance, 5.0f, 100.0f, "%.0f");
-        ImGui::SliderFloat("Radius", &cfg.radius, 0.5f, 8.0f, "%.1f");
+        // Context label
+        const char* temp_context = "Deep space (CMB)";
+        if (cfg.temperature_kelvin > 100.0f) temp_context = "Room temperature";
+        if (cfg.temperature_kelvin > 5000.0f) temp_context = "Surface of star";
+        if (cfg.temperature_kelvin > 1e6f) temp_context = "Stellar core";
+        if (cfg.temperature_kelvin > 1e9f) temp_context = "Neutron star";
+        if (cfg.temperature_kelvin > 1e11f) temp_context = "Quark-gluon plasma";
+        if (cfg.temperature_kelvin > 1e15f) temp_context = "Electroweak epoch";
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "  %s", temp_context);
     }
 
-    // ── QCD / Weak ───────────────────────────────────────────────────────────
-    if (ImGui::CollapsingHeader("QCD / Weak")) {
-        ImGui::SliderFloat("String Tension", &cfg.string_tension, 0.0f, 200.0f, "%.0f");
+    // ── Fundamental Forces ───────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Fundamental Forces", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // Electromagnetic
+        ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "Electromagnetic");
+        ImGui::SliderFloat("B Field", &cfg.lorentz_strength, 0.0f, 2.0f, "%.2f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Quark confinement strength (Cornell potential linear term)");
+            ImGui::SetTooltip("External magnetic field strength\nAffects charged particle trajectories");
 
-        ImGui::SliderFloat("Weak Coupling", &cfg.weak_coupling, 0.0f, 2.0f, "%.2f");
+        ImGui::Spacing();
+
+        // Strong Nuclear
+        ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.4f, 1.0f), "Strong Nuclear");
+        ImGui::SliderFloat("Confinement", &cfg.string_tension, 0.0f, 200.0f, "%.0f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Weak nuclear force strength (very short range)");
+            ImGui::SetTooltip("Quark confinement (string tension)\nHigher = quarks held more tightly\n0 = deconfinement (quark-gluon plasma)");
+
+        ImGui::Spacing();
+
+        // Weak Nuclear
+        ImGui::TextColored(ImVec4(0.7f, 0.3f, 0.9f, 1.0f), "Weak Nuclear");
+        ImGui::SliderFloat("Weak Force", &cfg.weak_coupling, 0.0f, 2.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Weak force coupling strength\nMediates beta decay and flavor changes\nVery short range (~3 px)");
 
         ImGui::SliderFloat("Higgs VEV", &cfg.higgs_vev, 0.0f, 500.0f, "%.0f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Higgs vacuum expectation value (mass coupling scale)");
+            ImGui::SetTooltip("Higgs vacuum expectation value\nSets the mass scale for W/Z bosons\nStandard Model: 246");
+
+        ImGui::Spacing();
+
+        // Gravity
+        ImGui::TextColored(ImVec4(0.8f, 0.6f, 0.3f, 1.0f), "Gravity");
+        ImGui::SliderFloat("Strength##grav", &cfg.gravity_strength, 0.0f, 2.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Gravitational attraction between massive particles\n0 = off (negligible at particle scale)\nUseful for stellar/neutron star scenarios");
+    }
+
+    // ── World Settings ───────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("World Settings")) {
+        ImGui::SliderFloat("Friction", &cfg.dampening, 0.50f, 0.99f, "%.3f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Velocity dampening per frame\n0.99 = near-vacuum (very low friction)\n0.90 = dense medium\nLower = more energy loss");
+
+        ImGui::SliderFloat("Hard Core", &cfg.repulsion_radius, 1.0f, 40.0f, "%.1f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Minimum distance before particles repel\nModels nucleon hard-core radius");
+
+        ImGui::SliderFloat("Core Force", &cfg.pressure_resistance, 5.0f, 100.0f, "%.0f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("How strongly particles repel at close range\nHigher = harder collisions");
+
+        ImGui::SliderFloat("Max Range", &cfg.interaction_radius, 20.0f, 200.0f, "%.0f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Maximum distance for force calculations\nHigher = longer-range EM interactions\nLower = faster simulation");
+
+        ImGui::SliderFloat("Display Size", &cfg.radius, 0.5f, 8.0f, "%.1f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Visual size of particles on screen\nDoes not affect physics");
     }
 
     // ── Field Visualization ──────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Field Visualization")) {
-        ImGui::Checkbox("Electromagnetic", &field_em);
+        ImGui::Checkbox("EM##field", &field_em);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show electric field lines\nRed = positive, Blue = negative");
         ImGui::SameLine();
-        ImGui::Checkbox("Strong", &field_strong);
+        ImGui::Checkbox("Strong##field", &field_strong);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show strong force field\nGreen glow around nucleons");
 
-        ImGui::Checkbox("Weak", &field_weak);
+        ImGui::Checkbox("Weak##field", &field_weak);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show weak field around W/Z bosons");
         ImGui::SameLine();
-        ImGui::Checkbox("Gravity", &field_gravity);
+        ImGui::Checkbox("Gravity##field", &field_gravity);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show gravitational potential wells");
 
-        ImGui::Checkbox("Higgs", &field_higgs);
+        ImGui::Checkbox("Higgs##field", &field_higgs);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show Higgs field coupling to massive particles");
 
-        if (field_em || field_strong || field_weak || field_gravity || field_higgs)
-            ImGui::SliderFloat("Intensity", &field_intensity, 0.05f, 2.0f, "%.2f");
+        if (field_em || field_strong || field_weak || field_gravity || field_higgs) {
+            ImGui::SliderFloat("Brightness", &field_intensity, 0.05f, 2.0f, "%.2f");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Field visualization brightness");
+        }
     }
 
     ImGui::End();
@@ -1052,6 +1110,67 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
         }
     }
 
+    // ── Force Objects ─────────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Force Objects")) {
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Click to place in world:");
+
+        static const char* fo_labels[] = { "EM", "Strong", "Weak", "Gravity", "Heat" };
+        static const char* fo_tips[] = {
+            "Electromagnetic field\nPushes/pulls charged particles",
+            "Strong nuclear force\nYukawa-like on baryons",
+            "Weak nuclear force\nShort-range on all particles",
+            "Gravity well\nAttracts all massive particles",
+            "Heat source\nAdds thermal energy to nearby particles"
+        };
+        static const ImVec4 fo_colors[] = {
+            ImVec4(0.3f, 0.5f, 1.0f, 1.0f),   // EM — blue
+            ImVec4(0.3f, 0.9f, 0.4f, 1.0f),   // Strong — green
+            ImVec4(0.7f, 0.3f, 0.9f, 1.0f),   // Weak — purple
+            ImVec4(0.9f, 0.7f, 0.2f, 1.0f),   // Gravity — amber
+            ImVec4(1.0f, 0.4f, 0.2f, 1.0f),   // Heat — orange-red
+        };
+
+        for (int fi = 0; fi < 5; ++fi) {
+            if (fi > 0) ImGui::SameLine();
+
+            bool active = (force_obj_placement_mode && force_obj_placement_type == fi);
+            ImVec4 c = fo_colors[fi];
+
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                ImVec4(c.x * 0.3f, c.y * 0.3f, c.z * 0.3f, 0.80f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                ImVec4(c.x * 0.5f, c.y * 0.5f, c.z * 0.5f, 0.90f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                ImVec4(c.x * 0.7f, c.y * 0.7f, c.z * 0.7f, 1.0f));
+
+            if (active) {
+                ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(c.x, c.y, c.z, 1.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
+            }
+
+            char fid[32];
+            snprintf(fid, sizeof(fid), "%s##fo%d", fo_labels[fi], fi);
+            if (ImGui::Button(fid, ImVec2(52, 30))) {
+                force_obj_placement_mode = !active;
+                force_obj_placement_type = fi;
+                pending_spawn = false;
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", fo_tips[fi]);
+
+            if (active) {
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor();
+            }
+            ImGui::PopStyleColor(3);
+        }
+
+        if (force_obj_placement_mode) {
+            ImGui::TextColored(fo_colors[force_obj_placement_type],
+                "Click in world to place %s object", fo_labels[force_obj_placement_type]);
+        }
+    }
+
     // ── Spawn Settings (shared, outside headers) ─────────────────────────────
     ImGui::Separator();
     ImGui::SliderInt("Count", &spawn_count, 1, 100);
@@ -1166,6 +1285,100 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
             ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Decay");
             ImGui::SameLine(col_w);
             ImGui::Text("%.3f", decay_rate);
+        }
+    }
+    ImGui::End();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Force Object Inspection Panel (Right Side) ──────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_force_object_panel(ForceObject* objects) {
+    if (selected_force_obj_idx < 0) return;
+    int idx = selected_force_obj_idx;
+    if (idx >= static_cast<int>(MAX_FORCE_OBJECTS) || !objects[idx].active) {
+        selected_force_obj_idx = -1;
+        return;
+    }
+
+    ForceObject& obj = objects[idx];
+
+    static const char* fo_type_names[] = { "EM Field", "Strong Force", "Weak Force", "Gravity Well", "Heat Source" };
+    static const ImVec4 fo_type_colors[] = {
+        ImVec4(0.3f, 0.5f, 1.0f, 1.0f),
+        ImVec4(0.3f, 0.9f, 0.4f, 1.0f),
+        ImVec4(0.7f, 0.3f, 0.9f, 1.0f),
+        ImVec4(0.9f, 0.7f, 0.2f, 1.0f),
+        ImVec4(1.0f, 0.4f, 0.2f, 1.0f),
+    };
+
+    const char* type_name = (obj.force_type < FORCE_OBJ_COUNT) ? fo_type_names[obj.force_type] : "Unknown";
+    ImVec4 type_color = (obj.force_type < FORCE_OBJ_COUNT) ? fo_type_colors[obj.force_type] : ImVec4(1,1,1,1);
+
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 260, 10));
+    ImGui::SetNextWindowSize(ImVec2(250, 0));
+
+    ImGuiWindowFlags panel_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize
+        | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+
+    if (ImGui::Begin("##ForceObjPanel", nullptr, panel_flags)) {
+        // Header
+        ImGui::TextColored(type_color, "%s", type_name);
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "#%d", idx);
+        ImGui::Separator();
+
+        // Position
+        float col_w = 80.0f;
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Position");
+        ImGui::SameLine(col_w);
+        ImGui::Text("%.0f, %.0f", obj.x, obj.y);
+
+        // Strength slider
+        ImGui::Spacing();
+        ImGui::TextColored(type_color, "Strength");
+        ImGui::SliderFloat("##fo_str", &obj.strength, 0.1f, 10.0f, "%.2f");
+
+        // Radius slider
+        ImGui::TextColored(type_color, "Radius");
+        ImGui::SliderFloat("##fo_rad", &obj.radius, 10.0f, 200.0f, "%.0f");
+
+        // Action buttons
+        ImGui::Spacing();
+        ImGui::Separator();
+
+        if (force_obj_move_mode) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.4f, 0.1f, 0.80f));
+            if (ImGui::Button("Moving...", ImVec2(72, 26))) {
+                force_obj_move_mode = false;
+            }
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.2f, 1.0f), "Click to place");
+        } else {
+            if (ImGui::Button("Move", ImVec2(72, 26))) {
+                force_obj_move_mode = true;
+            }
+        }
+        if (!force_obj_move_mode) {
+            ImGui::SameLine();
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.1f, 0.1f, 0.80f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.2f, 0.2f, 0.90f));
+            if (ImGui::Button("Delete", ImVec2(72, 26))) {
+                obj.active = 0;
+                selected_force_obj_idx = -1;
+                force_obj_move_mode = false;
+            }
+            ImGui::PopStyleColor(2);
+
+            ImGui::SameLine();
+            if (ImGui::Button("Close", ImVec2(72, 26))) {
+                selected_force_obj_idx = -1;
+                force_obj_move_mode = false;
+            }
         }
     }
     ImGui::End();

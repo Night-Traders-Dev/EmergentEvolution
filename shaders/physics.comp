@@ -21,6 +21,20 @@ layout(set = 0, binding = 14, std430) buffer EnergyOut { float data[]; } out_ene
 layout(set = 0, binding = 15, std430) readonly buffer Genomes { float data[]; } genome_buffer;
 layout(set = 0, binding = 16, std430) readonly buffer BondBuffer { uint data[]; } bond_buffer;
 
+// Force objects (stationary emitters, max 8)
+struct ForceObj {
+    float x, y;
+    float strength;
+    float radius;
+    uint  force_type;
+    uint  is_active;
+    float _pad0;
+    float _pad1;
+};
+layout(set = 0, binding = 17, std430) readonly buffer ForceObjectBuffer {
+    ForceObj data[];
+} force_objects;
+
 // ── Push Constants (expanded to 100 bytes) ──────────────────────────────────
 layout(push_constant, std430) uniform Params {
     vec2  region_size;
@@ -46,6 +60,7 @@ layout(push_constant, std430) uniform Params {
     float weak_coupling;
     float string_tension;
     float higgs_vev;
+    uint  force_object_count;
 } params;
 
 // ── Type indices (must match phys_particles.h) ──────────────────────────────
@@ -277,7 +292,6 @@ void apply_physics(uint i) {
     bool  is_light_particle = mass_inv_a > 0.5 && abs(charge_a) > 0.01;  // electrons/positrons/muons
     float closest_nuc_dist  = 9999.0;
     vec2  closest_nuc_delta = vec2(0.0);
-    float nearby_Z          = 0.0;  // total positive charge from nearby protons
     float nearby_charge_sum = 0.0;  // sum of nearby charges (for magnetic moment gating)
 
     float MAX_RADIUS    = params.interaction_radius;
@@ -357,8 +371,6 @@ void apply_physics(uint i) {
                     closest_nuc_dist = dist;
                     closest_nuc_delta = delta;
                 }
-                float cb = get_charge(uint(j));
-                if (cb > 0.01) nearby_Z += cb;  // count proton charges
             }
         }
 
@@ -377,7 +389,7 @@ void apply_physics(uint i) {
                 // Linear confinement (force increases with distance)
                 float confine = sigma * dist * 0.1;
 
-                float cornell_F = cf * (-short_range + confine);
+                float cornell_F = cf * (-short_range - confine);
                 total_force += normal * cornell_F;
 
                 // Hard-core repulsion for quarks at very close range
@@ -475,6 +487,67 @@ void apply_physics(uint i) {
         total_force += mu * mag_coupling * vec2(vel_a.y, -vel_a.x);
     }
 
+    // ── Force Object effects (stationary emitters, max 8) ──────────────────
+    for (uint fo = 0u; fo < params.force_object_count; fo++) {
+        if (force_objects.data[fo].is_active == 0u) continue;
+
+        vec2  fo_pos    = vec2(force_objects.data[fo].x, force_objects.data[fo].y);
+        float fo_str    = force_objects.data[fo].strength;
+        float fo_radius = force_objects.data[fo].radius;
+        uint  fo_type   = force_objects.data[fo].force_type;
+
+        vec2  fo_delta  = fo_pos - pos_a;
+        float fo_dist   = length(fo_delta);
+        if (fo_dist < 1.0 || fo_dist > fo_radius) continue;
+
+        vec2  fo_normal = fo_delta / fo_dist;
+
+        if (fo_type == 0u) {
+            // EM FIELD: Coulomb-like radial force on charged particles
+            if (abs(charge_a) > 0.01) {
+                float coulomb = fo_str * 800.0 * charge_a / (fo_dist * fo_dist + 25.0);
+                coulomb = clamp(coulomb, -100.0, 100.0);
+                total_force += fo_normal * coulomb;
+            }
+        }
+        else if (fo_type == 1u) {
+            // STRONG NUCLEAR: Yukawa-like short-range attraction on baryons
+            if (is_baryon(type_a)) {
+                float yukawa = fo_str * YUKAWA_COUPLING * 0.5
+                             * exp(-fo_dist / (YUKAWA_RANGE * 3.0))
+                             / max(fo_dist, 0.5);
+                total_force += fo_normal * yukawa;
+            }
+        }
+        else if (fo_type == 2u) {
+            // WEAK FORCE: short-range boost on all particles
+            float weak_range = min(fo_radius, 30.0);
+            if (fo_dist < weak_range) {
+                float weak_F = fo_str * 100.0 * exp(-fo_dist / 5.0) / max(fo_dist * fo_dist, 0.1);
+                total_force += fo_normal * weak_F;
+            }
+        }
+        else if (fo_type == 3u) {
+            // GRAVITY WELL: gravitational attraction on all massive particles
+            float mass_a_val = get_mass(type_a);
+            float f_grav = fo_str * mass_a_val * 200.0 / (fo_dist * fo_dist + 25.0);
+            total_force += fo_normal * f_grav;
+        }
+        else if (fo_type == 4u) {
+            // HEAT SOURCE: thermal noise boost (extra random velocity kick)
+            float fo_t = fo_dist / fo_radius;
+            float falloff = 1.0 - fo_t;
+            falloff *= falloff;
+            uint heat_seed = (i * 1664525u + params.step * 4789u + fo * 65537u) ^ 0xdeadbeefu;
+            heat_seed ^= (heat_seed >> 17u);
+            heat_seed *= 0xbf58476du;
+            heat_seed ^= (heat_seed >> 31u);
+            float heat_angle = float(heat_seed) * (6.28318 / 4294967296.0);
+            vec2  heat_dir = vec2(cos(heat_angle), sin(heat_angle));
+            vel_a += heat_dir * fo_str * 3.0 * falloff * sqrt(mass_inv_a);
+        }
+    }
+
     // ── Energy metabolism ────────────────────────────────────────────────────
     {
         float spd = length(vel_a);
@@ -529,10 +602,93 @@ void apply_physics(uint i) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+//  FORCE OBJECT RENDERING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void render_force_object(uint fo_idx) {
+    float fo_x     = force_objects.data[fo_idx].x;
+    float fo_y     = force_objects.data[fo_idx].y;
+    uint  fo_type  = force_objects.data[fo_idx].force_type;
+    float fo_str   = force_objects.data[fo_idx].strength;
+
+    vec2 screen_center = params.region_size * 0.5;
+    vec2 center = screen_center + (vec2(fo_x, fo_y) - params.camera_origin) * params.camera_zoom;
+
+    // Neutron-sized core
+    float core_radius = params.radius * params.camera_zoom * 0.7;
+    // Aura extends further
+    float aura_radius = core_radius * (3.0 + fo_str * 1.5);
+    aura_radius = min(aura_radius, 40.0);
+
+    int range = int(ceil(aura_radius));
+    if (center.x + float(range) < 0.0 || center.x - float(range) > params.region_size.x) return;
+    if (center.y + float(range) < 0.0 || center.y - float(range) > params.region_size.y) return;
+
+    // Per-type colors
+    vec3 aura_color, core_color;
+    if (fo_type == 0u) {
+        aura_color = vec3(0.3, 0.5, 1.0);   core_color = vec3(0.4, 0.6, 1.0);   // EM: blue
+    } else if (fo_type == 1u) {
+        aura_color = vec3(0.1, 0.8, 0.3);   core_color = vec3(0.2, 0.9, 0.4);   // Strong: green
+    } else if (fo_type == 2u) {
+        aura_color = vec3(0.6, 0.2, 0.9);   core_color = vec3(0.7, 0.3, 1.0);   // Weak: purple
+    } else if (fo_type == 3u) {
+        aura_color = vec3(0.8, 0.5, 0.2);   core_color = vec3(0.9, 0.6, 0.3);   // Gravity: amber
+    } else {
+        aura_color = vec3(1.0, 0.3, 0.1);   core_color = vec3(1.0, 0.5, 0.2);   // Heat: red-orange
+    }
+
+    float pulse = 0.8 + 0.2 * sin(float(params.step) * 0.05 + float(fo_idx) * 1.57);
+
+    for (int x = -range; x <= range; x++) {
+        for (int y = -range; y <= range; y++) {
+            ivec2 pixel = ivec2(floor(center)) + ivec2(x, y);
+            if (pixel.x < 0 || pixel.x >= int(params.region_size.x)) continue;
+            if (pixel.y < 0 || pixel.y >= int(params.region_size.y)) continue;
+
+            float d = length(vec2(x, y));
+            if (d > aura_radius) continue;
+
+            vec4 existing = imageLoad(out_render_texture, pixel);
+
+            if (d < core_radius) {
+                // Solid core with inner glow
+                float inner = 1.0 - d / core_radius;
+                inner *= inner;
+                vec3 col = mix(core_color * 0.8, vec3(1.0), inner * 0.5);
+                // Edge smoothing
+                float edge = 1.0 - smoothstep(core_radius * 0.65, core_radius, d);
+                col *= edge;
+                // Specular highlight
+                vec2 hi_off = vec2(float(x) + core_radius * 0.25, float(y) + core_radius * 0.25);
+                float hi_d = length(hi_off);
+                if (hi_d < core_radius * 0.3) {
+                    float hi = 1.0 - hi_d / (core_radius * 0.3);
+                    col = mix(col, vec3(1.0), hi * hi * 0.5);
+                }
+                imageStore(out_render_texture, pixel, vec4(col, 1.0));
+            } else {
+                // Aura glow
+                float t = (d - core_radius) / (aura_radius - core_radius);
+                float glow = (1.0 - t) * (1.0 - t);
+                vec3 glow_col = aura_color * glow * 0.4 * fo_str * pulse;
+                imageStore(out_render_texture, pixel,
+                    vec4(min(existing.rgb + glow_col, vec3(1.0)), 1.0));
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 //  RENDER STEP
 // ═══════════════════════════════════════════════════════════════════════════════
 
 void render_particle(uint i) {
+    // Render force objects (only first N threads)
+    if (i < params.force_object_count && force_objects.data[i].is_active != 0u) {
+        render_force_object(i);
+    }
+
     vec2  pos    = in_pos_buffer.data[i];
     uint  type   = type_buffer.data[i];
     float energy = in_energy_buffer.data[i];
