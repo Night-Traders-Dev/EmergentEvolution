@@ -339,8 +339,8 @@ void apply_physics(uint i) {
                                (flags_b & BEHAVIOR_MASS_DENSE)  != 0u ?  7.7f :
                                (flags_b & BEHAVIOR_MASS_HEAVY)  != 0u ?  5.6f :
                                (flags_b & BEHAVIOR_MASS_MEDIUM) != 0u ?  3.7f : 1.0f;
-                float f_grav = params.gravity_strength * mass_a * mass_b
-                               / (dist_sq + 100.0f);
+                float f_grav = params.gravity_strength * mass_a * mass_b * 8.0f
+                               / (dist_sq + 25.0f);
                 total_force += normal * f_grav;
             }
 
@@ -348,10 +348,10 @@ void apply_physics(uint i) {
             // 2D Biot-Savart: B_z from j's current, then F = q_i (v_i × B_z ẑ)
             if (params.lorentz_strength > 0.001f) {
                 float q_b = genome_buffer.data[j * 4u + 0u];
-                if (abs(charge) > 0.05f && abs(q_b) > 0.05f) {
+                if (abs(charge) > 0.01f && abs(q_b) > 0.01f) {
                     vec2  vel_b   = in_vel_buffer.data[j];
                     float cross_j = vel_b.x * (-normal.y) - vel_b.y * (-normal.x);
-                    float B_z     = params.lorentz_strength * q_b * cross_j
+                    float B_z     = params.lorentz_strength * q_b * cross_j * 5.0f
                                     / (dist + 1.0f);
                     total_force  += charge * B_z * vec2(vel_a.y, -vel_a.x);
                 }
@@ -464,7 +464,7 @@ void apply_physics(uint i) {
         float rng_angle = float(bm_seed) * (6.28318f / 4294967296.0f);
         vec2  noise_dir = vec2(cos(rng_angle), sin(rng_angle));
         // Heavier atoms have less thermal displacement (equipartition: v ∝ 1/√m)
-        vel_a += noise_dir * params.temperature * 0.3f * sqrt(mass_inv);
+        vel_a += noise_dir * params.temperature * 2.0f * sqrt(mass_inv);
     }
 
     // Movement update (infinite world)

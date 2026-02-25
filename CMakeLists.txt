@@ -19,7 +19,7 @@ FetchContent_Declare(imgui
 )
 FetchContent_MakeAvailable(imgui)
 
-# ── Executable ────────────────────────────────────────────────────────────────
+# ── Chemistry Simulation ─────────────────────────────────────────────────────
 
 add_executable(particle_life
     src/main.cpp
@@ -62,6 +62,48 @@ target_compile_options(particle_life PRIVATE
     $<$<CONFIG:Release>:-O3>
 )
 
+# ── Physics Simulation ───────────────────────────────────────────────────────
+
+add_executable(particle_physics
+    src/physics/main.cpp
+    src/physics/simulation.cpp
+    src/physics/phys_particles.cpp
+    src/physics/interface.cpp
+
+    # Shared infrastructure
+    src/vulkan_context.cpp
+    src/compute_pipeline.cpp
+    src/renderer.cpp
+    src/particles.cpp
+
+    # ImGui core
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+
+    # ImGui platform/renderer backends
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+)
+
+target_include_directories(particle_physics PRIVATE
+    src/
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
+)
+
+target_link_libraries(particle_physics PRIVATE
+    Vulkan::Vulkan
+    glfw
+    glm::glm
+)
+
+target_compile_options(particle_physics PRIVATE
+    -Wall -Wextra -Wpedantic
+    $<$<CONFIG:Release>:-O3>
+)
+
 # ── Shader compilation ────────────────────────────────────────────────────────
 
 # glslc is shipped with the Vulkan SDK; CMake 3.20+ exposes it
@@ -90,17 +132,20 @@ macro(compile_shader INPUT OUTPUT)
 endmacro()
 
 compile_shader(compute.comp      compute.spv)
+compile_shader(physics.comp      physics.spv)
 compile_shader(fullscreen.vert   fullscreen.vert.spv)
 compile_shader(fullscreen.frag   fullscreen.frag.spv)
 
 add_custom_target(shaders ALL DEPENDS
     ${SHADER_BIN_DIR}/compute.spv
+    ${SHADER_BIN_DIR}/physics.spv
     ${SHADER_BIN_DIR}/fullscreen.vert.spv
     ${SHADER_BIN_DIR}/fullscreen.frag.spv
 )
 add_dependencies(particle_life shaders)
+add_dependencies(particle_physics shaders)
 
 # ── Install ───────────────────────────────────────────────────────────────────
 
-install(TARGETS particle_life DESTINATION bin)
+install(TARGETS particle_life particle_physics DESTINATION bin)
 install(DIRECTORY ${SHADER_BIN_DIR}/ DESTINATION bin/shaders)

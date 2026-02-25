@@ -1,10 +1,10 @@
 <div align="center">
 
-# ⚛ Emergent Evolution
+# Emergent Evolution
 
 **A GPU-accelerated quantum chemistry and particle physics sandbox**
 
-Real atoms · Persistent bonds · Radioactive decay · Standard Model particles · Emergent life
+Real atoms · Standard Model particles · Nuclear fusion & fission · Orbital mechanics · Emergent life
 
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
 [![Vulkan](https://img.shields.io/badge/Vulkan-1.3-red.svg)](https://www.vulkan.org/)
@@ -15,27 +15,38 @@ Real atoms · Persistent bonds · Radioactive decay · Standard Model particles 
 
 ---
 
-Emergent Evolution simulates up to **22,500 particles** in real time using Vulkan compute shaders.
-Eighteen elements from hydrogen to uranium form persistent covalent and ionic bonds, undergo
-radioactive decay, emit Standard Model particles, and spontaneously self-organise into molecular
-aggregates, organic molecules, and evolving proto-organisms — all governed by the same four
-fundamental forces found in nature.
+Emergent Evolution ships two simulation modes sharing the same Vulkan compute engine:
+
+- **Particle Chemistry** (`particle_life`) — 18 elements with persistent covalent/ionic bonds,
+  molecular aggregates, vesicles, proto-cells, and Darwinian evolution
+- **Particle Physics** (`particle_physics`) — 30 Standard Model particle types with real quantum
+  mechanics: Coulomb + Yukawa + QCD forces, centrifugal barrier orbitals, nuclear fusion/fission,
+  radioactive decay, and five independent field visualizations
+
+Both simulate up to **22,500 particles** in real time on a toroidal 2560 x 1440 world using O(n^2)
+pairwise GPU compute shaders.
 
 ---
 
 ## Table of Contents
 
 - [Physics Engine](#physics-engine)
-- [Periodic Table](#periodic-table--18-elements)
-- [Environment Templates](#environment-templates)
-- [Standard Model Particles](#standard-model-particles)
-- [Radioactive Decay](#radioactive-decay)
-- [Quantum Field Effects](#quantum-field-effects)
-- [Chemistry & Bonding](#chemistry--bonding)
-- [Aggregates & Cells](#aggregates--cells)
-- [Sub-Atomic LOD](#sub-atomic-lod)
-- [F3 Lab Spawn Picker](#f3-lab-spawn-picker)
-- [UI Reference](#ui-reference)
+- [Particle Physics Mode](#particle-physics-mode)
+  - [Standard Model — 30 Particle Types](#standard-model--30-particle-types)
+  - [Four Fundamental Forces](#four-fundamental-forces)
+  - [Orbital Mechanics](#orbital-mechanics)
+  - [Nuclear Fusion](#nuclear-fusion)
+  - [Nuclear Fission](#nuclear-fission)
+  - [Radioactive Decay](#radioactive-decay)
+  - [Field Visualization](#field-visualization)
+  - [Environment Presets](#environment-presets-physics)
+  - [Spawn Picker — Physics](#spawn-picker--physics)
+- [Particle Chemistry Mode](#particle-chemistry-mode)
+  - [Periodic Table — 18 Elements](#periodic-table--18-elements)
+  - [Environment Templates](#environment-templates)
+  - [Chemistry & Bonding](#chemistry--bonding)
+  - [Aggregates & Cells](#aggregates--cells)
+  - [Spawn Picker — Chemistry](#spawn-picker--chemistry)
 - [Controls](#controls)
 - [Build](#build)
 - [Architecture](#architecture)
@@ -44,32 +55,263 @@ fundamental forces found in nature.
 
 ## Physics Engine
 
-The simulation runs entirely on the GPU via a single GLSL compute shader dispatched each frame.
+Both modes share the same Vulkan compute pipeline dispatched each frame.
 
 | Property | Detail |
 |---|---|
 | Particle count | Up to **22,500** simultaneous particles |
-| Force algorithm | O(n²) pairwise, per-frame on GPU |
-| World | Toroidal 2560 × 1440 (seamless wrap) |
-| Buffers | Double-buffered ping-pong (position, velocity, angle, ω, energy, genome) |
+| Force algorithm | O(n^2) pairwise, per-frame on GPU |
+| World | Toroidal 2560 x 1440 (seamless wrap) |
+| Buffers | Double-buffered ping-pong (position, velocity, angle, angular velocity, energy, genome) |
+| Genome | 4 floats per particle: charge, spin, color charge / orbital L, decay rate |
 
-**All four fundamental forces are active simultaneously:**
+---
 
-| Force | Implementation |
+# Particle Physics Mode
+
+A Standard Model particle sandbox where protons, neutrons, electrons, quarks, and gauge bosons
+interact through all four fundamental forces. Electrons orbit nuclei via quantum-mechanical
+centrifugal barriers, nucleons fuse under extreme temperature and pressure, and heavy nuclei
+undergo fission when struck by fast neutrons.
+
+---
+
+## Standard Model — 30 Particle Types
+
+<table>
+<thead><tr><th>Family</th><th>#</th><th>Particle</th><th>Mass (inv)</th><th>Charge</th><th>Spin</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td rowspan="3"><b>Nucleons</b></td>
+  <td>0</td><td><b>Proton</b> p</td><td>0.025</td><td>+1</td><td>+0.5</td><td>Stable</td></tr>
+<tr><td>1</td><td><b>Neutron</b> n</td><td>0.025</td><td>0</td><td>-0.5</td><td>Stable (bound)</td></tr>
+<tr><td>5</td><td><b>Antiproton</b> p&#773;</td><td>0.025</td><td>-1</td><td>-0.5</td><td>Annihilates with p</td></tr>
+<tr><td rowspan="6"><b>Gen-1 Leptons</b></td>
+  <td>2</td><td><b>Electron</b> e&#8315;</td><td>1.0</td><td>-1</td><td>+0.5</td><td>Stable, orbits nuclei</td></tr>
+<tr><td>4</td><td><b>Positron</b> e&#8314;</td><td>1.0</td><td>+1</td><td>-0.5</td><td>Annihilates with e&#8315;</td></tr>
+<tr><td>6</td><td><b>Electron Neutrino</b> &nu;e</td><td>100.0</td><td>0</td><td>+0.5</td><td>Near-zero interaction</td></tr>
+<tr><td>3</td><td><b>Photon</b> &gamma;</td><td>100.0</td><td>0</td><td>+1</td><td>Decays over time</td></tr>
+<tr><td>7</td><td><b>Muon</b> &mu;&#8315;</td><td>0.005</td><td>-1</td><td>+0.5</td><td>Decays to e&#8315; + &nu;</td></tr>
+<tr><td>8</td><td><b>Anti-muon</b> &mu;&#8314;</td><td>0.005</td><td>+1</td><td>-0.5</td><td>Decays to e&#8314; + &nu;</td></tr>
+<tr><td rowspan="4"><b>Gen-2/3 Leptons</b></td>
+  <td>9</td><td><b>Tau</b> &tau;&#8315;</td><td>0.0003</td><td>-1</td><td>+0.5</td><td>Instant decay</td></tr>
+<tr><td>10</td><td><b>Anti-tau</b> &tau;&#8314;</td><td>0.0003</td><td>+1</td><td>-0.5</td><td>Instant decay</td></tr>
+<tr><td>11</td><td><b>Muon Neutrino</b> &nu;&mu;</td><td>100.0</td><td>0</td><td>+0.5</td><td>Near-zero interaction</td></tr>
+<tr><td>12</td><td><b>Tau Neutrino</b> &nu;&tau;</td><td>100.0</td><td>0</td><td>+0.5</td><td>Near-zero interaction</td></tr>
+<tr><td rowspan="6"><b>Quarks</b></td>
+  <td>13</td><td><b>Up</b> u</td><td>0.2</td><td>+2/3</td><td>+0.5</td><td>Stable, confined</td></tr>
+<tr><td>14</td><td><b>Down</b> d</td><td>0.2</td><td>-1/3</td><td>-0.5</td><td>Stable, confined</td></tr>
+<tr><td>15</td><td><b>Strange</b> s</td><td>0.05</td><td>-1/3</td><td>-0.5</td><td>Slow decay</td></tr>
+<tr><td>16</td><td><b>Charm</b> c</td><td>0.002</td><td>+2/3</td><td>+0.5</td><td>Fast decay</td></tr>
+<tr><td>17</td><td><b>Top</b> t</td><td>0.000003</td><td>+2/3</td><td>+0.5</td><td>Instant decay</td></tr>
+<tr><td>18</td><td><b>Bottom</b> b</td><td>0.0005</td><td>-1/3</td><td>-0.5</td><td>Fast decay</td></tr>
+<tr><td rowspan="6"><b>Antiquarks</b></td>
+  <td>19</td><td><b>Anti-up</b> u&#773;</td><td>0.2</td><td>-2/3</td><td>-0.5</td><td>Annihilates with u</td></tr>
+<tr><td>20</td><td><b>Anti-down</b> d&#773;</td><td>0.2</td><td>+1/3</td><td>+0.5</td><td>Annihilates with d</td></tr>
+<tr><td>21</td><td><b>Anti-strange</b> s&#773;</td><td>0.05</td><td>+1/3</td><td>+0.5</td><td>Annihilates with s</td></tr>
+<tr><td>22</td><td><b>Anti-charm</b> c&#773;</td><td>0.002</td><td>-2/3</td><td>-0.5</td><td>Annihilates with c</td></tr>
+<tr><td>23</td><td><b>Anti-top</b> t&#773;</td><td>0.000003</td><td>-2/3</td><td>-0.5</td><td>Annihilates with t</td></tr>
+<tr><td>24</td><td><b>Anti-bottom</b> b&#773;</td><td>0.0005</td><td>+1/3</td><td>+0.5</td><td>Annihilates with b</td></tr>
+<tr><td rowspan="5"><b>Gauge Bosons</b></td>
+  <td>25</td><td><b>Gluon</b> g</td><td>100.0</td><td>0</td><td>+1</td><td>Color confinement mediator</td></tr>
+<tr><td>26</td><td><b>W+</b></td><td>0.00012</td><td>+1</td><td>+1</td><td>Instant decay to lepton + &nu;</td></tr>
+<tr><td>27</td><td><b>W-</b></td><td>0.00012</td><td>-1</td><td>-1</td><td>Instant decay to lepton + &nu;</td></tr>
+<tr><td>28</td><td><b>Z0</b></td><td>0.00011</td><td>0</td><td>0</td><td>Instant decay to e&#8315; + e&#8314;</td></tr>
+<tr><td>29</td><td><b>Higgs</b> H0</td><td>0.00008</td><td>0</td><td>0</td><td>Instant decay to 2&gamma;</td></tr>
+</tbody>
+</table>
+
+---
+
+## Four Fundamental Forces
+
+All four forces act simultaneously in the compute shader:
+
+| Force | Implementation | Key Constants |
+|---|---|---|
+| **Electromagnetic** | Coulomb attraction/repulsion (K=1200) + Biot-Savart magnetic deflection (always on) | K_COULOMB=1200, SOFTEN=8px |
+| **Strong nuclear** | Yukawa potential (attractive, 8px range) + Pauli hard-core repulsion (6px) | YUKAWA=2000, PAULI=12000 |
+| **Weak nuclear** | Stochastic decay channels (CPU-side) + tunable coupling constant | Coupling 0.0-2.0 |
+| **Gravity** | Newtonian 1/r^2 between massive particles, tunable strength | 0.0-2.0 slider |
+
+**QCD Color Confinement**: Quarks carry RGB color charge (genome[2]). The Cornell potential
+`V(r) = -alpha/r + sigma*r` confines quarks — the linear string tension term prevents free quarks.
+String tension is tunable (0-200, default 50).
+
+**Higgs Field**: Tunable VEV (0-500) provides mass coupling to heavy particles.
+
+---
+
+## Orbital Mechanics
+
+Electrons orbit nuclei using real quantum-mechanical centrifugal barriers, not artificial springs.
+
+**GPU side (physics.comp):**
+- Each electron tracks the nearest nucleon and accumulates the total nuclear charge (Z)
+- **Centrifugal barrier**: `F = L_eff^2 / (r^3 + 1.0)` — derivative of the QM effective potential,
+  applied once per electron (not per-nucleon)
+- **Spin-orbit coupling**: `F_SO = spin * L * K_SPIN_ORBIT / (r^4 + 1)` — fine structure correction
+- L_eff = max(L_actual, L_ground), where L_ground is computed CPU-side per orbital shell
+- Force capped at 300 to prevent catapulting on close approach
+
+**CPU side (update_orbitals):**
+- BFS clusters nucleons into nuclei (10px cluster radius)
+- Assigns electrons to nearest nucleus within 60px binding radius
+- Sorts by distance, fills shells: **1s** (2), **2s2p** (8), **3s3p3d** (18)
+- Computes L_ground per shell using the Bohr model with screening:
+  - `R_target = n^2 * R_BOHR / Z_eff` where `Z_eff = Z - inner_electrons`
+  - `L_ground = sqrt(Z_eff * K_COULOMB * R^3 / (R^2 + SOFTEN^2))`
+- Stores L_ground in genome[2] for the shader to read
+
+**Equilibrium**: For hydrogen, Coulomb attraction `1200/(r^2+64)` balances centrifugal
+`120^2/(r^3+1)` at ~15px — the Bohr radius of the simulation.
+
+---
+
+## Nuclear Fusion
+
+CPU-side fusion reactions trigger when particles have sufficient kinetic energy to overcome the
+Coulomb barrier. Max 5 fusions per frame to prevent chain reactions.
+
+| Reaction | Threshold | Products |
+|---|---|---|
+| **Proton-proton chain** (p + p) | Energy > 0.8, relative speed > 60 px/frame | p + n + e&#8314; + &nu;e (one proton converts to neutron) |
+| **Deuteron formation** (p + n) | Energy > 0.6, relative speed > 30 px/frame | Bound p-n pair (matched velocities, 3px separation) |
+| **He-4 formation** | Implicit | Two bound p-n pairs form helium-4 nucleus |
+
+Fusion radius is 8px (within strong force range). Relative velocity thresholds simulate Coulomb
+barrier tunneling — freshly spawned cold nuclei will not fuse spontaneously.
+
+---
+
+## Nuclear Fission
+
+Fast neutrons striking heavy nuclei trigger fission. Max 2 fissions per frame.
+
+| Condition | Detail |
 |---|---|
-| **Electromagnetic** | Coulomb charge interactions + Lorentz magnetic deflection |
-| **Weak nuclear** | Stochastic β/α radioactive decay + neutrino CEvNS scattering |
-| **Strong nuclear** | Yukawa nuclear potential (sub-atomic LOD) · covalent bond springs (macro) |
-| **Gravity** | Optional Newtonian 1/r² between heavy particles — tunable via slider |
+| **Trigger** | Neutron with energy > 0.6 and speed > 50 px/frame |
+| **Target** | Cluster of 6+ nucleons within 12px |
+| **Products** | Cluster splits in half (80 px/s separation impulse) + 2-3 free neutrons spawned at 0.7 energy |
 
-Each particle carries an **energy value (0–1)** updated every frame. Brightness reflects energy.
-Particles that reach zero energy lose all bonds and revert to hydrogen.
+Emitted neutrons can trigger further fissions, producing visible chain reactions in sufficiently
+dense nuclear matter.
+
+---
+
+## Radioactive Decay
+
+A decay engine runs CPU-side each frame. Particles that drop below 0.08 energy undergo
+probabilistic decay based on per-type decay rates.
+
+| Parent | Decay Rate | Products |
+|---|---|---|
+| **Top** t | 0.50 | Bottom + W+ |
+| **W+/W-** | 0.50 | Lepton + Neutrino |
+| **Z0** | 0.50 | e&#8315; + e&#8314; |
+| **Higgs** H0 | 0.40 | 2 Photons |
+| **Tau** &tau; | 0.20 | e&#8315; + &nu;&tau; |
+| **Charm** c | 0.12 | Strange + W+ |
+| **Bottom** b | 0.10 | Charm + W- |
+| **Strange** s | 0.02 | Up + W- |
+| **Muon** &mu; | 0.01 | e&#8315; + &nu;&mu; + &nu;e |
+
+**Matter-antimatter annihilation** runs every frame at 5px contact radius:
+e&#8315;+e&#8314;, p+p&#773;, &mu;&#8315;+&mu;&#8314;, &tau;&#8315;+&tau;&#8314;, and quark-antiquark pairs all
+annihilate to photons.
+
+**Decay cascades** unfold naturally: Top -> Bottom + W+ -> Charm + W- + lepton + nu -> ...
+producing showers of lighter particles from a single heavy parent.
+
+---
+
+## Field Visualization
+
+Five independent quantum field overlays, each toggled separately in the **Field Visualization**
+panel. All render as smooth gradients over the world.
+
+| Field | Color | Source | Range |
+|---|---|---|---|
+| **Electromagnetic** | Red (+) / Blue (-) | Charged particles | Coulomb 1/r^2 falloff |
+| **Strong Nuclear** | Cyan / Green | Nucleons + color-charged quarks | Yukawa exponential (8px range) |
+| **Weak Force** | Purple | W/Z bosons | Very short range (0.8px decay) |
+| **Gravity** | Grey | All massive particles | 1/r falloff |
+| **Higgs** | Gold | Mass coupling | Exponential (30px range) |
+
+Field intensity is adjustable (0.05x - 2.0x). Gravity field renders independently of the
+gravity strength slider — you can visualize the field even with gravity turned off.
+
+---
+
+<a name="environment-presets-physics"></a>
+## Environment Presets (Physics)
+
+Ten presets spanning vacuum to Big Bang conditions. Select from the **Environment** dropdown.
+
+| # | Environment | Temperature | Key Features |
+|---|---|---|---|
+| 0 | **Lab Mode** | 2.7 K | Empty vacuum — manual spawning only |
+| 1 | **Hydrogen Plasma** | 1.5 x 10^7 K | Hot ionized hydrogen, fusion conditions |
+| 2 | **Neutron Star** | 10^9 K | Ultra-dense neutron matter |
+| 3 | **Solar Core** | 1.5 x 10^7 K | Hydrogen + gravity — stellar fusion |
+| 4 | **Particle Soup** | 5 x 10^3 K | Mixed light particles at moderate energy |
+| 5 | **Alpha Emitter** | 300 K | Heavy nuclei, room temperature |
+| 6 | **Heavy Nucleus** | 100 K | Cold dense nuclear matter |
+| 7 | **Quark-Gluon Plasma** | 2 x 10^12 K | Deconfined quarks and gluons |
+| 8 | **Electroweak Era** | 10^15 K | W/Z/Higgs bosons above symmetry breaking |
+| 9 | **Meson Factory** | 5 x 10^11 K | Quark-antiquark pairs forming mesons |
+
+Temperature uses a logarithmic slider from 1 K to 10^13 K. The conversion to simulation
+noise amplitude follows `T_amp = min(2.0, 0.10 * (T/300)^0.25)`.
+
+---
+
+## Spawn Picker — Physics
+
+Press **F3** to open the spawn menu with four tabs:
+
+### Leptons
+Gen-1: e&#8315;, e&#8314;, &nu;e | Gen-2: &mu;&#8315;, &mu;&#8314;, &nu;&mu; | Gen-3: &tau;&#8315;, &tau;&#8314;, &nu;&tau; | Composites: p, n, p&#773;
+
+### Quarks
+Matter: u, d, s, c, t, b | Antimatter: u&#773;, d&#773;, s&#773;, c&#773;, t&#773;, b&#773;
+
+### Bosons
+Gauge: &gamma; (photon), g (gluon) | Weak: W+, W-, Z0 | Scalar: H0 (Higgs)
+
+### Atoms (Group Templates)
+
+12 composite templates that spawn complete atomic structures with correct proton/neutron/electron
+counts and orbital velocities:
+
+| Template | Composition | Particles |
+|---|---|---|
+| **Hydrogen** H | 1p + 1e | 2 |
+| **Deuterium** D | 1p + 1n + 1e | 3 |
+| **Helium-4** He | 2p + 2n + 2e | 6 |
+| **Lithium-7** Li | 3p + 4n + 3e | 10 |
+| **Carbon-12** C | 6p + 6n + 6e | 18 |
+| **Oxygen-16** O | 8p + 8n + 8e | 24 |
+| **Positronium** | e&#8315; + e&#8314; | 2 |
+| **Anti-Hydrogen** | p&#773; + e&#8314; | 2 |
+| **Anti-Helium-4** | 2p&#773; + 2n + 2e&#8314; | 6 |
+| **Pion+** &pi;+ | u + d&#773; | 2 |
+| **Pion-** &pi;- | d + u&#773; | 2 |
+| **Kaon+** K+ | u + s&#773; | 2 |
+
+Each tab has configurable count (1-100), energy (0.1-1.0), and scatter radius (1-100px).
+
+---
+
+# Particle Chemistry Mode
+
+The chemistry simulation models 18 elements forming persistent bonds, molecular aggregates,
+and evolving proto-organisms — all governed by the same four fundamental forces.
 
 ---
 
 ## Periodic Table — 18 Elements
 
-Three nucleosynthesis groups spanning the periodic table, each with distinct electrochemistry:
+Three nucleosynthesis groups spanning the periodic table:
 
 <table>
 <thead><tr><th>#</th><th>Element</th><th>Group</th><th>Valence</th><th>Special Behaviour</th></tr></thead>
@@ -78,103 +320,43 @@ Three nucleosynthesis groups spanning the periodic table, each with distinct ele
 <tr><td>1</td><td><b>C</b> Carbon</td><td>Biogenic</td><td>4</td><td>Neutral backbone</td></tr>
 <tr><td>2</td><td><b>N</b> Nitrogen</td><td>Biogenic</td><td>3</td><td>Electron donor</td></tr>
 <tr><td>3</td><td><b>O</b> Oxygen</td><td>Biogenic</td><td>2</td><td>Polar + electron acceptor</td></tr>
-<tr><td>4</td><td><b>P</b> Phosphorus</td><td>Biogenic</td><td>5</td><td>Heavy · enzymatic catalyst</td></tr>
+<tr><td>4</td><td><b>P</b> Phosphorus</td><td>Biogenic</td><td>5</td><td>Heavy, enzymatic catalyst</td></tr>
 <tr><td>5</td><td><b>S</b> Sulfur</td><td>Biogenic</td><td>2</td><td>Heavy</td></tr>
-<tr><td>6</td><td><b>Na</b> Sodium</td><td>Stellar</td><td>1</td><td>Heavy · ionic (+) · adhesive</td></tr>
-<tr><td>7</td><td><b>Cl</b> Chlorine</td><td>Stellar</td><td>1</td><td>Heavy · ionic (−) · adhesive</td></tr>
-<tr><td>8</td><td><b>Fe</b> Iron</td><td>Stellar</td><td>3</td><td>Heavy · polar · redox-active</td></tr>
-<tr><td>9</td><td><b>Ni</b> Nickel</td><td>Stellar</td><td>2</td><td>Heavy · catalyst · β⁺ unstable → Fe</td></tr>
-<tr><td>10</td><td><b>Si</b> Silicon</td><td>Stellar</td><td>4</td><td>Heavy · silicate network former</td></tr>
-<tr><td>11</td><td><b>Ca</b> Calcium</td><td>Stellar</td><td>2</td><td>Heavy · ionic (+)</td></tr>
-<tr><td>12</td><td><b>Ti</b> Titanium</td><td>Stellar</td><td>4</td><td>Heavy · refractory</td></tr>
-<tr><td>13</td><td><b>Sr</b> Strontium</td><td>r-process</td><td>2</td><td>Heavy · ionic · β⁻ unstable → Ca</td></tr>
-<tr><td>14</td><td><b>Au</b> Gold</td><td>r-process</td><td>1</td><td>Heavy · adhesive · noble</td></tr>
-<tr><td>15</td><td><b>Pb</b> Lead</td><td>r-process</td><td>4</td><td>Heavy · stable decay endpoint</td></tr>
-<tr><td>16</td><td><b>Eu</b> Europium</td><td>r-process</td><td>3</td><td>Heavy · radical · β⁻ unstable → Fe</td></tr>
-<tr><td>17</td><td><b>U</b> Uranium</td><td>r-process</td><td>6</td><td>Heavy · radical · catalyst · α unstable → Pb</td></tr>
+<tr><td>6</td><td><b>Na</b> Sodium</td><td>Stellar</td><td>1</td><td>Heavy, ionic (+), adhesive</td></tr>
+<tr><td>7</td><td><b>Cl</b> Chlorine</td><td>Stellar</td><td>1</td><td>Heavy, ionic (-), adhesive</td></tr>
+<tr><td>8</td><td><b>Fe</b> Iron</td><td>Stellar</td><td>3</td><td>Heavy, polar, redox-active</td></tr>
+<tr><td>9</td><td><b>Ni</b> Nickel</td><td>Stellar</td><td>2</td><td>Heavy, catalyst, beta+ unstable to Fe</td></tr>
+<tr><td>10</td><td><b>Si</b> Silicon</td><td>Stellar</td><td>4</td><td>Heavy, silicate network former</td></tr>
+<tr><td>11</td><td><b>Ca</b> Calcium</td><td>Stellar</td><td>2</td><td>Heavy, ionic (+)</td></tr>
+<tr><td>12</td><td><b>Ti</b> Titanium</td><td>Stellar</td><td>4</td><td>Heavy, refractory</td></tr>
+<tr><td>13</td><td><b>Sr</b> Strontium</td><td>r-process</td><td>2</td><td>Heavy, ionic, beta- unstable to Ca</td></tr>
+<tr><td>14</td><td><b>Au</b> Gold</td><td>r-process</td><td>1</td><td>Heavy, adhesive, noble</td></tr>
+<tr><td>15</td><td><b>Pb</b> Lead</td><td>r-process</td><td>4</td><td>Heavy, stable decay endpoint</td></tr>
+<tr><td>16</td><td><b>Eu</b> Europium</td><td>r-process</td><td>3</td><td>Heavy, radical, beta- unstable to Fe</td></tr>
+<tr><td>17</td><td><b>U</b> Uranium</td><td>r-process</td><td>6</td><td>Heavy, radical, catalyst, alpha unstable to Pb</td></tr>
 </tbody>
 </table>
 
-> **Spawn abundance** varies by environment template — e.g. Tide Pool is salt water + organics,
-> Asteroid Surface is dominated by Fe/Si/Ni. See [Environment Templates](#environment-templates).
->
-> Particles initialise in **three well-separated seed clusters** (triangle formation) so distinct
-> chemistry zones evolve independently before merging.
+Particles initialise in **three well-separated seed clusters** so distinct chemistry zones
+evolve independently before merging.
 
 ---
 
 ## Environment Templates
 
 Nine environment presets control particle abundance, temperature, dampening, and physics on reset.
-Select from the **Environment** dropdown in the settings panel, then press **F2** to regenerate.
 
 | # | Environment | Temp | Dampening | Key Atoms | Special |
 |---|---|---|---|---|---|
-| 0 | **Lab Mode** | 27°C | 0.85 | *(empty)* | Default — use F3 to place structures |
-| 1 | **Tide Pool** | 27°C | 0.93 | H, O, Na, Cl, C, N | Salt water + organics |
-| 2 | **Hydrothermal Vent** | 350°C | 0.90 | H, O, S, Fe, Si, Ca | Hot, mineral-rich water |
-| 3 | **Primordial Soup** | 80°C | 0.88 | H, C, N, O, P, S | Early Earth organics |
-| 4 | **Freshwater Pond** | 20°C | 0.91 | H, O, Ca, Na | Pure water + trace minerals |
-| 5 | **Deep Space** | −270°C | 0.99 | H, C, N, O | Sparse, cosmic ray bombardment |
-| 6 | **Nebula** | −250°C | 0.98 | H, C, N, O, Si, Fe | Dense hydrogen cloud, gravity = 0.1 |
-| 7 | **Asteroid Surface** | −50°C | 0.95 | Fe, Si, Ni, Ca, O, Ti | Rocky metallic body |
-| 8 | **Comet** | −100°C | 0.97 | H, O, C, N, Si, Fe, S, P | Ice + dust + organics |
-
-**Lab Mode** starts with an empty world and a dormant particle reservoir — place atoms, molecules,
-and cells manually via the F3 spawn picker. All other templates fill the world with particles
-matching real-world elemental compositions on reset.
-
----
-
-## Standard Model Particles
-
-Five fundamental particle types emerge naturally from decay chains and vacuum fluctuations,
-or can be placed manually via **F3 → Atoms**:
-
-| # | Particle | Symbol | Source | Behaviour |
-|---|---|---|---|---|
-| 19 | **Alpha** | α | U α-decay | He-4 nucleus · heavy · +2 charge · ~200 px/s |
-| 20 | **Free Electron** | e⁻ | β⁻ decay · virtual pairs | Lepton · ionic (−) · fast |
-| 21 | **Positron** | e⁺ | β⁺ decay · virtual pairs | Lepton · ionic (+) · annihilates e⁻ → 2γ |
-| 22 | **Electron Neutrino** | ν | μ decay · vacuum | Near-zero interaction · CEvNS scatter |
-| 23 | **Muon** | μ | Decay chain | Heavy lepton · decays → e⁻ + ν in ~0.5 s |
-
----
-
-## Radioactive Decay
-
-A half-life stochastic engine runs CPU-side every 2 frames. Unstable isotopes transmute
-probabilistically; daughter particles are injected into the simulation with conserved momentum.
-
-| Parent | Mode | Daughter | Emitted | Q-value | γ ray |
-|---|---|---|---|---|---|
-| **U** (17) | α-decay | Pb (15) | α (19) | 0.45 | ✓ |
-| **Eu** (16) | β⁻-decay | Fe (8) | e⁻ (20) | 0.30 | ✓ |
-| **Sr** (13) | β⁻-decay | Ca (11) | e⁻ (20) | 0.25 | ✓ |
-| **Ni** (9) | β⁺-decay | Fe (8) | e⁺ (21) | 0.20 | — |
-| **μ** (23) | μ-decay | e⁻ (20) | ν (22) | 0.15 | — |
-| **e⁺ + e⁻** | annihilation | — | 2 γ | 1.02 | — |
-
-Half-lives are scaled to 25–50 simulation-seconds so chains unfold visibly at runtime.
-Cumulative decay events are displayed in the **Quantum Physics** panel.
-
----
-
-## Quantum Field Effects
-
-Enable the **Vacuum Energy** slider to activate QFT-inspired vacuum fluctuations:
-
-- **Virtual photon pairs** — Zero-point energy radiation. Two counter-propagating γ photons emerge
-  from random vacuum points at rate `vacuum_energy × 0.8` pairs/cycle. Lifetime ~2–5 s.
-
-- **Virtual e⁺/e⁻ pairs** — Fermion pair production. Short-lived positron–electron pairs that
-  annihilate back to photons on the next decay cycle. Rate: `vacuum_energy × 0.15` pairs/cycle.
-
-- **ZPE energy floor** — Every particle receives a baseline energy gain of `vacuum_energy × 0.003/s`,
-  preventing complete thermodynamic death.
-
-- **Neutrino CEvNS** — Neutrinos scatter weakly off heavy nuclei via Coherent Elastic
-  neutrino–Nucleus Scattering (coupling constant 0.004, ~10⁻⁴ relative to EM). Always active.
+| 0 | **Lab Mode** | 27 C | 0.85 | *(empty)* | Use F3 to place structures |
+| 1 | **Tide Pool** | 27 C | 0.93 | H, O, Na, Cl, C, N | Salt water + organics |
+| 2 | **Hydrothermal Vent** | 350 C | 0.90 | H, O, S, Fe, Si, Ca | Hot, mineral-rich water |
+| 3 | **Primordial Soup** | 80 C | 0.88 | H, C, N, O, P, S | Early Earth organics |
+| 4 | **Freshwater Pond** | 20 C | 0.91 | H, O, Ca, Na | Pure water + trace minerals |
+| 5 | **Deep Space** | -270 C | 0.99 | H, C, N, O | Sparse, cosmic ray bombardment |
+| 6 | **Nebula** | -250 C | 0.98 | H, C, N, O, Si, Fe | Dense hydrogen cloud, gravity = 0.1 |
+| 7 | **Asteroid Surface** | -50 C | 0.95 | Fe, Si, Ni, Ca, O, Ti | Rocky metallic body |
+| 8 | **Comet** | -100 C | 0.97 | H, O, C, N, Si, Fe, S, P | Ice + dust + organics |
 
 ---
 
@@ -185,246 +367,83 @@ Enable the **Vacuum Energy** slider to activate QFT-inspired vacuum fluctuations
 Every 2 frames the CPU bond manager (spatial hash, O(N)) evaluates the particle population:
 
 - **Formation** — Two compatible atoms within `bond_form_radius` with free valence slots snap together
-- **Breaking** — A bond stretched beyond `rest_length × break_factor` snaps and emits a photon
-- **Spring force** — `F = k_eff × extension` where `k_eff = bond_spring_k × clamp(bond_str + 0.5, 0.2, 1.5)`
+- **Breaking** — A bond stretched beyond `rest_length * break_factor` snaps and emits a photon
+- **Spring force** — `F = k_eff * extension` where `k_eff = bond_spring_k * clamp(bond_str + 0.5, 0.2, 1.5)`
 
-Bond compatibility (`BOND_COMPAT`) respects real chemistry:
-`C–C · C–N · C–O · O–H` (covalent) · `Na–Cl` (ionic) · `Fe–O · Fe–S · Si–O · Au–S · U–O · P–O · N–H`
+Bond compatibility respects real chemistry:
+`C-C, C-N, C-O, O-H` (covalent), `Na-Cl` (ionic), `Fe-O, Fe-S, Si-O, Au-S, U-O, P-O, N-H`
 
-### Genome
-
-Each particle carries four float genes passed to the GPU each frame:
+### Genome (Chemistry)
 
 | Gene | Range | Effect |
 |---|---|---|
-| Charge | −1.0 → +1.0 | Coulomb + Lorentz weighting |
-| Electronegativity | 0.2 → 2.0 | Electron-transfer energy yield |
-| Reactivity | 0.2 → 2.0 | Bond-strain cost; coupled to nuclear stability |
-| Bond strength | −0.5 → +0.5 | Spring constant multiplier |
+| Charge | -1.0 to +1.0 | Coulomb + Lorentz weighting |
+| Electronegativity | 0.2 to 2.0 | Electron-transfer energy yield |
+| Reactivity | 0.2 to 2.0 | Bond-strain cost; coupled to nuclear stability |
+| Bond strength | -0.5 to +0.5 | Spring constant multiplier |
 
 ### Energy Metabolism
 
 | Source | Rate |
 |---|---|
-| Ambient gain | +0.010 / s |
-| Passive drain | −0.015 / s |
-| Movement cost | −speed × 0.00015 / s |
-| Crowding penalty | −(density − limit) × 0.005 / s |
-| Symbiotic gain | +attraction × proximity × 0.005 / pair / s |
-| Catalyst boost | +0.008 × neighbour catalysts / s |
-| Donor → Acceptor transfer | +electronegativity × proximity / s |
-| Bond strain cost | −\|ext\|/rest × 0.002 / s |
-| ZPE floor | +vacuum_energy × 0.003 / s |
+| Ambient gain | +0.010/s |
+| Passive drain | -0.015/s |
+| Movement cost | -speed * 0.00015/s |
+| Crowding penalty | -(density - limit) * 0.005/s |
+| Symbiotic gain | +attraction * proximity * 0.005/pair/s |
+| Catalyst boost | +0.008 * neighbour catalysts/s |
+| Donor to Acceptor transfer | +electronegativity * proximity/s |
+| Bond strain cost | -|ext|/rest * 0.002/s |
+| ZPE floor | +vacuum_energy * 0.003/s |
 
 ---
 
 ## Aggregates & Cells
 
-Every 5 frames, DBSCAN clustering (spatial hash) groups nearby atoms into **molecular aggregates**.
-These are plain chemistry — water, lipids, crystals — and are tracked but do not count as organisms.
+Every 5 frames, DBSCAN clustering groups nearby atoms into **molecular aggregates**.
 
-### Molecular classification (chemistry layer)
+### Molecular Classification
 
-| Class | Classification Rule |
+| Class | Rule |
 |---|---|
-| **H₂O** water | H > ¾ cluster & O > 1 |
-| **LIPID** | (C+H) > ⅔ cluster |
-| **AACD** amino acid | (N+O)×2 > size & C > 0 |
-| **NUCL** nucleotide | P×3 > size |
+| **H2O** water | H > 3/4 cluster & O > 1 |
+| **LIPID** | (C+H) > 2/3 cluster |
+| **AACD** amino acid | (N+O)*2 > size & C > 0 |
+| **NUCL** nucleotide | P*3 > size |
 | **RAD!** radical | any RADICAL member |
-| **POLY** polymer | C > ½ cluster & size > 20 |
+| **POLY** polymer | C > 1/2 cluster & size > 20 |
 | **INRG** inorganic | otherwise |
 
-### Biological complexity hierarchy (emergence layer)
-
-A structure is only recognised as a **cell** when its geometry qualifies — chemistry alone is not enough.
+### Biological Complexity Hierarchy
 
 | Tier | Label | Criteria |
 |---|---|---|
-| AGGREGATE | — | Any cluster; not shown in the Cells table |
-| **VESICLE** | `VSIC` | LIPID cluster with **ring topology** (ring_factor > 0.65) and size ≥ 8 |
-| **PROTO-CELL** | `PCLL` | Vesicle that spatially **encloses** at least one non-lipid cluster |
-| **CELL** | `CELL` | Proto-cell with a **nucleotide cluster** enclosed (DNA/RNA analog) |
+| AGGREGATE | -- | Any cluster |
+| **VESICLE** | `VSIC` | LIPID cluster with ring topology (ring_factor > 0.65), size >= 8 |
+| **PROTO-CELL** | `PCLL` | Vesicle enclosing at least one non-lipid cluster |
+| **CELL** | `CELL` | Proto-cell enclosing a nucleotide cluster (DNA/RNA analog) |
 
-**ring_factor** = mean distance from centroid / max distance from centroid.
-A solid lipid blob scores ~0.5; a hollow ring scores ~0.9+.
-
-### Darwinian evolution (vesicle+ only)
-
-Evolution pressure only applies to **vesicle and above** — plain water molecules are not competing.
+### Darwinian Evolution (vesicle+ only)
 
 | Mechanism | Detail |
 |---|---|
-| **Division mutation** | On division, ±3% drift applied to every member's electronegativity and reactivity — heritable stochastic variation |
-| **Fitness-driven force adaptation** | Top-3 vesicle+ structures by fitness (kills × 3 + divisions × 2 + energy × 10 + size × 0.01) nudge their type's self-cohesion force +0.004 per update cycle |
-| **Trait-scale amplification** | Bond-rich cell-class clusters boost their type's force row up to **2.5×** |
-
-### Trait feedback (all aggregates)
-
-Genome nudging toward molecular role applies to every aggregate regardless of complexity:
-WATER → ↑ electronegativity · LIPID → ↑ bond strength · RADICAL → ↑ reactivity · etc.
-
-**Force randomness** (Generation slider, default 0.25) blends random variation into chemistry
-force defaults on reset — different seeds produce genuinely distinct fitness landscapes.
+| **Division mutation** | On division, +/-3% drift to electronegativity and reactivity |
+| **Fitness-driven adaptation** | Top-3 vesicle+ structures nudge their type's self-cohesion force |
+| **Trait-scale amplification** | Bond-rich cell-class clusters boost their type's force row up to 2.5x |
 
 ---
 
-## Sub-Atomic LOD
+## Spawn Picker — Chemistry
 
-Hover over any particle and zoom in to drill down through three levels of detail:
+Press **F3** to open the spawn picker with tabs for **Atoms** (18 elements), **Groups**
+(14 inorganic / small-molecule templates), **Organics** (8 bio-molecule templates), and
+**Organisms** (clone aggregates or place predefined templates).
 
-| Zoom | View | Physics |
-|---|---|---|
-| **1×–20×** | Normal macro particle | Full pairwise force simulation |
-| **> 20×** | **Nucleon view** — Bohr-model nucleus with protons (red), neutrons (grey), electrons (blue) in real shell configurations | Yukawa nuclear + Coulomb + Pauli hard-core repulsion · Binding energy + nuclear stability displayed · Instability feeds back to macro reactivity genome |
-| **> 150×** | **Quark view** — click any nucleon to see its three constituent quarks (p = uud · n = udd) | Cornell potential V(r) = −α/r + σr · models QCD confinement + asymptotic freedom |
+Group templates include: H2O, CH4, NaCl, NH3, CO2, Glycine, Benzene, SiO4, Fe2O3, EtOH,
+CaCO3, Au3, UO2, FeS2.
 
-All 18 elements show correct name, symbol, proton/neutron count, and electron shell configuration.
-Heavy elements (Sr → U) cap at 56 visual nucleons for performance.
-
----
-
-## F3 Lab Spawn Picker
-
-Press **F3** to open the Spawn Picker. Select a template, then **left-click in the world** to place it.
-Newly placed particles are **spawn-protected** (90 frames normally · 600 frames in lab mode) so
-subsequent clicks never recycle them.
-
-**Lab Mode** (environment 0): the simulation resets to a completely blank world with a dormant
-particle reservoir. Background auto-spawn is disabled so manual placements are never overwritten.
-The **Particle Types** slider remains active to control how many element types appear in the
-force matrix.
-
-### Atoms
-
-All **18 elements + 5 SM particles** in a colour-coded grid. Configurable count (×1 – ×50) and scatter radius.
-
-### Groups — 14 Inorganic / Small-Molecule Templates
-
-| | Template | Structure |
-|---|---|---|
-| 💧 | **H2O** | Water — O + 2H, bent ~105° |
-| ⛽ | **CH4** | Methane — C + 4H, tetrahedral |
-| 🧂 | **NaCl** | Salt — Na–Cl ionic pair |
-| 💨 | **NH3** | Ammonia — N + 3H, trigonal pyramidal |
-| 🌬 | **CO2** | Carbon dioxide — O=C=O, linear |
-| 🧬 | **Gly** | Glycine — N–C–C(=O) amino acid backbone |
-| 🔷 | **C6H6** | Benzene — aromatic 6-ring + 6H |
-| 🪨 | **SiO4** | Silicate — Si + 4O tetrahedral unit |
-| 🔩 | **Fe2O3** | Hematite — 2 Fe + 3O iron oxide |
-| 🍺 | **EtOH** | Ethanol — C2H5OH |
-| 🪨 | **CaCO3** | Calcite — Ca + C + 3O limestone |
-| ✨ | **Au3** | Gold trimer — 3 Au metallic nano-cluster |
-| ☢️ | **UO2** | Uranium oxide — U + 2O nuclear fuel |
-| 💛 | **FeS2** | Pyrite — Fe + 2S (fool's gold) |
-
-### Organics — 8 Bio-Molecule Templates
-
-<table>
-<thead><tr><th>Category</th><th>Template</th><th>Structure</th></tr></thead>
-<tbody>
-<tr><td rowspan="2"><b>Proteins</b></td>
-  <td><b>Gly</b></td><td>Glycine — NH₂–CH₂–COOH, simplest amino acid (8 atoms)</td></tr>
-<tr><td><b>Ala</b></td><td>Alanine — NH₂–CH(CH₃)–COOH, methyl side-chain (10 atoms)</td></tr>
-<tr><td rowspan="2"><b>Carbohydrates</b></td>
-  <td><b>Glc</b></td><td>Glucose — hexose ring C₆H₁₂O₆ (5C + ring-O + 5 OH, 11 atoms)</td></tr>
-<tr><td><b>Rib</b></td><td>Ribose — pentose ring C₅H₁₀O₄ (4C + ring-O + 4 OH, 9 atoms)</td></tr>
-<tr><td rowspan="2"><b>Lipids</b></td>
-  <td><b>ButAc</b></td><td>Butyric acid — short fatty acid CH₃CH₂CH₂COOH (12 atoms)</td></tr>
-<tr><td><b>GlyP</b></td><td>Glycerophosphate — lipid head group P + 4O + 3C + N (10 atoms)</td></tr>
-<tr><td rowspan="2"><b>Nucleic Acids</b></td>
-  <td><b>Ade</b></td><td>Adenine — purine fused 6+5 ring C₅H₅N₅ (10 atoms)</td></tr>
-<tr><td><b>Cyt</b></td><td>Cytosine — pyrimidine 6-ring + NH₂ C₄H₅N₃O (8 atoms)</td></tr>
-</tbody>
-</table>
-
-### Organisms
-
-Clone any live molecular aggregate, or place one of three predefined templates:
-**Water Cluster** (5× H₂O pentagon) · **Salt Lattice** (4× NaCl) · **Lipid Stub** (C₆ fatty acid)
-
----
-
-## UI Reference
-
-<details>
-<summary><b>Generation Settings</b></summary>
-
-| Control | Effect |
-|---|---|
-| Particle Count | Pool size (hidden in lab mode — fixed at 10,000) |
-| Particle Types | How many element types appear in the force matrix (1–18) |
-| Reset Colors on next run | Restore CPK palette on reset |
-| Reset Forces on next run | Re-randomise the force matrix on reset |
-| **Force Randomness** | 0–1 blend from pure chemistry defaults to pure random forces; 0.2–0.4 recommended for emergent dynamics |
-| Seed | Deterministic RNG seed — same seed + same Force Randomness → identical run |
-| **Environment** | 9 presets (Lab Mode → Comet) — sets abundance, temperature, dampening, gravity |
-
-</details>
-
-<details>
-<summary><b>Particle Values (Force Grid)</b></summary>
-
-26×26 interaction matrix rendered as a colour-coded button grid. Element symbols on headers.
-- **Hover + scroll** — adjust attraction / repulsion
-- **Right-click** — zero the force
-
-</details>
-
-<details>
-<summary><b>Particle Archetypes</b></summary>
-
-Nine behaviour presets per particle type:
-`Default` · `Repeller` · `Polar` · `Heavy` · `Catalyst` · `Adhesive` · `Radical` · `Donor` · `Acceptor`
-
-</details>
-
-<details>
-<summary><b>Chemical Bonds</b></summary>
-
-| Slider | Effect |
-|---|---|
-| Bond Form Radius | Distance within which compatible atoms snap together |
-| Bond Rest Length | Equilibrium spring length |
-| Bond Break Factor | Stretch multiplier at which bond snaps |
-| Bond Spring k | Base spring constant |
-
-</details>
-
-<details>
-<summary><b>Physics Sliders</b></summary>
-
-| Slider | Range | Default | Effect |
-|---|---|---|---|
-| Temperature | 0 – 2 | 0.3 | Thermal noise per frame (displayed in °C) |
-| Gravity | 0 – 5 | 0 | Newtonian 1/r² between heavy particles |
-| Magnetism | 0 – 2 | 0 | Lorentz force on charged particle pairs |
-| Vacuum Energy | 0 – 1 | 0 | ZPE floor + virtual photon/fermion pair rate |
-
-</details>
-
-<details>
-<summary><b>Aggregates & Cells Panel</b></summary>
-
-- Total cluster count (**Clusters: N active | M dust**)
-- **Vesicles / Proto-cells / Cells** tier counts
-- Population history graph (300-frame ring buffer)
-- Per-type trait-feedback force-scale bars (max 2.5×, only filled by vesicle+ structures)
-- **Top-8 table** (vesicle+ only): tier · ring_factor · size · bonds · speed · gen · kills · divs · energy
-  - `VSIC` = vesicle (lipid ring) · `PCLL` = proto-cell · `CELL` = cell with nucleotide
-
-</details>
-
-<details>
-<summary><b>Quantum Physics Panel</b></summary>
-
-Live stats for all four forces:
-- Cumulative **radioactive decay** events
-- Cumulative **vacuum pair injections**
-- Decay chain reference: `U→Pb+α` · `Eu→Fe+e⁻` · `Sr→Ca+e⁻` · `Ni→Fe+e⁺` · `μ→e⁻+ν` · `e⁺+e⁻→2γ`
-- Gauge interaction summary (EM · Weak · Strong · Gravity)
-
-</details>
+Organic templates include: Glycine, Alanine, Glucose, Ribose, Butyric Acid, Glycerophosphate,
+Adenine, Cytosine.
 
 ---
 
@@ -442,10 +461,7 @@ Live stats for all four forces:
 | Left drag | Pan camera (mouse) |
 | Scroll wheel | Zoom in / out |
 
-> **Force grid** — hover a cell and scroll to tune; right-click to zero it.
->
-> **Sub-atomic view** — hover a particle and zoom past 20× for the nucleon panel;
-> zoom past 150× and click a nucleon to enter quark view.
+> **Force grid** (chemistry mode) — hover a cell and scroll to tune; right-click to zero it.
 
 ---
 
@@ -474,7 +490,11 @@ Compiled SPIR-V shaders are written to `build/shaders/`.
 ### Run
 
 ```bash
+# Chemistry simulation
 ./build/particle_life
+
+# Physics simulation
+./build/particle_physics
 ```
 
 ---
@@ -484,22 +504,28 @@ Compiled SPIR-V shaders are written to `build/shaders/`.
 ```
 EmergentEvolution/
 ├── src/
-│   ├── types.h               # SimConfig · PushConstants (84 b) · ATOM_VALENCE[26] · behaviour flags
-│   ├── particles.h/.cpp      # CPU arrays · CPK colours · electrochemistry force matrix · genome defaults
-│   ├── bond_manager.h/.cpp   # Spatial-hash bond formation/breaking · BOND_COMPAT matrix
-│   ├── decay_manager.h/.cpp  # Stochastic half-life decay · annihilation · DECAY_TABLE[26]
-│   ├── organism.h/.cpp       # DBSCAN clustering · MoleculeClass inference · trait feedback · lineage
-│   ├── sub_atomic.h/.cpp     # Sub-atomic LOD · Bohr nucleon/electron · Cornell quark · LOD↔macro coupling
-│   ├── vulkan_context.h/.cpp # Vulkan instance · device · swapchain · buffer helpers
-│   ├── compute_pipeline.h/.cpp # 17-binding descriptor layout · buffer lifecycle · readback
-│   ├── renderer.h/.cpp       # Fullscreen-quad pipeline · ImGui integration · swapchain sync
-│   ├── interface.h/.cpp      # All Dear ImGui panels · F3 spawn picker · quantum physics panel
-│   ├── simulation.h/.cpp     # Main loop · input · camera · readback · spawn protection · orchestration
-│   └── main.cpp              # Entry point · GLFW window
+│   ├── types.h                  # SimConfig, PushConstants (100 bytes), shared constants
+│   ├── particles.h/.cpp         # CPU arrays, CPK colours, electrochemistry force matrix
+│   ├── bond_manager.h/.cpp      # Spatial-hash bond formation/breaking, BOND_COMPAT
+│   ├── decay_manager.h/.cpp     # Stochastic half-life decay, annihilation, DECAY_TABLE
+│   ├── organism.h/.cpp          # DBSCAN clustering, molecule classification, trait feedback
+│   ├── sub_atomic.h/.cpp        # Sub-atomic LOD: Bohr nucleon/electron, Cornell quark
+│   ├── vulkan_context.h/.cpp    # Vulkan instance, device, swapchain, buffer helpers
+│   ├── compute_pipeline.h/.cpp  # 17-binding descriptor layout, buffer lifecycle, readback
+│   ├── renderer.h/.cpp          # Fullscreen-quad pipeline, ImGui integration
+│   ├── interface.h/.cpp         # Chemistry ImGui panels, F3 spawn picker
+│   ├── simulation.h/.cpp        # Chemistry main loop, input, camera, orchestration
+│   └── main.cpp                 # Chemistry entry point
+├── src/physics/
+│   ├── phys_particles.h/.cpp    # 30 Standard Model types, masses, charges, decay rates
+│   ├── interface.h/.cpp         # Physics ImGui panels, 4-tab spawn picker, field viz
+│   ├── simulation.h/.cpp        # Physics main loop: fusion, fission, decay, orbitals
+│   └── main.cpp                 # Physics entry point
 ├── shaders/
-│   ├── compute.comp          # GPU physics: forces · bonds · metabolism · SM particle paths · all 4 forces
-│   ├── fullscreen.vert       # Fullscreen triangle vertex shader
-│   └── fullscreen.frag       # Particle texture → swapchain blit
+│   ├── compute.comp             # Chemistry GPU: forces, bonds, metabolism
+│   ├── physics.comp             # Physics GPU: 4 forces, centrifugal barrier, 5 field viz
+│   ├── fullscreen.vert          # Fullscreen triangle vertex shader
+│   └── fullscreen.frag          # Particle texture blit
 └── CMakeLists.txt
 ```
 
@@ -516,14 +542,13 @@ EmergentEvolution/
 | 6 | velocity B (pong) | write |
 | 7 | render texture | image write |
 | 8 | behaviour flags | read |
-| 9–12 | angle / angular velocity A+B | read/write |
+| 9-12 | angle / angular velocity A+B | read/write |
 | 13 | energy A (ping) | read |
 | 14 | energy B (pong) | write |
 | 15 | genome | read |
 | 16 | bond partners | read (CPU-managed) |
 
-A/B buffers ping-pong each tick. The bond buffer (binding 16) is shared across both descriptor sets
-since the CPU writes it only while the GPU is idle.
+A/B buffers ping-pong each tick. All buffers are HOST_VISIBLE + HOST_COHERENT for CPU readback.
 
 ---
 

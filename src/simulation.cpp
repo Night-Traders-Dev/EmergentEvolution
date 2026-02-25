@@ -195,8 +195,18 @@ void Simulation::tick(GLFWwindow* window, double dt) {
     bool request_reset = false;
     iface.render_imgui(cfg, particles, organism_manager, bond_manager, request_reset);
 
-    if (request_reset)
+    if (request_reset) {
+        // Apply pending particle count from slider before reset
+        if (!cfg.start_empty) {
+            int pc = static_cast<int>(std::max(2.0f,
+                std::pow(iface.particle_count_slider, 2.0f)));
+            cfg.particle_count = static_cast<uint32_t>(pc);
+        } else {
+            cfg.particle_count = 10000;
+        }
+        cfg.particle_types = static_cast<uint32_t>(iface.particle_types_slider);
         reset();
+    }
 
     // Sub-atomic panel — draws after main UI, still within ImGui frame
     sub_atomic_sim.render_panel(iface.hover_particle_idx, particles);
@@ -385,8 +395,17 @@ void Simulation::handle_input(GLFWwindow* window, double dt) {
     // F2: reset simulation
     static bool f2_prev = false;
     bool f2_cur = (glfwGetKey(window, GLFW_KEY_F2) == GLFW_PRESS);
-    if (f2_cur && !f2_prev)
+    if (f2_cur && !f2_prev) {
+        if (!cfg.start_empty) {
+            int pc = static_cast<int>(std::max(2.0f,
+                std::pow(iface.particle_count_slider, 2.0f)));
+            cfg.particle_count = static_cast<uint32_t>(pc);
+        } else {
+            cfg.particle_count = 10000;
+        }
+        cfg.particle_types = static_cast<uint32_t>(iface.particle_types_slider);
         reset();
+    }
     f2_prev = f2_cur;
 
     // F3: spawn picker

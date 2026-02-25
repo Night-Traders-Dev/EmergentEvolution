@@ -1,0 +1,843 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+// ── Buffer layout (same as chemistry shader — reuses ComputePipeline) ────────
+layout(set = 0, binding = 0, std430) buffer InPosBuffer  { vec2  data[]; } in_pos_buffer;
+layout(set = 0, binding = 1, std430) buffer InVelBuffer  { vec2  data[]; } in_vel_buffer;
+layout(set = 0, binding = 2, std430) readonly buffer Types  { uint  data[]; } type_buffer;
+layout(set = 0, binding = 3, std430) buffer Forces       { float data[]; } force_buffer;
+layout(set = 0, binding = 4, std430) buffer Colors       { vec4  data[]; } color_buffer;
+layout(set = 0, binding = 5, std430) buffer OutPosBuffer { vec2  data[]; } out_pos_buffer;
+layout(set = 0, binding = 6, std430) buffer OutVelBuffer { vec2  data[]; } out_vel_buffer;
+layout(set = 0, binding = 7, rgba32f) uniform image2D out_render_texture;
+layout(set = 0, binding =  8, std430) readonly buffer Behaviors { uint  data[]; } behavior_buffer;
+layout(set = 0, binding =  9, std430) buffer AngleIn            { float data[]; } angle_in_buffer;
+layout(set = 0, binding = 10, std430) buffer AngVelIn           { float data[]; } avel_in_buffer;
+layout(set = 0, binding = 11, std430) buffer AngleOut           { float data[]; } angle_out_buffer;
+layout(set = 0, binding = 12, std430) buffer AngVelOut          { float data[]; } avel_out_buffer;
+layout(set = 0, binding = 13, std430) buffer EnergyIn  { float data[]; } in_energy_buffer;
+layout(set = 0, binding = 14, std430) buffer EnergyOut { float data[]; } out_energy_buffer;
+layout(set = 0, binding = 15, std430) readonly buffer Genomes { float data[]; } genome_buffer;
+layout(set = 0, binding = 16, std430) readonly buffer BondBuffer { uint data[]; } bond_buffer;
+
+// ── Push Constants (expanded to 100 bytes) ──────────────────────────────────
+layout(push_constant, std430) uniform Params {
+    vec2  region_size;
+    vec2  camera_origin;
+    uint  particle_count;
+    uint  particle_types;
+    uint  step;
+    float dt;
+    float camera_zoom;
+    float radius;
+    float dampening;
+    float repulsion_radius;
+    float interaction_radius;
+    float density_limit;
+    float viscosity_strength;
+    float pressure_resistance;
+    float local_density_cap;
+    float temperature;
+    float gravity_strength;
+    float lorentz_strength;
+    float vacuum_energy;
+    uint  field_flags;
+    float weak_coupling;
+    float string_tension;
+    float higgs_vev;
+} params;
+
+// ── Type indices (must match phys_particles.h) ──────────────────────────────
+const uint PROTON_TYPE     = 0u;
+const uint NEUTRON_TYPE    = 1u;
+const uint ELECTRON_TYPE   = 2u;
+const uint PHOTON_TYPE     = 3u;
+const uint POSITRON_TYPE   = 4u;
+const uint ANTIPROTON_TYPE = 5u;
+const uint NEUTRINO_E_TYPE = 6u;
+const uint MUON_TYPE       = 7u;
+const uint ANTIMUON_TYPE   = 8u;
+const uint TAU_TYPE        = 9u;
+const uint ANTITAU_TYPE    = 10u;
+const uint NEUTRINO_MU_TYPE = 11u;
+const uint NEUTRINO_TAU_TYPE = 12u;
+const uint UP_QUARK        = 13u;
+const uint DOWN_QUARK      = 14u;
+const uint STRANGE_QUARK   = 15u;
+const uint CHARM_QUARK     = 16u;
+const uint TOP_QUARK       = 17u;
+const uint BOTTOM_QUARK    = 18u;
+const uint ANTI_UP         = 19u;
+const uint ANTI_DOWN       = 20u;
+const uint ANTI_STRANGE    = 21u;
+const uint ANTI_CHARM      = 22u;
+const uint ANTI_TOP        = 23u;
+const uint ANTI_BOTTOM     = 24u;
+const uint GLUON_TYPE      = 25u;
+const uint W_PLUS_TYPE     = 26u;
+const uint W_MINUS_TYPE    = 27u;
+const uint Z_BOSON_TYPE    = 28u;
+const uint HIGGS_TYPE      = 29u;
+
+// ── Behavior flags (must match types.h) ─────────────────────────────────────
+const uint BEHAVIOR_PHOTON     = 1024u;      // 1 << 10
+const uint BEHAVIOR_LEPTON     = 4096u;      // 1 << 12
+const uint BEHAVIOR_NEUTRINO   = 8192u;      // 1 << 13
+const uint BEHAVIOR_POSITRON   = 16384u;     // 1 << 14
+const uint BEHAVIOR_MASS_HEAVY = 131072u;    // 1 << 17
+const uint BEHAVIOR_QUARK      = 1048576u;   // 1 << 20
+const uint BEHAVIOR_ANTIQUARK  = 2097152u;   // 1 << 21
+const uint BEHAVIOR_WEAK_BOSON = 4194304u;   // 1 << 22
+const uint BEHAVIOR_HIGGS_FLAG = 8388608u;   // 1 << 23
+const uint BEHAVIOR_GLUON_FLAG = 16777216u;  // 1 << 24
+
+// ── Physics constants ───────────────────────────────────────────────────────
+// Force hierarchy: Strong > EM > Weak > Gravity (at nuclear distances)
+// Yukawa must dominate Coulomb at dist 4-8px for nuclei to form
+const float YUKAWA_RANGE     = 8.0;
+const float YUKAWA_COUPLING  = 2000.0;  // ~10x Coulomb at nuclear distances
+const float PAULI_CORE       = 6.0;     // nucleon hard-core radius (smooth overlap)
+const float PAULI_STRENGTH   = 12000.0; // must dominate Yukawa at close range
+const float K_COULOMB        = 1200.0;  // electromagnetic strength
+const float SOFTEN_MIN       = 8.0;     // softening distance for Coulomb
+const float L_MIN              = 120.0;  // minimum angular momentum (ground state orbital)
+const float K_SPIN_ORBIT       = 0.3;   // spin-orbit coupling strength (fine structure)
+const float CENTRIFUGAL_SOFTEN = 1.0;   // softening for r→0 stability
+const float K_MAGNETIC         = 0.5;   // intrinsic Biot-Savart coupling (always on)
+const float ANNIHIL_RADIUS   = 6.0;
+const float ANNIHIL_ATTRACTION = 200.0;
+const float ANNIHIL_DRAIN    = 0.4;
+const float PHOTON_DRAIN     = 0.07;
+const float NEUTRINO_DRAIN   = 0.02;
+const float COLOR_ALPHA_S    = 400.0;   // QCD short-range coupling
+
+// ── Genome accessors ────────────────────────────────────────────────────────
+float get_charge(uint i) { return genome_buffer.data[i * 4u + 0u]; }
+float get_spin(uint i)   { return genome_buffer.data[i * 4u + 1u]; }
+float get_color(uint i)  { return genome_buffer.data[i * 4u + 2u]; }
+float get_decay(uint i)  { return genome_buffer.data[i * 4u + 3u]; }
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+bool is_baryon(uint t) {
+    return t <= NEUTRON_TYPE || t == ANTIPROTON_TYPE;
+}
+
+bool is_quark_type(uint flags) {
+    return (flags & BEHAVIOR_QUARK) != 0u;
+}
+
+bool is_colored(uint flags) {
+    return (flags & (BEHAVIOR_QUARK | BEHAVIOR_GLUON_FLAG)) != 0u;
+}
+
+bool is_annihilation_pair(uint a, uint b) {
+    return (a == ELECTRON_TYPE && b == POSITRON_TYPE)
+        || (a == POSITRON_TYPE && b == ELECTRON_TYPE)
+        || (a == PROTON_TYPE   && b == ANTIPROTON_TYPE)
+        || (a == ANTIPROTON_TYPE && b == PROTON_TYPE)
+        || (a == MUON_TYPE     && b == ANTIMUON_TYPE)
+        || (a == ANTIMUON_TYPE && b == MUON_TYPE)
+        || (a == TAU_TYPE      && b == ANTITAU_TYPE)
+        || (a == ANTITAU_TYPE  && b == TAU_TYPE)
+        // Quark-antiquark annihilation (same flavor only)
+        || (a >= UP_QUARK && a <= BOTTOM_QUARK && b == a + 6u)
+        || (a >= ANTI_UP && a <= ANTI_BOTTOM && b == a - 6u);
+}
+
+// Per-type inverse mass (for force scaling)
+float get_mass_inv(uint type) {
+    // Composites (nucleons)
+    if (type <= NEUTRON_TYPE || type == ANTIPROTON_TYPE) return 0.025;
+    // Gen1 leptons
+    if (type == ELECTRON_TYPE || type == POSITRON_TYPE) return 1.0;
+    // Gen2 leptons (muon ~207 me)
+    if (type == MUON_TYPE || type == ANTIMUON_TYPE) return 0.005;
+    // Gen3 leptons (tau ~3477 me)
+    if (type == TAU_TYPE || type == ANTITAU_TYPE) return 0.0003;
+    // Neutrinos
+    if (type == NEUTRINO_E_TYPE || type == NEUTRINO_MU_TYPE || type == NEUTRINO_TAU_TYPE) return 100.0;
+    // Light quarks (u ~2.2 MeV, d ~4.7 MeV — very light bare mass)
+    if (type == UP_QUARK || type == ANTI_UP) return 0.2;
+    if (type == DOWN_QUARK || type == ANTI_DOWN) return 0.15;
+    // Strange ~95 MeV
+    if (type == STRANGE_QUARK || type == ANTI_STRANGE) return 0.005;
+    // Charm ~1.27 GeV
+    if (type == CHARM_QUARK || type == ANTI_CHARM) return 0.0004;
+    // Bottom ~4.18 GeV
+    if (type == BOTTOM_QUARK || type == ANTI_BOTTOM) return 0.00012;
+    // Top ~173 GeV
+    if (type == TOP_QUARK || type == ANTI_TOP) return 0.000003;
+    // Massless bosons
+    if (type == PHOTON_TYPE || type == GLUON_TYPE) return 100.0;
+    // W ~80 GeV
+    if (type == W_PLUS_TYPE || type == W_MINUS_TYPE) return 0.00006;
+    // Z ~91 GeV
+    if (type == Z_BOSON_TYPE) return 0.00005;
+    // Higgs ~125 GeV
+    if (type == HIGGS_TYPE) return 0.00004;
+    return 1.0;
+}
+
+// Get mass (inverse of get_mass_inv, clamped)
+float get_mass(uint type) {
+    float inv = get_mass_inv(type);
+    return (inv > 0.001) ? 1.0 / inv : 1000.0;
+}
+
+// Color interaction factor between two colored particles
+float color_factor(float ca, float cb) {
+    // Quark-antiquark: same abs color → strong attraction (meson)
+    if (ca * cb < 0.0 && abs(abs(ca) - abs(cb)) < 0.1) return -1.0;
+    // Same color same sign → repulsion
+    if (abs(ca - cb) < 0.1) return 0.5;
+    // Different colors, same sign → weak attraction (baryon formation, RGB → white)
+    if (ca > 0.0 && cb > 0.0) return -0.3;
+    if (ca < 0.0 && cb < 0.0) return -0.3;
+    return 0.0;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  PHYSICS STEP
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void apply_physics(uint i) {
+    vec2  pos_a   = in_pos_buffer.data[i];
+    vec2  vel_a   = in_vel_buffer.data[i];
+    uint  type_a  = type_buffer.data[i];
+    uint  flags_a = behavior_buffer.data[type_a];
+    float energy  = in_energy_buffer.data[i];
+
+    // ── Dormant fast-path ────────────────────────────────────────────────────
+    if (energy < 0.001) {
+        out_pos_buffer.data[i]    = pos_a;
+        out_vel_buffer.data[i]    = vec2(0.0);
+        out_energy_buffer.data[i] = 0.0;
+        angle_out_buffer.data[i]  = angle_in_buffer.data[i];
+        avel_out_buffer.data[i]   = avel_in_buffer.data[i];
+        return;
+    }
+
+    // ── Photon/Gluon fast-path (ballistic, no forces) ────────────────────────
+    if ((flags_a & BEHAVIOR_PHOTON) != 0u) {
+        float drain = (type_a == GLUON_TYPE) ? PHOTON_DRAIN * 1.5 : PHOTON_DRAIN;
+        float ph_energy = max(energy - drain * params.dt, 0.0);
+        out_energy_buffer.data[i] = ph_energy;
+        out_pos_buffer.data[i]    = pos_a + vel_a * params.dt;
+        out_vel_buffer.data[i]    = vel_a;
+        angle_out_buffer.data[i]  = angle_in_buffer.data[i];
+        avel_out_buffer.data[i]   = avel_in_buffer.data[i];
+        return;
+    }
+
+    // ── Neutrino fast-path (all 3 flavors) ───────────────────────────────────
+    if ((flags_a & BEHAVIOR_NEUTRINO) != 0u) {
+        float nu_energy = max(energy - NEUTRINO_DRAIN * params.dt, 0.0);
+        out_energy_buffer.data[i] = nu_energy;
+        out_pos_buffer.data[i]    = pos_a + vel_a * params.dt;
+        out_vel_buffer.data[i]    = vel_a;
+        angle_out_buffer.data[i]  = angle_in_buffer.data[i];
+        avel_out_buffer.data[i]   = avel_in_buffer.data[i];
+        return;
+    }
+
+    // ── W/Z boson fast-path (very short-lived, minimal physics) ──────────────
+    if ((flags_a & BEHAVIOR_WEAK_BOSON) != 0u) {
+        float boson_energy = max(energy - 0.5 * params.dt, 0.0);
+        out_energy_buffer.data[i] = boson_energy;
+        out_pos_buffer.data[i]    = pos_a + vel_a * params.dt * 0.5;
+        out_vel_buffer.data[i]    = vel_a * 0.95;
+        angle_out_buffer.data[i]  = angle_in_buffer.data[i];
+        avel_out_buffer.data[i]   = avel_in_buffer.data[i];
+        return;
+    }
+
+    // ── Higgs fast-path (short-lived, very heavy, barely moves) ──────────────
+    if ((flags_a & BEHAVIOR_HIGGS_FLAG) != 0u) {
+        float h_energy = max(energy - 0.4 * params.dt, 0.0);
+        out_energy_buffer.data[i] = h_energy;
+        out_pos_buffer.data[i]    = pos_a + vel_a * params.dt * 0.1;
+        out_vel_buffer.data[i]    = vel_a * 0.9;
+        angle_out_buffer.data[i]  = angle_in_buffer.data[i];
+        avel_out_buffer.data[i]   = avel_in_buffer.data[i];
+        return;
+    }
+
+    // ── Full pairwise physics ────────────────────────────────────────────────
+    float mass_inv_a = get_mass_inv(type_a);
+    float charge_a   = get_charge(i);
+    float spin_a     = get_spin(i);
+    float color_a    = get_color(i);
+
+    vec2  total_force = vec2(0.0);
+    float interaction_energy = 0.0;
+    float local_density = 0.0;
+
+    // Centrifugal barrier tracking (electrons only) — applied ONCE after loop
+    bool  is_light_particle = mass_inv_a > 0.5 && abs(charge_a) > 0.01;  // electrons/positrons/muons
+    float closest_nuc_dist  = 9999.0;
+    vec2  closest_nuc_delta = vec2(0.0);
+    float nearby_Z          = 0.0;  // total positive charge from nearby protons
+
+    float MAX_RADIUS    = params.interaction_radius;
+    float MAX_RADIUS_SQ = MAX_RADIUS * MAX_RADIUS;
+
+    for (int j = 0; j < int(params.particle_count); j++) {
+        if (i == uint(j)) continue;
+
+        float energy_b = in_energy_buffer.data[j];
+        if (energy_b < 0.001) continue;
+
+        vec2  pos_b   = in_pos_buffer.data[j];
+        vec2  delta   = pos_b - pos_a;
+        float dist_sq = dot(delta, delta);
+
+        if (dist_sq <= 0.0 || dist_sq >= MAX_RADIUS_SQ) continue;
+
+        float dist   = sqrt(dist_sq);
+        vec2  normal = delta / dist;
+        uint  type_b = type_buffer.data[j];
+        uint  flags_b = behavior_buffer.data[type_b];
+
+        // Skip non-interacting particles in force calculation
+        if ((flags_b & (BEHAVIOR_PHOTON | BEHAVIOR_NEUTRINO | BEHAVIOR_WEAK_BOSON | BEHAVIOR_HIGGS_FLAG)) != 0u) continue;
+
+        local_density += exp(-dist / (MAX_RADIUS * 0.5));
+
+        // ── 1. Soft-body repulsion (universal) ──────────────────────────────
+        if (dist < params.repulsion_radius) {
+            float overlap = 1.0 - (dist / params.repulsion_radius);
+            total_force -= normal * overlap * params.pressure_resistance;
+        }
+
+        // ── 2. Yukawa nuclear force (baryon-baryon) ─────────────────────────
+        if (is_baryon(type_a) && is_baryon(type_b)) {
+            if (dist < YUKAWA_RANGE * 3.0) {
+                float inv_r = 1.0 / max(dist, 0.5);
+                float yukawa_F = YUKAWA_COUPLING * exp(-dist / YUKAWA_RANGE)
+                                 * (inv_r + 1.0 / YUKAWA_RANGE) * inv_r;
+                total_force += normal * yukawa_F;
+
+                if (dist < PAULI_CORE) {
+                    float overlap = 1.0 - dist / PAULI_CORE;
+                    float pauli = PAULI_STRENGTH * overlap * overlap / (dist * dist + 0.05);
+                    total_force -= normal * pauli;
+                }
+
+                if (dist < YUKAWA_RANGE) {
+                    interaction_energy += 0.004 * params.dt;
+                }
+            }
+        }
+
+        // ── 3. Coulomb electrostatic force ──────────────────────────────────
+        {
+            float charge_b = get_charge(uint(j));
+            float q_prod = charge_a * charge_b;
+            if (abs(q_prod) > 0.001) {
+                float soften_sq = max(SOFTEN_MIN * SOFTEN_MIN,
+                                      params.repulsion_radius * 0.5 * params.repulsion_radius * 0.5);
+                float coulomb = K_COULOMB * q_prod / (dist_sq + soften_sq);
+                coulomb = clamp(coulomb, -50.0, 50.0);
+                total_force -= normal * coulomb;
+
+                if (q_prod < 0.0 && dist < params.interaction_radius * 0.5) {
+                    interaction_energy += 0.005 * params.dt;
+                }
+            }
+        }
+
+        // ── 3b. Track nearest nucleon for centrifugal barrier ─────────
+        // (Applied ONCE after loop to avoid N× force from multi-nucleon nuclei)
+        if (is_light_particle) {
+            float mass_inv_b = get_mass_inv(type_b);
+            if (mass_inv_b < 0.05) {  // partner is nucleon-scale
+                if (dist < closest_nuc_dist) {
+                    closest_nuc_dist = dist;
+                    closest_nuc_delta = delta;
+                }
+                float cb = get_charge(uint(j));
+                if (cb > 0.01) nearby_Z += cb;  // count proton charges
+            }
+        }
+
+        // ── 4. Color confinement (quark-quark, Cornell potential) ────────────
+        if (is_colored(flags_a) && is_colored(flags_b)) {
+            float color_b = get_color(uint(j));
+            float cf = color_factor(color_a, color_b);
+
+            if (abs(cf) > 0.01) {
+                // Cornell: F = -alpha_s/r^2 (short-range) + sigma*r (confinement)
+                float sigma = params.string_tension;
+                float inv_r = 1.0 / max(dist, 0.5);
+
+                // Short-range color Coulomb (asymptotic freedom — weaker at close range)
+                float short_range = COLOR_ALPHA_S * inv_r * inv_r;
+                // Linear confinement (force increases with distance)
+                float confine = sigma * dist * 0.1;
+
+                float cornell_F = cf * (-short_range + confine);
+                total_force += normal * cornell_F;
+
+                // Hard-core repulsion for quarks at very close range
+                if (dist < 2.0) {
+                    float core = 800.0 / (dist * dist + 0.1);
+                    total_force -= normal * core;
+                }
+
+                // String breaking signal: drain energy when too far apart
+                if (cf < -0.5 && dist > 40.0) {
+                    interaction_energy -= 0.3 * params.dt;
+                }
+
+                // Binding energy for close quarks
+                if (dist < 15.0 && cf < 0.0) {
+                    interaction_energy += 0.006 * params.dt;
+                }
+            }
+        }
+
+        // ── 5. Gravity (optional) ───────────────────────────────────────────
+        if (params.gravity_strength > 0.001) {
+            float mass_a = get_mass(type_a);
+            float mass_b = get_mass(type_b);
+            float f_grav = params.gravity_strength * mass_a * mass_b * 8.0
+                           / (dist_sq + 25.0);
+            total_force += normal * f_grav;
+        }
+
+        // ── 6. Magnetic force (Biot-Savart, always on) ─────────────────────
+        // Each moving charge generates a B field; other charges feel Lorentz force.
+        // K_MAGNETIC is the intrinsic coupling; slider amplifies on top.
+        {
+            float charge_b = get_charge(uint(j));
+            if (abs(charge_a) > 0.01 && abs(charge_b) > 0.01) {
+                vec2  vel_b   = in_vel_buffer.data[j];
+                float cross_j = vel_b.x * (-normal.y) - vel_b.y * (-normal.x);
+                float coupling = K_MAGNETIC + params.lorentz_strength * 5.0;
+                float B_z     = coupling * charge_b * cross_j / (dist + 1.0);
+                total_force  += charge_a * B_z * vec2(vel_a.y, -vel_a.x);
+            }
+        }
+
+        // ── 7. Weak force (very short range) ────────────────────────────────
+        if (params.weak_coupling > 0.001 && dist < 3.0) {
+            float weak_F = params.weak_coupling * 200.0 * exp(-dist / 0.8) / max(dist_sq, 0.1);
+            total_force += normal * weak_F;
+        }
+
+        // ── 8. Spin-based Pauli exclusion (identical fermions) ──────────────
+        if (type_a == type_b && dist < PAULI_CORE * 2.0) {
+            float spin_b = get_spin(uint(j));
+            if (abs(spin_a - spin_b) < 0.1) {
+                // Same type + same spin → extra repulsion (capped for light particles)
+                float pauli_extra = 150.0 / (dist * dist + 1.0);
+                total_force -= normal * pauli_extra;
+            }
+        }
+
+        // ── 9. Spin magnetic moment (always on) ──────────────────────────────
+        if (abs(spin_a * charge_a) > 0.01) {
+            float mu = spin_a * charge_a * 0.5;
+            float mag_coupling = K_MAGNETIC * 0.02 + params.lorentz_strength * 0.01;
+            total_force += mu * mag_coupling * vec2(vel_a.y, -vel_a.x);
+        }
+
+        // ── 10. Matter-antimatter annihilation ──────────────────────────────
+        if (is_annihilation_pair(type_a, type_b) && dist < ANNIHIL_RADIUS) {
+            total_force += normal * ANNIHIL_ATTRACTION;
+            interaction_energy -= energy * ANNIHIL_DRAIN * params.dt;
+        }
+    }
+
+    // ── Centrifugal barrier (applied ONCE per electron) ──────────────────
+    // genome[2] stores L_ground from CPU orbital assignment (0 = free electron)
+    if (is_light_particle && closest_nuc_dist < params.interaction_radius) {
+        float L_ground = get_color(i);  // genome[2] repurposed for orbital L
+        if (L_ground < 1.0) L_ground = L_MIN;  // free electron: default
+
+        vec2 nuc_normal = closest_nuc_delta / max(closest_nuc_dist, 0.1);
+
+        // Angular momentum relative to nearest nucleon
+        float L_actual = abs(closest_nuc_delta.x * vel_a.y - closest_nuc_delta.y * vel_a.x);
+        float L_eff = max(L_actual, L_ground);
+
+        // Centrifugal barrier: F = L²/r³ (capped to prevent catapulting)
+        float r3 = closest_nuc_dist * closest_nuc_dist * closest_nuc_dist + CENTRIFUGAL_SOFTEN;
+        float F_centrifugal = min(L_eff * L_eff / r3, 300.0);
+        total_force -= nuc_normal * F_centrifugal;
+
+        // Spin-orbit coupling
+        float F_SO = spin_a * L_actual * K_SPIN_ORBIT
+                   / (closest_nuc_dist * closest_nuc_dist * closest_nuc_dist * closest_nuc_dist + 1.0);
+        total_force -= nuc_normal * F_SO;
+    }
+
+    // ── Energy metabolism ────────────────────────────────────────────────────
+    {
+        float spd = length(vel_a);
+        float delta_e = 0.0;
+        delta_e += 0.005 * params.dt;                    // zero-point / vacuum fluctuation gain
+        delta_e -= 0.005 * params.dt;                    // radiation loss (balanced in vacuum)
+        delta_e -= spd * 0.00002 * params.dt;            // synchrotron radiation cost (gentle)
+        delta_e += interaction_energy;
+        if (params.vacuum_energy > 0.001)
+            delta_e += params.vacuum_energy * 0.003 * params.dt;
+
+        // Decay drain from genome[3]
+        float decay_rate = get_decay(i);
+        if (decay_rate > 0.001) {
+            delta_e -= decay_rate * params.dt;
+        }
+
+        energy = clamp(energy + delta_e, 0.0, 1.0);
+    }
+    out_energy_buffer.data[i] = energy;
+
+    // ── Integration ──────────────────────────────────────────────────────────
+    total_force *= mass_inv_a;
+    vel_a += total_force * params.dt;
+
+    // Viscosity from local density
+    float viscosity_factor = clamp(local_density * params.viscosity_strength, 0.0, 0.9);
+    float effective_damp = params.dampening * (1.0 - viscosity_factor);
+    vel_a *= clamp(effective_damp, 0.0, 0.99);
+
+    // Speed cap (lighter particles can move faster, but capped for stability)
+    float max_speed = mix(150.0, 400.0, clamp(mass_inv_a * 5.0, 0.0, 1.0));
+    max_speed /= (1.0 + local_density * 0.1);
+    float speed = length(vel_a);
+    if (speed > max_speed) vel_a = (vel_a / speed) * max_speed;
+
+    // Thermal noise
+    if (params.temperature > 0.001) {
+        uint bm_seed = (i * 1664525u + params.step * 1013904223u) ^ 0x9e3779b9u;
+        bm_seed ^= (bm_seed >> 17u); bm_seed *= 0xbf58476du; bm_seed ^= (bm_seed >> 31u);
+        float rng_angle = float(bm_seed) * (6.28318 / 4294967296.0);
+        vec2  noise_dir = vec2(cos(rng_angle), sin(rng_angle));
+        vel_a += noise_dir * params.temperature * 2.0 * sqrt(mass_inv_a);
+    }
+
+    pos_a += vel_a * params.dt;
+
+    out_pos_buffer.data[i] = pos_a;
+    out_vel_buffer.data[i] = vel_a;
+    angle_out_buffer.data[i] = angle_in_buffer.data[i];
+    avel_out_buffer.data[i]  = avel_in_buffer.data[i];
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  RENDER STEP
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void render_particle(uint i) {
+    vec2  pos    = in_pos_buffer.data[i];
+    uint  type   = type_buffer.data[i];
+    float energy = in_energy_buffer.data[i];
+    uint  flags  = behavior_buffer.data[type];
+
+    if (energy < 0.01) return;
+
+    // Particle classification
+    bool is_photon_p    = (flags & BEHAVIOR_PHOTON) != 0u;
+    bool is_neutrino_p  = (flags & BEHAVIOR_NEUTRINO) != 0u;
+    bool is_nucleon     = (type <= NEUTRON_TYPE || type == ANTIPROTON_TYPE);
+    bool is_lepton_p    = (flags & BEHAVIOR_LEPTON) != 0u;
+    bool is_quark_p     = (flags & BEHAVIOR_QUARK) != 0u;
+    bool is_antimatter  = (type == POSITRON_TYPE || type == ANTIPROTON_TYPE ||
+                           type == ANTIMUON_TYPE || type == ANTITAU_TYPE ||
+                           (type >= ANTI_UP && type <= ANTI_BOTTOM));
+    bool is_boson_heavy = (flags & (BEHAVIOR_WEAK_BOSON | BEHAVIOR_HIGGS_FLAG)) != 0u;
+
+    // Size by particle type
+    float base_radius = params.radius * params.camera_zoom;
+    float render_radius;
+    if (is_photon_p)        render_radius = max(base_radius * 4.0, 5.0);
+    else if (is_neutrino_p) render_radius = max(base_radius * 2.0, 3.0);
+    else if (is_nucleon)    render_radius = base_radius * 0.7;
+    else if (is_quark_p)    render_radius = base_radius * 0.45;
+    else if (is_boson_heavy) render_radius = max(base_radius * 3.0, 4.0);
+    else if (type == MUON_TYPE || type == ANTIMUON_TYPE) render_radius = base_radius * 0.5;
+    else if (type == TAU_TYPE || type == ANTITAU_TYPE) render_radius = base_radius * 0.55;
+    else                    render_radius = base_radius * 0.4;
+
+    vec2 screen_center = params.region_size * 0.5;
+    vec2 center = screen_center + (pos - params.camera_origin) * params.camera_zoom;
+
+    float bloom = max(0.0, (energy - 0.5) * 2.0);
+    float outer = render_radius * (1.0 + bloom * 0.6);
+    int   range = int(ceil(outer));
+
+    if (center.x + range < 0.0 || center.x - range > params.region_size.x) return;
+    if (center.y + range < 0.0 || center.y - range > params.region_size.y) return;
+
+    vec4 base_col = color_buffer.data[type];
+
+    // Quarks: tint by color charge (R/G/B)
+    if (is_quark_p) {
+        float cc = get_color(i);
+        float abs_cc = abs(cc);
+        if (abs_cc > 0.5 && abs_cc < 1.5)       base_col.rgb = mix(base_col.rgb, vec3(1.0, 0.2, 0.2), 0.4); // R
+        else if (abs_cc > 1.5 && abs_cc < 2.5)   base_col.rgb = mix(base_col.rgb, vec3(0.2, 1.0, 0.2), 0.4); // G
+        else if (abs_cc > 2.5)                    base_col.rgb = mix(base_col.rgb, vec3(0.2, 0.2, 1.0), 0.4); // B
+    }
+
+    base_col.rgb *= mix(0.15, 1.0, energy);
+
+    for (int x = -range; x <= range; x++) {
+        for (int y = -range; y <= range; y++) {
+            ivec2 pixel_pos = ivec2(floor(center)) + ivec2(x, y);
+            vec2  px_center = vec2(pixel_pos) + 0.5;
+            float d = distance(px_center, center);
+
+            if (d >= outer) continue;
+
+            vec4 col = base_col;
+
+            if (d < render_radius) {
+                // ── Photon/Gluon: radial glow ───────────────────────────────
+                if (is_photon_p) {
+                    float norm_d = d / render_radius;
+                    float glow = max(0.0, 1.0 - norm_d * norm_d);
+                    col.rgb *= glow * 1.6;
+                    // Gluon: green tint
+                    if (type == GLUON_TYPE) col.rgb = mix(col.rgb, vec3(0.3, 1.0, 0.3), 0.3);
+                    vec4 existing = imageLoad(out_render_texture, pixel_pos);
+                    imageStore(out_render_texture, pixel_pos,
+                               vec4(min(existing.rgb + col.rgb, vec3(1.0)), 1.0));
+                    continue;
+                }
+
+                // ── Neutrino: faint ghostly glow ────────────────────────────
+                if (is_neutrino_p) {
+                    float norm_d = d / render_radius;
+                    float glow = max(0.0, 1.0 - norm_d * norm_d);
+                    col.rgb *= glow * 0.6;
+                    col.rgb = mix(col.rgb, vec3(0.7, 1.0, 0.7), 0.3);
+                    vec4 existing = imageLoad(out_render_texture, pixel_pos);
+                    imageStore(out_render_texture, pixel_pos,
+                               vec4(min(existing.rgb + col.rgb, vec3(1.0)), 1.0));
+                    continue;
+                }
+
+                // ── Heavy bosons (W/Z/Higgs): bright flash ──────────────────
+                if (is_boson_heavy) {
+                    float norm_d = d / render_radius;
+                    float glow = max(0.0, 1.0 - norm_d * norm_d);
+                    if (type == HIGGS_TYPE) {
+                        col.rgb = mix(col.rgb, vec3(1.0, 0.95, 0.7), glow * 0.6);
+                    } else {
+                        col.rgb = mix(col.rgb, vec3(0.8, 0.9, 1.0), glow * 0.7);
+                    }
+                    col.rgb *= glow * 2.0;
+                    vec4 existing = imageLoad(out_render_texture, pixel_pos);
+                    imageStore(out_render_texture, pixel_pos,
+                               vec4(min(existing.rgb + col.rgb, vec3(1.0)), 1.0));
+                    continue;
+                }
+
+                // ── Smooth edge for solid particles ─────────────────────────
+                float edge = 1.0 - smoothstep(render_radius * 0.65, render_radius, d);
+                col.rgb *= edge;
+
+                // ── Nucleon inner glow ──────────────────────────────────────
+                if (is_nucleon) {
+                    float inner_glow = 1.0 - d / render_radius;
+                    inner_glow *= inner_glow;
+                    if (type == PROTON_TYPE) {
+                        col.rgb = mix(col.rgb, vec3(1.0, 0.4, 0.1), inner_glow * 0.4);
+                    } else if (type == ANTIPROTON_TYPE) {
+                        col.rgb = mix(col.rgb, vec3(0.4, 1.0, 0.9), inner_glow * 0.5);
+                    } else {
+                        col.rgb = mix(col.rgb, vec3(0.9, 0.9, 1.0), inner_glow * 0.3);
+                    }
+                }
+
+                // ── Quark inner glow (color-charge tinted) ──────────────────
+                if (is_quark_p) {
+                    float inner_glow = 1.0 - d / render_radius;
+                    inner_glow *= inner_glow;
+                    col.rgb = mix(col.rgb, vec3(1.0, 1.0, 1.0), inner_glow * 0.35);
+                }
+
+                // ── Antimatter halo ring ────────────────────────────────────
+                if (is_antimatter) {
+                    float ring_d = abs(d - render_radius * 0.75);
+                    float ring = exp(-ring_d * ring_d / (render_radius * 0.06 + 0.01));
+                    col.rgb = mix(col.rgb, vec3(1.0), ring * 0.35);
+                }
+
+                // ── Specular highlight ──────────────────────────────────────
+                vec2  hi_ctr = center + vec2(-render_radius * 0.25, -render_radius * 0.25);
+                float d_hi   = distance(px_center, hi_ctr);
+                if (d_hi < render_radius * 0.30) {
+                    float hi = 1.0 - d_hi / (render_radius * 0.30);
+                    hi *= hi;
+                    col.rgb = mix(col.rgb, vec3(1.0), hi * 0.45);
+                }
+
+                imageStore(out_render_texture, pixel_pos, col);
+
+            } else if (!is_photon_p && bloom > 0.01) {
+                float t    = (d - render_radius) / (outer - render_radius);
+                float glow = (1.0 - t) * (1.0 - t) * bloom * 0.3;
+                vec4 existing = imageLoad(out_render_texture, pixel_pos);
+                imageStore(out_render_texture, pixel_pos,
+                           vec4(min(existing.rgb + col.rgb * glow, vec3(1.0)), 1.0));
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  FIELD VISUALIZATION (step 2)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const float FIELD_MAX_WORLD_RADIUS = 60.0;
+const float FIELD_MAX_SCREEN_RADIUS = 60.0;
+const float FIELD_SCALE = 0.00025;
+
+void render_field(uint i) {
+    vec2  pos    = in_pos_buffer.data[i];
+    uint  type   = type_buffer.data[i];
+    float energy = in_energy_buffer.data[i];
+    uint  flags  = behavior_buffer.data[type];
+
+    if (energy < 0.01) return;
+
+    // Skip photons and neutrinos from field rendering
+    if ((flags & (BEHAVIOR_PHOTON | BEHAVIOR_NEUTRINO)) != 0u) return;
+
+    uint fflags = params.field_flags;
+    // Support legacy density_limit encoding for backward compat
+    if (fflags == 0u) {
+        float fm = params.density_limit;
+        if (fm > 0.5 && fm < 1.5) fflags = 1u;
+        else if (fm > 1.5 && fm < 2.5) fflags = 2u;
+        else if (fm > 2.5 && fm < 3.5) fflags = 3u;
+    }
+
+    bool show_em     = (fflags & 1u) != 0u;
+    bool show_strong = (fflags & 2u) != 0u;
+    bool show_weak   = (fflags & 4u) != 0u;
+    bool show_grav   = (fflags & 8u) != 0u;
+    bool show_higgs  = (fflags & 16u) != 0u;
+
+    float charge     = get_charge(i);
+    bool has_charge  = abs(charge) > 0.01;
+    bool is_nucleon  = is_baryon(type);
+    bool is_colored_p = is_colored(flags);
+    bool is_weak_b   = (flags & BEHAVIOR_WEAK_BOSON) != 0u;
+
+    float intensity  = params.local_density_cap;
+
+    // Check if this particle contributes to any enabled field
+    bool contributes = false;
+    if (show_em && has_charge) contributes = true;
+    if (show_strong && (is_nucleon || is_colored_p)) contributes = true;
+    if (show_weak && is_weak_b) contributes = true;
+    if (show_grav) contributes = true;
+    if (show_higgs) contributes = true;
+    if (!contributes) return;
+
+    vec2 screen_center = params.region_size * 0.5;
+    vec2 center = screen_center + (pos - params.camera_origin) * params.camera_zoom;
+
+    float world_range = 0.0;
+    if (show_em && has_charge) world_range = FIELD_MAX_WORLD_RADIUS;
+    if (show_strong && (is_nucleon || is_colored_p)) world_range = max(world_range, YUKAWA_RANGE * 3.5);
+    if (show_weak && is_weak_b) world_range = max(world_range, 5.0);
+    if (show_grav) world_range = max(world_range, FIELD_MAX_WORLD_RADIUS);
+    if (show_higgs) world_range = max(world_range, 30.0);
+
+    float screen_range = min(world_range * params.camera_zoom, FIELD_MAX_SCREEN_RADIUS);
+    int range = int(ceil(screen_range));
+
+    if (center.x + float(range) < 0.0 || center.x - float(range) > params.region_size.x) return;
+    if (center.y + float(range) < 0.0 || center.y - float(range) > params.region_size.y) return;
+
+    float scale = FIELD_SCALE * intensity * energy;
+
+    for (int x = -range; x <= range; x++) {
+        for (int y = -range; y <= range; y++) {
+            ivec2 pixel = ivec2(floor(center)) + ivec2(x, y);
+            if (pixel.x < 0 || pixel.x >= int(params.region_size.x)) continue;
+            if (pixel.y < 0 || pixel.y >= int(params.region_size.y)) continue;
+
+            float screen_dist = length(vec2(x, y));
+            if (screen_dist > screen_range) continue;
+
+            float world_dist = max(screen_dist / params.camera_zoom, 1.0);
+
+            vec3 field_color = vec3(0.0);
+
+            // ── Electromagnetic (Coulomb potential) ──────────────────────
+            if (show_em && has_charge) {
+                float phi = charge / (world_dist * world_dist + 9.0);
+                float viz_K = 8000.0;  // visualization brightness (independent of physics K)
+                if (phi > 0.0)
+                    field_color += vec3(phi * 1.0, phi * 0.25, phi * 0.03) * viz_K;
+                else
+                    field_color += vec3(-phi * 0.03, -phi * 0.35, -phi * 1.0) * viz_K;
+            }
+
+            // ── Strong nuclear (Yukawa for nucleons, color for quarks) ──
+            if (show_strong) {
+                if (is_nucleon) {
+                    float yukawa = exp(-world_dist / YUKAWA_RANGE) / max(world_dist, 0.5);
+                    field_color += vec3(yukawa * 0.08, yukawa * 0.6, yukawa * 0.35) * YUKAWA_COUPLING;
+                }
+                if (is_colored_p) {
+                    float cc = abs(get_color(i));
+                    float cornell = params.string_tension * world_dist * 0.001;
+                    vec3 qcd_col = vec3(0.0);
+                    if (cc > 0.5 && cc < 1.5) qcd_col = vec3(cornell, 0.0, 0.0);         // R
+                    else if (cc > 1.5 && cc < 2.5) qcd_col = vec3(0.0, cornell, 0.0);     // G
+                    else qcd_col = vec3(0.0, 0.0, cornell);                                 // B
+                    field_color += qcd_col * 2.0;
+                }
+            }
+
+            // ── Weak field (very short range around W/Z) ────────────────
+            if (show_weak && is_weak_b) {
+                float weak_V = exp(-world_dist / 0.8) * 100.0;
+                field_color += vec3(weak_V * 0.5, weak_V * 0.1, weak_V * 0.8) * 0.0005;
+            }
+
+            // ── Gravitational ───────────────────────────────────────────
+            if (show_grav) {
+                float mass = get_mass(type);
+                float grav_phi = mass * 0.5 / (world_dist + 2.0);
+                field_color += vec3(grav_phi * 0.3, grav_phi * 0.3, grav_phi * 0.4) * 0.01;
+            }
+
+            // ── Higgs field ─────────────────────────────────────────────
+            if (show_higgs) {
+                float mass = get_mass(type);
+                float higgs_d = mass * exp(-world_dist / 30.0);
+                field_color += vec3(higgs_d * 0.6, higgs_d * 0.5, higgs_d * 0.2) * 0.0001;
+            }
+
+            field_color *= scale;
+
+            vec4 existing = imageLoad(out_render_texture, pixel);
+            imageStore(out_render_texture, pixel,
+                       vec4(min(existing.rgb + field_color, vec3(1.0)), 1.0));
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ENTRY POINT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= params.particle_count) return;
+
+    switch (params.step) {
+        case 0: apply_physics(i);    break;
+        case 1: render_particle(i);  break;
+        case 2: render_field(i);     break;
+    }
+}

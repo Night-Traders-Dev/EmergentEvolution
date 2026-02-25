@@ -67,6 +67,13 @@ enum ParticleBehavior : uint32_t {
     BEHAVIOR_MASS_HEAVY  = 1u << 17, // P S Na Cl (23-35 amu)  mass_inv=0.18
     BEHAVIOR_MASS_DENSE  = 1u << 18, // Fe Ni Si Ca Ti (28-59 amu)  mass_inv=0.13
     BEHAVIOR_MASS_ULTRA  = 1u << 19, // Sr Au Pb Eu U (88-238 amu) mass_inv=0.08
+    // Sub-atomic / Standard Model particle flags
+    BEHAVIOR_QUARK       = 1u << 20, // participates in color confinement (strong force)
+    BEHAVIOR_ANTIQUARK   = 1u << 21, // antiquark (opposite color charge)
+    BEHAVIOR_WEAK_BOSON  = 1u << 22, // W or Z boson — weak force mediator
+    BEHAVIOR_HIGGS       = 1u << 23, // Higgs boson — scalar field coupling
+    BEHAVIOR_GLUON       = 1u << 24, // gluon — strong force mediator (massless, colored)
+    BEHAVIOR_TAU         = 1u << 25, // tau lepton family (heavy, short-lived)
 };
 
 
@@ -90,9 +97,13 @@ struct PushConstants {
     float     gravity_strength;   // 72  — scaled gravity (0 = off)
     float     lorentz_strength;   // 76  — scaled Lorentz / magnetic force (0 = off)
     float     vacuum_energy;      // 80  — zero-point energy / vacuum fluctuation strength
+    uint32_t  field_flags;        // 84  — bitfield: bit0=EM, 1=strong, 2=weak, 3=gravity, 4=Higgs
+    float     weak_coupling;      // 88  — weak force strength
+    float     string_tension;     // 92  — quark confinement constant (Cornell potential)
+    float     higgs_vev;          // 96  — Higgs vacuum expectation value
 };
-// Size is 84 bytes
-static_assert(sizeof(PushConstants) == 84, "PushConstants layout mismatch");
+// Size is 100 bytes (under 128 Vulkan minimum)
+static_assert(sizeof(PushConstants) == 100, "PushConstants layout mismatch");
 
 struct SimConfig {
     uint32_t particle_count     = 22500;
@@ -129,6 +140,15 @@ struct SimConfig {
     float    lorentz_strength         = 0.0f;   // scaled Lorentz / magnetic deflection
     float    vacuum_energy            = 0.0f;   // vacuum fluctuation rate + ZPE floor (0=off)
 
+    // Standard Model forces
+    uint32_t field_flags              = 0;      // bitfield for field visualization toggles
+    float    weak_coupling            = 0.0f;   // weak force strength (0=off)
+    float    string_tension           = 50.0f;  // quark confinement linear potential coefficient
+    float    higgs_vev                = 246.0f; // Higgs vacuum expectation value
+
+    // Temperature in Kelvin (for physics sim)
+    float    temperature_kelvin       = 300.0f; // actual temperature; converted to noise amplitude
+
     // Periodic particle spawn
     bool     spawn_enabled   = false;
     float    spawn_interval  = 5.0f;   // seconds between spawn events
@@ -140,8 +160,8 @@ struct SimConfig {
     uint32_t pool_size       = 5000;   // how many dormant H atoms to pre-allocate
 
     // Environment presets
-    uint32_t environment_mode = 0;  // 0=Standard, 1=Water, 2=Salt Water,
-                                    // 3=Empty Space, 4=Cosmic Rays, 5=Magnetic Field
+    uint32_t environment_mode = 0;  // 0=Lab 1=Tide Pool 2=Vent 3=Primordial
+                                    // 4=Pond 5=Space 6=Nebula 7=Asteroid 8=Comet
 
     glm::vec2 camera_origin      = { REGION_W / 2.0f, REGION_H / 2.0f };
     float     camera_zoom        = 1.0f;

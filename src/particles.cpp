@@ -375,38 +375,73 @@ void Particles::gen_particles(const SimConfig& cfg) {
     for (uint32_t i = 0; i < n_active; ++i) cum[i+1] = cum[i] + abundance[i] / total;
     cum[n_active] = 1.0f; // clamp
 
-    // ── Three well-separated seed clusters ───────────────────────────────────
-    // Triangle layout so matter starts in distinct regions of the world.
-    // Small random jitter keeps each reset visually unique.
-    static const float SEED_X[3] = { 0.25f, 0.50f, 0.75f };
-    static const float SEED_Y[3] = { 0.28f, 0.72f, 0.28f };
-    int n_clusters = 3;
-    std::vector<glm::vec2> cluster_centers(3);
-    std::vector<float>     cluster_sigma(3);
-    for (int k = 0; k < 3; ++k) {
-        cluster_centers[k] = {
-            std::clamp(rw * (SEED_X[k] + rand_range_f(-0.08f, 0.08f)), rw * 0.05f, rw * 0.95f),
-            std::clamp(rh * (SEED_Y[k] + rand_range_f(-0.08f, 0.08f)), rh * 0.05f, rh * 0.95f)
-        };
-        cluster_sigma[k] = rand_range_f(rh * 0.07f, rh * 0.18f);
-    }
-
+    // ── Per-environment spatial distribution ────────────────────────────────
     std::normal_distribution<float> gauss(0.0f, 1.0f);
 
     for (uint32_t i = 0; i < cfg.particle_count; ++i) {
-        // Assign to a random cluster
-        int ci = static_cast<int>(rng_() % n_clusters);
         glm::vec2 pos;
-        // Rejection-sample to keep within world bounds
-        int tries = 0;
-        do {
-            float sig = cluster_sigma[ci];
-            pos = { cluster_centers[ci].x + gauss(rng_) * sig,
-                    cluster_centers[ci].y + gauss(rng_) * sig };
-            ++tries;
-        } while ((pos.x < 0.0f || pos.x >= rw || pos.y < 0.0f || pos.y >= rh) && tries < 20);
-        pos.x = std::clamp(pos.x, 0.0f, rw - 1.0f);
-        pos.y = std::clamp(pos.y, 0.0f, rh - 1.0f);
+
+        switch (cfg.environment_mode) {
+            case 2: { // Hydrothermal Vent — plume rising from bottom-center
+                float cx = rw * 0.5f;
+                float plume_sx = rw * 0.06f;
+                if (rand_range_f(0.0f, 1.0f) < 0.70f) {
+                    // Plume column: narrow x, biased toward bottom
+                    float py = rh - std::abs(gauss(rng_)) * rh * 0.4f;
+                    py = std::clamp(py, 0.0f, rh - 1.0f);
+                    pos = glm::vec2(
+                        std::clamp(cx + gauss(rng_) * plume_sx, 0.0f, rw - 1.0f),
+                        py);
+                } else {
+                    // Sparse warm-water background
+                    pos = glm::vec2(rand_range_f(0.0f, rw), rand_range_f(0.0f, rh));
+                }
+                break;
+            }
+            case 6: { // Nebula — dense Gaussian cloud at center
+                float cx = rw * 0.5f, cy = rh * 0.5f;
+                float sx = rw * 0.25f, sy = rh * 0.25f;
+                pos = glm::vec2(
+                    std::clamp(cx + gauss(rng_) * sx, 0.0f, rw - 1.0f),
+                    std::clamp(cy + gauss(rng_) * sy, 0.0f, rh - 1.0f));
+                break;
+            }
+            case 7: { // Asteroid — dense rocky core + scattered debris
+                float cx = rw * 0.5f, cy = rh * 0.5f;
+                float core_s = rw * 0.08f;
+                if (rand_range_f(0.0f, 1.0f) < 0.80f) {
+                    pos = glm::vec2(
+                        std::clamp(cx + gauss(rng_) * core_s, 0.0f, rw - 1.0f),
+                        std::clamp(cy + gauss(rng_) * core_s, 0.0f, rh - 1.0f));
+                } else {
+                    // Scattered debris
+                    pos = glm::vec2(rand_range_f(0.0f, rw), rand_range_f(0.0f, rh));
+                }
+                break;
+            }
+            case 8: { // Comet — dense nucleus + elongated tail
+                float nx = rw * 0.25f, ny = rh * 0.5f;
+                float nuc_s = rw * 0.05f;
+                if (rand_range_f(0.0f, 1.0f) < 0.55f) {
+                    // Dense icy nucleus
+                    pos = glm::vec2(
+                        std::clamp(nx + gauss(rng_) * nuc_s, 0.0f, rw - 1.0f),
+                        std::clamp(ny + gauss(rng_) * nuc_s, 0.0f, rh - 1.0f));
+                } else {
+                    // Tail streaming rightward, widening with distance
+                    float tx = nx + std::abs(gauss(rng_)) * rw * 0.35f;
+                    float spread = (tx - nx) / rw * 0.3f;
+                    float ty = ny + gauss(rng_) * rh * (0.03f + spread);
+                    pos = glm::vec2(
+                        std::clamp(tx, 0.0f, rw - 1.0f),
+                        std::clamp(ty, 0.0f, rh - 1.0f));
+                }
+                break;
+            }
+            default: // Uniform fill (Tide Pool, Primordial Soup, Freshwater Pond, Deep Space)
+                pos = glm::vec2(rand_range_f(0.0f, rw), rand_range_f(0.0f, rh));
+                break;
+        }
 
         // Sample type from abundance distribution
         float r = rand_range_f(0.0f, 1.0f);

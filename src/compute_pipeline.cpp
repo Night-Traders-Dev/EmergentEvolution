@@ -147,6 +147,8 @@ void ComputePipeline::create_descriptor_pool(VkDevice device) {
 // ── Buffer creation ───────────────────────────────────────────────────────────
 
 void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& particles) {
+    live_particle_count_ = static_cast<uint32_t>(particles.positions.size());
+
     const VkBufferUsageFlags    BUF_USAGE = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
     const VkMemoryPropertyFlags MEM_PROPS =
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
@@ -462,7 +464,7 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     if (pos_buffer_a_.handle == VK_NULL_HANDLE) return;
 
     VkDescriptorSet active_set = (tick % 2 == 0) ? desc_set_a_ : desc_set_b_;
-    uint32_t particle_count    = static_cast<uint32_t>(cfg.particle_count);
+    uint32_t particle_count    = live_particle_count_;
 
     PushConstants pc{};
     pc.region_size = {
@@ -486,6 +488,10 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     pc.gravity_strength     = cfg.gravity_strength;
     pc.lorentz_strength     = cfg.lorentz_strength;
     pc.vacuum_energy        = cfg.vacuum_energy;
+    pc.field_flags          = cfg.field_flags;
+    pc.weak_coupling        = cfg.weak_coupling;
+    pc.string_tension       = cfg.string_tension;
+    pc.higgs_vev            = cfg.higgs_vev;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -532,6 +538,24 @@ void ComputePipeline::record(VkCommandBuffer cmd,
         VK_PIPELINE_STAGE_TRANSFER_BIT,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         0, 0, nullptr, 0, nullptr, 1, &img_barrier);
+
+    // ── Step 2: quantum field visualization (optional) ─────────────────────────
+    // field_flags bitfield: bit0=EM, 1=strong, 2=weak, 3=gravity, 4=Higgs
+    // Also support legacy density_limit mode for chemistry sim
+    if (pc.field_flags != 0u || (pc.density_limit >= 0.5f && pc.density_limit <= 3.5f)) {
+        pc.step = 2;
+        dispatch(cmd, active_set, pc, particle_count);
+
+        // Barrier: field writes → particle render reads
+        VkMemoryBarrier field_barrier{};
+        field_barrier.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        field_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        field_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 1, &field_barrier, 0, nullptr, 0, nullptr);
+    }
 
     // ── Step 1: render particles to texture ───────────────────────────────────
     pc.step = 1;

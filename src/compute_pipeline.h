@@ -89,6 +89,9 @@ private:
     // Layout: bond_partners[i * MAX_BONDS_PER_PARTICLE + slot] = partner index
     Buffer bond_buffer_{};
 
+    // Actual particle count the buffers were allocated for (safe dispatch cap)
+    uint32_t live_particle_count_ = 0;
+
     // Descriptor sets: set_a uses (a→in, b→out), set_b uses (b→in, a→out)
     VkDescriptorSet desc_set_a_ = VK_NULL_HANDLE;
     VkDescriptorSet desc_set_b_ = VK_NULL_HANDLE;

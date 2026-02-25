@@ -92,10 +92,9 @@ void Interface::render_imgui(SimConfig&       cfg,
     if (!cfg.start_empty) {
         ImGui::SliderFloat("Count Slider", &particle_count_slider, 1.0f, 317.0f, "%.0f");
         int pc = static_cast<int>(std::max(2.0f, std::pow(particle_count_slider, 2.0f)));
-        cfg.particle_count = static_cast<uint32_t>(pc);
-        ImGui::Text("Particle Count:  %d", pc);
+        ImGui::Text("Particle Count:  %d  (applied on Reset)", pc);
     } else {
-        cfg.particle_count = 10000;  // fixed lab capacity — no slider needed
+        ImGui::Text("Particle Count:  %d  (Lab Mode)", cfg.particle_count);
     }
 
     ImGui::SliderFloat("Types Slider", &particle_types_slider, 1.0f, 18.0f, "%.0f");
@@ -128,50 +127,59 @@ void Interface::render_imgui(SimConfig&       cfg,
     if (ImGui::Combo("##env_mode", &env, ENV_NAMES, IM_ARRAYSIZE(ENV_NAMES))) {
         cfg.environment_mode = static_cast<uint32_t>(env);
         switch (cfg.environment_mode) {
-            case 0: // Lab Mode
+            case 0: // Lab Mode — empty world, F3 to place
                 cfg.temperature = 0.30f; cfg.dampening = 0.85f;
                 cfg.gravity_strength = 0.0f; cfg.lorentz_strength = 0.0f;
                 cfg.vacuum_energy = 0.0f; cfg.start_empty = true;
+                particle_types_slider = 8.0f;
                 break;
-            case 1: // Tide Pool
+            case 1: // Tide Pool — 50K, uniform water fill
                 cfg.temperature = 0.30f; cfg.dampening = 0.93f;
                 cfg.gravity_strength = 0.0f; cfg.lorentz_strength = 0.0f;
                 cfg.vacuum_energy = 0.0f; cfg.start_empty = false;
+                particle_count_slider = 224.0f; particle_types_slider = 12.0f;
                 break;
-            case 2: // Hydrothermal Vent
+            case 2: // Hydrothermal Vent — 45K, plume from bottom
                 cfg.temperature = 0.623f; cfg.dampening = 0.90f;
                 cfg.gravity_strength = 0.0f; cfg.lorentz_strength = 0.0f;
                 cfg.vacuum_energy = 0.0f; cfg.start_empty = false;
+                particle_count_slider = 212.0f; particle_types_slider = 18.0f;
                 break;
-            case 3: // Primordial Soup
+            case 3: // Primordial Soup — 50K, uniform warm ocean
                 cfg.temperature = 0.353f; cfg.dampening = 0.88f;
                 cfg.gravity_strength = 0.0f; cfg.lorentz_strength = 0.0f;
                 cfg.vacuum_energy = 0.0f; cfg.start_empty = false;
+                particle_count_slider = 224.0f; particle_types_slider = 12.0f;
                 break;
-            case 4: // Freshwater Pond
+            case 4: // Freshwater Pond — 40K, uniform calm water
                 cfg.temperature = 0.293f; cfg.dampening = 0.91f;
                 cfg.gravity_strength = 0.0f; cfg.lorentz_strength = 0.0f;
                 cfg.vacuum_energy = 0.0f; cfg.start_empty = false;
+                particle_count_slider = 200.0f; particle_types_slider = 12.0f;
                 break;
-            case 5: // Deep Space
+            case 5: // Deep Space — 5K, sparse void
                 cfg.temperature = 0.003f; cfg.dampening = 0.99f;
                 cfg.gravity_strength = 0.0f; cfg.lorentz_strength = 0.0f;
                 cfg.vacuum_energy = 0.3f; cfg.start_empty = false;
+                particle_count_slider = 71.0f; particle_types_slider = 8.0f;
                 break;
-            case 6: // Nebula
+            case 6: // Nebula — 60K, central Gaussian cloud
                 cfg.temperature = 0.023f; cfg.dampening = 0.98f;
                 cfg.gravity_strength = 0.1f; cfg.lorentz_strength = 0.0f;
                 cfg.vacuum_energy = 0.0f; cfg.start_empty = false;
+                particle_count_slider = 245.0f; particle_types_slider = 14.0f;
                 break;
-            case 7: // Asteroid Surface
+            case 7: // Asteroid Surface — 35K, dense rocky core
                 cfg.temperature = 0.223f; cfg.dampening = 0.95f;
                 cfg.gravity_strength = 0.05f; cfg.lorentz_strength = 0.0f;
                 cfg.vacuum_energy = 0.0f; cfg.start_empty = false;
+                particle_count_slider = 187.0f; particle_types_slider = 18.0f;
                 break;
-            case 8: // Comet
+            case 8: // Comet — 30K, nucleus + tail
                 cfg.temperature = 0.173f; cfg.dampening = 0.97f;
                 cfg.gravity_strength = 0.02f; cfg.lorentz_strength = 0.0f;
                 cfg.vacuum_energy = 0.0f; cfg.start_empty = false;
+                particle_count_slider = 173.0f; particle_types_slider = 14.0f;
                 break;
         }
         dampening_slider = cfg.dampening;
