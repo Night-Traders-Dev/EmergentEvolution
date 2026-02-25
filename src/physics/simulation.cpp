@@ -385,15 +385,33 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
             spawned_slots.push_back(slot);
         }
 
-        // Place electrons in proper orbital shells
+        // Place electrons in proper orbital shells outside the nucleus
+        // Compute nucleus physical extent (half-width of the nucleon grid)
+        float nuc_extent = std::max(cx, cy) + nuc_spacing * 0.5f;
+        // Shell radii: start outside nucleus, each shell separated by SHELL_GAP
+        const float SHELL_GAP = 15.0f;
+        const float MIN_INNER_SHELL = nuc_extent + 12.0f;  // clear of nucleus surface
+
         int electrons_left = Z;
         int inner_electrons = 0;
         for (int shell = 0; shell < 3 && electrons_left > 0; ++shell) {
             int cap = std::min(SHELL_CAP_SPAWN[shell], electrons_left);
             float n_shell = static_cast<float>(shell + 1);
-            float Z_eff = std::max(1.0f, static_cast<float>(Z - inner_electrons));
-            float R_target = n_shell * n_shell * R_BOHR_SPAWN / Z_eff;
-            R_target = std::max(R_target, 8.0f);
+
+            // Slater screening: inner shells screen more effectively
+            // s=0.30 for 1s peers, s=0.85 for inner shells, s=1.0 for deeper
+            float screening = 0.0f;
+            if (shell == 0) screening = 0.30f * std::max(0, cap - 1);  // 1s: only peer screens
+            else if (shell == 1) screening = static_cast<float>(SHELL_CAP_SPAWN[0]) * 0.85f
+                                           + 0.35f * std::max(0, cap - 1);
+            else screening = static_cast<float>(SHELL_CAP_SPAWN[0]) * 1.0f
+                           + static_cast<float>(SHELL_CAP_SPAWN[1]) * 0.85f
+                           + 0.35f * std::max(0, cap - 1);
+            float Z_eff = std::max(1.0f, static_cast<float>(Z) - screening);
+
+            // Bohr-like radius with floor to stay outside nucleus
+            float R_bohr = n_shell * n_shell * R_BOHR_SPAWN / Z_eff;
+            float R_target = std::max(R_bohr, MIN_INNER_SHELL + shell * SHELL_GAP);
 
             // Compute L_ground for this shell (equilibrium: Coulomb = centrifugal)
             float R3 = R_target * R_target * R_target;
