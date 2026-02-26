@@ -32,6 +32,42 @@ void PhysicsSim_RegisterScrollCallback(GLFWwindow* window, PhysicsSimulation* si
     glfwSetScrollCallback(window, scroll_callback);
 }
 
+// ── Spatial Grid ────────────────────────────────────────────────────────────
+
+void SpatialGrid::build(const std::vector<glm::vec2>& positions,
+                         const std::vector<float>& energies, uint32_t n)
+{
+    indices.resize(n);
+    std::memset(cell_count, 0, sizeof(cell_count));
+
+    // Count particles per cell
+    for (uint32_t i = 0; i < n; ++i) {
+        if (energies[i] < 0.01f) continue;
+        int col = std::clamp(static_cast<int>(positions[i].x / CELL_SIZE), 0, COLS - 1);
+        int row = std::clamp(static_cast<int>(positions[i].y / CELL_SIZE), 0, ROWS - 1);
+        cell_count[row * COLS + col]++;
+    }
+
+    // Prefix sum → cell_start
+    uint32_t acc = 0;
+    for (int c = 0; c < TOTAL_CELLS; ++c) {
+        cell_start[c] = acc;
+        acc += cell_count[c];
+    }
+
+    // Scatter — use a temporary offset array
+    uint32_t offsets[TOTAL_CELLS];
+    std::memcpy(offsets, cell_start, sizeof(cell_start));
+
+    for (uint32_t i = 0; i < n; ++i) {
+        if (energies[i] < 0.01f) continue;
+        int col = std::clamp(static_cast<int>(positions[i].x / CELL_SIZE), 0, COLS - 1);
+        int row = std::clamp(static_cast<int>(positions[i].y / CELL_SIZE), 0, ROWS - 1);
+        int cell = row * COLS + col;
+        indices[offsets[cell]++] = i;
+    }
+}
+
 // ── Init / Destroy ───────────────────────────────────────────────────────────
 
 void PhysicsSimulation::init(GLFWwindow* window) {
@@ -905,13 +941,13 @@ void PhysicsSimulation::check_annihilation() {
         }
         if (target_type == UINT32_MAX) continue;
 
-        // Find nearest counterpart
+        // Find nearest counterpart (spatial grid accelerated)
         float best_dist_sq = CONTACT_RADIUS_SQ;
         uint32_t best_j = UINT32_MAX;
-        for (uint32_t j = 0; j < n; ++j) {
-            if (j == i || consumed[j]) continue;
-            if (readback_energies_[j] < 0.01f) continue;
-            if (particles.types[j] != target_type) continue;
+        auto annihil_search = [&](uint32_t j) {
+            if (j == i || consumed[j]) return;
+            if (readback_energies_[j] < 0.01f) return;
+            if (particles.types[j] != target_type) return;
 
             glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
             float d2 = delta.x * delta.x + delta.y * delta.y;
@@ -919,7 +955,11 @@ void PhysicsSimulation::check_annihilation() {
                 best_dist_sq = d2;
                 best_j = j;
             }
-        }
+        };
+        if (iface.prefs.spatial_grid)
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, CONTACT_RADIUS, annihil_search);
+        else
+            for (uint32_t j = 0; j < n; ++j) annihil_search(j);
 
         if (best_j == UINT32_MAX) continue;
 
@@ -988,9 +1028,7 @@ void PhysicsSimulation::check_annihilation() {
     }
 
     if (any_annihilated) {
-        vkDeviceWaitIdle(vk.device);
-        compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
-        compute.upload_dynamic_data(vk, particles);
+        cpu_particles_dirty_ = true;
     }
 }
 
@@ -1034,20 +1072,28 @@ void PhysicsSimulation::check_fusion() {
         if (readback_energies_[i] < 0.8f) continue;
         if (particles.types[i] != PROTON_TYPE) continue;
 
-        for (uint32_t j = i + 1; j < n; ++j) {
-            if (used[j]) continue;
-            if (readback_energies_[j] < 0.8f) continue;
-            if (particles.types[j] != PROTON_TYPE) continue;
-
+        // Find nearby proton for p+p chain (spatial grid accelerated)
+        uint32_t best_pp = UINT32_MAX;
+        auto pp_search = [&](uint32_t j) {
+            if (best_pp != UINT32_MAX) return;
+            if (j <= i || used[j]) return;
+            if (readback_energies_[j] < 0.8f) return;
+            if (particles.types[j] != PROTON_TYPE) return;
             glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
             float d2 = delta.x * delta.x + delta.y * delta.y;
-            if (d2 > FUSION_RADIUS_SQ) continue;
-
-            // Require high relative velocity (Coulomb barrier tunneling)
+            if (d2 > FUSION_RADIUS_SQ) return;
             glm::vec2 rel_vel = readback_velocities_[j] - readback_velocities_[i];
             float rel_speed_sq = glm::dot(rel_vel, rel_vel);
-            if (rel_speed_sq < 60.0f * 60.0f) continue;
-
+            if (rel_speed_sq < 60.0f * 60.0f) return;
+            best_pp = j;
+        };
+        if (iface.prefs.spatial_grid)
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, FUSION_RADIUS, pp_search);
+        else
+            for (uint32_t j = 0; j < n; ++j) pp_search(j);
+        if (best_pp == UINT32_MAX) continue;
+        {
+            uint32_t j = best_pp;
             // Convert one proton to neutron
             used[i] = true;
             used[j] = true;
@@ -1087,7 +1133,6 @@ void PhysicsSimulation::check_fusion() {
                                     PhysicsInterface::DEVT_FUSION, ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
             achievements.total_fusions++;
             try_unlock(ACH_FIRST_FUSION);
-            break;
         }
     }
 
@@ -1098,19 +1143,31 @@ void PhysicsSimulation::check_fusion() {
         if (readback_energies_[i] < 0.6f) continue;
         if (particles.types[i] != PROTON_TYPE) continue;
 
-        for (uint32_t j = 0; j < n; ++j) {
-            if (j == i || used[j]) continue;
-            if (readback_energies_[j] < 0.6f) continue;
-            if (particles.types[j] != NEUTRON_TYPE) continue;
-
+        // Find nearby neutron for deuteron formation (spatial grid accelerated)
+        uint32_t best_pn = UINT32_MAX;
+        glm::vec2 best_pn_delta{};
+        auto pn_search = [&](uint32_t j) {
+            if (best_pn != UINT32_MAX) return;
+            if (j == i || used[j]) return;
+            if (readback_energies_[j] < 0.6f) return;
+            if (particles.types[j] != NEUTRON_TYPE) return;
             glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
             float d2 = delta.x * delta.x + delta.y * delta.y;
-            if (d2 > FUSION_RADIUS_SQ) continue;
-
-            // Require moderate relative velocity (energetic collision)
+            if (d2 > FUSION_RADIUS_SQ) return;
             glm::vec2 rel_vel = readback_velocities_[j] - readback_velocities_[i];
             float rel_speed_sq = glm::dot(rel_vel, rel_vel);
-            if (rel_speed_sq < 30.0f * 30.0f) continue;
+            if (rel_speed_sq < 30.0f * 30.0f) return;
+            best_pn = j;
+            best_pn_delta = delta;
+        };
+        if (iface.prefs.spatial_grid)
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, FUSION_RADIUS, pn_search);
+        else
+            for (uint32_t j = 0; j < n; ++j) pn_search(j);
+        if (best_pn == UINT32_MAX) continue;
+        {
+            uint32_t j = best_pn;
+            glm::vec2 delta = best_pn_delta;
 
             // Bind them: move close together and match velocities
             used[i] = true;
@@ -1144,9 +1201,7 @@ void PhysicsSimulation::check_fusion() {
         for (uint32_t i = 0; i < n; ++i) {
             readback_energies_[i] = std::clamp(readback_energies_[i], 0.0f, 1.0f);
         }
-        vkDeviceWaitIdle(vk.device);
-        compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
-        compute.upload_dynamic_data(vk, particles);
+        cpu_particles_dirty_ = true;
     }
 }
 
@@ -1196,18 +1251,21 @@ void PhysicsSimulation::check_fission() {
         // Count nucleons near this fast neutron
         std::vector<uint32_t> cluster;
         cluster.push_back(i);
-        for (uint32_t j = 0; j < n; ++j) {
-            if (j == i || used[j]) continue;
-            if (readback_energies_[j] < 0.01f) continue;
+        auto fission_search = [&](uint32_t j) {
+            if (j == i || used[j]) return;
+            if (readback_energies_[j] < 0.01f) return;
             uint32_t t = particles.types[j];
-            if (t != PROTON_TYPE && t != NEUTRON_TYPE) continue;
-
+            if (t != PROTON_TYPE && t != NEUTRON_TYPE) return;
             glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
             float d2 = delta.x * delta.x + delta.y * delta.y;
             if (d2 < CLUSTER_RADIUS_SQ) {
                 cluster.push_back(j);
             }
-        }
+        };
+        if (iface.prefs.spatial_grid)
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, CLUSTER_RADIUS, fission_search);
+        else
+            for (uint32_t j = 0; j < n; ++j) fission_search(j);
 
         if (static_cast<int>(cluster.size()) < MIN_CLUSTER_SIZE) continue;
 
@@ -1257,9 +1315,7 @@ void PhysicsSimulation::check_fission() {
     }
 
     if (any_fissioned) {
-        vkDeviceWaitIdle(vk.device);
-        compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
-        compute.upload_dynamic_data(vk, particles);
+        cpu_particles_dirty_ = true;
     }
 }
 
@@ -1312,18 +1368,21 @@ void PhysicsSimulation::update_orbitals() {
 
         for (size_t front = 0; front < members.size(); ++front) {
             uint32_t mi = members[front];
-            for (uint32_t j = 0; j < n; ++j) {
-                if (clustered[j]) continue;
-                if (readback_energies_[j] < 0.01f) continue;
+            auto bfs_search = [&](uint32_t j) {
+                if (clustered[j]) return;
+                if (readback_energies_[j] < 0.01f) return;
                 uint32_t tj = particles.types[j];
-                if (tj != PROTON_TYPE && tj != NEUTRON_TYPE) continue;
-
+                if (tj != PROTON_TYPE && tj != NEUTRON_TYPE) return;
                 glm::vec2 d = readback_positions_[j] - readback_positions_[mi];
                 if (glm::dot(d, d) < NUCLEAR_CLUSTER_RADIUS_SQ) {
                     members.push_back(j);
                     clustered[j] = true;
                 }
-            }
+            };
+            if (iface.prefs.spatial_grid)
+                grid_.query(readback_positions_[mi].x, readback_positions_[mi].y, NUCLEAR_CLUSTER_RADIUS, bfs_search);
+            else
+                for (uint32_t j = 0; j < n; ++j) bfs_search(j);
         }
 
         // Compute nucleus centroid and proton count
@@ -1389,17 +1448,20 @@ void PhysicsSimulation::update_orbitals() {
 
         for (size_t front = 0; front < members.size(); ++front) {
             uint32_t mi = members[front];
-            for (uint32_t j = 0; j < n; ++j) {
-                if (clustered[j]) continue;
-                if (readback_energies_[j] < 0.01f) continue;
-                if (particles.types[j] != ANTIPROTON_TYPE_PHYS) continue;
-
+            auto anti_bfs_search = [&](uint32_t j) {
+                if (clustered[j]) return;
+                if (readback_energies_[j] < 0.01f) return;
+                if (particles.types[j] != ANTIPROTON_TYPE_PHYS) return;
                 glm::vec2 d = readback_positions_[j] - readback_positions_[mi];
                 if (glm::dot(d, d) < NUCLEAR_CLUSTER_RADIUS_SQ) {
                     members.push_back(j);
                     clustered[j] = true;
                 }
-            }
+            };
+            if (iface.prefs.spatial_grid)
+                grid_.query(readback_positions_[mi].x, readback_positions_[mi].y, NUCLEAR_CLUSTER_RADIUS, anti_bfs_search);
+            else
+                for (uint32_t j = 0; j < n; ++j) anti_bfs_search(j);
         }
 
         Nucleus anuc{};
@@ -1924,9 +1986,7 @@ void PhysicsSimulation::check_decay() {
     }
 
     if (any_decayed) {
-        vkDeviceWaitIdle(vk.device);
-        compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
-        compute.upload_dynamic_data(vk, particles);
+        cpu_particles_dirty_ = true;
     }
 }
 
@@ -2172,9 +2232,7 @@ void PhysicsSimulation::check_nuclear_decay() {
     }
 
     if (any_decayed) {
-        vkDeviceWaitIdle(vk.device);
-        compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
-        compute.upload_dynamic_data(vk, particles);
+        cpu_particles_dirty_ = true;
     }
 }
 
@@ -2223,20 +2281,22 @@ void PhysicsSimulation::check_photoelectric() {
         // Find nearest bound electron/positron within interaction radius
         float best_dist_sq = INTERACTION_RADIUS_SQ;
         uint32_t best_e = UINT32_MAX;
-
-        for (uint32_t j = 0; j < n; ++j) {
-            if (j == i || used[j]) continue;
-            if (readback_energies_[j] < 0.01f) continue;
+        auto pe_search = [&](uint32_t j) {
+            if (j == i || used[j]) return;
+            if (readback_energies_[j] < 0.01f) return;
             uint32_t t = particles.types[j];
-            if (t != ELECTRON_TYPE_PHYS && t != POSITRON_TYPE_PHYS) continue;
-
+            if (t != ELECTRON_TYPE_PHYS && t != POSITRON_TYPE_PHYS) return;
             glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
             float d2 = delta.x * delta.x + delta.y * delta.y;
             if (d2 < best_dist_sq) {
                 best_dist_sq = d2;
                 best_e = j;
             }
-        }
+        };
+        if (iface.prefs.spatial_grid)
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, INTERACTION_RADIUS, pe_search);
+        else
+            for (uint32_t j = 0; j < n; ++j) pe_search(j);
         if (best_e == UINT32_MAX) continue;
 
         // Determine if the electron is bound (has orbital parent)
@@ -2416,24 +2476,24 @@ void PhysicsSimulation::check_photoelectric() {
         // Find nearest free nucleon (not part of a nucleus)
         float best_dist_sq = INTERACTION_RADIUS_SQ;
         uint32_t best_nuc = UINT32_MAX;
-
-        for (uint32_t j = 0; j < n; ++j) {
-            if (j == i || used[j]) continue;
-            if (readback_energies_[j] < 0.01f) continue;
+        auto nuc_compton_search = [&](uint32_t j) {
+            if (j == i || used[j]) return;
+            if (readback_energies_[j] < 0.01f) return;
             uint32_t t = particles.types[j];
-            if (t != PROTON_TYPE && t != NEUTRON_TYPE && t != ANTIPROTON_TYPE_PHYS) continue;
-
-            // Must be free (not part of a nucleus with other nucleons)
+            if (t != PROTON_TYPE && t != NEUTRON_TYPE && t != ANTIPROTON_TYPE_PHYS) return;
             if (j < particles.orbital_parent.size() && particles.orbital_parent[j] >= 0 &&
-                particles.orbital_parent[j] != static_cast<int32_t>(j)) continue;
-
+                particles.orbital_parent[j] != static_cast<int32_t>(j)) return;
             glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
             float d2 = delta.x * delta.x + delta.y * delta.y;
             if (d2 < best_dist_sq) {
                 best_dist_sq = d2;
                 best_nuc = j;
             }
-        }
+        };
+        if (iface.prefs.spatial_grid)
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, INTERACTION_RADIUS, nuc_compton_search);
+        else
+            for (uint32_t j = 0; j < n; ++j) nuc_compton_search(j);
         if (best_nuc == UINT32_MAX) continue;
 
         // Nuclear Compton: photon deflects, nucleon gets momentum kick
@@ -2455,9 +2515,7 @@ void PhysicsSimulation::check_photoelectric() {
     }
 
     if (any_changed) {
-        vkDeviceWaitIdle(vk.device);
-        compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
-        compute.upload_dynamic_data(vk, particles);
+        cpu_particles_dirty_ = true;
     }
 }
 
@@ -2970,9 +3028,7 @@ void PhysicsSimulation::check_spallation() {
     }
 
     if (any_spallated) {
-        vkDeviceWaitIdle(vk.device);
-        compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
-        compute.upload_dynamic_data(vk, particles);
+        cpu_particles_dirty_ = true;
     }
 }
 
@@ -3022,13 +3078,11 @@ void PhysicsSimulation::check_virtual_pairs() {
         uint32_t best_j = UINT32_MAX;
         float e_j_best = 0.0f;
         uint32_t flags_j_best = 0;
-
-        for (uint32_t j = 0; j < n; ++j) {
-            if (j == i) continue;
+        auto vp_search = [&](uint32_t j) {
+            if (j == i) return;
             float e_j = readback_energies_[j];
-            if (e_j < min_energy) continue;
-            if (particles.behavior_flags[particles.types[j]] & BEHAVIOR_VIRTUAL) continue;
-
+            if (e_j < min_energy) return;
+            if (particles.behavior_flags[particles.types[j]] & BEHAVIOR_VIRTUAL) return;
             glm::vec2 d = readback_positions_[j] - readback_positions_[i];
             float d2 = d.x * d.x + d.y * d.y;
             if (d2 < best_d2) {
@@ -3037,7 +3091,11 @@ void PhysicsSimulation::check_virtual_pairs() {
                 e_j_best = e_j;
                 flags_j_best = particles.behavior_flags[particles.types[j]];
             }
-        }
+        };
+        if (iface.prefs.spatial_grid)
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, PAIR_RADIUS, vp_search);
+        else
+            for (uint32_t j = 0; j < n; ++j) vp_search(j);
 
         if (best_j == UINT32_MAX) continue;
         float combined_e = e_i + e_j_best;
@@ -3115,11 +3173,263 @@ void PhysicsSimulation::check_virtual_pairs() {
     }
 
     if (any_spawned) {
-        vkDeviceWaitIdle(vk.device);
-        compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
-        compute.upload_dynamic_data(vk, particles);
+        cpu_particles_dirty_ = true;
     }
 
+}
+
+// ── Hadronization / Color confinement ────────────────────────────────────────
+
+void PhysicsSimulation::check_hadronization() {
+    if (readback_positions_.empty()) return;
+    if (!cfg.hadronization_enabled) return;
+
+    // QGP deconfinement — quarks are free above this temperature
+    constexpr float QGP_TEMP = 2.0e12f;
+    if (cfg.temperature_kelvin >= QGP_TEMP) return;
+
+    const uint32_t n = cfg.particle_count;
+    constexpr float CONFINEMENT_RADIUS = 45.0f;   // beyond string breaking (40px shader)
+    constexpr float HADRONIZE_RADIUS   = 50.0f;   // search radius for meson partners
+    constexpr float STRING_BREAK_DIST  = 55.0f;   // create new pairs beyond this
+    constexpr float MESON_ENERGY       = 0.4f;
+    constexpr float MESON_SPEED        = 60.0f;
+    constexpr uint32_t MAX_HADRONIZE   = 6;        // cap meson-formation events/frame
+    constexpr uint32_t MAX_STRING_BREAK = 4;
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    auto is_quark = [](uint32_t t) { return t >= UP_QUARK_TYPE && t <= BOTTOM_QUARK_TYPE; };
+    auto is_antiquark = [](uint32_t t) { return t >= ANTI_UP_TYPE && t <= ANTI_BOTTOM_TYPE; };
+    auto is_any_quark = [](uint32_t t) {
+        return (t >= UP_QUARK_TYPE && t <= BOTTOM_QUARK_TYPE) ||
+               (t >= ANTI_UP_TYPE  && t <= ANTI_BOTTOM_TYPE);
+    };
+    auto anti_flavor = [](uint32_t t) -> uint32_t {
+        if (t >= UP_QUARK_TYPE && t <= BOTTOM_QUARK_TYPE)
+            return t + (ANTI_UP_TYPE - UP_QUARK_TYPE);   // +6
+        if (t >= ANTI_UP_TYPE && t <= ANTI_BOTTOM_TYPE)
+            return t - (ANTI_UP_TYPE - UP_QUARK_TYPE);   // -6
+        return t;
+    };
+
+    // ── Phase 1: identify free quarks (no nearby quark partner) ──────────────
+    std::vector<uint32_t> free_quarks;
+    free_quarks.reserve(64);
+
+    for (uint32_t i = 0; i < n; ++i) {
+        if (readback_energies_[i] < 0.01f) continue;
+        uint32_t type = particles.types[i];
+        if (!is_any_quark(type)) continue;
+
+        bool has_partner = false;
+        auto partner_check = [&](uint32_t j) {
+            if (has_partner || j == i) return;
+            if (readback_energies_[j] < 0.01f) return;
+            if (!is_any_quark(particles.types[j])) return;
+            glm::vec2 d = readback_positions_[j] - readback_positions_[i];
+            if (d.x * d.x + d.y * d.y < CONFINEMENT_RADIUS * CONFINEMENT_RADIUS)
+                has_partner = true;
+        };
+
+        if (iface.prefs.spatial_grid)
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y,
+                        CONFINEMENT_RADIUS, partner_check);
+        else
+            for (uint32_t j = 0; j < n; ++j) partner_check(j);
+
+        if (!has_partner)
+            free_quarks.push_back(i);
+    }
+
+    if (free_quarks.empty()) return;
+
+    std::mt19937 rng(frame_counter_ * 3141592653u);
+    std::vector<bool> consumed(n, false);
+    uint32_t events = 0;
+    bool any_changed = false;
+
+    // ── Phase 2: meson formation — pair free q + free q̄ ─────────────────────
+    for (size_t fi = 0; fi < free_quarks.size() && events < MAX_HADRONIZE; ++fi) {
+        uint32_t i = free_quarks[fi];
+        if (consumed[i]) continue;
+        uint32_t ti = particles.types[i];
+
+        float color_i = particles.genomes[i * GENOME_SIZE + 2];
+        float best_d2 = HADRONIZE_RADIUS * HADRONIZE_RADIUS;
+        uint32_t best_j = UINT32_MAX;
+
+        auto meson_search = [&](uint32_t j) {
+            if (j == i || consumed[j]) return;
+            if (readback_energies_[j] < 0.01f) return;
+            uint32_t tj = particles.types[j];
+            if (!is_any_quark(tj)) return;
+            // Need opposite matter/antimatter
+            if (is_quark(ti) == is_quark(tj)) return;
+            // Color compatibility: q(+c) + q̄(-c), same |c|
+            float color_j = particles.genomes[j * GENOME_SIZE + 2];
+            if (std::abs(std::abs(color_i) - std::abs(color_j)) > 0.1f) return;
+            if (color_i * color_j >= 0.0f) return;
+            glm::vec2 d = readback_positions_[j] - readback_positions_[i];
+            float d2 = d.x * d.x + d.y * d.y;
+            if (d2 < best_d2) { best_d2 = d2; best_j = j; }
+        };
+
+        if (iface.prefs.spatial_grid)
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y,
+                        HADRONIZE_RADIUS, meson_search);
+        else
+            for (uint32_t j = 0; j < n; ++j) meson_search(j);
+
+        if (best_j != UINT32_MAX) {
+            // Velocity impulse toward each other (binding)
+            glm::vec2 delta = readback_positions_[best_j] - readback_positions_[i];
+            float dist = std::sqrt(best_d2);
+            if (dist > 0.1f) {
+                glm::vec2 dir = delta / dist;
+                readback_velocities_[i]      += dir * 30.0f;
+                readback_velocities_[best_j] -= dir * 30.0f;
+            }
+            consumed[i] = true;
+            consumed[best_j] = true;
+            any_changed = true;
+            ++events;
+        }
+    }
+
+    // ── Phase 3: vacuum instability — spawn partner for remaining free quarks ─
+    uint32_t search_from = 0;
+    auto find_dormant = [&](uint32_t start) -> uint32_t {
+        for (uint32_t k = start; k < n; ++k)
+            if (readback_energies_[k] < 0.01f) return k;
+        for (uint32_t k = 0; k < start; ++k)
+            if (readback_energies_[k] < 0.01f) return k;
+        return UINT32_MAX;
+    };
+
+    uint32_t vacuum_events = 0;
+    for (size_t fi = 0; fi < free_quarks.size() && vacuum_events < MAX_STRING_BREAK; ++fi) {
+        uint32_t i = free_quarks[fi];
+        if (consumed[i]) continue;
+        if (readback_energies_[i] < 0.3f) continue;  // need energy for pair production
+
+        uint32_t ti = particles.types[i];
+        uint32_t spawn_type;
+        if (is_quark(ti)) {
+            spawn_type = (ti <= DOWN_QUARK_TYPE) ? anti_flavor(ti)
+                       : ((rng() % 2 == 0) ? ANTI_UP_TYPE : ANTI_DOWN_TYPE);
+        } else {
+            spawn_type = (ti <= ANTI_DOWN_TYPE) ? anti_flavor(ti)
+                       : ((rng() % 2 == 0) ? UP_QUARK_TYPE : DOWN_QUARK_TYPE);
+        }
+
+        uint32_t slot = find_dormant(search_from);
+        if (slot == UINT32_MAX) break;
+        search_from = slot + 1;
+
+        glm::vec2 pos_i = readback_positions_[i];
+        std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
+        float a = angle_dist(rng);
+        glm::vec2 offset(std::cos(a) * 5.0f, std::sin(a) * 5.0f);
+
+        float color_i = particles.genomes[i * GENOME_SIZE + 2];
+        write_spawn_genome(particles, slot, spawn_type, rng, frame_counter_);
+        particles.genomes[slot * GENOME_SIZE + 2] = -color_i;  // complementary color
+
+        readback_positions_[slot]  = pos_i + offset;
+        readback_velocities_[slot] = glm::vec2(std::cos(a), std::sin(a)) * MESON_SPEED;
+        readback_energies_[slot]   = MESON_ENERGY;
+
+        // Drain energy from parent quark
+        readback_energies_[i] -= 0.2f;
+        if (readback_energies_[i] < 0.1f) readback_energies_[i] = 0.1f;
+
+        consumed[i] = true;
+        any_changed = true;
+        ++vacuum_events;
+
+        iface.push_notification("Vacuum: q\xc4\x81 pair", ImVec4(0.3f, 0.9f, 0.4f, 1.0f));
+        iface.push_decay_event("Vacuum pair", PhysicsInterface::DEVT_PAIR_PRODUCTION,
+                               ImVec4(0.3f, 0.9f, 0.4f, 1.0f));
+    }
+
+    // ── Phase 4: string breaking — bound pairs stretched beyond threshold ────
+    uint32_t breaks = 0;
+    for (uint32_t i = 0; i < n && breaks < MAX_STRING_BREAK; ++i) {
+        if (readback_energies_[i] < 0.01f) continue;
+        uint32_t ti = particles.types[i];
+        if (!is_quark(ti)) continue;  // matter quarks only (avoid double-counting)
+        if (consumed[i]) continue;
+
+        float color_i = particles.genomes[i * GENOME_SIZE + 2];
+        uint32_t best_j = UINT32_MAX;
+        float best_d2 = 0.0f;
+
+        auto string_search = [&](uint32_t j) {
+            if (j == i || consumed[j]) return;
+            if (readback_energies_[j] < 0.01f) return;
+            if (!is_antiquark(particles.types[j])) return;
+            float color_j = particles.genomes[j * GENOME_SIZE + 2];
+            if (color_i * color_j >= 0.0f) return;
+            if (std::abs(std::abs(color_i) - std::abs(color_j)) > 0.1f) return;
+            glm::vec2 d = readback_positions_[j] - readback_positions_[i];
+            float d2 = d.x * d.x + d.y * d.y;
+            if (d2 > STRING_BREAK_DIST * STRING_BREAK_DIST && d2 > best_d2) {
+                best_d2 = d2; best_j = j;
+            }
+        };
+
+        float search_r = STRING_BREAK_DIST * 2.0f;
+        if (iface.prefs.spatial_grid)
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y,
+                        search_r, string_search);
+        else
+            for (uint32_t j = 0; j < n; ++j) string_search(j);
+
+        if (best_j == UINT32_MAX) continue;
+
+        uint32_t slot_q = find_dormant(search_from);
+        if (slot_q == UINT32_MAX) break;
+        search_from = slot_q + 1;
+        uint32_t slot_qbar = find_dormant(search_from);
+        if (slot_qbar == UINT32_MAX) break;
+        search_from = slot_qbar + 1;
+
+        glm::vec2 midpoint = (readback_positions_[i] + readback_positions_[best_j]) * 0.5f;
+        glm::vec2 axis = readback_positions_[best_j] - readback_positions_[i];
+        float dist = std::sqrt(best_d2);
+        glm::vec2 dir = (dist > 0.1f) ? axis / dist : glm::vec2(1.0f, 0.0f);
+
+        uint32_t new_q_type    = (rng() % 2 == 0) ? UP_QUARK_TYPE : DOWN_QUARK_TYPE;
+        uint32_t new_qbar_type = anti_flavor(new_q_type);
+
+        write_spawn_genome(particles, slot_q, new_q_type, rng, frame_counter_);
+        particles.genomes[slot_q * GENOME_SIZE + 2] = -particles.genomes[best_j * GENOME_SIZE + 2];
+
+        write_spawn_genome(particles, slot_qbar, new_qbar_type, rng, frame_counter_);
+        particles.genomes[slot_qbar * GENOME_SIZE + 2] = -color_i;
+
+        readback_positions_[slot_q]    = midpoint - dir * 3.0f;
+        readback_positions_[slot_qbar] = midpoint + dir * 3.0f;
+        readback_velocities_[slot_q]    = -dir * MESON_SPEED;
+        readback_velocities_[slot_qbar] =  dir * MESON_SPEED;
+        readback_energies_[slot_q]    = MESON_ENERGY;
+        readback_energies_[slot_qbar] = MESON_ENERGY;
+
+        readback_energies_[i]      = std::max(0.1f, readback_energies_[i] - 0.15f);
+        readback_energies_[best_j] = std::max(0.1f, readback_energies_[best_j] - 0.15f);
+
+        consumed[i] = true;
+        consumed[best_j] = true;
+        any_changed = true;
+        ++breaks;
+
+        iface.push_notification("String break \xe2\x86\x92 2 mesons", ImVec4(0.3f, 0.9f, 0.4f, 1.0f));
+        iface.push_decay_event("String break", PhysicsInterface::DEVT_PAIR_PRODUCTION,
+                               ImVec4(0.3f, 0.9f, 0.4f, 1.0f));
+    }
+
+    if (any_changed)
+        cpu_particles_dirty_ = true;
 }
 
 // ── Quantum entanglement update ──────────────────────────────────────────────
@@ -3397,7 +3707,9 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     frame_counter_++;
 
     // Apply thread count from settings
-    omp_set_num_threads(std::clamp(iface.prefs.max_threads, 1, omp_get_max_threads()));
+    int sys_max = omp_get_max_threads();
+    int threads = (iface.prefs.max_threads <= 0) ? sys_max : std::clamp(iface.prefs.max_threads, 1, sys_max);
+    omp_set_num_threads(threads);
 
     // ── Temperature kelvin → noise amplitude (Berendsen thermostat) ─────────
     // Negative feedback: when system is hotter than target → reduce noise (cool)
@@ -3426,6 +3738,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     if (iface.field_weak)    cfg.field_flags |= (1u << 2);
     if (iface.field_gravity) cfg.field_flags |= (1u << 3);
     if (iface.field_higgs)   cfg.field_flags |= (1u << 4);
+    if (iface.wave_mode)     cfg.field_flags |= (1u << 5);
 
     // Pass field intensity via legacy density_limit/local_density_cap path
     cfg.density_limit    = (cfg.field_flags != 0) ? 1.0f : 0.0f;
@@ -3486,19 +3799,59 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         readback_energies_.resize(cfg.particle_count);
         compute.read_current_state(vk, readback_positions_, readback_velocities_, readback_energies_);
 
-        check_annihilation();
-        check_fusion();
-        check_fission();
-        check_decay();
-        if (cfg.virtual_pairs_enabled)
-            check_virtual_pairs();
-        if (cfg.entanglement_enabled)
-            update_entanglement();
-        update_orbitals();
-        check_nuclear_decay();
-        check_photoelectric();
-        check_spallation();
-        check_achievements();
+        // Physics quality and skip settings
+        int quality = iface.prefs.physics_quality;
+        int skip    = iface.prefs.physics_skip;
+        bool run_physics = (skip == 0) || (frame_counter_ % static_cast<uint32_t>(skip + 1) == 0);
+
+        if (run_physics) {
+            // Build spatial grid for O(N) neighbor queries
+            if (iface.prefs.spatial_grid)
+                grid_.build(readback_positions_, readback_energies_, cfg.particle_count);
+
+            // Core physics — always run (frequency reduced by quality level)
+            bool frame2 = (frame_counter_ % 2 == 0);
+            bool frame3 = (frame_counter_ % 3 == 0);
+            bool frame4 = (frame_counter_ % 4 == 0);
+
+            if (quality >= 2 || (quality == 1 && frame2) || (quality == 0 && frame4))
+                check_annihilation();
+            if (quality >= 2 || (quality == 1 && frame2) || (quality == 0 && frame4))
+                check_fusion();
+            if (quality >= 2 || (quality == 1 && frame2) || (quality == 0 && frame4))
+                check_fission();
+            if (quality >= 2 || (quality == 1) || (quality == 0 && frame2))
+                check_decay();
+            if (quality >= 2 || (quality == 1 && frame2) || (quality == 0 && frame4))
+                check_hadronization();
+
+            // Medium+ interactions
+            if (quality >= 1) {
+                if (cfg.virtual_pairs_enabled && (quality >= 2 || frame4))
+                    check_virtual_pairs();
+                if (cfg.entanglement_enabled)
+                    update_entanglement();
+                if (quality >= 2 || frame3) {
+                    check_photoelectric();
+                    check_spallation();
+                }
+            }
+
+            // Orbital update (always needed for element detection)
+            if (quality >= 2 || (quality == 1 && frame2) || (quality == 0 && frame4))
+                update_orbitals();
+
+            check_nuclear_decay();
+            check_achievements();
+
+            // ── Single batched GPU sync for all CPU physics modifications ──
+            if (cpu_particles_dirty_) {
+                vkDeviceWaitIdle(vk.device);
+                compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+                compute.upload_dynamic_data(vk, particles);
+                cpu_particles_dirty_ = false;
+            }
+        }
 
         // Handle particle delete request from UI
         if (iface.request_delete_particle && iface.selected_particle_idx >= 0) {
@@ -3760,11 +4113,12 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     iface.readback_energies_ptr = readback_energies_.data();
 
     // ── Measurement tool updates ─────────────────────────────────────────────
-    // Thermometer probes
+    // Thermometer probes (OpenMP parallelized inner loop)
     for (auto& probe : iface.thermo_probes) {
         float total_ke = 0.0f;
         uint32_t cnt = 0;
         float r2 = probe.radius * probe.radius;
+        #pragma omp parallel for reduction(+:total_ke,cnt) if(cfg.particle_count > 2000)
         for (uint32_t i = 0; i < cfg.particle_count; ++i) {
             if (readback_energies_[i] <= 0.0f) continue;
             glm::vec2 d = readback_positions_[i] - probe.world_pos;
@@ -3777,10 +4131,11 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         probe.local_temp = (cnt > 0) ? (total_ke / cnt) * 0.1f : 0.0f;
     }
 
-    // Density counters
+    // Density counters (OpenMP parallelized inner loop)
     for (auto& dc : iface.density_counters) {
         uint32_t cnt = 0;
         float r2 = dc.radius * dc.radius;
+        #pragma omp parallel for reduction(+:cnt) if(cfg.particle_count > 2000)
         for (uint32_t i = 0; i < cfg.particle_count; ++i) {
             if (readback_energies_[i] <= 0.0f) continue;
             glm::vec2 d = readback_positions_[i] - dc.world_pos;
@@ -3802,23 +4157,37 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                        [](const VelocityMeterTarget& v) { return !v.active; }),
         iface.velocity_meters.end());
 
-    // ── Visualization grid (heatmap + velocity field) ────────────────────────
+    // ── Visualization grid (heatmap + velocity field) — OpenMP parallelized ──
     if (iface.show_energy_heatmap || iface.show_velocity_field) {
         iface.vis_grid = VisGrid{};
         float cell_w = static_cast<float>(REGION_W) / VIS_GRID_W;
         float cell_h = static_cast<float>(REGION_H) / VIS_GRID_H;
 
-        for (uint32_t i = 0; i < cfg.particle_count; ++i) {
-            if (readback_energies_[i] <= 0.0f) continue;
-            int gx = std::clamp(static_cast<int>(readback_positions_[i].x / cell_w), 0, static_cast<int>(VIS_GRID_W) - 1);
-            int gy = std::clamp(static_cast<int>(readback_positions_[i].y / cell_h), 0, static_cast<int>(VIS_GRID_H) - 1);
-            int idx = gy * VIS_GRID_W + gx;
+        #pragma omp parallel if(cfg.particle_count > 2000)
+        {
+            VisGrid local_grid{};
+            #pragma omp for nowait
+            for (uint32_t i = 0; i < cfg.particle_count; ++i) {
+                if (readback_energies_[i] <= 0.0f) continue;
+                int gx = std::clamp(static_cast<int>(readback_positions_[i].x / cell_w), 0, static_cast<int>(VIS_GRID_W) - 1);
+                int gy = std::clamp(static_cast<int>(readback_positions_[i].y / cell_h), 0, static_cast<int>(VIS_GRID_H) - 1);
+                int idx = gy * VIS_GRID_W + gx;
 
-            glm::vec2 v = readback_velocities_[i];
-            iface.vis_grid.energy[idx] += 0.5f * glm::dot(v, v);
-            iface.vis_grid.vel_x[idx] += v.x;
-            iface.vis_grid.vel_y[idx] += v.y;
-            iface.vis_grid.count[idx]++;
+                glm::vec2 v = readback_velocities_[i];
+                local_grid.energy[idx] += 0.5f * glm::dot(v, v);
+                local_grid.vel_x[idx] += v.x;
+                local_grid.vel_y[idx] += v.y;
+                local_grid.count[idx]++;
+            }
+            #pragma omp critical
+            {
+                for (uint32_t c = 0; c < VIS_GRID_CELLS; ++c) {
+                    iface.vis_grid.energy[c] += local_grid.energy[c];
+                    iface.vis_grid.vel_x[c]  += local_grid.vel_x[c];
+                    iface.vis_grid.vel_y[c]  += local_grid.vel_y[c];
+                    iface.vis_grid.count[c]  += local_grid.count[c];
+                }
+            }
         }
     }
 

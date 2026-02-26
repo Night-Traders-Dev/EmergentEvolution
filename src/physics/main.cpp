@@ -16,7 +16,7 @@ static void framebuffer_resize_callback(GLFWwindow*, int, int) {
 }
 
 int main() {
-    omp_set_num_threads(std::min(omp_get_max_threads(), 8));  // initial default; updated by settings
+    omp_set_num_threads(omp_get_max_threads());  // initial default; updated by settings after prefs load
 
     // Suppress GTK libdecor plugin (crashes in fontconfig on some systems).
     // Window is borderless (GLFW_DECORATED=FALSE) so decorations aren't needed.

@@ -951,6 +951,112 @@ void render_mirror(uint fo_idx) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+//  WAVE PACKET RENDERING (de Broglie wave-particle duality)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void render_wave_packet(uint i) {
+    vec2  pos    = in_pos_buffer.data[i];
+    vec2  vel    = in_vel_buffer.data[i];
+    uint  type   = type_buffer.data[i];
+    float energy = in_energy_buffer.data[i];
+
+    if (energy < 0.01) return;
+
+    float mass_inv = get_mass_inv(type);
+    float speed    = length(vel);
+    float mass     = 1.0 / max(mass_inv, 0.0001);
+
+    // de Broglie wavelength: λ ∝ 1/(m·v)
+    // Visual scaling: heavier/faster → shorter wavelength, lighter/slower → longer
+    float momentum = mass * max(speed, 0.5);
+    float lambda   = clamp(60.0 / momentum, 3.0, 50.0) * params.camera_zoom;
+
+    // Wave packet parameters
+    float packet_half  = lambda * 2.0;           // ±2λ extent along velocity
+    float sigma_long   = lambda * 1.2;           // Gaussian envelope spread (longitudinal)
+    float sigma_trans  = lambda * 0.35;          // transverse spread
+    float omega        = 6.28318 / lambda;       // spatial frequency
+
+    // Direction (along velocity, or default if stationary)
+    vec2 dir;
+    if (speed > 0.1) {
+        dir = vel / speed;
+    } else {
+        // Use pseudo-random direction for stationary particles
+        float angle = float(i) * 2.399 + float(type) * 0.618;
+        dir = vec2(cos(angle), sin(angle));
+    }
+    vec2 perp = vec2(-dir.y, dir.x);
+
+    // Screen-space center
+    vec2 screen_center = params.region_size * 0.5;
+    vec2 center = screen_center + (pos - params.camera_origin) * params.camera_zoom;
+
+    // Bounding box (elongated along velocity)
+    int range_long  = int(ceil(packet_half));
+    int range_trans = int(ceil(sigma_trans * 3.0));
+    int range       = max(range_long, range_trans);
+
+    // Cull offscreen
+    if (center.x + range < 0.0 || center.x - range > params.region_size.x) return;
+    if (center.y + range < 0.0 || center.y - range > params.region_size.y) return;
+
+    // Particle color
+    vec4 base_col = color_buffer.data[type];
+    base_col.rgb *= mix(0.3, 1.0, energy);
+
+    // Time-dependent phase oscillation
+    float phase_offset = float(params.step) * 0.15 * max(speed * 0.1, 1.0);
+
+    // Precompute Gaussian denominators
+    float inv_2sigma_l2 = 1.0 / (2.0 * sigma_long * sigma_long);
+    float inv_2sigma_t2 = 1.0 / (2.0 * sigma_trans * sigma_trans);
+
+    for (int x = -range; x <= range; x++) {
+        for (int y = -range; y <= range; y++) {
+            ivec2 pixel_pos = ivec2(floor(center)) + ivec2(x, y);
+            vec2  px_center = vec2(pixel_pos) + 0.5;
+
+            // Project onto wave packet local coordinates
+            vec2 delta = px_center - center;
+            float along  = dot(delta, dir);     // longitudinal (along velocity)
+            float across = dot(delta, perp);    // transverse
+
+            // Skip if too far from envelope
+            if (abs(along) > packet_half || abs(across) > sigma_trans * 3.0) continue;
+
+            // Gaussian envelope: |ψ|²
+            float env = exp(-along * along * inv_2sigma_l2
+                           - across * across * inv_2sigma_t2);
+
+            if (env < 0.01) continue;
+
+            // Oscillatory wave function: Re(ψ) = envelope × cos(k·x - ωt)
+            float wave = cos(omega * along - phase_offset);
+
+            // Display: probability density with visible wave crests
+            // Blend between |ψ|² (probability) and visible oscillation
+            float intensity = env * (0.4 + 0.6 * wave * wave);
+
+            // Color: wave crests brighter, troughs dimmer, with particle color
+            vec3 col = base_col.rgb * intensity * 1.4;
+
+            // Bright central ridge along the wave axis
+            float ridge = exp(-across * across * inv_2sigma_t2 * 3.0);
+            col += base_col.rgb * ridge * env * wave * wave * 0.3;
+
+            // Bounds check
+            if (pixel_pos.x < 0 || pixel_pos.x >= int(params.region_size.x)) continue;
+            if (pixel_pos.y < 0 || pixel_pos.y >= int(params.region_size.y)) continue;
+
+            vec4 existing = imageLoad(out_render_texture, pixel_pos);
+            imageStore(out_render_texture, pixel_pos,
+                       vec4(min(existing.rgb + col, vec3(1.0)), 1.0));
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 //  RENDER STEP
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -962,6 +1068,12 @@ void render_particle(uint i) {
         } else {
             render_force_object(i);
         }
+    }
+
+    // Wave mode: render as de Broglie wave packet instead of point particle
+    if ((params.field_flags & (1u << 5)) != 0u) {
+        render_wave_packet(i);
+        return;
     }
 
     vec2  pos    = in_pos_buffer.data[i];

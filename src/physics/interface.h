@@ -12,12 +12,15 @@
 
 // ── User preferences (settings menu) ─────────────────────────────────────────
 struct UserPrefs {
-    int   temp_unit    = 0;     // 0=Kelvin, 1=Celsius, 2=Fahrenheit
-    int   theme        = 0;     // 0=Dark Navy, 1=Midnight, 2=Slate, 3=Ember
-    int   max_threads  = 8;     // OpenMP thread cap (1..system max)
-    int   fps_cap      = 0;     // 0=uncapped, 30/60/120/144/240
-    bool  show_fps     = true;
-    float ui_scale     = 1.0f;  // 0.8 - 1.5
+    int   temp_unit       = 0;     // 0=Kelvin, 1=Celsius, 2=Fahrenheit
+    int   theme           = 0;     // 0=Dark Navy, 1=Midnight, 2=Slate, 3=Ember
+    int   max_threads     = 0;     // OpenMP thread cap (0 = use system max)
+    int   fps_cap         = 0;     // 0=uncapped, 30/60/120/144/240
+    bool  show_fps        = true;
+    float ui_scale        = 1.0f;  // 0.8 - 1.5
+    int   physics_quality = 2;     // 0=Low, 1=Medium, 2=High
+    int   physics_skip    = 0;     // run CPU physics every (skip+1) frames
+    bool  spatial_grid    = true;  // use spatial grid for neighbor queries
 };
 
 // ── Group template for spawning composite structures ─────────────────────────
@@ -221,6 +224,9 @@ public:
     float    total_energy_display     = 0.0f;
     float    avg_energy_display       = 0.0f;
     uint32_t type_counts_display[MAX_PARTICLE_TYPES] = {};
+
+    // Wave-particle duality
+    bool  wave_mode = false;
 
     // Field visualization (5 independent toggles)
     bool  field_em      = true;

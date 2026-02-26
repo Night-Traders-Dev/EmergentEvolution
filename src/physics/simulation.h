@@ -9,6 +9,42 @@
 #include "physics/achievements.h"
 #include <GLFW/glfw3.h>
 #include <vector>
+#include <cstring>
+#include <cmath>
+
+// ── Spatial acceleration grid for O(N) neighbor queries ─────────────────────
+struct SpatialGrid {
+    static constexpr float CELL_SIZE    = 30.0f;
+    static constexpr int   COLS         = static_cast<int>(REGION_W / CELL_SIZE) + 1;  // 86
+    static constexpr int   ROWS         = static_cast<int>(REGION_H / CELL_SIZE) + 1;  // 49
+    static constexpr int   TOTAL_CELLS  = COLS * ROWS;
+
+    uint32_t cell_start[TOTAL_CELLS];
+    uint32_t cell_count[TOTAL_CELLS];
+    std::vector<uint32_t> indices;
+
+    void build(const std::vector<glm::vec2>& positions,
+               const std::vector<float>& energies, uint32_t n);
+
+    template<typename Fn>
+    void query(float cx, float cy, float radius, Fn&& fn) const {
+        int min_col = std::max(0, static_cast<int>(std::floor((cx - radius) / CELL_SIZE)));
+        int max_col = std::min(COLS - 1, static_cast<int>(std::floor((cx + radius) / CELL_SIZE)));
+        int min_row = std::max(0, static_cast<int>(std::floor((cy - radius) / CELL_SIZE)));
+        int max_row = std::min(ROWS - 1, static_cast<int>(std::floor((cy + radius) / CELL_SIZE)));
+
+        for (int row = min_row; row <= max_row; ++row) {
+            for (int col = min_col; col <= max_col; ++col) {
+                int cell = row * COLS + col;
+                uint32_t start = cell_start[cell];
+                uint32_t count = cell_count[cell];
+                for (uint32_t k = 0; k < count; ++k) {
+                    fn(indices[start + k]);
+                }
+            }
+        }
+    }
+};
 
 class PhysicsSimulation;
 void PhysicsSim_RegisterScrollCallback(GLFWwindow* window, PhysicsSimulation* sim);
@@ -43,6 +79,9 @@ private:
     std::vector<glm::vec2> readback_positions_;
     std::vector<glm::vec2> readback_velocities_;
     std::vector<float>     readback_energies_;
+
+    SpatialGrid grid_;
+    bool cpu_particles_dirty_ = false;
 
     float emergent_temperature_ = 1.0f;   // EMA of kinetic temperature (Kelvin)
     float emergent_bfield_      = 0.0f;   // EMA of emergent B-field magnitude
@@ -80,6 +119,7 @@ private:
     void check_nuclear_decay();
     void check_photoelectric();
     void check_spallation();
+    void check_hadronization();
 
     void place_force_object(glm::vec2 world_pos, ForceObjectType type);
     void place_mirror(glm::vec2 endpoint1, glm::vec2 endpoint2);

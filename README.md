@@ -4,7 +4,7 @@
 
 **A GPU-accelerated quantum particle physics sandbox**
 
-Standard Model + Beyond · Nuclear fusion & fission · Photon-matter interactions · Orbital mechanics · Emergent thermodynamics · Quantum entanglement · Achievements · Tools · Save/Load
+Standard Model + Beyond · Nuclear fusion & fission · Photon-matter interactions · Orbital mechanics · Emergent thermodynamics · Quantum entanglement · Wave-particle duality · Achievements · Tools · Save/Load
 
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
 [![Vulkan](https://img.shields.io/badge/Vulkan-1.3-red.svg)](https://www.vulkan.org/)
@@ -22,13 +22,14 @@ radioactive decay with realistic isotope half-lives, photoelectric effect, Compt
 nuclear spallation, photodisintegration, pair production, pion production, vector meson dominance,
 hard-sphere collisions, emergent thermodynamics, virtual particle pair creation, quantum
 entanglement, antimatter element detection, electron cloud visualization, a persistent event log,
-an achievement system, measurement tools (thermometer, velocity meter, ruler, density counter),
-visualization overlays (energy heatmap, velocity field, trajectory tracer, force vectors),
-interactive tools (particle accelerator, mirrors), 12 UI themes, 12 environment presets,
-element export/import, and six per-force multiplier knobs.
+an achievement system, measurement tools (thermometer, velocity meter, ruler with nanometer scale,
+density counter), visualization overlays (energy heatmap, velocity field, trajectory tracer, force
+vectors, atom grid, wave-particle duality mode), interactive tools (particle accelerator, mirrors),
+12 UI themes, 12 environment presets, element export/import, and six per-force multiplier knobs.
 
-Simulates up to **22,500 particles** in real time on a toroidal 2560 x 1440 world using O(n^2)
-pairwise GPU compute shaders.
+Simulates up to **22,500 particles** in real time on a toroidal 2560 x 1440 world. GPU compute
+shaders handle O(n^2) pairwise forces; CPU-side physics uses a **spatial acceleration grid** for
+O(n) neighbor queries with **OpenMP** parallelization across all available cores.
 
 ---
 
@@ -59,6 +60,7 @@ pairwise GPU compute shaders.
 - [Tools](#tools)
 - [Achievements](#achievements)
 - [Save / Load](#save--load)
+- [Performance](#performance)
 - [UI Themes](#ui-themes)
 - [Controls](#controls)
 - [Build](#build)
@@ -73,7 +75,10 @@ The Vulkan compute pipeline is dispatched each frame.
 | Property | Detail |
 |---|---|
 | Particle count | Up to **22,500** simultaneous particles |
-| Force algorithm | O(n^2) pairwise, per-frame on GPU |
+| GPU forces | O(n^2) pairwise, per-frame on Vulkan compute shader |
+| CPU physics | O(n) via **spatial acceleration grid** (30px cells, 86x49 = 4,214 cells) |
+| Parallelism | **OpenMP** across all cores for statistics, measurement probes, and visualization grid |
+| GPU sync | Batched — single `vkDeviceWaitIdle` per frame (was 8-10 before) |
 | World | Toroidal 2560 x 1440 (seamless wrap) |
 | Buffers | Double-buffered ping-pong (position, velocity, angle, angular velocity, energy, genome) |
 | Genome | 4 floats per particle: charge, spin, color charge / orbital L, decay rate |
@@ -615,14 +620,15 @@ and kinetic energy. Automatically removed when the tracked particle dies.
 
 ### Distance Ruler
 
-Two-click placement: set start point, then end point. Displays world-space distance as a
-labeled line with tick marks at each endpoint.
+Two-click placement: set start point, then end point. Displays distance in real-world
+nanometer scale as a labeled line with tick marks at each endpoint.
 
 | Property | Detail |
 |---|---|
 | **Placement** | Two clicks to define endpoints |
-| **Display** | Yellow line with perpendicular tick marks + "d=NNN.N" midpoint label |
-| **Measurement** | Euclidean world-space distance between points |
+| **Display** | Yellow line with perpendicular tick marks + distance label in nanometers |
+| **Measurement** | Euclidean distance converted to nanometers (1 Bohr radius = 0.0529 nm) |
+| **Units** | Smart formatting: picometers for < 0.01 nm, 3 decimals for < 1 nm, 2 decimals for larger |
 
 ### Density Counter
 
@@ -648,7 +654,7 @@ When any measurement instruments are placed, a right-side panel appears showing:
 
 ## Visualization Tools
 
-Six visualization overlays accessible from **Menu > Visualization**. Toggle each independently
+Eight visualization overlays accessible from **Menu > Visualization**. Toggle each independently
 via checkbox menu items. Overlays render on the foreground draw list above particles but below
 UI windows.
 
@@ -656,6 +662,8 @@ UI windows.
 |---|---|
 | **Show Trails** | GPU-side particle path fade effect |
 | **Electron Cloud** | Bohr-model orbital shell rings around nuclei (see [Electron Cloud](#electron-cloud-visualization)) |
+| **Wave Mode** | Renders all particles as de Broglie wave packets instead of point particles. Wavelength inversely proportional to momentum (lambda = h/p). Gaussian-enveloped oscillating waves with time-animated phase, additive blending |
+| **Atom Grid** | Overlay grid where each cell equals one hydrogen atom diameter (2 x Bohr radius = 0.106 nm). Camera-aware with auto-hide when cells < 4px. Every 10th line highlighted. Scale label at bottom-left |
 | **Trajectory Tracer** | Records last 120 positions per particle, draws fading polylines. Useful for tracking individual particle paths through interactions |
 | **Energy Heatmap** | 32x18 grid overlay colored blue-to-red by average kinetic energy density. Opacity adjustable (default 0.3) |
 | **Velocity Field** | Arrow grid showing average velocity direction and magnitude per cell. Arrow length scales with speed |
@@ -772,6 +780,53 @@ Simulation state can be saved and loaded in two binary formats.
 
 ---
 
+## Performance
+
+The CPU-side physics engine uses several optimization strategies to maintain real-time performance
+at high particle counts.
+
+### Spatial Acceleration Grid
+
+A uniform 2D grid (30px cells, 86 x 49 = 4,214 cells) accelerates all neighbor queries from
+O(n^2) to O(n * k) where k is the average number of particles per cell.
+
+| Property | Detail |
+|---|---|
+| **Cell size** | 30px (covers largest search radius used by any physics check) |
+| **Build** | Single O(n) pass per frame: count, prefix sum, scatter |
+| **Functions accelerated** | `check_annihilation` (5px), `check_fusion` (8px), `check_fission` (12px), `check_photoelectric` (25px), `update_orbitals` BFS (10px), `check_virtual_pairs` (15px) |
+| **Fallback** | Brute-force O(n^2) when spatial grid is disabled in settings |
+
+### Batched GPU Synchronization
+
+All CPU-side physics modifications (annihilation, fusion, fission, decay, nuclear decay,
+photoelectric, spallation, virtual pairs) set a `cpu_particles_dirty_` flag instead of
+individually syncing with the GPU. A single `vkDeviceWaitIdle` + buffer write occurs at the
+end of each frame, reducing GPU stalls from 8-10 per frame to at most 1.
+
+### OpenMP Parallelization
+
+| Loop | Strategy |
+|---|---|
+| **Statistics** (type counts, energy totals) | `parallel for` with array reduction |
+| **Thermometer probes** (per-probe O(n) scan) | `parallel for` with `reduction(+:total_ke,cnt)` |
+| **Density counters** (per-counter O(n) scan) | `parallel for` with `reduction(+:cnt)` |
+| **Visualization grid** (32x18 binning) | Thread-local grids merged via `critical` section |
+
+All parallel loops use `if(n > 2000)` guards to avoid overhead on small particle counts.
+
+### Performance Settings
+
+Three tuning knobs in **Settings > Performance**:
+
+| Setting | Range | Default | Effect |
+|---|---|---|---|
+| **Physics Quality** | Low / Medium / High | High | Controls which CPU physics checks run and at what frequency. Low skips expensive checks (photoelectric, virtual pairs, spallation); Medium runs them at reduced frequency |
+| **Physics Skip** | 0 - 4 | 0 | Skip CPU physics every N frames. 0 = every frame (best quality), higher = better FPS |
+| **Spatial Grid** | on / off | on | Enable spatial acceleration grid for neighbor queries. Disable only for debugging |
+
+---
+
 ## UI Themes
 
 Eight color themes are available in **Settings > Theme**:
@@ -787,8 +842,8 @@ Eight color themes are available in **Settings > Theme**:
 | 6 | **Arctic** | Dark steel-blue | Ice white-blue |
 | 7 | **Solar** | Near-black warm | Golden yellow |
 
-User preferences (theme, temperature unit, FPS cap, thread count, UI scale) are persisted
-across sessions.
+User preferences (theme, temperature unit, FPS cap, thread count, UI scale, physics quality,
+physics skip, spatial grid) are persisted across sessions.
 
 ---
 
@@ -873,12 +928,12 @@ EmergentEvolution/
 ├── src/physics/
 │   ├── phys_particles.h/.cpp    # 33 particle types, masses, charges, decay rates, isotope table, environments
 │   ├── interface.h/.cpp         # ImGui: spawn picker, force multipliers, element cards, tools, event log, achievements
-│   ├── simulation.h/.cpp        # Main loop: fusion, fission, decay, orbitals, entanglement, photoelectric, spallation
+│   ├── simulation.h/.cpp        # Main loop: fusion, fission, decay, orbitals, entanglement, photoelectric, spallation, spatial grid
 │   ├── achievements.h/.cpp      # 36 achievements across 5 categories with persistence
 │   ├── save_load.h/.cpp         # Binary .ppsg/.ppel save/load/export/import serialization
 │   └── main.cpp                 # Entry point (borderless maximized, window icon via stb_image)
 ├── shaders/
-│   ├── physics.comp             # GPU: 7 forces, centrifugal barrier, hard-sphere, mirror reflection, 5 field viz
+│   ├── physics.comp             # GPU: 7 forces, centrifugal barrier, hard-sphere, mirror reflection, 5 field viz, wave packet rendering
 │   ├── fullscreen.vert          # Fullscreen triangle vertex shader
 │   └── fullscreen.frag          # Particle texture blit
 └── CMakeLists.txt
@@ -921,7 +976,7 @@ A/B buffers ping-pong each tick. All buffers are HOST_VISIBLE + HOST_COHERENT fo
 | 72-75 | gravity_strength | Gravity multiplier |
 | 76-79 | lorentz_strength | Effective magnetic field |
 | 80-83 | vacuum_energy | ZPE floor |
-| 84-87 | field_flags | Field visualization bitmask |
+| 84-87 | field_flags | Field visualization bitmask (bits 0-4: field types, bit 5: wave mode) |
 | 88-91 | weak_coupling | Weak force strength |
 | 92-95 | string_tension | QCD confinement |
 | 96-99 | higgs_vev | Higgs VEV |

@@ -1300,21 +1300,23 @@ void PhysicsInterface::draw_settings_menu() {
         ImGui::PushFont(ImGui::GetFont());
         const char* title = "SETTINGS";
         ImVec2 title_size = ImGui::CalcTextSize(title);
-        ImGui::SetCursorPos(ImVec2(cx - title_size.x * 0.5f, cy - 260.0f));
+        ImGui::SetCursorPos(ImVec2(cx - title_size.x * 0.5f, cy - 290.0f));
 
         const auto& tc = THEMES[std::clamp(prefs.theme, 0, THEME_COUNT - 1)];
         ImGui::TextColored(tc.accent, "%s", title);
         ImGui::GetFont()->Scale = old_scale;
         ImGui::PopFont();
 
-        // Settings panel (centered, fixed width)
+        // Settings panel (centered, scrollable)
         float panel_w = 420.0f;
         float panel_x = cx - panel_w * 0.5f;
-        float panel_y = cy - 190.0f;
+        float panel_top = cy - 240.0f;
+        float panel_bottom = cy + 220.0f;
+        float panel_h = panel_bottom - panel_top;
 
-        ImGui::SetCursorPos(ImVec2(panel_x, panel_y));
-        ImGui::BeginGroup();
-        ImGui::PushItemWidth(panel_w - 20.0f);
+        ImGui::SetCursorPos(ImVec2(panel_x, panel_top));
+        ImGui::BeginChild("##SettingsScroll", ImVec2(panel_w, panel_h), false, ImGuiWindowFlags_NoBackground);
+        ImGui::PushItemWidth(panel_w - 40.0f);
 
         // ── Display ──────────────────────────────────────────────────────
         ImGui::TextColored(tc.accent, "Display");
@@ -1338,6 +1340,7 @@ void PhysicsInterface::draw_settings_menu() {
         ImGui::Separator();
 
         int sys_max = omp_get_max_threads();
+        if (prefs.max_threads <= 0) prefs.max_threads = sys_max;
         prefs.max_threads = std::clamp(prefs.max_threads, 1, sys_max);
         ImGui::SliderInt("CPU Threads", &prefs.max_threads, 1, sys_max);
         if (ImGui::IsItemHovered())
@@ -1351,6 +1354,19 @@ void PhysicsInterface::draw_settings_menu() {
         }
         if (ImGui::Combo("FPS Cap", &fps_idx, fps_labels, 6))
             prefs.fps_cap = fps_values[fps_idx];
+
+        const char* quality_labels[] = { "Low", "Medium", "High" };
+        ImGui::Combo("Physics Quality", &prefs.physics_quality, quality_labels, 3);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Low: essential physics, skip expensive checks\nMedium: most interactions at reduced rate\nHigh: full simulation fidelity every frame");
+
+        ImGui::SliderInt("Physics Skip", &prefs.physics_skip, 0, 4);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Run CPU physics every (N+1) frames\n0 = every frame (best quality)\nHigher = better FPS, less accurate");
+
+        ImGui::Checkbox("Spatial Grid", &prefs.spatial_grid);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Use spatial acceleration grid for neighbor searches\nGreatly improves CPU physics performance\nDisable only for debugging");
 
         ImGui::Dummy(ImVec2(0, 10));
 
@@ -1391,12 +1407,12 @@ void PhysicsInterface::draw_settings_menu() {
         }
 
         ImGui::PopItemWidth();
-        ImGui::EndGroup();
+        ImGui::EndChild();
 
         // ── Back button ──────────────────────────────────────────────────
         float btn_w = 160.0f;
         float btn_h = 36.0f;
-        ImGui::SetCursorPos(ImVec2(cx - btn_w * 0.5f, cy + 200.0f));
+        ImGui::SetCursorPos(ImVec2(cx - btn_w * 0.5f, panel_bottom + 15.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
         if (ImGui::Button("Back", ImVec2(btn_w, btn_h))) {
             show_settings_menu = false;
@@ -1408,7 +1424,7 @@ void PhysicsInterface::draw_settings_menu() {
         // Hint
         const char* hint = "Press Escape to resume";
         ImVec2 hint_size = ImGui::CalcTextSize(hint);
-        ImGui::SetCursorPos(ImVec2(cx - hint_size.x * 0.5f, cy + 250.0f));
+        ImGui::SetCursorPos(ImVec2(cx - hint_size.x * 0.5f, panel_bottom + 60.0f));
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.6f), "%s", hint);
     }
     ImGui::End();
@@ -1911,6 +1927,10 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Show force breakdown on selected particle\nCoulomb (red), Yukawa (green), Gravity (blue)");
 
+                    ImGui::MenuItem("Wave Mode", nullptr, &wave_mode);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Toggle wave-particle duality\nRender all particles as de Broglie wave packets\nWavelength inversely proportional to momentum");
+
                     ImGui::MenuItem("Atom Grid", nullptr, &show_atom_grid);
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Overlay grid where each cell = hydrogen atom diameter\n(2 Bohr radii = 0.106 nm)");
@@ -2024,6 +2044,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.lorentz_strength = 1.0f;
                     cfg.weak_coupling = 1.0f;
                     cfg.string_tension = 100.0f;
+                    cfg.hadronization_enabled = true;
                     cfg.viscosity_strength = 0.0f;
                     cfg.time_scale = 1.0f;
                     break;
@@ -2096,6 +2117,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.interaction_radius = 80.0f;
                     cfg.gravity_strength = 0.0f;
                     cfg.string_tension = 10.0f;
+                    cfg.hadronization_enabled = false;  // quarks deconfined in QGP
                     cfg.weak_coupling = 0.5f;
                     particle_count_slider = 100.0f;
                     break;
@@ -2218,6 +2240,12 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
         ImGui::SliderFloat("Confinement", &cfg.string_tension, 0.0f, 200.0f, "%.0f");
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Quark confinement (string tension)\nHigher = quarks held more tightly\n0 = deconfinement (quark-gluon plasma)");
+        ImGui::Checkbox("Hadronization", &cfg.hadronization_enabled);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Color confinement enforcement\n"
+                "Free quarks form mesons (q+qbar) or spawn vacuum pairs\n"
+                "String breaking creates new pairs when quarks separate\n"
+                "Disabled above QGP temperature (2 trillion K)");
 
         ImGui::Spacing();
 

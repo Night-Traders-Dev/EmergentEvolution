@@ -183,6 +183,7 @@ struct SimConfig {
     float    weak_coupling            = 1.0f;   // weak force strength
     float    string_tension           = 100.0f; // quark confinement linear potential coefficient
     float    higgs_vev                = 246.0f; // Higgs vacuum expectation value
+    bool     hadronization_enabled    = true;   // CPU-side color confinement enforcement
 
     // Temperature in Kelvin (for physics sim)
     float    temperature_kelvin       = 1.0f;    // actual temperature; converted to noise amplitude
