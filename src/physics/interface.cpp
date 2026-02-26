@@ -472,11 +472,32 @@ static const ThemeColors THEMES[] = {
       {1.000f,0.820f,0.200f,1.0f},  {1.000f,0.900f,0.400f,1.0f},
       {0.220f,0.180f,0.100f,0.50f}, {0.110f,0.090f,0.055f,0.65f}, {0.160f,0.130f,0.080f,0.70f},
       {0.930f,0.910f,0.860f,1.0f},  {0.560f,0.520f,0.430f,1.0f} },
+    // 8: Crimson + Blood Red
+    { {0.090f,0.040f,0.040f,0.75f}, {0.065f,0.025f,0.025f,0.80f},
+      {0.900f,0.200f,0.200f,1.0f},  {1.000f,0.350f,0.350f,1.0f},
+      {0.280f,0.120f,0.120f,0.50f}, {0.135f,0.060f,0.060f,0.65f}, {0.190f,0.090f,0.090f,0.70f},
+      {0.930f,0.870f,0.870f,1.0f},  {0.550f,0.430f,0.430f,1.0f} },
+    // 9: Ocean + Aquamarine
+    { {0.030f,0.065f,0.090f,0.75f}, {0.020f,0.045f,0.065f,0.80f},
+      {0.200f,0.900f,0.800f,1.0f},  {0.350f,1.000f,0.900f,1.0f},
+      {0.100f,0.200f,0.260f,0.50f}, {0.055f,0.100f,0.135f,0.65f}, {0.080f,0.145f,0.190f,0.70f},
+      {0.850f,0.920f,0.940f,1.0f},  {0.430f,0.520f,0.560f,1.0f} },
+    // 10: Neon + Electric Green
+    { {0.035f,0.035f,0.040f,0.75f}, {0.020f,0.020f,0.025f,0.80f},
+      {0.200f,1.000f,0.300f,1.0f},  {0.400f,1.000f,0.500f,1.0f},
+      {0.100f,0.150f,0.110f,0.50f}, {0.055f,0.065f,0.058f,0.65f}, {0.080f,0.100f,0.085f,0.70f},
+      {0.880f,0.950f,0.890f,1.0f},  {0.450f,0.530f,0.460f,1.0f} },
+    // 11: Lavender + Lilac
+    { {0.075f,0.065f,0.095f,0.75f}, {0.052f,0.045f,0.070f,0.80f},
+      {0.720f,0.560f,0.900f,1.0f},  {0.820f,0.680f,1.000f,1.0f},
+      {0.200f,0.170f,0.260f,0.50f}, {0.105f,0.090f,0.140f,0.65f}, {0.148f,0.130f,0.200f,0.70f},
+      {0.910f,0.880f,0.940f,1.0f},  {0.500f,0.470f,0.560f,1.0f} },
 };
-static constexpr int THEME_COUNT = 8;
+static constexpr int THEME_COUNT = 12;
 static const char* THEME_NAMES[] = {
     "Dark Navy", "Midnight", "Slate", "Ember",
-    "Synthwave", "Forest", "Arctic", "Solar"
+    "Synthwave", "Forest", "Arctic", "Solar",
+    "Crimson", "Ocean", "Neon", "Lavender"
 };
 
 void PhysicsInterface::push_theme() {
@@ -599,7 +620,9 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         settings_visible = !settings_visible;
 
     // Auto-disable select_mode when other modes activate
-    if (pending_spawn || force_obj_placement_mode || accel_mode || mirror_placement_mode)
+    if (pending_spawn || force_obj_placement_mode || accel_mode || mirror_placement_mode
+        || thermo_probe_placement_mode || velocity_meter_mode
+        || ruler_placement_mode || density_counter_placement_mode)
         select_mode = false;
 
     push_theme();
@@ -631,9 +654,6 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         pop_theme();
         return;
     }
-
-    // Draw event notifications (top-right toast stack)
-    draw_notifications();
 
     // Draw bottom bar (always visible)
     draw_bottom_bar(cfg, request_reset);
@@ -972,6 +992,42 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
             }
         }
     }
+
+    // ── Visualization overlays ───────────────────────────────────────────────
+    if (show_energy_heatmap)    draw_energy_heatmap(cfg);
+    if (show_velocity_field)    draw_velocity_field(cfg);
+    if (show_trajectory_tracer) draw_trajectory_traces(cfg);
+    if (show_force_vectors)     draw_force_vectors_overlay(cfg);
+
+    // ── Measurement overlays ─────────────────────────────────────────────────
+    if (!thermo_probes.empty() || !velocity_meters.empty() ||
+        !distance_rulers.empty() || !density_counters.empty())
+        draw_measurement_overlays(cfg);
+
+    if (!thermo_probes.empty() || !velocity_meters.empty() ||
+        !distance_rulers.empty() || !density_counters.empty())
+        draw_measurement_panel();
+
+    // ── Placement mode hints ─────────────────────────────────────────────────
+    if (thermo_probe_placement_mode || density_counter_placement_mode ||
+        ruler_placement_mode || velocity_meter_mode) {
+        ImDrawList* fg = ImGui::GetForegroundDrawList();
+        const char* txt = thermo_probe_placement_mode ? "Click to place thermometer probe" :
+                          density_counter_placement_mode ? "Click to place density counter" :
+                          ruler_placement_mode ? (ruler_placement_phase == 0 ?
+                              "Click to set ruler start point" : "Click to set ruler end point") :
+                          "Click a particle to attach velocity meter";
+        ImVec2 ts = ImGui::CalcTextSize(txt);
+        ImGuiIO& io2 = ImGui::GetIO();
+        fg->AddRectFilled(ImVec2(io2.DisplaySize.x * 0.5f - ts.x * 0.5f - 8, 26),
+                          ImVec2(io2.DisplaySize.x * 0.5f + ts.x * 0.5f + 8, 50),
+                          IM_COL32(0, 0, 0, 180), 4.0f);
+        fg->AddText(ImVec2(io2.DisplaySize.x * 0.5f - ts.x * 0.5f, 30.0f),
+                    ImGui::ColorConvertFloat4ToU32(ImVec4(0.8f, 0.8f, 0.9f, 1.0f)), txt);
+    }
+
+    // Draw notifications last so they render on top of all windows
+    draw_notifications();
 
     pop_theme();
 }
@@ -1672,6 +1728,22 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
             ImGui::SameLine(0, 12);
             ImGui::TextColored(ImVec4(0.0f, 0.9f, 0.9f, 1.0f), "[SELECT]");
         }
+        if (thermo_probe_placement_mode) {
+            ImGui::SameLine(0, 12);
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "[THERMOMETER]");
+        }
+        if (velocity_meter_mode) {
+            ImGui::SameLine(0, 12);
+            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "[VEL METER]");
+        }
+        if (ruler_placement_mode) {
+            ImGui::SameLine(0, 12);
+            ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.3f, 1.0f), "[RULER]");
+        }
+        if (density_counter_placement_mode) {
+            ImGui::SameLine(0, 12);
+            ImGui::TextColored(ImVec4(0.6f, 0.3f, 1.0f, 1.0f), "[DENSITY]");
+        }
 
         // Right-aligned Menu button
         float menu_btn_w = 70.0f;
@@ -1685,7 +1757,7 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
         // Menu popup (rendered above the button)
         if (show_tools_popup) {
             float popup_w = 220.0f;
-            float popup_h = 350.0f;
+            float popup_h = 500.0f;
             float popup_x = display_w - 12.0f - popup_w;
             float popup_y = display_h - bar_h - popup_h - 4.0f;
             ImGui::SetNextWindowPos(ImVec2(popup_x, popup_y));
@@ -1739,14 +1811,73 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                 ImGui::Spacing();
 
                 // ── Tools ──
-                if (ImGui::TreeNodeEx("Tools", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    if (ImGui::MenuItem("Halt Velocities")) {
-                        request_halt_velocities = true;
+                // ── Measurement ──────────────────────────────────────────────
+                if (ImGui::TreeNodeEx("Measurement", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    auto enter_meas_mode = [&]() {
+                        pending_spawn = false;
+                        select_mode = false;
+                        force_obj_placement_mode = false;
+                        accel_mode = false;
+                        mirror_placement_mode = false;
+                        thermo_probe_placement_mode = false;
+                        velocity_meter_mode = false;
+                        ruler_placement_mode = false;
+                        density_counter_placement_mode = false;
+                    };
+
+                    if (ImGui::MenuItem("Thermometer Probe", nullptr, thermo_probe_placement_mode)) {
+                        bool was = thermo_probe_placement_mode;
+                        enter_meas_mode();
+                        thermo_probe_placement_mode = !was;
                         show_tools_popup = false;
                     }
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Set all particle velocities to zero");
+                        ImGui::SetTooltip("Click to place a temperature probe\nShows local avg kinetic energy within radius");
 
+                    if (ImGui::MenuItem("Velocity Meter", nullptr, velocity_meter_mode)) {
+                        bool was = velocity_meter_mode;
+                        enter_meas_mode();
+                        velocity_meter_mode = !was;
+                        show_tools_popup = false;
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Click a particle to track its velocity\nShows speed, direction arrow, and kinetic energy");
+
+                    if (ImGui::MenuItem("Distance Ruler", nullptr, ruler_placement_mode)) {
+                        bool was = ruler_placement_mode;
+                        enter_meas_mode();
+                        ruler_placement_mode = !was;
+                        ruler_placement_phase = 0;
+                        show_tools_popup = false;
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Click two points to measure distance\nDisplays world-space distance between points");
+
+                    if (ImGui::MenuItem("Density Counter", nullptr, density_counter_placement_mode)) {
+                        bool was = density_counter_placement_mode;
+                        enter_meas_mode();
+                        density_counter_placement_mode = !was;
+                        show_tools_popup = false;
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Click to place a density counter\nShows particle count and density within radius");
+
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Clear All Measurements")) {
+                        thermo_probes.clear();
+                        velocity_meters.clear();
+                        distance_rulers.clear();
+                        density_counters.clear();
+                        show_tools_popup = false;
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Remove all placed measurement tools");
+
+                    ImGui::TreePop();
+                }
+
+                // ── Visualization ───────────────────────────────────────────
+                if (ImGui::TreeNodeEx("Visualization", ImGuiTreeNodeFlags_DefaultOpen)) {
                     ImGui::MenuItem("Show Trails", nullptr, &cfg.show_trails);
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Draw particle paths (fade effect)");
@@ -1755,21 +1886,27 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Show orbital shell rings around nuclei\nDisplays expected electron shells and occupancy");
 
-                    if (ImGui::MenuItem("Remove Massless")) {
-                        request_remove_massless = true;
-                        show_tools_popup = false;
-                    }
+                    ImGui::MenuItem("Trajectory Tracer", nullptr, &show_trajectory_tracer);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Remove all massless particles\n(photons, gluons, gravitons, neutrinos)");
+                        ImGui::SetTooltip("Record and draw recent particle paths\nFading polylines colored by particle type");
 
-                    if (ImGui::MenuItem("Remove Massive")) {
-                        request_remove_massive = true;
-                        show_tools_popup = false;
-                    }
+                    ImGui::MenuItem("Energy Heatmap", nullptr, &show_energy_heatmap);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Remove all massive particles\n(everything except photons, gluons, etc.)");
+                        ImGui::SetTooltip("Overlay grid showing kinetic energy density\nBlue = low, Red = high");
 
-                    ImGui::Separator();
+                    ImGui::MenuItem("Velocity Field", nullptr, &show_velocity_field);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Overlay arrow grid showing average\nvelocity direction and magnitude");
+
+                    ImGui::MenuItem("Force Vectors", nullptr, &show_force_vectors);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Show force breakdown on selected particle\nCoulomb (red), Yukawa (green), Gravity (blue)");
+
+                    ImGui::TreePop();
+                }
+
+                // ── Tools ───────────────────────────────────────────────────
+                if (ImGui::TreeNodeEx("Tools", ImGuiTreeNodeFlags_DefaultOpen)) {
                     if (ImGui::MenuItem("Accelerator", nullptr, accel_mode)) {
                         accel_mode = !accel_mode;
                         if (accel_mode) {
@@ -1778,6 +1915,10 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                             pending_spawn = false;
                             select_mode = false;
                             force_obj_placement_mode = false;
+                            thermo_probe_placement_mode = false;
+                            velocity_meter_mode = false;
+                            ruler_placement_mode = false;
+                            density_counter_placement_mode = false;
                         }
                         show_tools_popup = false;
                     }
@@ -1792,11 +1933,37 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                             select_mode = false;
                             force_obj_placement_mode = false;
                             accel_mode = false;
+                            thermo_probe_placement_mode = false;
+                            velocity_meter_mode = false;
+                            ruler_placement_mode = false;
+                            density_counter_placement_mode = false;
                         }
                         show_tools_popup = false;
                     }
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Reflective mirror tool\nTwo clicks define a line segment\nParticles bounce off reflectively");
+
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Halt Velocities")) {
+                        request_halt_velocities = true;
+                        show_tools_popup = false;
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Set all particle velocities to zero");
+
+                    if (ImGui::MenuItem("Remove Massless")) {
+                        request_remove_massless = true;
+                        show_tools_popup = false;
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Remove all massless particles\n(photons, gluons, gravitons, neutrinos)");
+
+                    if (ImGui::MenuItem("Remove Massive")) {
+                        request_remove_massive = true;
+                        show_tools_popup = false;
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Remove all massive particles\n(everything except photons, gluons, etc.)");
 
                     ImGui::TreePop();
                 }
@@ -3358,22 +3525,25 @@ void PhysicsInterface::draw_decay_log() {
     for (int idx = static_cast<int>(decay_log.size()) - 1; idx >= 0; --idx) {
         const auto& entry = decay_log[idx];
 
-        // Frame timestamp
-        float age_sec = static_cast<float>(frame_counter_display - entry.frame) / 60.0f;
-        if (age_sec < 60.0f)
-            ImGui::TextColored(ImVec4(0.35f, 0.38f, 0.48f, 1.0f), "%5.1fs", age_sec);
-        else
-            ImGui::TextColored(ImVec4(0.35f, 0.38f, 0.48f, 1.0f), "%4.1fm", age_sec / 60.0f);
+        // Wall-clock timestamp
+        {
+            struct tm tm_buf;
+            localtime_r(&entry.timestamp, &tm_buf);
+            char ts_str[16];
+            snprintf(ts_str, sizeof(ts_str), "%02d:%02d:%02d",
+                     tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
+            ImGui::TextColored(ImVec4(0.35f, 0.38f, 0.48f, 1.0f), "%s", ts_str);
+        }
 
         // Type tag
-        ImGui::SameLine(50.0f);
+        ImGui::SameLine(65.0f);
         const char* tag = (entry.type < 11) ? TYPE_LABELS[entry.type] : "?";
         ImVec4 tag_color = (entry.type < 11) ? TYPE_COLORS[entry.type] : ImVec4(1,1,1,1);
         ImGui::TextColored(ImVec4(tag_color.x * 0.7f, tag_color.y * 0.7f,
                                    tag_color.z * 0.7f, 0.8f), "[%s]", tag);
 
         // Description
-        ImGui::SameLine(120.0f);
+        ImGui::SameLine(135.0f);
         ImGui::TextColored(entry.color, "%s", entry.description.c_str());
     }
 
@@ -3652,7 +3822,7 @@ void PhysicsInterface::push_notification(const char* text, ImVec4 color) {
 void PhysicsInterface::push_decay_event(const char* desc, DecayEventType type, ImVec4 color) {
     if (static_cast<int>(decay_log.size()) >= DECAY_LOG_MAX)
         decay_log.erase(decay_log.begin());  // drop oldest
-    decay_log.push_back({std::string(desc), type, color, frame_counter_display});
+    decay_log.push_back({std::string(desc), type, color, frame_counter_display, std::time(nullptr)});
 }
 
 void PhysicsInterface::draw_notifications() {
@@ -4080,6 +4250,484 @@ void PhysicsInterface::draw_save_load_dialog() {
         show_save_dialog = false;
         show_load_dialog = false;
         show_import_dialog = false;
+    }
+
+    ImGui::End();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Measurement Overlays ────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_measurement_overlays(const SimConfig& cfg) {
+    ImGuiIO& io = ImGui::GetIO();
+    ImDrawList* fg = ImGui::GetForegroundDrawList();
+    float ww = io.DisplaySize.x, wh = io.DisplaySize.y;
+
+    auto w2s = [&](glm::vec2 w) -> ImVec2 {
+        glm::vec2 s = glm::vec2(ww, wh) * 0.5f
+                    + (w - cfg.camera_origin) * cfg.current_camera_zoom;
+        return ImVec2(s.x, s.y);
+    };
+
+    // ── Thermometer probes ───────────────────────────────────────────────
+    for (auto& probe : thermo_probes) {
+        ImVec2 center = w2s(probe.world_pos);
+        float screen_r = probe.radius * cfg.current_camera_zoom;
+        if (center.x < -screen_r || center.x > ww + screen_r ||
+            center.y < -screen_r || center.y > wh + screen_r) continue;
+
+        ImU32 ring_col = IM_COL32(255, 150, 50, 120);
+        fg->AddCircle(center, screen_r, ring_col, 48, 1.5f);
+
+        // Label
+        char buf[64];
+        snprintf(buf, sizeof(buf), "T: %.0f K (%u)", probe.local_temp, probe.local_count);
+        ImVec2 ts = ImGui::CalcTextSize(buf);
+        float lx = center.x - ts.x * 0.5f, ly = center.y - screen_r - 20.0f;
+        fg->AddRectFilled(ImVec2(lx - 4, ly - 2), ImVec2(lx + ts.x + 4, ly + ts.y + 2),
+                          IM_COL32(0, 0, 0, 180), 3.0f);
+        fg->AddText(ImVec2(lx, ly), IM_COL32(255, 180, 80, 255), buf);
+    }
+
+    // ── Velocity meters ──────────────────────────────────────────────────
+    if (readback_positions_ptr && readback_velocities && readback_energies_ptr) {
+        for (auto& vm : velocity_meters) {
+            if (!vm.active || vm.particle_idx < 0 ||
+                static_cast<uint32_t>(vm.particle_idx) >= readback_count) continue;
+            uint32_t pi = static_cast<uint32_t>(vm.particle_idx);
+            if (readback_energies_ptr[pi] <= 0.0f) { vm.active = false; continue; }
+
+            glm::vec2 pos = readback_positions_ptr[pi];
+            glm::vec2 vel = readback_velocities[pi];
+            ImVec2 scr = w2s(pos);
+
+            float speed = glm::length(vel);
+            float ke = 0.5f * glm::dot(vel, vel);
+
+            // Arrow
+            if (speed > 0.1f) {
+                glm::vec2 dir = vel / speed;
+                float arrow_len = std::min(speed * 0.5f, 80.0f) * cfg.current_camera_zoom;
+                ImVec2 tip = ImVec2(scr.x + dir.x * arrow_len, scr.y + dir.y * arrow_len);
+                fg->AddLine(scr, tip, IM_COL32(80, 255, 130, 200), 2.0f);
+                // Arrowhead
+                glm::vec2 perp(-dir.y, dir.x);
+                float ah = 6.0f;
+                fg->AddTriangleFilled(
+                    tip,
+                    ImVec2(tip.x - dir.x * ah + perp.x * ah * 0.5f,
+                           tip.y - dir.y * ah + perp.y * ah * 0.5f),
+                    ImVec2(tip.x - dir.x * ah - perp.x * ah * 0.5f,
+                           tip.y - dir.y * ah - perp.y * ah * 0.5f),
+                    IM_COL32(80, 255, 130, 200));
+            }
+
+            // Label
+            char buf[64];
+            snprintf(buf, sizeof(buf), "v=%.1f  KE=%.3f", speed, ke);
+            ImVec2 ts = ImGui::CalcTextSize(buf);
+            float lx = scr.x + 10, ly = scr.y - 20;
+            fg->AddRectFilled(ImVec2(lx - 4, ly - 2), ImVec2(lx + ts.x + 4, ly + ts.y + 2),
+                              IM_COL32(0, 0, 0, 180), 3.0f);
+            fg->AddText(ImVec2(lx, ly), IM_COL32(80, 255, 130, 255), buf);
+        }
+    }
+
+    // ── Distance rulers ──────────────────────────────────────────────────
+    for (auto& ruler : distance_rulers) {
+        ImVec2 a = w2s(ruler.point_a);
+        ImVec2 b = w2s(ruler.point_b);
+
+        fg->AddLine(a, b, IM_COL32(230, 230, 80, 200), 1.5f);
+
+        // Tick marks at endpoints
+        float dx = b.x - a.x, dy = b.y - a.y;
+        float len = std::sqrt(dx * dx + dy * dy);
+        if (len > 1.0f) {
+            float nx = -dy / len * 6.0f, ny = dx / len * 6.0f;
+            fg->AddLine(ImVec2(a.x + nx, a.y + ny), ImVec2(a.x - nx, a.y - ny),
+                        IM_COL32(230, 230, 80, 200), 1.5f);
+            fg->AddLine(ImVec2(b.x + nx, b.y + ny), ImVec2(b.x - nx, b.y - ny),
+                        IM_COL32(230, 230, 80, 200), 1.5f);
+        }
+
+        // Midpoint label
+        char buf[32];
+        snprintf(buf, sizeof(buf), "d=%.1f", ruler.distance);
+        ImVec2 mid((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+        ImVec2 ts = ImGui::CalcTextSize(buf);
+        fg->AddRectFilled(ImVec2(mid.x - ts.x * 0.5f - 4, mid.y - ts.y * 0.5f - 2),
+                          ImVec2(mid.x + ts.x * 0.5f + 4, mid.y + ts.y * 0.5f + 2),
+                          IM_COL32(0, 0, 0, 180), 3.0f);
+        fg->AddText(ImVec2(mid.x - ts.x * 0.5f, mid.y - ts.y * 0.5f),
+                    IM_COL32(230, 230, 80, 255), buf);
+    }
+
+    // ── Density counters ─────────────────────────────────────────────────
+    for (auto& dc : density_counters) {
+        ImVec2 center = w2s(dc.world_pos);
+        float screen_r = dc.radius * cfg.current_camera_zoom;
+        if (center.x < -screen_r || center.x > ww + screen_r ||
+            center.y < -screen_r || center.y > wh + screen_r) continue;
+
+        // Dashed circle
+        ImU32 ring_col = IM_COL32(150, 80, 255, 120);
+        int segs = 48;
+        for (int s = 0; s < segs; s += 2) {
+            float a0 = (float)s / segs * 6.2831853f;
+            float a1 = (float)(s + 1) / segs * 6.2831853f;
+            fg->AddLine(ImVec2(center.x + std::cos(a0) * screen_r,
+                               center.y + std::sin(a0) * screen_r),
+                        ImVec2(center.x + std::cos(a1) * screen_r,
+                               center.y + std::sin(a1) * screen_r),
+                        ring_col, 1.5f);
+        }
+
+        // Label
+        char buf[64];
+        snprintf(buf, sizeof(buf), "n=%u  \xcf\x81=%.4f", dc.count, dc.density);
+        ImVec2 ts = ImGui::CalcTextSize(buf);
+        float lx = center.x - ts.x * 0.5f, ly = center.y - screen_r - 20.0f;
+        fg->AddRectFilled(ImVec2(lx - 4, ly - 2), ImVec2(lx + ts.x + 4, ly + ts.y + 2),
+                          IM_COL32(0, 0, 0, 180), 3.0f);
+        fg->AddText(ImVec2(lx, ly), IM_COL32(180, 130, 255, 255), buf);
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Energy Heatmap ──────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_energy_heatmap(const SimConfig& cfg) {
+    ImGuiIO& io = ImGui::GetIO();
+    ImDrawList* fg = ImGui::GetForegroundDrawList();
+    float ww = io.DisplaySize.x, wh = io.DisplaySize.y;
+
+    float cell_w = static_cast<float>(REGION_W) / VIS_GRID_W;
+    float cell_h = static_cast<float>(REGION_H) / VIS_GRID_H;
+
+    // Find max avg energy for normalization
+    float max_avg = 0.0f;
+    for (uint32_t i = 0; i < VIS_GRID_CELLS; ++i) {
+        if (vis_grid.count[i] > 0) {
+            float avg = vis_grid.energy[i] / vis_grid.count[i];
+            if (avg > max_avg) max_avg = avg;
+        }
+    }
+    if (max_avg < 0.001f) return;
+
+    auto w2s = [&](glm::vec2 w) -> ImVec2 {
+        glm::vec2 s = glm::vec2(ww, wh) * 0.5f
+                    + (w - cfg.camera_origin) * cfg.current_camera_zoom;
+        return ImVec2(s.x, s.y);
+    };
+
+    uint8_t alpha = static_cast<uint8_t>(heatmap_opacity * 255);
+
+    for (uint32_t gy = 0; gy < VIS_GRID_H; ++gy) {
+        for (uint32_t gx = 0; gx < VIS_GRID_W; ++gx) {
+            uint32_t idx = gy * VIS_GRID_W + gx;
+            if (vis_grid.count[idx] == 0) continue;
+
+            float t = (vis_grid.energy[idx] / vis_grid.count[idx]) / max_avg;
+            t = std::clamp(t, 0.0f, 1.0f);
+
+            // Blue → Cyan → Green → Yellow → Red
+            uint8_t r, g, b;
+            if (t < 0.25f) {
+                float s = t / 0.25f;
+                r = 0; g = static_cast<uint8_t>(s * 255); b = 255;
+            } else if (t < 0.5f) {
+                float s = (t - 0.25f) / 0.25f;
+                r = 0; g = 255; b = static_cast<uint8_t>((1.0f - s) * 255);
+            } else if (t < 0.75f) {
+                float s = (t - 0.5f) / 0.25f;
+                r = static_cast<uint8_t>(s * 255); g = 255; b = 0;
+            } else {
+                float s = (t - 0.75f) / 0.25f;
+                r = 255; g = static_cast<uint8_t>((1.0f - s) * 255); b = 0;
+            }
+
+            glm::vec2 tl(gx * cell_w, gy * cell_h);
+            glm::vec2 br((gx + 1) * cell_w, (gy + 1) * cell_h);
+            ImVec2 stl = w2s(tl), sbr = w2s(br);
+
+            fg->AddRectFilled(stl, sbr, IM_COL32(r, g, b, alpha));
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Velocity Field ──────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_velocity_field(const SimConfig& cfg) {
+    ImGuiIO& io = ImGui::GetIO();
+    ImDrawList* fg = ImGui::GetForegroundDrawList();
+    float ww = io.DisplaySize.x, wh = io.DisplaySize.y;
+
+    float cell_w = static_cast<float>(REGION_W) / VIS_GRID_W;
+    float cell_h = static_cast<float>(REGION_H) / VIS_GRID_H;
+
+    auto w2s = [&](glm::vec2 w) -> ImVec2 {
+        glm::vec2 s = glm::vec2(ww, wh) * 0.5f
+                    + (w - cfg.camera_origin) * cfg.current_camera_zoom;
+        return ImVec2(s.x, s.y);
+    };
+
+    // Find max avg speed for normalization
+    float max_speed = 0.0f;
+    for (uint32_t i = 0; i < VIS_GRID_CELLS; ++i) {
+        if (vis_grid.count[i] > 0) {
+            float vx = vis_grid.vel_x[i] / vis_grid.count[i];
+            float vy = vis_grid.vel_y[i] / vis_grid.count[i];
+            float spd = std::sqrt(vx * vx + vy * vy);
+            if (spd > max_speed) max_speed = spd;
+        }
+    }
+    if (max_speed < 0.01f) return;
+
+    for (uint32_t gy = 0; gy < VIS_GRID_H; ++gy) {
+        for (uint32_t gx = 0; gx < VIS_GRID_W; ++gx) {
+            uint32_t idx = gy * VIS_GRID_W + gx;
+            if (vis_grid.count[idx] < 2) continue;  // need at least 2 particles
+
+            float vx = vis_grid.vel_x[idx] / vis_grid.count[idx];
+            float vy = vis_grid.vel_y[idx] / vis_grid.count[idx];
+            float spd = std::sqrt(vx * vx + vy * vy);
+            if (spd < 0.01f) continue;
+
+            // Cell center in world space
+            glm::vec2 cell_center((gx + 0.5f) * cell_w, (gy + 0.5f) * cell_h);
+            ImVec2 origin = w2s(cell_center);
+
+            // Arrow length proportional to speed, scaled by zoom and user scale
+            float norm_spd = spd / max_speed;
+            float arrow_len = norm_spd * cell_w * 0.4f * cfg.current_camera_zoom * velocity_field_scale;
+            arrow_len = std::clamp(arrow_len, 3.0f, 40.0f);
+
+            float dx = vx / spd, dy = vy / spd;
+            ImVec2 tip(origin.x + dx * arrow_len, origin.y + dy * arrow_len);
+
+            uint8_t a = static_cast<uint8_t>(100 + norm_spd * 155);
+            fg->AddLine(origin, tip, IM_COL32(200, 200, 255, a), 1.2f);
+
+            // Small arrowhead
+            float ah = 3.0f;
+            float px = -dy, py = dx;
+            fg->AddTriangleFilled(
+                tip,
+                ImVec2(tip.x - dx * ah + px * ah * 0.4f, tip.y - dy * ah + py * ah * 0.4f),
+                ImVec2(tip.x - dx * ah - px * ah * 0.4f, tip.y - dy * ah - py * ah * 0.4f),
+                IM_COL32(200, 200, 255, a));
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Trajectory Traces ───────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_trajectory_traces(const SimConfig& cfg) {
+    ImGuiIO& io = ImGui::GetIO();
+    ImDrawList* fg = ImGui::GetForegroundDrawList();
+    float ww = io.DisplaySize.x, wh = io.DisplaySize.y;
+
+    auto w2s = [&](glm::vec2 w) -> ImVec2 {
+        glm::vec2 s = glm::vec2(ww, wh) * 0.5f
+                    + (w - cfg.camera_origin) * cfg.current_camera_zoom;
+        return ImVec2(s.x, s.y);
+    };
+
+    for (uint32_t pi = 0; pi < static_cast<uint32_t>(trajectory_history.size()); ++pi) {
+        auto& hist = trajectory_history[pi];
+        if (hist.size() < 2) continue;
+
+        // Get particle type color
+        ImVec4 col(0.7f, 0.7f, 0.7f, 1.0f);
+        if (pi < readback_count && readback_positions_ptr) {
+            // Use type color if we have it via type_counts_display context
+            // We need the type — check if readback_energies_ptr is valid
+            // For simplicity, use a generic fading white with slight type-based tint
+        }
+
+        int n = static_cast<int>(hist.size());
+        for (int i = 1; i < n; ++i) {
+            float alpha_frac = static_cast<float>(i) / static_cast<float>(n);
+            uint8_t a = static_cast<uint8_t>(alpha_frac * 160);
+
+            ImVec2 p0 = w2s(hist[i - 1]);
+            ImVec2 p1 = w2s(hist[i]);
+
+            // Skip if both off screen
+            if ((p0.x < -20 || p0.x > ww + 20 || p0.y < -20 || p0.y > wh + 20) &&
+                (p1.x < -20 || p1.x > ww + 20 || p1.y < -20 || p1.y > wh + 20))
+                continue;
+
+            // Skip if the segment is too long (toroidal wrap artifact)
+            float sdx = p1.x - p0.x, sdy = p1.y - p0.y;
+            if (sdx * sdx + sdy * sdy > (ww * 0.3f) * (ww * 0.3f)) continue;
+
+            fg->AddLine(p0, p1, IM_COL32(180, 200, 255, a), 1.0f);
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Force Vectors Overlay ───────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_force_vectors_overlay(const SimConfig& cfg) {
+    if (selected_particle_idx < 0 || force_contributions.empty()) return;
+    if (!readback_positions_ptr || static_cast<uint32_t>(selected_particle_idx) >= readback_count) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    ImDrawList* fg = ImGui::GetForegroundDrawList();
+    float ww = io.DisplaySize.x, wh = io.DisplaySize.y;
+
+    glm::vec2 pos = readback_positions_ptr[selected_particle_idx];
+    glm::vec2 scr_v = glm::vec2(ww, wh) * 0.5f + (pos - cfg.camera_origin) * cfg.current_camera_zoom;
+    ImVec2 origin(scr_v.x, scr_v.y);
+
+    // Find max magnitude for scaling
+    float max_mag = 0.0f;
+    for (auto& fc : force_contributions)
+        if (fc.magnitude > max_mag) max_mag = fc.magnitude;
+    if (max_mag < 0.0001f) return;
+
+    for (auto& fc : force_contributions) {
+        float norm = std::log(1.0f + fc.magnitude) / std::log(1.0f + max_mag);
+        float arrow_len = norm * 80.0f;
+        if (arrow_len < 5.0f) continue;
+
+        ImVec2 tip(origin.x + fc.direction.x * arrow_len,
+                   origin.y + fc.direction.y * arrow_len);
+
+        ImU32 col = ImGui::ColorConvertFloat4ToU32(fc.color);
+        fg->AddLine(origin, tip, col, 2.5f);
+
+        // Arrowhead
+        float dx = fc.direction.x, dy = fc.direction.y;
+        float ah = 7.0f;
+        float px = -dy, py = dx;
+        fg->AddTriangleFilled(
+            tip,
+            ImVec2(tip.x - dx * ah + px * ah * 0.4f, tip.y - dy * ah + py * ah * 0.4f),
+            ImVec2(tip.x - dx * ah - px * ah * 0.4f, tip.y - dy * ah - py * ah * 0.4f),
+            col);
+
+        // Label at tip
+        ImVec2 ts = ImGui::CalcTextSize(fc.name);
+        fg->AddRectFilled(ImVec2(tip.x + 4, tip.y - ts.y * 0.5f - 1),
+                          ImVec2(tip.x + 8 + ts.x, tip.y + ts.y * 0.5f + 1),
+                          IM_COL32(0, 0, 0, 160), 2.0f);
+        fg->AddText(ImVec2(tip.x + 6, tip.y - ts.y * 0.5f), col, fc.name);
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Measurement Panel (right side) ──────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_measurement_panel() {
+    ImGuiIO& io = ImGui::GetIO();
+    float panel_w = 280.0f;
+    float max_h = io.DisplaySize.y - 64.0f;
+
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - panel_w - 10, 10), ImGuiCond_Always);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(panel_w, 80), ImVec2(panel_w, max_h));
+    ImGui::SetNextWindowSize(ImVec2(panel_w, 0), ImGuiCond_Always);
+
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize
+                           | ImGuiWindowFlags_AlwaysAutoResize;
+    if (!ImGui::Begin("Measurements", nullptr, flags)) {
+        ImGui::End();
+        return;
+    }
+
+    // ── Thermometer probes ───────────────────────────────────────────────
+    if (!thermo_probes.empty() && ImGui::CollapsingHeader("Thermometer Probes", ImGuiTreeNodeFlags_DefaultOpen)) {
+        int remove_idx = -1;
+        for (int i = 0; i < static_cast<int>(thermo_probes.size()); ++i) {
+            auto& p = thermo_probes[i];
+            ImGui::PushID(i);
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "Probe %d", i + 1);
+            ImGui::SameLine(200);
+            if (ImGui::SmallButton("X")) remove_idx = i;
+            ImGui::Text("  T: %.0f K  (%u particles)", p.local_temp, p.local_count);
+            ImGui::SliderFloat("Radius", &p.radius, 20.0f, 300.0f, "%.0f");
+            ImGui::PopID();
+            ImGui::Separator();
+        }
+        if (remove_idx >= 0)
+            thermo_probes.erase(thermo_probes.begin() + remove_idx);
+    }
+
+    // ── Velocity meters ──────────────────────────────────────────────────
+    if (!velocity_meters.empty() && ImGui::CollapsingHeader("Velocity Meters", ImGuiTreeNodeFlags_DefaultOpen)) {
+        int remove_idx = -1;
+        for (int i = 0; i < static_cast<int>(velocity_meters.size()); ++i) {
+            auto& vm = velocity_meters[i];
+            ImGui::PushID(1000 + i);
+            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "Particle #%d", vm.particle_idx);
+            ImGui::SameLine(200);
+            if (ImGui::SmallButton("X")) remove_idx = i;
+            if (vm.active && readback_velocities && static_cast<uint32_t>(vm.particle_idx) < readback_count) {
+                glm::vec2 v = readback_velocities[vm.particle_idx];
+                float speed = glm::length(v);
+                float ke = 0.5f * glm::dot(v, v);
+                ImGui::Text("  Speed: %.1f  KE: %.4f", speed, ke);
+            }
+            ImGui::PopID();
+            ImGui::Separator();
+        }
+        if (remove_idx >= 0)
+            velocity_meters.erase(velocity_meters.begin() + remove_idx);
+    }
+
+    // ── Distance rulers ──────────────────────────────────────────────────
+    if (!distance_rulers.empty() && ImGui::CollapsingHeader("Distance Rulers", ImGuiTreeNodeFlags_DefaultOpen)) {
+        int remove_idx = -1;
+        for (int i = 0; i < static_cast<int>(distance_rulers.size()); ++i) {
+            auto& r = distance_rulers[i];
+            ImGui::PushID(2000 + i);
+            ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.3f, 1.0f), "Ruler %d", i + 1);
+            ImGui::SameLine(200);
+            if (ImGui::SmallButton("X")) remove_idx = i;
+            ImGui::Text("  Distance: %.1f", r.distance);
+            ImGui::PopID();
+            ImGui::Separator();
+        }
+        if (remove_idx >= 0)
+            distance_rulers.erase(distance_rulers.begin() + remove_idx);
+    }
+
+    // ── Density counters ─────────────────────────────────────────────────
+    if (!density_counters.empty() && ImGui::CollapsingHeader("Density Counters", ImGuiTreeNodeFlags_DefaultOpen)) {
+        int remove_idx = -1;
+        for (int i = 0; i < static_cast<int>(density_counters.size()); ++i) {
+            auto& dc = density_counters[i];
+            ImGui::PushID(3000 + i);
+            ImGui::TextColored(ImVec4(0.7f, 0.5f, 1.0f, 1.0f), "Counter %d", i + 1);
+            ImGui::SameLine(200);
+            if (ImGui::SmallButton("X")) remove_idx = i;
+            ImGui::Text("  Count: %u  Density: %.4f", dc.count, dc.density);
+            ImGui::SliderFloat("Radius", &dc.radius, 20.0f, 300.0f, "%.0f");
+            ImGui::PopID();
+            ImGui::Separator();
+        }
+        if (remove_idx >= 0)
+            density_counters.erase(density_counters.begin() + remove_idx);
+    }
+
+    // ── Clear All ────────────────────────────────────────────────────────
+    ImGui::Spacing();
+    if (ImGui::Button("Clear All", ImVec2(-1, 0))) {
+        thermo_probes.clear();
+        velocity_meters.clear();
+        distance_rulers.clear();
+        density_counters.clear();
     }
 
     ImGui::End();

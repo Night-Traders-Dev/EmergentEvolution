@@ -5,6 +5,7 @@
 #include "particles.h"
 #include "physics/achievements.h"
 #include <cstdint>
+#include <ctime>
 #include <vector>
 #include <string>
 #include <glm/glm.hpp>
@@ -37,6 +38,45 @@ extern const GroupTemplate GROUP_TEMPLATES[];
 extern const int GROUP_TEMPLATE_COUNT_VAL;
 extern const GroupTemplate HADRON_TEMPLATES[];
 extern const int HADRON_TEMPLATE_COUNT_VAL;
+
+// ── Measurement tool data ────────────────────────────────────────────────────
+
+struct ThermometerProbe {
+    glm::vec2 world_pos;
+    float radius = 80.0f;
+    float local_temp = 0.0f;
+    uint32_t local_count = 0;
+};
+
+struct VelocityMeterTarget {
+    int32_t particle_idx = -1;
+    bool active = true;
+};
+
+struct DistanceRuler {
+    glm::vec2 point_a, point_b;
+    float distance = 0.0f;
+};
+
+struct DensityCounter {
+    glm::vec2 world_pos;
+    float radius = 100.0f;
+    uint32_t count = 0;
+    float density = 0.0f;
+};
+
+// ── Visualization grid ───────────────────────────────────────────────────────
+
+static constexpr uint32_t VIS_GRID_W     = 32;
+static constexpr uint32_t VIS_GRID_H     = 18;
+static constexpr uint32_t VIS_GRID_CELLS = VIS_GRID_W * VIS_GRID_H;
+
+struct VisGrid {
+    float    energy[VIS_GRID_CELLS] = {};
+    float    vel_x[VIS_GRID_CELLS]  = {};
+    float    vel_y[VIS_GRID_CELLS]  = {};
+    uint32_t count[VIS_GRID_CELLS]  = {};
+};
 
 class PhysicsInterface {
 public:
@@ -129,6 +169,47 @@ public:
     uint32_t accel_stream_timer = 0;        // frame counter for stream rate
     uint32_t accel_stream_interval = 3;     // fire every N frames in stream
     glm::vec2 accel_source_world_pos = {};  // updated each tick for aim rendering
+
+    // ── Measurement Tools ────────────────────────────────────────────────────
+    std::vector<ThermometerProbe> thermo_probes;
+    bool thermo_probe_placement_mode = false;
+
+    std::vector<VelocityMeterTarget> velocity_meters;
+    bool velocity_meter_mode = false;
+
+    std::vector<DistanceRuler> distance_rulers;
+    bool ruler_placement_mode = false;
+    int  ruler_placement_phase = 0;
+    glm::vec2 ruler_point_a = {};
+
+    std::vector<DensityCounter> density_counters;
+    bool density_counter_placement_mode = false;
+
+    // ── Visualization Toggles ────────────────────────────────────────────────
+    bool  show_trajectory_tracer = false;
+    int   trajectory_max_points  = 120;
+
+    bool  show_energy_heatmap = false;
+    float heatmap_opacity      = 0.3f;
+
+    bool  show_velocity_field  = false;
+    float velocity_field_scale = 1.0f;
+
+    bool  show_force_vectors   = false;
+
+    // ── Visualization Data (populated by simulation each tick) ───────────────
+    VisGrid vis_grid;
+    std::vector<std::vector<glm::vec2>> trajectory_history;
+
+    struct ForceContribution {
+        glm::vec2 direction;
+        float magnitude;
+        const char* name;
+        ImVec4 color;
+    };
+    std::vector<ForceContribution> force_contributions;
+
+    const float* readback_energies_ptr = nullptr;
 
     // Stats display
     float    fps_display = 0.0f;
@@ -229,8 +310,9 @@ public:
         DecayEventType type;
         ImVec4 color;
         uint32_t frame;             // frame number when event occurred
+        std::time_t timestamp;      // wall-clock time when event occurred
     };
-    static constexpr int DECAY_LOG_MAX = 500;
+    static constexpr int DECAY_LOG_MAX = 10000;
     std::vector<DecayLogEntry> decay_log;
     bool show_decay_log = false;
 
@@ -260,4 +342,10 @@ private:
     void draw_settings_menu();
     void draw_achievements_panel();
     void draw_decay_log();
+    void draw_measurement_overlays(const SimConfig& cfg);
+    void draw_energy_heatmap(const SimConfig& cfg);
+    void draw_velocity_field(const SimConfig& cfg);
+    void draw_trajectory_traces(const SimConfig& cfg);
+    void draw_force_vectors_overlay(const SimConfig& cfg);
+    void draw_measurement_panel();
 };

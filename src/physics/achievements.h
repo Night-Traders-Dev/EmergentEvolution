@@ -18,21 +18,29 @@ enum AchievementID : uint32_t {
     ACH_CHAIN_REACTION,         // 3+ fission events within 60 frames
     ACH_FUSION_10,              // 10 total fusion events
     ACH_FUSION_100,             // 100 total fusion events
+    ACH_FIRST_SPALLATION,       // Trigger nuclear spallation
+    ACH_FIRST_PHOTOELECTRIC,    // Trigger the photoelectric effect
+    ACH_FIRST_PAIR_PRODUCTION,  // Witness pair production (gamma -> e+e-)
 
     // ── Element Creation ────────────────────────────────────────────────────
     ACH_FIRST_ELEMENT,          // Create any element (Z >= 1 with electrons)
     ACH_HYDROGEN,               // Create Hydrogen (Z=1)
     ACH_HELIUM,                 // Create Helium (Z=2)
+    ACH_LITHIUM,                // Create Lithium (Z=3)
     ACH_CARBON,                 // Create Carbon (Z=6)
+    ACH_OXYGEN,                 // Create Oxygen (Z=8)
     ACH_IRON,                   // Create Iron (Z=26) — peak of binding energy
     ACH_GOLD,                   // Create Gold (Z=79)
     ACH_URANIUM,                // Create Uranium (Z=92)
     ACH_ELEMENTS_10,            // Create 10 distinct elements
+    ACH_ELEMENTS_25,            // Create 25 distinct elements
 
     // ── Particle Zoo ────────────────────────────────────────────────────────
     ACH_FIRST_POSITRON,         // Create a positron
     ACH_FIRST_NEUTRINO,         // Create a neutrino
     ACH_FIRST_MUON,             // Create a muon
+    ACH_FIRST_TAU,              // Create a tau lepton
+    ACH_FIRST_ANTIPROTON,       // Create an antiproton
     ACH_FIRST_QUARK,            // Observe a free quark
     ACH_FIRST_BOSON,            // Create a W/Z/Higgs boson
     ACH_DARK_MATTER,            // Observe dark matter particle
@@ -42,19 +50,25 @@ enum AchievementID : uint32_t {
     ACH_TEMP_1000K,             // Reach 1,000 K
     ACH_TEMP_1MK,               // Reach 1,000,000 K (1 MK)
     ACH_TEMP_1GK,               // Reach 1,000,000,000 K (1 GK)
+    ACH_TEMP_10GK,              // Reach 10,000,000,000 K (10 GK)
     ACH_ABSOLUTE_ZERO,          // Cool system below 2 K
 
     // ── Milestones ──────────────────────────────────────────────────────────
     ACH_PARTICLES_1000,         // Have 1000+ active particles simultaneously
     ACH_PARTICLES_5000,         // Have 5000+ active particles simultaneously
+    ACH_PARTICLES_10000,        // Have 10000+ active particles simultaneously
     ACH_FIRST_ENTANGLED,        // Create first entangled pair
     ACH_ENTANGLED_10,           // 10+ entangled pairs active simultaneously
     ACH_FIRST_FORCE_OBJ,       // Place first force object
     ACH_FIRST_MIRROR,           // Place a mirror
+    ACH_FIRST_ACCELERATOR,      // Fire the particle accelerator
     ACH_FIRST_SAVE,             // Save a simulation
     ACH_FIRST_LOAD,             // Load a simulation
     ACH_FIRST_EXPORT,           // Export an element
     ACH_FIRST_IMPORT,           // Import an element
+    ACH_ANNIHILATIONS_100,      // 100 total annihilations
+    ACH_NUCLEAR_DECAYS_50,      // 50 nuclear decay events
+    ACH_ANTIMATTER_ELEMENT,     // Create an antimatter element
 
     // ── Environment Presets ─────────────────────────────────────────────────
     ACH_TRY_ALL_ENVIRONMENTS,   // Try all 12 environment presets
@@ -108,8 +122,9 @@ public:
     uint32_t total_fusions       = 0;
     uint32_t total_fissions      = 0;
     uint32_t total_annihilations = 0;
-    uint32_t total_alpha_decays  = 0;
-    uint32_t total_beta_decays   = 0;
+    uint32_t total_alpha_decays   = 0;
+    uint32_t total_beta_decays    = 0;
+    uint32_t total_nuclear_decays = 0;
 
     // Chain reaction tracking
     uint32_t fission_recent_count = 0;   // fissions in current window

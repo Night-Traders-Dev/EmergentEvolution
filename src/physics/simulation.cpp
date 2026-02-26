@@ -111,6 +111,21 @@ void PhysicsSimulation::reset() {
     iface.accel_stream_timer = 0;
     iface.mirror_placement_mode = false;
     iface.mirror_placement_phase = 0;
+    iface.thermo_probe_placement_mode = false;
+    iface.velocity_meter_mode = false;
+    iface.ruler_placement_mode = false;
+    iface.ruler_placement_phase = 0;
+    iface.density_counter_placement_mode = false;
+    iface.thermo_probes.clear();
+    iface.velocity_meters.clear();
+    iface.distance_rulers.clear();
+    iface.density_counters.clear();
+    iface.trajectory_history.clear();
+    iface.force_contributions.clear();
+    iface.show_trajectory_tracer = false;
+    iface.show_energy_heatmap = false;
+    iface.show_velocity_field = false;
+    iface.show_force_vectors = false;
     entangled_pair_count_ = 0;
 
     physics_gen_data(particles, cfg);
@@ -333,6 +348,57 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
                 iface.mirror_placement_mode = false;
             }
         }
+        else if (iface.thermo_probe_placement_mode) {
+            // 3.7. Thermometer probe placement (single click)
+            if (iface.thermo_probes.size() < 8) {
+                ThermometerProbe probe;
+                probe.world_pos = world_pos;
+                iface.thermo_probes.push_back(probe);
+            }
+            iface.thermo_probe_placement_mode = false;
+        }
+        else if (iface.velocity_meter_mode) {
+            // 3.8. Velocity meter (click on particle)
+            float snap_r = std::max(cfg.radius * 3.0f + 4.0f, 15.0f / cfg.current_camera_zoom);
+            float min_d2 = snap_r * snap_r;
+            int32_t best = -1;
+            for (uint32_t pi = 0; pi < static_cast<uint32_t>(readback_positions_.size()); ++pi) {
+                if (pi < readback_energies_.size() && readback_energies_[pi] <= 0.0f) continue;
+                glm::vec2 d = readback_positions_[pi] - world_pos;
+                float d2 = d.x * d.x + d.y * d.y;
+                if (d2 < min_d2) { min_d2 = d2; best = static_cast<int32_t>(pi); }
+            }
+            if (best >= 0) {
+                VelocityMeterTarget vm;
+                vm.particle_idx = best;
+                iface.velocity_meters.push_back(vm);
+            }
+            iface.velocity_meter_mode = false;
+        }
+        else if (iface.ruler_placement_mode) {
+            // 3.9. Distance ruler placement (two-click)
+            if (iface.ruler_placement_phase == 0) {
+                iface.ruler_point_a = world_pos;
+                iface.ruler_placement_phase = 1;
+            } else {
+                DistanceRuler ruler;
+                ruler.point_a = iface.ruler_point_a;
+                ruler.point_b = world_pos;
+                ruler.distance = glm::length(ruler.point_b - ruler.point_a);
+                iface.distance_rulers.push_back(ruler);
+                iface.ruler_placement_phase = 0;
+                iface.ruler_placement_mode = false;
+            }
+        }
+        else if (iface.density_counter_placement_mode) {
+            // 3.10. Density counter placement (single click)
+            if (iface.density_counters.size() < 8) {
+                DensityCounter dc;
+                dc.world_pos = world_pos;
+                iface.density_counters.push_back(dc);
+            }
+            iface.density_counter_placement_mode = false;
+        }
         else if (iface.force_obj_placement_mode) {
             // 3. Place new force object
             place_force_object(world_pos, static_cast<ForceObjectType>(iface.force_obj_placement_type));
@@ -500,6 +566,7 @@ void PhysicsSimulation::do_accelerator_fire(glm::vec2 aim_world_pos) {
     if (any_spawned) {
         compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
         compute.upload_dynamic_data(vk, particles);
+        try_unlock(ACH_FIRST_ACCELERATOR);
     }
 }
 
@@ -1946,6 +2013,7 @@ void PhysicsSimulation::check_nuclear_decay() {
                 nuc.Z -= 2; nuc.N -= 2;
                 any_decayed = true;
                 nuclear_decay_count_++;
+                achievements.total_nuclear_decays++;
                 achievements.total_alpha_decays++;
                 try_unlock(ACH_FIRST_ALPHA_DECAY);
                 {
@@ -1990,6 +2058,7 @@ void PhysicsSimulation::check_nuclear_decay() {
                 }
                 any_decayed = true;
                 nuclear_decay_count_++;
+                achievements.total_nuclear_decays++;
                 achievements.total_beta_decays++;
                 try_unlock(ACH_FIRST_BETA_DECAY);
                 {
@@ -2034,6 +2103,7 @@ void PhysicsSimulation::check_nuclear_decay() {
                 }
                 any_decayed = true;
                 nuclear_decay_count_++;
+                achievements.total_nuclear_decays++;
                 achievements.total_beta_decays++;
                 try_unlock(ACH_FIRST_BETA_DECAY);
                 {
@@ -2059,6 +2129,7 @@ void PhysicsSimulation::check_nuclear_decay() {
                 nuc.N--;
                 any_decayed = true;
                 nuclear_decay_count_++;
+                achievements.total_nuclear_decays++;
                 {
                     char msg[128];
                     int A_parent = nuc.Z + nuc.N + 1;
@@ -2082,6 +2153,7 @@ void PhysicsSimulation::check_nuclear_decay() {
                 nuc.Z--;
                 any_decayed = true;
                 nuclear_decay_count_++;
+                achievements.total_nuclear_decays++;
                 {
                     char msg[128];
                     int A_parent = nuc.Z + nuc.N + 1;
@@ -2256,6 +2328,7 @@ void PhysicsSimulation::check_photoelectric() {
                 used[best_e] = true;
                 any_changed = true;
                 interaction_count++;
+                try_unlock(ACH_FIRST_PHOTOELECTRIC);
                 iface.push_decay_event("Photoelectric: \xce\xb3 absorbed, e\xe2\x81\xbb ionized", PhysicsInterface::DEVT_PHOTOELECTRIC, ImVec4(0.3f, 0.7f, 1.0f, 1.0f));
 
             } else if (ph_energy >= binding * 0.6f) {
@@ -2545,6 +2618,7 @@ void PhysicsSimulation::check_spallation() {
 
             any_spallated = true;
             spallation_count++;
+            try_unlock(ACH_FIRST_SPALLATION);
 
             {
                 char msg[128];
@@ -2833,6 +2907,7 @@ void PhysicsSimulation::check_spallation() {
                     "Pair production: \xCE\xB3 \xE2\x86\x92 e\xE2\x81\xBA + e\xE2\x81\xBB",
                     ImVec4(0.3f, 0.7f, 1.0f, 1.0f));
                 iface.push_decay_event("\xCE\xB3 \xE2\x86\x92 e\xE2\x81\xBA + e\xE2\x81\xBB", PhysicsInterface::DEVT_PAIR_PRODUCTION, ImVec4(0.3f, 0.7f, 1.0f, 1.0f));
+                try_unlock(ACH_FIRST_PAIR_PRODUCTION);
                 break;
 
             } else if (ph_energy >= 0.50f) {
@@ -3198,6 +3273,7 @@ void PhysicsSimulation::check_achievements() {
     if (temp >= 1000.0f)       try_unlock(ACH_TEMP_1000K);
     if (temp >= 1000000.0f)    try_unlock(ACH_TEMP_1MK);
     if (temp >= 1000000000.0f) try_unlock(ACH_TEMP_1GK);
+    if (temp >= 10000000000.0f) try_unlock(ACH_TEMP_10GK);
     if (temp <= 2.0f && temp > 0.0f && frame_counter_ > 120)
         try_unlock(ACH_ABSOLUTE_ZERO);
 
@@ -3205,8 +3281,9 @@ void PhysicsSimulation::check_achievements() {
     uint32_t active = iface.active_particle_display;
     if (active > achievements.peak_active_particles)
         achievements.peak_active_particles = active;
-    if (active >= 1000) try_unlock(ACH_PARTICLES_1000);
-    if (active >= 5000) try_unlock(ACH_PARTICLES_5000);
+    if (active >= 1000)  try_unlock(ACH_PARTICLES_1000);
+    if (active >= 5000)  try_unlock(ACH_PARTICLES_5000);
+    if (active >= 10000) try_unlock(ACH_PARTICLES_10000);
 
     // ── Entangled pairs ─────────────────────────────────────────────────
     if (entangled_pair_count_ > 0)        try_unlock(ACH_FIRST_ENTANGLED);
@@ -3220,6 +3297,10 @@ void PhysicsSimulation::check_achievements() {
 
     // ── Chain reaction detection ────────────────────────────────────────
     if (achievements.fission_recent_count >= 3) try_unlock(ACH_CHAIN_REACTION);
+
+    // ── Counter-based milestones ─────────────────────────────────────────
+    if (achievements.total_annihilations >= 100) try_unlock(ACH_ANNIHILATIONS_100);
+    if (achievements.total_nuclear_decays >= 50) try_unlock(ACH_NUCLEAR_DECAYS_50);
 
     // ── Element discovery from detected nuclei ──────────────────────────
     for (const auto& nuc : detected_nuclei_) {
@@ -3245,14 +3326,20 @@ void PhysicsSimulation::check_achievements() {
         switch (nuc.Z) {
             case 1:  try_unlock(ACH_HYDROGEN); break;
             case 2:  try_unlock(ACH_HELIUM);   break;
+            case 3:  try_unlock(ACH_LITHIUM);  break;
             case 6:  try_unlock(ACH_CARBON);   break;
+            case 8:  try_unlock(ACH_OXYGEN);   break;
             case 26: try_unlock(ACH_IRON);     break;
             case 79: try_unlock(ACH_GOLD);     break;
             case 92: try_unlock(ACH_URANIUM);  break;
             default: break;
         }
+
+        // Check for antimatter element
+        if (nuc.is_anti && has_electrons) try_unlock(ACH_ANTIMATTER_ELEMENT);
     }
     if (achievements.distinct_elements_count >= 10) try_unlock(ACH_ELEMENTS_10);
+    if (achievements.distinct_elements_count >= 25) try_unlock(ACH_ELEMENTS_25);
 
     // ── Particle zoo: check for specific types present ──────────────────
     const uint32_t* tc = iface.type_counts_display;
@@ -3262,6 +3349,10 @@ void PhysicsSimulation::check_achievements() {
         try_unlock(ACH_FIRST_NEUTRINO);
     if (tc[MUON_TYPE_PHYS] > 0 || tc[ANTIMUON_TYPE_PHYS] > 0)
         try_unlock(ACH_FIRST_MUON);
+    if (tc[TAU_TYPE_PHYS] > 0 || tc[ANTITAU_TYPE_PHYS] > 0)
+        try_unlock(ACH_FIRST_TAU);
+    if (tc[ANTIPROTON_TYPE_PHYS] > 0)
+        try_unlock(ACH_FIRST_ANTIPROTON);
     // Quarks (types 13-24)
     for (uint32_t q = UP_QUARK_TYPE; q <= ANTI_BOTTOM_TYPE; ++q) {
         if (tc[q] > 0) { try_unlock(ACH_FIRST_QUARK); break; }
@@ -3666,6 +3757,145 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     iface.entangled_pair_count_display = entangled_pair_count_;
     iface.readback_positions_ptr = readback_positions_.data();
     iface.entangled_partners_ptr = particles.entangled_partner.data();
+    iface.readback_energies_ptr = readback_energies_.data();
+
+    // ── Measurement tool updates ─────────────────────────────────────────────
+    // Thermometer probes
+    for (auto& probe : iface.thermo_probes) {
+        float total_ke = 0.0f;
+        uint32_t cnt = 0;
+        float r2 = probe.radius * probe.radius;
+        for (uint32_t i = 0; i < cfg.particle_count; ++i) {
+            if (readback_energies_[i] <= 0.0f) continue;
+            glm::vec2 d = readback_positions_[i] - probe.world_pos;
+            if (glm::dot(d, d) < r2) {
+                total_ke += 0.5f * glm::dot(readback_velocities_[i], readback_velocities_[i]);
+                cnt++;
+            }
+        }
+        probe.local_count = cnt;
+        probe.local_temp = (cnt > 0) ? (total_ke / cnt) * 0.1f : 0.0f;
+    }
+
+    // Density counters
+    for (auto& dc : iface.density_counters) {
+        uint32_t cnt = 0;
+        float r2 = dc.radius * dc.radius;
+        for (uint32_t i = 0; i < cfg.particle_count; ++i) {
+            if (readback_energies_[i] <= 0.0f) continue;
+            glm::vec2 d = readback_positions_[i] - dc.world_pos;
+            if (glm::dot(d, d) < r2) cnt++;
+        }
+        dc.count = cnt;
+        dc.density = static_cast<float>(cnt) / (3.14159265f * dc.radius * dc.radius);
+    }
+
+    // Velocity meters: prune dead targets
+    for (auto& vm : iface.velocity_meters) {
+        if (vm.particle_idx >= 0 && static_cast<uint32_t>(vm.particle_idx) < cfg.particle_count) {
+            if (readback_energies_[vm.particle_idx] <= 0.0f)
+                vm.active = false;
+        }
+    }
+    iface.velocity_meters.erase(
+        std::remove_if(iface.velocity_meters.begin(), iface.velocity_meters.end(),
+                       [](const VelocityMeterTarget& v) { return !v.active; }),
+        iface.velocity_meters.end());
+
+    // ── Visualization grid (heatmap + velocity field) ────────────────────────
+    if (iface.show_energy_heatmap || iface.show_velocity_field) {
+        iface.vis_grid = VisGrid{};
+        float cell_w = static_cast<float>(REGION_W) / VIS_GRID_W;
+        float cell_h = static_cast<float>(REGION_H) / VIS_GRID_H;
+
+        for (uint32_t i = 0; i < cfg.particle_count; ++i) {
+            if (readback_energies_[i] <= 0.0f) continue;
+            int gx = std::clamp(static_cast<int>(readback_positions_[i].x / cell_w), 0, static_cast<int>(VIS_GRID_W) - 1);
+            int gy = std::clamp(static_cast<int>(readback_positions_[i].y / cell_h), 0, static_cast<int>(VIS_GRID_H) - 1);
+            int idx = gy * VIS_GRID_W + gx;
+
+            glm::vec2 v = readback_velocities_[i];
+            iface.vis_grid.energy[idx] += 0.5f * glm::dot(v, v);
+            iface.vis_grid.vel_x[idx] += v.x;
+            iface.vis_grid.vel_y[idx] += v.y;
+            iface.vis_grid.count[idx]++;
+        }
+    }
+
+    // ── Trajectory tracer update ─────────────────────────────────────────────
+    if (iface.show_trajectory_tracer) {
+        if (iface.trajectory_history.size() != cfg.particle_count)
+            iface.trajectory_history.resize(cfg.particle_count);
+
+        int max_pts = iface.trajectory_max_points;
+        for (uint32_t i = 0; i < cfg.particle_count; ++i) {
+            auto& hist = iface.trajectory_history[i];
+            if (readback_energies_[i] <= 0.0f) {
+                hist.clear();
+                continue;
+            }
+            hist.push_back(readback_positions_[i]);
+            if (static_cast<int>(hist.size()) > max_pts)
+                hist.erase(hist.begin());
+        }
+    } else if (!iface.trajectory_history.empty()) {
+        iface.trajectory_history.clear();
+    }
+
+    // ── Force vector computation for selected particle ───────────────────────
+    if (iface.show_force_vectors && iface.selected_particle_idx >= 0) {
+        uint32_t si = static_cast<uint32_t>(iface.selected_particle_idx);
+        iface.force_contributions.clear();
+
+        if (si < cfg.particle_count && readback_energies_[si] > 0.0f) {
+            glm::vec2 pos_i = readback_positions_[si];
+            float q_i = particles.genomes[si * GENOME_SIZE + 0];
+
+            glm::vec2 f_coulomb(0), f_yukawa(0), f_gravity(0);
+
+            for (uint32_t j = 0; j < cfg.particle_count; ++j) {
+                if (j == si || readback_energies_[j] <= 0.0f) continue;
+                glm::vec2 d = readback_positions_[j] - pos_i;
+                // Toroidal wrapping
+                if (d.x > REGION_W * 0.5f) d.x -= REGION_W;
+                if (d.x < -REGION_W * 0.5f) d.x += REGION_W;
+                if (d.y > REGION_H * 0.5f) d.y -= REGION_H;
+                if (d.y < -REGION_H * 0.5f) d.y += REGION_H;
+
+                float r2 = glm::dot(d, d);
+                float r = std::sqrt(r2);
+                if (r < 1.0f || r > cfg.interaction_radius) continue;
+                glm::vec2 dir = d / r;
+
+                float q_j = particles.genomes[j * GENOME_SIZE + 0];
+
+                // Coulomb: q_i * q_j / r^2
+                if (std::abs(q_i) > 0.01f && std::abs(q_j) > 0.01f)
+                    f_coulomb += dir * (q_i * q_j * 1200.0f / r2);
+
+                // Yukawa (short-range nuclear)
+                if (r < 30.0f) {
+                    float yukawa = 800.0f * std::exp(-r / 5.0f) / r2;
+                    f_yukawa += dir * yukawa;
+                }
+
+                // Gravity
+                f_gravity += dir * (cfg.gravity_strength / r2);
+            }
+
+            auto push_force = [&](glm::vec2 f, const char* name, ImVec4 col) {
+                float mag = glm::length(f);
+                if (mag > 0.001f)
+                    iface.force_contributions.push_back({f / mag, mag, name, col});
+            };
+
+            push_force(f_coulomb, "Coulomb",  ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+            push_force(f_yukawa,  "Yukawa",   ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+            push_force(f_gravity, "Gravity",  ImVec4(0.5f, 0.5f, 1.0f, 1.0f));
+        }
+    } else {
+        iface.force_contributions.clear();
+    }
 
     // Populate element list and electron cloud data for UI
     iface.element_list.clear();

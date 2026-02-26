@@ -22,8 +22,10 @@ radioactive decay with realistic isotope half-lives, photoelectric effect, Compt
 nuclear spallation, photodisintegration, pair production, pion production, vector meson dominance,
 hard-sphere collisions, emergent thermodynamics, virtual particle pair creation, quantum
 entanglement, antimatter element detection, electron cloud visualization, a persistent event log,
-an achievement system, interactive tools (particle accelerator, mirrors), 8 UI themes, 12
-environment presets, element export/import, and six per-force multiplier knobs.
+an achievement system, measurement tools (thermometer, velocity meter, ruler, density counter),
+visualization overlays (energy heatmap, velocity field, trajectory tracer, force vectors),
+interactive tools (particle accelerator, mirrors), 12 UI themes, 12 environment presets,
+element export/import, and six per-force multiplier knobs.
 
 Simulates up to **22,500 particles** in real time on a toroidal 2560 x 1440 world using O(n^2)
 pairwise GPU compute shaders.
@@ -52,6 +54,8 @@ pairwise GPU compute shaders.
 - [Field Visualization](#field-visualization)
 - [Environment Presets](#environment-presets)
 - [Spawn Picker](#spawn-picker)
+- [Measurement Tools](#measurement-tools)
+- [Visualization Tools](#visualization-tools)
 - [Tools](#tools)
 - [Achievements](#achievements)
 - [Save / Load](#save--load)
@@ -381,11 +385,12 @@ scrollable window listing every element with:
   its Element Detail Card
 
 **Event Notifications** — Toast-style notifications appear in the top-right corner when
-physics events occur, stacking vertically with a 5-second timeout and fade-out (max 8).
+physics events occur, rendering above all other windows. Stacks vertically with a 5-second
+timeout and fade-out (max 8 visible).
 
 **Decay / Event Log** — Click the **"Events: N"** counter in the bottom bar to open a
-persistent, scrollable log of all physics events. The log tracks up to 500 entries across
-11 event categories:
+persistent, scrollable log of all physics events. The log tracks up to **10,000** entries
+across 11 event categories, each stamped with a wall-clock timestamp (`HH:MM:SS`):
 
 | Category | Examples | Color |
 |---|---|---|
@@ -402,14 +407,15 @@ persistent, scrollable log of all physics events. The log tracks up to 500 entri
 | **Photodisintegration** | &gamma; ejected nucleon from nucleus | Purple |
 
 The log window displays a summary bar with per-category counts and supports a **Clear** button
-to reset the log. Events are listed newest-first with frame timestamps and color-coded type tags.
+to reset the log. Events are listed newest-first with wall-clock timestamps and color-coded type
+tags.
 
 ---
 
 ## Electron Cloud Visualization
 
-Toggle via **Menu > Tools > Electron Cloud** to overlay Bohr-model orbital shell rings around
-all detected nuclei.
+Toggle via **Menu > Visualization > Electron Cloud** to overlay Bohr-model orbital shell rings
+around all detected nuclei.
 
 | Property | Detail |
 |---|---|
@@ -577,10 +583,90 @@ Each section has configurable count (1-100), energy (0.1-1.0), and scatter radiu
 
 ---
 
+## Measurement Tools
+
+Four measurement instruments accessible from **Menu > Measurement**. Each is a click-to-place
+tool; only one placement mode can be active at a time. Placed instruments persist until removed
+and update in real time. A right-side **Measurements** panel shows readings and controls for all
+placed instruments.
+
+### Thermometer Probe
+
+Click to place a local temperature probe. Shows average kinetic energy of particles within an
+adjustable radius, displayed as Kelvin alongside the particle count.
+
+| Property | Detail |
+|---|---|
+| **Placement** | Single click to place (max 8 probes) |
+| **Display** | Orange circle overlay + "T: NNN K (count)" label |
+| **Radius** | Adjustable 20-300 px via Measurements panel slider |
+| **Computation** | `T = avg(0.5 * |v|^2) * 0.1` for particles within radius |
+
+### Velocity Meter
+
+Click a particle to track its velocity in real time. Shows a directional arrow, speed value,
+and kinetic energy. Automatically removed when the tracked particle dies.
+
+| Property | Detail |
+|---|---|
+| **Placement** | Click on a particle to attach |
+| **Display** | Green arrow from particle + "v=NNN KE=N.NNN" label |
+| **Tracking** | Follows particle position each frame; auto-removes on death |
+
+### Distance Ruler
+
+Two-click placement: set start point, then end point. Displays world-space distance as a
+labeled line with tick marks at each endpoint.
+
+| Property | Detail |
+|---|---|
+| **Placement** | Two clicks to define endpoints |
+| **Display** | Yellow line with perpendicular tick marks + "d=NNN.N" midpoint label |
+| **Measurement** | Euclidean world-space distance between points |
+
+### Density Counter
+
+Click to place a circular counting region. Shows the number of active particles within the
+radius and the area density (count / pi*r^2).
+
+| Property | Detail |
+|---|---|
+| **Placement** | Single click to place (max 8 counters) |
+| **Display** | Purple dashed circle + "n=NNN rho=N.NNNN" label |
+| **Radius** | Adjustable 20-300 px via Measurements panel slider |
+| **Computation** | Count active particles within radius; density = count / (pi * r^2) |
+
+### Measurements Panel
+
+When any measurement instruments are placed, a right-side panel appears showing:
+- Per-instrument readings with color-coded headers
+- Radius sliders for thermometer probes and density counters
+- Individual remove buttons (X) for each instrument
+- **Clear All** button to remove everything
+
+---
+
+## Visualization Tools
+
+Six visualization overlays accessible from **Menu > Visualization**. Toggle each independently
+via checkbox menu items. Overlays render on the foreground draw list above particles but below
+UI windows.
+
+| Overlay | Description |
+|---|---|
+| **Show Trails** | GPU-side particle path fade effect |
+| **Electron Cloud** | Bohr-model orbital shell rings around nuclei (see [Electron Cloud](#electron-cloud-visualization)) |
+| **Trajectory Tracer** | Records last 120 positions per particle, draws fading polylines. Useful for tracking individual particle paths through interactions |
+| **Energy Heatmap** | 32x18 grid overlay colored blue-to-red by average kinetic energy density. Opacity adjustable (default 0.3) |
+| **Velocity Field** | Arrow grid showing average velocity direction and magnitude per cell. Arrow length scales with speed |
+| **Force Vectors** | Shows approximate force breakdown on the selected particle: Coulomb (red), Yukawa (green), Gravity (blue). Arrows use logarithmic magnitude scaling with labeled tips |
+
+---
+
 ## Tools
 
-Interactive tools accessible from **Menu > Tools** in the top menu bar. Only one tool can be
-active at a time; activating a tool disables select mode and spawn mode.
+Interactive tools accessible from **Menu > Tools** in the top menu bar. Only one placement tool
+can be active at a time; activating a tool disables select mode and spawn mode.
 
 ### Particle Accelerator
 
@@ -633,28 +719,27 @@ Additional tools available in the **Menu > Tools** popup:
 | Tool | Effect |
 |---|---|
 | **Halt Velocities** | Instantly zeroes all particle velocities (freeze-frame) |
-| **Show Trails** | Toggles particle path visualization with fade effect |
-| **Electron Cloud** | Toggles Bohr-model shell ring overlay on all nuclei |
 | **Remove Massless** | Deletes all photons, gluons, gravitons, and neutrinos |
 | **Remove Massive** | Deletes all massive particles |
-| **Import Element** | Opens file browser to import `.ppel` element files |
+
+Element import is available from **Menu > File > Import Element**.
 
 ---
 
 ## Achievements
 
-An achievement system tracks 36 milestones across 5 categories. Achievements persist across
-sessions via a save file. Open the achievements panel from **Menu > Achievements**.
+An achievement system tracks **52 milestones** across 5 categories. Achievements persist across
+sessions via a `.ppach` save file. Open the achievements panel from **Menu > Achievements**.
 
 ### Categories
 
 | Category | Achievements | Examples |
 |---|---|---|
-| **Nuclear Physics** | 8 | First Fusion, First Fission, First Annihilation, Chain Reaction (3+ fissions in 60 frames), 100 Fusions |
-| **Element Creation** | 8 | Create Hydrogen, Helium, Carbon, Iron (peak binding energy), Gold, Uranium; 10 distinct elements |
-| **Particle Zoo** | 7 | First Positron, First Neutrino, First Quark, First W/Z/Higgs, Dark Matter, All 33 types simultaneously |
-| **Thermodynamics** | 4 | Reach 1,000 K, 1 MK, 1 GK; Cool below 2 K |
-| **Milestones** | 9 | 1000/5000 particles, First Entangled Pair, 10+ Entangled Pairs, First Force Object, First Mirror, First Save/Load, Try All 12 Environments |
+| **Nuclear Physics** | 11 | First Fusion, First Fission, First Annihilation, Chain Reaction, 100 Fusions, Nuclear Demolition (spallation), Einstein's Nobel (photoelectric), Something from Nothing (pair production) |
+| **Element Creation** | 11 | Create Hydrogen, Helium, Lithium, Carbon, Oxygen, Iron (peak binding energy), Gold, Uranium; 10/25 distinct elements |
+| **Particle Zoo** | 9 | First Positron, First Neutrino, First Muon, First Tau, First Antiproton, First Quark, First Boson, Dark Matter, All 33 types simultaneously |
+| **Thermodynamics** | 5 | Reach 1,000 K, 1 MK, 1 GK, 10 GK (Quark Epoch); Cool below 2 K |
+| **Milestones** | 16 | 1000/5000/10000 particles, Entangled Pairs, First Force Object, First Mirror, CERN at Home (accelerator), First Save/Load, Element Export/Import, 100 Annihilations, 50 Nuclear Decays, Antimatter Atom, Try All 12 Environments |
 
 When an achievement unlocks, a toast notification appears. The achievements panel shows progress
 with unlocked/locked status and descriptions for each achievement.
