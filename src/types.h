@@ -196,7 +196,7 @@ struct SimConfig {
 
     // Lab mode — start with a quiet dormant reservoir; use F3 to place structures
     bool     start_empty     = true;
-    uint32_t pool_size       = 5000;   // how many dormant H atoms to pre-allocate
+    uint32_t pool_size       = 100000; // how many dormant slots to pre-allocate
 
     // Environment presets
     uint32_t environment_mode = 0;  // 0=Lab 1=Tide Pool 2=Vent 3=Primordial

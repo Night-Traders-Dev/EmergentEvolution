@@ -341,6 +341,7 @@ private:
     void draw_info_card(const Particles& particles);
     void draw_force_object_panel(ForceObject* objects);
     void draw_splash_screen();
+    void init_splash_particles();
     void draw_pause_menu(SimConfig& cfg, bool& request_reset);
     void draw_save_load_dialog();
     void refresh_browse_entries();
@@ -358,4 +359,16 @@ private:
     void draw_force_vectors_overlay(const SimConfig& cfg);
     void draw_atom_grid(const SimConfig& cfg);
     void draw_measurement_panel();
+
+    // Splash animation state
+    struct SplashParticle {
+        float x, y, vx, vy, r;
+        ImU32 color, glow_color;
+        bool  orbit;
+        float orbit_r, orbit_speed, phase, cx, cy, tilt_x, tilt_y;
+    };
+    std::vector<SplashParticle> splash_particles_;
+    std::vector<std::vector<ImVec2>> splash_trails_;
+    float splash_time_ = 0.0f;
+    bool  splash_inited_ = false;
 };

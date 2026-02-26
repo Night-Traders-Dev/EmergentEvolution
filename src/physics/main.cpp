@@ -44,15 +44,21 @@ int main() {
         return 1;
     }
 
-    // Set window icon
+    // Set window icon — multiple sizes for best quality
     {
-        int w, h, channels;
-        unsigned char* pixels = stbi_load("ParticlePlayground.jpg", &w, &h, &channels, 4);
-        if (pixels) {
-            GLFWimage icon = { w, h, pixels };
-            glfwSetWindowIcon(window, 1, &icon);
-            stbi_image_free(pixels);
-        }
+        GLFWimage icons[3];
+        int w32, h32, c32, w64, h64, c64, w256, h256, c256;
+        unsigned char* p32  = stbi_load("assets/icon_32.png",  &w32,  &h32,  &c32,  4);
+        unsigned char* p64  = stbi_load("assets/icon_64.png",  &w64,  &h64,  &c64,  4);
+        unsigned char* p256 = stbi_load("assets/icon_256.png", &w256, &h256, &c256, 4);
+        int count = 0;
+        if (p32)  { icons[count++] = { w32,  h32,  p32  }; }
+        if (p64)  { icons[count++] = { w64,  h64,  p64  }; }
+        if (p256) { icons[count++] = { w256, h256, p256 }; }
+        if (count > 0) glfwSetWindowIcon(window, count, icons);
+        if (p32)  stbi_image_free(p32);
+        if (p64)  stbi_image_free(p64);
+        if (p256) stbi_image_free(p256);
     }
 
     PhysicsSimulation sim;

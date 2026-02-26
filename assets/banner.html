@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Particle Playground - Steam Banner</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;600&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    background: #0a0a0a;
+  }
+  .banner {
+    width: 616px;
+    height: 353px;
+    position: relative;
+    overflow: hidden;
+    background: #020810;
+  }
+  canvas#scene { position: absolute; top: 0; left: 0; z-index: 1; }
+
+  /* Gradient overlays */
+  .vignette {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background:
+      radial-gradient(ellipse at 50% 45%, transparent 30%, rgba(2, 8, 16, 0.6) 70%, rgba(2, 8, 16, 0.95) 100%);
+    z-index: 5;
+  }
+  .top-fade {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 80px;
+    background: linear-gradient(to bottom, rgba(2, 8, 16, 0.8), transparent);
+    z-index: 5;
+  }
+  .bottom-fade {
+    position: absolute;
+    bottom: 0; left: 0;
+    width: 100%; height: 120px;
+    background: linear-gradient(to top, rgba(2, 8, 16, 0.95), transparent);
+    z-index: 5;
+  }
+
+  /* Title area */
+  .title-area {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    padding: 20px 30px 22px;
+    z-index: 10;
+  }
+  .title {
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 900;
+    font-size: 32px;
+    color: #ffffff;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    text-shadow:
+      0 0 20px rgba(0, 180, 255, 0.6),
+      0 0 40px rgba(0, 120, 255, 0.3),
+      0 2px 4px rgba(0, 0, 0, 0.8);
+    line-height: 1;
+  }
+  .title span {
+    color: #00d4ff;
+  }
+  .subtitle {
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 300;
+    font-size: 13px;
+    color: rgba(0, 200, 255, 0.7);
+    letter-spacing: 5px;
+    text-transform: uppercase;
+    margin-top: 6px;
+  }
+
+  /* Top badge */
+  .badge {
+    position: absolute;
+    top: 14px;
+    right: 18px;
+    z-index: 10;
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 600;
+    font-size: 10px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: rgba(255, 100, 60, 0.9);
+    border: 1px solid rgba(255, 100, 60, 0.3);
+    padding: 3px 10px;
+    border-radius: 2px;
+    background: rgba(255, 60, 30, 0.08);
+  }
+
+  /* Scan line effect */
+  .scanlines {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.03) 2px,
+      rgba(0, 0, 0, 0.03) 4px
+    );
+    z-index: 8;
+    pointer-events: none;
+  }
+
+  /* Horizontal accent line */
+  .accent-line {
+    position: absolute;
+    bottom: 72px;
+    left: 30px;
+    width: 180px;
+    height: 1px;
+    background: linear-gradient(to right, rgba(0, 200, 255, 0.6), transparent);
+    z-index: 10;
+  }
+</style>
+</head>
+<body>
+<div class="banner">
+  <canvas id="scene" width="616" height="353"></canvas>
+  <div class="vignette"></div>
+  <div class="top-fade"></div>
+  <div class="bottom-fade"></div>
+  <div class="scanlines"></div>
+  <div class="accent-line"></div>
+  <div class="badge">Quantum Physics Sandbox</div>
+  <div class="title-area">
+    <div class="title">Particle <span>Playground</span></div>
+    <div class="subtitle">Standard Model &bull; Fusion &bull; Fission &bull; 33 Particle Types</div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('scene');
+const ctx = canvas.getContext('2d');
+const W = 616, H = 353;
+
+// Particle types with physics-inspired colors
+const TYPES = [
+  { color: '#ff4433', glow: '#ff220066', r: [4, 8], name: 'proton' },
+  { color: '#4488cc', glow: '#3366aa66', r: [4, 7], name: 'neutron' },
+  { color: '#00ddff', glow: '#00aaff44', r: [2, 4], name: 'electron' },
+  { color: '#ffcc00', glow: '#ffaa0033', r: [1.5, 3], name: 'photon' },
+  { color: '#00ffaa', glow: '#00dd8844', r: [2, 4], name: 'positron' },
+  { color: '#cc55ff', glow: '#aa33ff44', r: [2.5, 5], name: 'quark' },
+  { color: '#ff6688', glow: '#ff446644', r: [1.5, 3], name: 'muon' },
+  { color: '#88ff44', glow: '#66dd2244', r: [2, 3], name: 'gluon' },
+];
+
+// Create particles
+const particles = [];
+const NUCLEUS_X = W * 0.48, NUCLEUS_Y = H * 0.38;
+
+// Nucleus cluster
+for (let i = 0; i < 12; i++) {
+  const angle = Math.random() * Math.PI * 2;
+  const dist = Math.random() * 18;
+  const type = i < 6 ? TYPES[0] : TYPES[1];
+  particles.push({
+    x: NUCLEUS_X + Math.cos(angle) * dist,
+    y: NUCLEUS_Y + Math.sin(angle) * dist,
+    vx: (Math.random() - 0.5) * 0.15,
+    vy: (Math.random() - 0.5) * 0.15,
+    r: type.r[0] + Math.random() * (type.r[1] - type.r[0]),
+    color: type.color,
+    glow: type.glow,
+    orbit: false,
+    ox: 0, oy: 0,
+    phase: Math.random() * Math.PI * 2,
+  });
+}
+
+// Orbiting electrons
+for (let i = 0; i < 6; i++) {
+  const orbitR = 40 + i * 22 + Math.random() * 10;
+  const phase = (Math.PI * 2 * i / 6) + Math.random() * 0.5;
+  particles.push({
+    x: 0, y: 0,
+    vx: 0, vy: 0,
+    r: 2.5 + Math.random() * 1.5,
+    color: '#00ddff',
+    glow: '#00aaff66',
+    orbit: true,
+    orbitR: orbitR,
+    orbitSpeed: 0.008 + Math.random() * 0.006,
+    phase: phase,
+    cx: NUCLEUS_X,
+    cy: NUCLEUS_Y,
+    tiltX: 0.5 + Math.random() * 0.5,
+    tiltY: 0.7 + Math.random() * 0.4,
+  });
+}
+
+// Scattered particles (quarks, photons, gluons)
+for (let i = 0; i < 60; i++) {
+  const type = TYPES[Math.floor(Math.random() * TYPES.length)];
+  particles.push({
+    x: Math.random() * W,
+    y: Math.random() * H,
+    vx: (Math.random() - 0.5) * 0.8,
+    vy: (Math.random() - 0.5) * 0.8,
+    r: type.r[0] + Math.random() * (type.r[1] - type.r[0]),
+    color: type.color,
+    glow: type.glow,
+    orbit: false,
+    phase: Math.random() * Math.PI * 2,
+  });
+}
+
+// Trails
+const trails = particles.map(() => []);
+
+// Force lines between nearby particles
+function drawForceLines(t) {
+  for (let i = 0; i < particles.length; i++) {
+    for (let j = i + 1; j < particles.length; j++) {
+      const dx = particles[j].x - particles[i].x;
+      const dy = particles[j].y - particles[i].y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 50 && dist > 5) {
+        const alpha = (1 - dist / 50) * 0.12;
+        ctx.beginPath();
+        ctx.moveTo(particles[i].x, particles[i].y);
+        ctx.lineTo(particles[j].x, particles[j].y);
+        ctx.strokeStyle = `rgba(0, 180, 255, ${alpha})`;
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
+      }
+    }
+  }
+}
+
+// Central energy glow
+function drawEnergyCore(t) {
+  const r1 = 35 + Math.sin(t * 0.002) * 5;
+  const g1 = ctx.createRadialGradient(NUCLEUS_X, NUCLEUS_Y, 0, NUCLEUS_X, NUCLEUS_Y, r1 * 3);
+  g1.addColorStop(0, 'rgba(255, 120, 60, 0.15)');
+  g1.addColorStop(0.4, 'rgba(255, 60, 30, 0.06)');
+  g1.addColorStop(1, 'transparent');
+  ctx.fillStyle = g1;
+  ctx.fillRect(0, 0, W, H);
+
+  // Outer EM halo
+  const g2 = ctx.createRadialGradient(NUCLEUS_X, NUCLEUS_Y, 60, NUCLEUS_X, NUCLEUS_Y, 160);
+  g2.addColorStop(0, 'rgba(0, 100, 255, 0.04)');
+  g2.addColorStop(1, 'transparent');
+  ctx.fillStyle = g2;
+  ctx.fillRect(0, 0, W, H);
+}
+
+// Collision spark effect
+const sparks = [];
+function spawnSpark(x, y) {
+  for (let i = 0; i < 4; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 1 + Math.random() * 2;
+    sparks.push({
+      x, y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1.0,
+      color: ['#ffcc00', '#00ffdd', '#ff4488', '#cc66ff'][Math.floor(Math.random() * 4)],
+    });
+  }
+}
+
+function draw(t) {
+  ctx.clearRect(0, 0, W, H);
+
+  // Deep space background
+  ctx.fillStyle = '#020810';
+  ctx.fillRect(0, 0, W, H);
+
+  // Nebula-like background glow
+  const nbg = ctx.createRadialGradient(W * 0.3, H * 0.3, 0, W * 0.5, H * 0.5, 300);
+  nbg.addColorStop(0, 'rgba(10, 20, 60, 0.5)');
+  nbg.addColorStop(0.5, 'rgba(5, 10, 30, 0.3)');
+  nbg.addColorStop(1, 'transparent');
+  ctx.fillStyle = nbg;
+  ctx.fillRect(0, 0, W, H);
+
+  drawEnergyCore(t);
+
+  // Update and draw particles
+  particles.forEach((p, i) => {
+    if (p.orbit) {
+      p.phase += p.orbitSpeed;
+      p.x = p.cx + Math.cos(p.phase) * p.orbitR * p.tiltX;
+      p.y = p.cy + Math.sin(p.phase) * p.orbitR * p.tiltY;
+    } else {
+      p.x += p.vx;
+      p.y += p.vy;
+      if (p.x < -10) p.x = W + 10;
+      if (p.x > W + 10) p.x = -10;
+      if (p.y < -10) p.y = H + 10;
+      if (p.y > H + 10) p.y = -10;
+    }
+
+    // Trail
+    trails[i].push({ x: p.x, y: p.y });
+    if (trails[i].length > 8) trails[i].shift();
+
+    // Draw trail
+    if (trails[i].length > 2) {
+      for (let j = 1; j < trails[i].length; j++) {
+        const alpha = (j / trails[i].length) * 0.3;
+        ctx.beginPath();
+        ctx.moveTo(trails[i][j - 1].x, trails[i][j - 1].y);
+        ctx.lineTo(trails[i][j].x, trails[i][j].y);
+        ctx.strokeStyle = p.color + Math.floor(alpha * 255).toString(16).padStart(2, '0');
+        ctx.lineWidth = p.r * 0.6;
+        ctx.stroke();
+      }
+    }
+  });
+
+  drawForceLines(t);
+
+  // Draw particles (glow + core)
+  particles.forEach(p => {
+    // Outer glow
+    const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 4);
+    g.addColorStop(0, p.color + '44');
+    g.addColorStop(1, 'transparent');
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r * 4, 0, Math.PI * 2);
+    ctx.fillStyle = g;
+    ctx.fill();
+
+    // Core
+    const cg = ctx.createRadialGradient(p.x - p.r * 0.2, p.y - p.r * 0.2, 0, p.x, p.y, p.r);
+    cg.addColorStop(0, '#ffffff');
+    cg.addColorStop(0.3, p.color);
+    cg.addColorStop(1, p.color + 'aa');
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fillStyle = cg;
+    ctx.fill();
+  });
+
+  // Sparks
+  sparks.forEach((s, i) => {
+    s.x += s.vx;
+    s.y += s.vy;
+    s.life -= 0.03;
+    if (s.life > 0) {
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 1.5 * s.life, 0, Math.PI * 2);
+      ctx.fillStyle = s.color + Math.floor(s.life * 200).toString(16).padStart(2, '0');
+      ctx.fill();
+    }
+  });
+
+  // Random sparks near nucleus
+  if (Math.random() < 0.06) {
+    spawnSpark(
+      NUCLEUS_X + (Math.random() - 0.5) * 80,
+      NUCLEUS_Y + (Math.random() - 0.5) * 80
+    );
+  }
+
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

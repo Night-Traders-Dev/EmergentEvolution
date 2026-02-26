@@ -4,7 +4,7 @@
 
 **A GPU-accelerated quantum particle physics sandbox**
 
-Standard Model + Beyond · Nuclear fusion & fission · Photon-matter interactions · Orbital mechanics · Emergent thermodynamics · Quantum entanglement · Wave-particle duality · Achievements · Tools · Save/Load
+Standard Model + Beyond · Nuclear fusion & fission · Hadronization & Color Confinement · Gluon Interactions · Photon-matter interactions · Orbital mechanics · Emergent thermodynamics · Quantum entanglement · Wave-particle duality · Achievements · Tools · Save/Load
 
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
 [![Vulkan](https://img.shields.io/badge/Vulkan-1.3-red.svg)](https://www.vulkan.org/)
@@ -20,14 +20,17 @@ Particle Playground is a real-time particle physics sandbox powered by Vulkan co
 forces: Coulomb + Yukawa + QCD + weak, with centrifugal barrier orbitals, nuclear fusion/fission,
 radioactive decay with realistic isotope half-lives, photoelectric effect, Compton scattering,
 nuclear spallation, photodisintegration, pair production, pion production, vector meson dominance,
-hard-sphere collisions, emergent thermodynamics, virtual particle pair creation, quantum
+hard-sphere collisions, hadronization & color confinement (meson formation, baryon condensation,
+vacuum instability, string breaking), gluon interactions (quark absorption, self-coupling,
+confinement splitting), emergent thermodynamics, virtual particle pair creation, quantum
 entanglement, antimatter element detection, electron cloud visualization, a persistent event log,
 an achievement system, measurement tools (thermometer, velocity meter, ruler with nanometer scale,
 density counter), visualization overlays (energy heatmap, velocity field, trajectory tracer, force
 vectors, atom grid, wave-particle duality mode), interactive tools (particle accelerator, mirrors),
-12 UI themes, 12 environment presets, element export/import, and six per-force multiplier knobs.
+12 UI themes, 12 environment presets, element export/import, six per-force multiplier knobs, and
+an animated particle splash screen.
 
-Simulates up to **22,500 particles** in real time on a toroidal 2560 x 1440 world. GPU compute
+Simulates up to **100,000 particles** in real time on a toroidal 2560 x 1440 world. GPU compute
 shaders handle O(n^2) pairwise forces; CPU-side physics uses a **spatial acceleration grid** for
 O(n) neighbor queries with **OpenMP** parallelization across all available cores.
 
@@ -50,6 +53,8 @@ O(n) neighbor queries with **OpenMP** parallelization across all available cores
 - [Electron Cloud Visualization](#electron-cloud-visualization)
 - [Hard-Sphere Collisions](#hard-sphere-collisions)
 - [Virtual Particle Pairs](#virtual-particle-pairs)
+- [Hadronization & Color Confinement](#hadronization--color-confinement)
+- [Gluon Interactions](#gluon-interactions)
 - [Quantum Entanglement](#quantum-entanglement)
 - [Emergent Thermodynamics](#emergent-thermodynamics)
 - [Field Visualization](#field-visualization)
@@ -74,7 +79,7 @@ The Vulkan compute pipeline is dispatched each frame.
 
 | Property | Detail |
 |---|---|
-| Particle count | Up to **22,500** simultaneous particles |
+| Particle count | Up to **100,000** simultaneous particles |
 | GPU forces | O(n^2) pairwise, per-frame on Vulkan compute shader |
 | CPU physics | O(n) via **spatial acceleration grid** (30px cells, 86x49 = 4,214 cells) |
 | Parallelism | **OpenMP** across all cores for statistics, measurement probes, and visualization grid |
@@ -464,6 +469,42 @@ max pairs per tick (1-16).
 
 ---
 
+## Hadronization & Color Confinement
+
+CPU-side color confinement enforcement that prevents free quarks from existing in isolation.
+Quarks must form color-neutral hadrons (mesons or baryons). Runs each tick with five phases:
+
+| Phase | Description |
+|---|---|
+| **1. Free quark detection** | Any quark/antiquark without a partner within 45px confinement radius is flagged as free |
+| **2. Meson formation** | Free quark + free antiquark with complementary colors (R+anti-R, etc.) pair into mesons — velocity impulse pushes them together |
+| **2b. Baryon condensation** | Below the Hagedorn temperature (1.7 x 10^12 K), RGB triplets of quarks within 15px condense into protons or neutrons. Down-type quark count (d,s,b) determines baryon: 0-1 down = proton, 2-3 down = neutron. Antimatter triplets form antiprotons |
+| **3. Vacuum instability** | Remaining free quarks with energy >= 0.3 spontaneously generate a partner quark from the vacuum (Schwinger-like mechanism) |
+| **4. String breaking** | Bound quark-antiquark pairs stretched beyond 55px break the color flux tube (Lund model) — a new quark-antiquark pair spawns at the midpoint |
+
+**QGP exception**: Above 2 x 10^12 K, quarks are deconfined and hadronization is suppressed
+(Quark-Gluon Plasma regime). The QGP environment preset automatically disables hadronization.
+
+Toggle in **Settings > Strong Nuclear > Hadronization**. Max 8 mesons, 8 baryons, 4 vacuum pairs,
+and 3 string breaks per frame to prevent chain reactions.
+
+---
+
+## Gluon Interactions
+
+CPU-side gluon interaction physics complementing the GPU-side Cornell potential. Three interaction
+types enforced per tick:
+
+| Interaction | Description | Condition |
+|---|---|---|
+| **Quark absorption** | Gluon absorbed by nearby quark — 50% energy transfer + 30% momentum kick | Gluon within 12px of quark |
+| **Self-coupling** (g+g -> g) | Two gluons merge into one — non-abelian trilinear vertex | Two gluons within 12px |
+| **Confinement splitting** (g -> q+q-bar) | Isolated gluon splits into light quark-antiquark pair | Gluon with energy >= 0.2, no nearby colored particle within 40px |
+
+Max 6 gluon events per frame. The killed gluon's energy is transferred to the products.
+
+---
+
 ## Quantum Entanglement
 
 An optional subsystem that entangles particle pairs created during virtual pair production.
@@ -533,14 +574,14 @@ Twelve presets spanning vacuum to dark sector. Select from the **Environment** d
 
 | # | Environment | Temperature | Key Features |
 |---|---|---|---|
-| 0 | **Lab Mode** | 1 K | Empty vacuum — manual spawning only |
+| 0 | **Lab Mode** | 1 K | Empty vacuum — manual spawning only, hadronization enabled |
 | 1 | **Hydrogen Plasma** | 1.5 x 10^7 K | Hot ionized hydrogen, fusion conditions |
 | 2 | **Neutron Star** | 10^9 K | Ultra-dense neutron matter |
 | 3 | **Solar Core** | 1.5 x 10^7 K | Hydrogen + gravity — stellar fusion |
 | 4 | **Particle Soup** | 5 x 10^3 K | Mixed light particles at moderate energy |
 | 5 | **Alpha Emitter** | 300 K | Heavy nuclei, room temperature |
 | 6 | **Heavy Nucleus** | 100 K | Cold dense nuclear matter |
-| 7 | **Quark-Gluon Plasma** | 2 x 10^12 K | Deconfined quarks and gluons |
+| 7 | **Quark-Gluon Plasma** | 2 x 10^12 K | Deconfined quarks and gluons, hadronization disabled |
 | 8 | **Electroweak Era** | 10^15 K | W/Z/Higgs bosons above symmetry breaking |
 | 9 | **Meson Factory** | 5 x 10^11 K | Quark-antiquark pairs forming mesons |
 | 10 | **Particle Accelerator** | 10^8 K | High-energy protons + synchrotron radiation |
@@ -794,13 +835,13 @@ O(n^2) to O(n * k) where k is the average number of particles per cell.
 |---|---|
 | **Cell size** | 30px (covers largest search radius used by any physics check) |
 | **Build** | Single O(n) pass per frame: count, prefix sum, scatter |
-| **Functions accelerated** | `check_annihilation` (5px), `check_fusion` (8px), `check_fission` (12px), `check_photoelectric` (25px), `update_orbitals` BFS (10px), `check_virtual_pairs` (15px) |
+| **Functions accelerated** | `check_annihilation` (5px), `check_fusion` (8px), `check_fission` (12px), `check_photoelectric` (25px), `update_orbitals` BFS (10px), `check_virtual_pairs` (15px), `check_hadronization` (45px confinement, 15px baryon, 12px gluon) |
 | **Fallback** | Brute-force O(n^2) when spatial grid is disabled in settings |
 
 ### Batched GPU Synchronization
 
 All CPU-side physics modifications (annihilation, fusion, fission, decay, nuclear decay,
-photoelectric, spallation, virtual pairs) set a `cpu_particles_dirty_` flag instead of
+photoelectric, spallation, virtual pairs, hadronization) set a `cpu_particles_dirty_` flag instead of
 individually syncing with the GPU. A single `vkDeviceWaitIdle` + buffer write occurs at the
 end of each frame, reducing GPU stalls from 8-10 per frame to at most 1.
 
@@ -851,7 +892,7 @@ physics skip, spatial grid) are persisted across sessions.
 
 | Key / Input | Action |
 |---|---|
-| `Escape` | Pause menu (Resume / New / Save / Load / About / Quit) |
+| `Escape` | Pause menu (Resume / New / Save / Load / About / Quit). About re-shows animated splash |
 | `F1` | Toggle settings panel |
 | `F2` | Reset simulation |
 | `F3` | Open / close Spawn Picker |
@@ -927,11 +968,15 @@ EmergentEvolution/
 │   └── stb_image_impl.cpp       # stb_image implementation unit
 ├── src/physics/
 │   ├── phys_particles.h/.cpp    # 33 particle types, masses, charges, decay rates, isotope table, environments
-│   ├── interface.h/.cpp         # ImGui: spawn picker, force multipliers, element cards, tools, event log, achievements
-│   ├── simulation.h/.cpp        # Main loop: fusion, fission, decay, orbitals, entanglement, photoelectric, spallation, spatial grid
+│   ├── interface.h/.cpp         # ImGui: animated splash screen, spawn picker, force multipliers, element cards, tools, event log, achievements
+│   ├── simulation.h/.cpp        # Main loop: fusion, fission, decay, orbitals, entanglement, photoelectric, spallation, hadronization, spatial grid
 │   ├── achievements.h/.cpp      # 36 achievements across 5 categories with persistence
 │   ├── save_load.h/.cpp         # Binary .ppsg/.ppel save/load/export/import serialization
-│   └── main.cpp                 # Entry point (borderless maximized, window icon via stb_image)
+│   └── main.cpp                 # Entry point (borderless maximized, window icon from assets/)
+├── assets/
+│   ├── banner.html              # Animated splash screen reference (HTML5 canvas)
+│   ├── icon_32/64/128/256/512.png  # Window icons (multiple sizes)
+│   └── particle_playground.ico  # Windows ICO format
 ├── shaders/
 │   ├── physics.comp             # GPU: 7 forces, centrifugal barrier, hard-sphere, mirror reflection, 5 field viz, wave packet rendering
 │   ├── fullscreen.vert          # Fullscreen triangle vertex shader

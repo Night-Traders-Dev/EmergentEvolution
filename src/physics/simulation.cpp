@@ -72,11 +72,11 @@ void SpatialGrid::build(const std::vector<glm::vec2>& positions,
 
 void PhysicsSimulation::init(GLFWwindow* window) {
     // Defaults — all forces active, 1K temperature, all fields visualized
-    cfg.particle_count     = 5000;
+    cfg.particle_count     = 100000;
     cfg.particle_types     = PHYS_PARTICLE_TYPES;
     cfg.start_empty        = true;
     cfg.environment_mode   = 0;  // Lab Mode
-    cfg.pool_size          = 5000;
+    cfg.pool_size          = 100000;
     cfg.temperature_kelvin = 1.0f;
     cfg.temperature        = 0.30f;
     cfg.thermo_coupling    = 1.0f;
@@ -3296,6 +3296,118 @@ void PhysicsSimulation::check_hadronization() {
         }
     }
 
+    // ── Phase 2b: baryon condensation — 3 quarks with RGB → proton/neutron ──
+    // Hagedorn temperature ~150 MeV ≈ 1.7×10¹² K — below this, baryons form
+    constexpr float HAGEDORN_TEMP    = 1.7e12f;
+    constexpr float BARYON_RADIUS    = 15.0f;   // quarks must be very close
+    constexpr float BARYON_RADIUS_SQ = BARYON_RADIUS * BARYON_RADIUS;
+    constexpr uint32_t MAX_BARYON    = 8;
+
+    // Map quark flavor to up-like(0) or down-like(1) for baryon determination
+    // +2/3 charge quarks (u,c,t) → up-like → eventually decay to u
+    // -1/3 charge quarks (d,s,b) → down-like → d stable, s/b decay to u but
+    //   in the baryon context the quark content determines the hadron
+    auto is_down_type = [](uint32_t t) -> bool {
+        return t == DOWN_QUARK_TYPE  || t == STRANGE_QUARK_TYPE  || t == BOTTOM_QUARK_TYPE ||
+               t == ANTI_DOWN_TYPE   || t == ANTI_STRANGE_TYPE   || t == ANTI_BOTTOM_TYPE;
+    };
+
+    if (cfg.temperature_kelvin < HAGEDORN_TEMP) {
+        uint32_t baryons_formed = 0;
+
+        for (uint32_t i = 0; i < n && baryons_formed < MAX_BARYON; ++i) {
+            if (readback_energies_[i] < 0.01f) continue;
+            if (consumed[i]) continue;
+            uint32_t ti = particles.types[i];
+            bool matter_i = is_quark(ti);
+            bool anti_i   = is_antiquark(ti);
+            if (!matter_i && !anti_i) continue;
+
+            float color_i = particles.genomes[i * GENOME_SIZE + 2];
+            int ci = static_cast<int>(std::round(color_i));
+            if (ci == 0) continue;
+
+            // Find the 2 missing colors (same sign as ci)
+            int sign = (ci > 0) ? 1 : -1;
+            int abs_ci = std::abs(ci);
+            int need[2];
+            int ni = 0;
+            for (int c = 1; c <= 3; ++c)
+                if (c != abs_ci) need[ni++] = c * sign;
+
+            // Search for nearest quarks with each missing color
+            uint32_t best_j = UINT32_MAX, best_k = UINT32_MAX;
+            float best_j_d2 = BARYON_RADIUS_SQ, best_k_d2 = BARYON_RADIUS_SQ;
+
+            auto triplet_search = [&](uint32_t j) {
+                if (j == i || consumed[j]) return;
+                if (readback_energies_[j] < 0.01f) return;
+                uint32_t tj = particles.types[j];
+                if (matter_i ? !is_quark(tj) : !is_antiquark(tj)) return;
+                float color_j = particles.genomes[j * GENOME_SIZE + 2];
+                int cj = static_cast<int>(std::round(color_j));
+                glm::vec2 d = readback_positions_[j] - readback_positions_[i];
+                float d2 = d.x * d.x + d.y * d.y;
+                if (cj == need[0] && d2 < best_j_d2) { best_j_d2 = d2; best_j = j; }
+                if (cj == need[1] && d2 < best_k_d2) { best_k_d2 = d2; best_k = j; }
+            };
+
+            if (iface.prefs.spatial_grid)
+                grid_.query(readback_positions_[i].x, readback_positions_[i].y,
+                            BARYON_RADIUS, triplet_search);
+            else
+                for (uint32_t j = 0; j < n; ++j) triplet_search(j);
+
+            if (best_j == UINT32_MAX || best_k == UINT32_MAX) continue;
+
+            // Found RGB triplet! Determine baryon type from quark flavors
+            int down_count = (is_down_type(ti) ? 1 : 0)
+                           + (is_down_type(particles.types[best_j]) ? 1 : 0)
+                           + (is_down_type(particles.types[best_k]) ? 1 : 0);
+
+            uint32_t baryon_type;
+            const char* baryon_name;
+            if (matter_i) {
+                // uud(1 down)→proton, udd(2 down)→neutron
+                // uuu(0 down)→proton(Delta++ analog), ddd(3 down)→neutron(Delta- analog)
+                baryon_type = (down_count <= 1) ? PROTON_TYPE : NEUTRON_TYPE;
+                baryon_name = (down_count <= 1) ? "proton" : "neutron";
+            } else {
+                baryon_type = ANTIPROTON_TYPE_PHYS;
+                baryon_name = "antiproton";
+            }
+
+            // Condense: centroid position, average velocity, combined energy
+            glm::vec2 centroid = (readback_positions_[i] + readback_positions_[best_j]
+                                + readback_positions_[best_k]) / 3.0f;
+            glm::vec2 avg_vel  = (readback_velocities_[i] + readback_velocities_[best_j]
+                                + readback_velocities_[best_k]) / 3.0f;
+            float total_energy = readback_energies_[i] + readback_energies_[best_j]
+                               + readback_energies_[best_k];
+
+            // Convert slot i → baryon, kill j and k
+            write_spawn_genome(particles, i, baryon_type, rng, frame_counter_);
+            readback_positions_[i]  = centroid;
+            readback_velocities_[i] = avg_vel;
+            readback_energies_[i]   = std::min(total_energy, 1.0f);
+
+            readback_energies_[best_j] = 0.0f;
+            readback_energies_[best_k] = 0.0f;
+
+            consumed[i] = true;
+            consumed[best_j] = true;
+            consumed[best_k] = true;
+            any_changed = true;
+            ++baryons_formed;
+
+            char msg[64];
+            snprintf(msg, sizeof(msg), "Hadronization \xe2\x86\x92 %s", baryon_name);
+            iface.push_notification(msg, ImVec4(0.2f, 0.8f, 1.0f, 1.0f));
+            iface.push_decay_event(msg, PhysicsInterface::DEVT_FUSION,
+                                   ImVec4(0.2f, 0.8f, 1.0f, 1.0f));
+        }
+    }
+
     // ── Phase 3: vacuum instability — spawn partner for remaining free quarks ─
     uint32_t search_from = 0;
     auto find_dormant = [&](uint32_t start) -> uint32_t {
@@ -3426,6 +3538,122 @@ void PhysicsSimulation::check_hadronization() {
         iface.push_notification("String break \xe2\x86\x92 2 mesons", ImVec4(0.3f, 0.9f, 0.4f, 1.0f));
         iface.push_decay_event("String break", PhysicsInterface::DEVT_PAIR_PRODUCTION,
                                ImVec4(0.3f, 0.9f, 0.4f, 1.0f));
+    }
+
+    // ── Phase 5: gluon interactions ─────────────────────────────────────────
+    // Gluons carry color charge and are confined like quarks.
+    // Near quarks → absorbed (q-g vertex, transfers energy/momentum)
+    // Near other gluons → merge (g+g → g, trilinear self-coupling)
+    // Isolated → split into q+q̄ pair (color confinement)
+    constexpr float GLUON_ABSORB_RADIUS    = 12.0f;
+    constexpr float GLUON_ABSORB_RADIUS_SQ = GLUON_ABSORB_RADIUS * GLUON_ABSORB_RADIUS;
+    constexpr float GLUON_SPLIT_ENERGY     = 0.2f;
+    constexpr uint32_t MAX_GLUON_EVENTS    = 6;
+
+    uint32_t gluon_events = 0;
+    for (uint32_t i = 0; i < n && gluon_events < MAX_GLUON_EVENTS; ++i) {
+        if (readback_energies_[i] < 0.01f) continue;
+        if (consumed[i]) continue;
+        if (particles.types[i] != GLUON_TYPE_PHYS) continue;
+
+        // ── Try quark absorption first (most common interaction) ────────
+        uint32_t nearest_quark = UINT32_MAX;
+        float nearest_q_d2 = GLUON_ABSORB_RADIUS_SQ;
+
+        auto quark_absorb = [&](uint32_t j) {
+            if (j == i || consumed[j]) return;
+            if (readback_energies_[j] < 0.01f) return;
+            if (!is_any_quark(particles.types[j])) return;
+            glm::vec2 d = readback_positions_[j] - readback_positions_[i];
+            float d2 = d.x * d.x + d.y * d.y;
+            if (d2 < nearest_q_d2) { nearest_q_d2 = d2; nearest_quark = j; }
+        };
+
+        if (iface.prefs.spatial_grid)
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y,
+                        GLUON_ABSORB_RADIUS, quark_absorb);
+        else
+            for (uint32_t j = 0; j < n; ++j) quark_absorb(j);
+
+        if (nearest_quark != UINT32_MAX) {
+            // Gluon absorbed by quark — transfer energy and momentum
+            readback_energies_[nearest_quark] += readback_energies_[i] * 0.5f;
+            readback_energies_[nearest_quark] = std::min(readback_energies_[nearest_quark], 1.5f);
+            readback_velocities_[nearest_quark] += readback_velocities_[i] * 0.3f;
+            readback_energies_[i] = 0.0f;
+            consumed[i] = true;
+            any_changed = true;
+            ++gluon_events;
+            continue;
+        }
+
+        // ── Try gluon-gluon merge (trilinear self-coupling: g+g → g) ───
+        uint32_t nearest_gluon = UINT32_MAX;
+        float nearest_g_d2 = GLUON_ABSORB_RADIUS_SQ;
+
+        auto gluon_merge = [&](uint32_t j) {
+            if (j <= i || consumed[j]) return;  // j > i avoids double processing
+            if (readback_energies_[j] < 0.01f) return;
+            if (particles.types[j] != GLUON_TYPE_PHYS) return;
+            glm::vec2 d = readback_positions_[j] - readback_positions_[i];
+            float d2 = d.x * d.x + d.y * d.y;
+            if (d2 < nearest_g_d2) { nearest_g_d2 = d2; nearest_gluon = j; }
+        };
+
+        if (iface.prefs.spatial_grid)
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y,
+                        GLUON_ABSORB_RADIUS, gluon_merge);
+        else
+            for (uint32_t j = 0; j < n; ++j) gluon_merge(j);
+
+        if (nearest_gluon != UINT32_MAX) {
+            // Merge: i absorbs j's energy, j dies
+            readback_energies_[i] += readback_energies_[nearest_gluon] * 0.7f;
+            readback_energies_[i] = std::min(readback_energies_[i], 1.5f);
+            readback_velocities_[i] = (readback_velocities_[i] + readback_velocities_[nearest_gluon]) * 0.5f;
+            readback_energies_[nearest_gluon] = 0.0f;
+            consumed[nearest_gluon] = true;
+            any_changed = true;
+            ++gluon_events;
+            continue;
+        }
+
+        // ── Isolated gluon — split into q+q̄ (color confinement) ────────
+        if (readback_energies_[i] >= GLUON_SPLIT_ENERGY) {
+            uint32_t slot = find_dormant(search_from);
+            if (slot == UINT32_MAX) continue;
+            search_from = slot + 1;
+
+            float gluon_color = particles.genomes[i * GENOME_SIZE + 2];
+            float q_color  = (gluon_color > 0.0f) ?  gluon_color : -gluon_color;
+            float qb_color = -q_color;
+
+            // Convert gluon slot → quark
+            uint32_t q_type = (rng() % 2 == 0) ? UP_QUARK_TYPE : DOWN_QUARK_TYPE;
+            uint32_t qbar_type = anti_flavor(q_type);
+            float half_energy = readback_energies_[i] * 0.5f;
+
+            write_spawn_genome(particles, i, q_type, rng, frame_counter_);
+            particles.genomes[i * GENOME_SIZE + 2] = q_color;
+            readback_energies_[i] = half_energy;
+
+            // Spawn antiquark in dormant slot
+            std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
+            float a = angle_dist(rng);
+            write_spawn_genome(particles, slot, qbar_type, rng, frame_counter_);
+            particles.genomes[slot * GENOME_SIZE + 2] = qb_color;
+            readback_positions_[slot]  = readback_positions_[i] + glm::vec2(std::cos(a) * 3.0f, std::sin(a) * 3.0f);
+            readback_velocities_[slot] = glm::vec2(std::cos(a), std::sin(a)) * 40.0f;
+            readback_energies_[slot]   = half_energy;
+
+            consumed[i] = true;
+            any_changed = true;
+            ++gluon_events;
+
+            iface.push_notification("g \xe2\x86\x92 qq\xcc\x84 split", ImVec4(0.3f, 0.9f, 0.3f, 1.0f));
+            iface.push_decay_event("Gluon split", PhysicsInterface::DEVT_PAIR_PRODUCTION,
+                                   ImVec4(0.3f, 0.9f, 0.3f, 1.0f));
+        }
     }
 
     if (any_changed)

@@ -1045,110 +1045,317 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
 // ── Splash Screen ───────────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ── Splash animation helpers ─────────────────────────────────────────────────
+
+static void draw_radial_glow(ImDrawList* dl, float cx, float cy, float radius,
+                              ImU32 center_col, ImU32 edge_col) {
+    constexpr int STEPS = 12;
+    for (int s = STEPS; s >= 0; --s) {
+        float t = (float)s / STEPS;
+        float r = radius * t;
+        if (r < 1.0f) continue;
+        float blend = 1.0f - t;
+        int a_c = (center_col >> IM_COL32_A_SHIFT) & 0xFF;
+        int a_e = (edge_col   >> IM_COL32_A_SHIFT) & 0xFF;
+        int a = a_c + (int)((a_e - a_c) * blend);
+        int r_c = (center_col >> IM_COL32_R_SHIFT) & 0xFF, r_e = (edge_col >> IM_COL32_R_SHIFT) & 0xFF;
+        int g_c = (center_col >> IM_COL32_G_SHIFT) & 0xFF, g_e = (edge_col >> IM_COL32_G_SHIFT) & 0xFF;
+        int b_c = (center_col >> IM_COL32_B_SHIFT) & 0xFF, b_e = (edge_col >> IM_COL32_B_SHIFT) & 0xFF;
+        int rr = r_c + (int)((r_e - r_c) * blend);
+        int gg = g_c + (int)((g_e - g_c) * blend);
+        int bb = b_c + (int)((b_e - b_c) * blend);
+        dl->AddCircleFilled(ImVec2(cx, cy), r, IM_COL32(rr, gg, bb, a), 32);
+    }
+}
+
+static void draw_vignette(ImDrawList* dl, float W, float H) {
+    // Top fade
+    for (int i = 0; i < 20; ++i) {
+        float t = (float)i / 20.0f;
+        int a = (int)((1.0f - t) * 0.8f * 255);
+        dl->AddRectFilled(ImVec2(0, i * (H / 80.0f)), ImVec2(W, (i+1) * (H / 80.0f)),
+                          IM_COL32(2, 8, 16, a));
+    }
+    // Bottom fade
+    for (int i = 0; i < 30; ++i) {
+        float t = (float)i / 30.0f;
+        float band = H / 60.0f;
+        float y = H - (30 - i) * band;
+        int a = (int)((1.0f - t) * 0.95f * 255);
+        dl->AddRectFilled(ImVec2(0, y), ImVec2(W, y + band),
+                          IM_COL32(2, 8, 16, a));
+    }
+}
+
+// ── Splash particle initialization ───────────────────────────────────────────
+
+void PhysicsInterface::init_splash_particles() {
+    ImGuiIO& io = ImGui::GetIO();
+    float W = io.DisplaySize.x, H = io.DisplaySize.y;
+    float scale = std::min(W / 616.0f, H / 353.0f);
+    float ncx = W * 0.48f, ncy = H * 0.38f;
+
+    splash_particles_.clear();
+    splash_trails_.clear();
+    splash_time_ = 0.0f;
+
+    std::mt19937 rng(42);
+    auto randf = [&]() { return std::uniform_real_distribution<float>(0.0f, 1.0f)(rng); };
+    auto randf_range = [&](float lo, float hi) { return std::uniform_real_distribution<float>(lo, hi)(rng); };
+
+    // Particle type colors (matching banner.html)
+    struct SplashType { ImU32 color; ImU32 glow; float r_min, r_max; };
+    SplashType types[] = {
+        { IM_COL32(0xff, 0x44, 0x33, 255), IM_COL32(0xff, 0x22, 0x00, 0x66), 4, 8 },   // proton
+        { IM_COL32(0x44, 0x88, 0xcc, 255), IM_COL32(0x33, 0x66, 0xaa, 0x66), 4, 7 },   // neutron
+        { IM_COL32(0x00, 0xdd, 0xff, 255), IM_COL32(0x00, 0xaa, 0xff, 0x44), 2, 4 },   // electron
+        { IM_COL32(0xff, 0xcc, 0x00, 255), IM_COL32(0xff, 0xaa, 0x00, 0x33), 1.5f, 3 },// photon
+        { IM_COL32(0x00, 0xff, 0xaa, 255), IM_COL32(0x00, 0xdd, 0x88, 0x44), 2, 4 },   // positron
+        { IM_COL32(0xcc, 0x55, 0xff, 255), IM_COL32(0xaa, 0x33, 0xff, 0x44), 2.5f, 5 },// quark
+        { IM_COL32(0xff, 0x66, 0x88, 255), IM_COL32(0xff, 0x44, 0x66, 0x44), 1.5f, 3 },// muon
+        { IM_COL32(0x88, 0xff, 0x44, 255), IM_COL32(0x66, 0xdd, 0x22, 0x44), 2, 3 },   // gluon
+    };
+
+    // Nucleus cluster: 6 protons + 6 neutrons
+    for (int i = 0; i < 12; ++i) {
+        float angle = randf() * 6.2831853f;
+        float dist = randf() * 18.0f * scale;
+        auto& t = types[i < 6 ? 0 : 1];
+        SplashParticle p{};
+        p.x = ncx + cosf(angle) * dist;
+        p.y = ncy + sinf(angle) * dist;
+        p.vx = randf_range(-0.5f, 0.5f) * 0.15f;
+        p.vy = randf_range(-0.5f, 0.5f) * 0.15f;
+        p.r = randf_range(t.r_min, t.r_max) * scale;
+        p.color = t.color;
+        p.glow_color = t.glow;
+        p.orbit = false;
+        p.phase = randf() * 6.2831853f;
+        splash_particles_.push_back(p);
+    }
+
+    // 6 orbiting electrons
+    for (int i = 0; i < 6; ++i) {
+        SplashParticle p{};
+        p.orbit = true;
+        p.orbit_r = (40.0f + i * 22.0f + randf() * 10.0f) * scale;
+        p.orbit_speed = 0.008f + randf() * 0.006f;
+        p.phase = (6.2831853f * i / 6.0f) + randf() * 0.5f;
+        p.cx = ncx;
+        p.cy = ncy;
+        p.tilt_x = 0.5f + randf() * 0.5f;
+        p.tilt_y = 0.7f + randf() * 0.4f;
+        p.r = (2.5f + randf() * 1.5f) * scale;
+        p.color = IM_COL32(0x00, 0xdd, 0xff, 255);
+        p.glow_color = IM_COL32(0x00, 0xaa, 0xff, 0x66);
+        p.x = p.cx + cosf(p.phase) * p.orbit_r * p.tilt_x;
+        p.y = p.cy + sinf(p.phase) * p.orbit_r * p.tilt_y;
+        splash_particles_.push_back(p);
+    }
+
+    // 60 scattered ambient particles
+    for (int i = 0; i < 60; ++i) {
+        int ti = (int)(randf() * 8.0f);
+        if (ti > 7) ti = 7;
+        auto& t = types[ti];
+        SplashParticle p{};
+        p.x = randf() * W;
+        p.y = randf() * H;
+        p.vx = randf_range(-0.5f, 0.5f) * 0.8f;
+        p.vy = randf_range(-0.5f, 0.5f) * 0.8f;
+        p.r = randf_range(t.r_min, t.r_max) * scale;
+        p.color = t.color;
+        p.glow_color = t.glow;
+        p.orbit = false;
+        p.phase = randf() * 6.2831853f;
+        splash_particles_.push_back(p);
+    }
+
+    splash_trails_.resize(splash_particles_.size());
+}
+
+// ── Animated Splash Screen ───────────────────────────────────────────────────
+
 void PhysicsInterface::draw_splash_screen() {
     ImGuiIO& io = ImGui::GetIO();
 
-    // Check for dismiss: any mouse button or key
-    bool dismiss = ImGui::IsMouseClicked(ImGuiMouseButton_Left)
-                || ImGui::IsMouseClicked(ImGuiMouseButton_Right);
-    if (!dismiss) {
-        for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k) {
-            if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(k), false)) {
-                dismiss = true;
-                break;
+    // Check for dismiss: any mouse button or key (skip first 0.3s to avoid accidental dismiss)
+    if (splash_time_ > 0.3f) {
+        bool dismiss = ImGui::IsMouseClicked(ImGuiMouseButton_Left)
+                    || ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+        if (!dismiss) {
+            for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k) {
+                if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(k), false)) {
+                    dismiss = true;
+                    break;
+                }
+            }
+        }
+        if (dismiss) { show_splash = false; return; }
+    }
+
+    // Init particles on first call (or re-init on About)
+    if (!splash_inited_) { init_splash_particles(); splash_inited_ = true; }
+
+    float dt = io.DeltaTime;
+    splash_time_ += dt;
+
+    ImDrawList* bg = ImGui::GetBackgroundDrawList();
+    float W = io.DisplaySize.x, H = io.DisplaySize.y;
+    float scale = std::min(W / 616.0f, H / 353.0f);
+    float ncx = W * 0.48f, ncy = H * 0.38f;
+
+    // 1. Background fill
+    bg->AddRectFilled(ImVec2(0, 0), ImVec2(W, H), IM_COL32(2, 8, 16, 255));
+
+    // 2. Nebula glow
+    draw_radial_glow(bg, W * 0.3f, H * 0.3f, 300.0f * scale,
+                     IM_COL32(10, 20, 60, 80), IM_COL32(10, 20, 60, 0));
+
+    // 3. Energy core glow around nucleus
+    float core_r = (35.0f + sinf(splash_time_ * 2.0f) * 5.0f) * scale;
+    draw_radial_glow(bg, ncx, ncy, core_r * 3.0f,
+                     IM_COL32(255, 120, 60, 38), IM_COL32(255, 60, 30, 0));
+    draw_radial_glow(bg, ncx, ncy, 160.0f * scale,
+                     IM_COL32(0, 100, 255, 10), IM_COL32(0, 100, 255, 0));
+
+    // 4. Update particles
+    for (auto& p : splash_particles_) {
+        if (p.orbit) {
+            p.phase += p.orbit_speed * dt * 60.0f;
+            p.x = p.cx + cosf(p.phase) * p.orbit_r * p.tilt_x;
+            p.y = p.cy + sinf(p.phase) * p.orbit_r * p.tilt_y;
+        } else {
+            p.x += p.vx * dt * 60.0f;
+            p.y += p.vy * dt * 60.0f;
+            if (p.x < -10) p.x = W + 10;
+            if (p.x > W + 10) p.x = -10;
+            if (p.y < -10) p.y = H + 10;
+            if (p.y > H + 10) p.y = -10;
+        }
+    }
+
+    // 5. Update trails
+    for (size_t i = 0; i < splash_particles_.size(); ++i) {
+        splash_trails_[i].push_back(ImVec2(splash_particles_[i].x, splash_particles_[i].y));
+        if (splash_trails_[i].size() > 8) splash_trails_[i].erase(splash_trails_[i].begin());
+    }
+
+    // 6. Draw trails
+    for (size_t i = 0; i < splash_particles_.size(); ++i) {
+        auto& trail = splash_trails_[i];
+        for (size_t j = 1; j < trail.size(); ++j) {
+            float alpha = (float)j / (float)trail.size() * 0.3f;
+            ImU32 col = (splash_particles_[i].color & ~IM_COL32_A_MASK) |
+                        ((uint32_t)(alpha * 255) << IM_COL32_A_SHIFT);
+            bg->AddLine(trail[j-1], trail[j], col, splash_particles_[i].r * 0.6f);
+        }
+    }
+
+    // 7. Draw force lines between nearby particles
+    float force_dist = 50.0f * scale;
+    for (size_t i = 0; i < splash_particles_.size(); ++i) {
+        for (size_t j = i + 1; j < splash_particles_.size(); ++j) {
+            float dx = splash_particles_[j].x - splash_particles_[i].x;
+            float dy = splash_particles_[j].y - splash_particles_[i].y;
+            float dist2 = dx * dx + dy * dy;
+            if (dist2 < force_dist * force_dist && dist2 > 25.0f) {
+                float dist = sqrtf(dist2);
+                float alpha = (1.0f - dist / force_dist) * 0.12f;
+                bg->AddLine(ImVec2(splash_particles_[i].x, splash_particles_[i].y),
+                           ImVec2(splash_particles_[j].x, splash_particles_[j].y),
+                           IM_COL32(0, 180, 255, (int)(alpha * 255)), 0.5f);
             }
         }
     }
-    if (dismiss) { show_splash = false; return; }
 
-    // Fullscreen dark overlay
+    // 8. Draw particles (glow + core + highlight)
+    for (auto& p : splash_particles_) {
+        draw_radial_glow(bg, p.x, p.y, p.r * 4.0f, p.glow_color, IM_COL32(0, 0, 0, 0));
+        bg->AddCircleFilled(ImVec2(p.x, p.y), p.r, p.color);
+        bg->AddCircleFilled(ImVec2(p.x - p.r * 0.2f, p.y - p.r * 0.2f),
+                            p.r * 0.5f, IM_COL32(255, 255, 255, 80));
+    }
+
+    // 9. Vignette overlay
+    draw_vignette(bg, W, H);
+
+    // 10. Scanlines
+    float scanline_gap = 4.0f * scale;
+    if (scanline_gap < 2.0f) scanline_gap = 2.0f;
+    for (float y = 0; y < H; y += scanline_gap)
+        bg->AddRectFilled(ImVec2(0, y + scanline_gap * 0.5f), ImVec2(W, y + scanline_gap),
+                          IM_COL32(0, 0, 0, 8));
+
+    // 11. Text overlay — transparent fullscreen ImGui window
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(io.DisplaySize);
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
         | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
-        | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav;
+        | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav
+        | ImGuiWindowFlags_NoBackground;
 
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.03f, 0.06f, 0.88f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 
     if (ImGui::Begin("##Splash", nullptr, flags)) {
-        float cx = io.DisplaySize.x * 0.5f;
-        float cy = io.DisplaySize.y * 0.5f;
+        float title_y = H - 80.0f * scale;
+        float left_margin = 30.0f * scale;
 
-        // Title
+        // Accent line
+        bg->AddLine(ImVec2(left_margin, title_y - 8.0f * scale),
+                    ImVec2(left_margin + 180.0f * scale, title_y - 8.0f * scale),
+                    IM_COL32(0, 200, 255, 153), 1.0f);
+
+        // Title "Particle Playground" — large text
         float old_scale = ImGui::GetFont()->Scale;
-        ImGui::GetFont()->Scale = 2.5f;
+        float title_font_scale = 2.2f * scale;
+        if (title_font_scale < 1.5f) title_font_scale = 1.5f;
+        ImGui::GetFont()->Scale = title_font_scale;
         ImGui::PushFont(ImGui::GetFont());
 
-        const char* title = "Particle Playground";
-        ImVec2 text_size = ImGui::CalcTextSize(title);
-        ImGui::SetCursorPos(ImVec2(cx - text_size.x * 0.5f, cy - 120.0f));
-        ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "%s", title);
+        // "Particle " in white
+        ImGui::SetCursorPos(ImVec2(left_margin, title_y));
+        ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1.0f), "Particle ");
+        ImGui::SameLine(0, 0);
+        // "Playground" in cyan
+        ImGui::TextColored(ImVec4(0.0f, 0.83f, 1.0f, 1.0f), "Playground");
 
         ImGui::GetFont()->Scale = old_scale;
         ImGui::PopFont();
 
-        // Tagline
-        const char* tagline = "A GPU-accelerated quantum particle physics sandbox";
-        ImVec2 tag_size = ImGui::CalcTextSize(tagline);
-        ImGui::SetCursorPosX(cx - tag_size.x * 0.5f);
-        ImGui::TextColored(ImVec4(0.6f, 0.65f, 0.75f, 0.9f), "%s", tagline);
+        // Subtitle
+        ImGui::SetCursorPos(ImVec2(left_margin, title_y + 40.0f * scale));
+        ImGui::TextColored(ImVec4(0.0f, 0.78f, 1.0f, 0.7f),
+            "Standard Model  \xe2\x80\xa2  Fusion  \xe2\x80\xa2  Fission  \xe2\x80\xa2  33 Particle Types");
 
-        ImGui::Dummy(ImVec2(0, 12));
+        // Top-right badge "QUANTUM PHYSICS SANDBOX"
+        {
+            const char* badge = "QUANTUM PHYSICS SANDBOX";
+            ImVec2 badge_sz = ImGui::CalcTextSize(badge);
+            float badge_x = W - badge_sz.x - 18.0f * scale;
+            float badge_y = 14.0f * scale;
+            // Badge background
+            bg->AddRectFilled(ImVec2(badge_x - 10.0f * scale, badge_y - 3.0f * scale),
+                              ImVec2(badge_x + badge_sz.x + 10.0f * scale, badge_y + badge_sz.y + 3.0f * scale),
+                              IM_COL32(255, 60, 30, 20));
+            bg->AddRect(ImVec2(badge_x - 10.0f * scale, badge_y - 3.0f * scale),
+                        ImVec2(badge_x + badge_sz.x + 10.0f * scale, badge_y + badge_sz.y + 3.0f * scale),
+                        IM_COL32(255, 100, 60, 77), 2.0f);
+            ImGui::SetCursorPos(ImVec2(badge_x, badge_y));
+            ImGui::TextColored(ImVec4(1.0f, 0.39f, 0.24f, 0.9f), "%s", badge);
+        }
 
-        // Feature list
-        const ImVec4 dim(0.451f, 0.478f, 0.580f, 0.80f);
-        const ImVec4 accent(0.302f, 0.749f, 0.953f, 0.9f);
-        float left = cx - 220.0f;
-
-        ImGui::SetCursorPosX(left);
-        ImGui::TextColored(accent, "33 particle types");
-        ImGui::SameLine(); ImGui::TextColored(dim, " - Standard Model + Beyond SM");
-
-        ImGui::SetCursorPosX(left);
-        ImGui::TextColored(accent, "7 fundamental forces");
-        ImGui::SameLine(); ImGui::TextColored(dim, " - EM, Strong, QCD, Weak, Gravity, Compton, Annihilation");
-
-        ImGui::SetCursorPosX(left);
-        ImGui::TextColored(accent, "Nuclear reactions");
-        ImGui::SameLine(); ImGui::TextColored(dim, " - Fusion, fission, isotope decay, chain reactions");
-
-        ImGui::SetCursorPosX(left);
-        ImGui::TextColored(accent, "Quantum mechanics");
-        ImGui::SameLine(); ImGui::TextColored(dim, " - Orbitals, virtual pairs, entanglement");
-
-        ImGui::SetCursorPosX(left);
-        ImGui::TextColored(accent, "Emergent physics");
-        ImGui::SameLine(); ImGui::TextColored(dim, " - Thermodynamics, magnetic fields");
-
-        ImGui::SetCursorPosX(left);
-        ImGui::TextColored(accent, "Interactive tools");
-        ImGui::SameLine(); ImGui::TextColored(dim, " - Accelerator, mirrors, force objects");
-
-        ImGui::SetCursorPosX(left);
-        ImGui::TextColored(accent, "22,500 particles");
-        ImGui::SameLine(); ImGui::TextColored(dim, " - Real-time O(n^2) Vulkan compute");
-
-        ImGui::Dummy(ImVec2(0, 16));
-
-        // Credits
-        const char* credits = "C++20 / Vulkan / Dear ImGui  -  Night-Traders-Dev 2026";
-        ImVec2 cr_size = ImGui::CalcTextSize(credits);
-        ImGui::SetCursorPosX(cx - cr_size.x * 0.5f);
-        ImGui::TextColored(ImVec4(0.35f, 0.38f, 0.48f, 0.7f), "%s", credits);
-
-        ImGui::Dummy(ImVec2(0, 20));
-
-        // Dismiss hint
-        const char* subtitle = "Click or press any key to continue";
-        ImVec2 sub_size = ImGui::CalcTextSize(subtitle);
-        ImGui::SetCursorPosX(cx - sub_size.x * 0.5f);
-        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.5f), "%s", subtitle);
+        // Bottom-center dismiss hint (pulsing alpha)
+        float pulse = 0.3f + 0.2f * sinf(splash_time_ * 3.0f);
+        const char* hint = "Click or press any key to continue";
+        ImVec2 hint_size = ImGui::CalcTextSize(hint);
+        ImGui::SetCursorPos(ImVec2(W * 0.5f - hint_size.x * 0.5f, H - 30.0f * scale));
+        ImGui::TextColored(ImVec4(0.45f, 0.48f, 0.58f, pulse), "%s", hint);
     }
     ImGui::End();
-    ImGui::PopStyleVar(2);
-    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(3);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1232,6 +1439,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 4));
         if (ImGui::Button("About", ImVec2(btn_w, btn_h))) {
             show_splash = true;
+            splash_inited_ = false;  // re-init animation
             show_pause_menu = false;
         }
 
