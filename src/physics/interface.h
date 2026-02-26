@@ -67,6 +67,19 @@ public:
     char save_load_message[256] = {};
     float save_load_msg_timer = 0.0f;
 
+    // File browser state
+    std::string browse_current_dir;
+    struct BrowseEntry {
+        std::string name;
+        bool is_dir;
+        uintmax_t size;  // file size in bytes (0 for dirs)
+    };
+    std::vector<BrowseEntry> browse_entries;
+    int browse_selected_idx = -1;
+    bool browse_needs_refresh = true;
+    char browse_filename[256] = "save.ppsg";   // filename input for save
+    char browse_path_buf[512] = {};             // editable path bar
+
     // Spawn settings
     int   spawn_type    = 0;     // phys_particles.h type index
     int   spawn_count   = 1;
@@ -186,6 +199,7 @@ private:
     void draw_splash_screen();
     void draw_pause_menu(SimConfig& cfg, bool& request_reset);
     void draw_save_load_dialog();
+    void refresh_browse_entries();
     void draw_element_card(const Particles& particles);
     void draw_element_list();
     void draw_accelerator_panel();

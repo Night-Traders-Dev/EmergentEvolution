@@ -5,7 +5,10 @@
 #include <random>
 #include <cstdio>
 #include <algorithm>
+#include <filesystem>
 #include <omp.h>
+
+namespace fs = std::filesystem;
 
 void PhysicsInterface::init() {
     std::random_device rd;
@@ -530,10 +533,14 @@ static bool spawn_button(int type_idx, const char* label, ImVec4 color,
 
 void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceObject* force_objects, bool& request_reset) {
     // Ctrl+S / Ctrl+L hotkeys
-    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false))
+    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) {
         show_save_dialog = true;
-    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_L, false))
+        browse_needs_refresh = true;
+    }
+    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_L, false)) {
         show_load_dialog = true;
+        browse_needs_refresh = true;
+    }
 
     // F1 toggle settings panel
     if (ImGui::IsKeyPressed(ImGuiKey_F1, false))
@@ -942,6 +949,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
             show_save_dialog = true;
             show_load_dialog = false;
             show_pause_menu = false;
+            browse_needs_refresh = true;
         }
 
         // Load
@@ -950,6 +958,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
             show_load_dialog = true;
             show_save_dialog = false;
             show_pause_menu = false;
+            browse_needs_refresh = true;
         }
 
         // About
@@ -1334,10 +1343,12 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                     if (ImGui::MenuItem("Save (Ctrl+S)")) {
                         show_save_dialog = true;
                         show_tools_popup = false;
+                        browse_needs_refresh = true;
                     }
                     if (ImGui::MenuItem("Load (Ctrl+L)")) {
                         show_load_dialog = true;
                         show_tools_popup = false;
+                        browse_needs_refresh = true;
                     }
                     ImGui::TreePop();
                 }
@@ -3236,28 +3247,187 @@ void PhysicsInterface::draw_force_object_panel(ForceObject* objects) {
 // ── Save / Load Dialog ──────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ── File browser helpers ─────────────────────────────────────────────────────
+
+static std::string format_file_size(uintmax_t bytes) {
+    char buf[32];
+    if (bytes >= 1024ULL * 1024)
+        snprintf(buf, sizeof(buf), "%.1f MB", bytes / (1024.0 * 1024.0));
+    else if (bytes >= 1024)
+        snprintf(buf, sizeof(buf), "%.1f KB", bytes / 1024.0);
+    else
+        snprintf(buf, sizeof(buf), "%llu B", (unsigned long long)bytes);
+    return buf;
+}
+
+void PhysicsInterface::refresh_browse_entries() {
+    browse_entries.clear();
+    browse_selected_idx = -1;
+
+    std::error_code ec;
+    if (!fs::is_directory(browse_current_dir, ec)) {
+        browse_current_dir = fs::current_path(ec).string();
+    }
+
+    // Collect directories and .ppsg files
+    std::vector<BrowseEntry> dirs, files;
+    for (auto& entry : fs::directory_iterator(browse_current_dir, ec)) {
+        std::string name = entry.path().filename().string();
+        if (name.empty() || name[0] == '.') continue;  // skip hidden
+
+        if (entry.is_directory(ec)) {
+            dirs.push_back({ name, true, 0 });
+        } else if (entry.is_regular_file(ec)) {
+            std::string ext = entry.path().extension().string();
+            if (ext == ".ppsg") {
+                uintmax_t sz = entry.file_size(ec);
+                files.push_back({ name, false, sz });
+            }
+        }
+    }
+
+    // Sort alphabetically
+    auto cmp = [](const BrowseEntry& a, const BrowseEntry& b) { return a.name < b.name; };
+    std::sort(dirs.begin(), dirs.end(), cmp);
+    std::sort(files.begin(), files.end(), cmp);
+
+    // Dirs first, then files
+    browse_entries.insert(browse_entries.end(), dirs.begin(), dirs.end());
+    browse_entries.insert(browse_entries.end(), files.begin(), files.end());
+
+    browse_needs_refresh = false;
+}
+
 void PhysicsInterface::draw_save_load_dialog() {
+    // Initialize browse directory on first open
+    if (browse_current_dir.empty()) {
+        std::error_code ec;
+        fs::path saves_dir = fs::current_path(ec) / "saves";
+        if (fs::is_directory(saves_dir, ec))
+            browse_current_dir = saves_dir.string();
+        else
+            browse_current_dir = fs::current_path(ec).string();
+    }
+
+    if (browse_needs_refresh)
+        refresh_browse_entries();
+
     ImGuiIO& io = ImGui::GetIO();
     ImVec2 center(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
-    ImVec2 size(360, 160);
+    ImVec2 size(520, 480);
 
     ImGui::SetNextWindowPos(ImVec2(center.x - size.x * 0.5f, center.y - size.y * 0.5f), ImGuiCond_Appearing);
     ImGui::SetNextWindowSize(size, ImGuiCond_Appearing);
 
     const char* title = show_save_dialog ? "Save Simulation###SaveLoad" : "Load Simulation###SaveLoad";
+    bool open = true;
 
-    if (ImGui::Begin(title, nullptr, ImGuiWindowFlags_NoCollapse)) {
-        ImGui::Text("Filename:");
-        ImGui::SetNextItemWidth(-1);
-        ImGui::InputText("##filename", save_filename, sizeof(save_filename));
+    if (ImGui::Begin(title, &open, ImGuiWindowFlags_NoCollapse)) {
+        // ── Path bar ─────────────────────────────────────────────────────
+        ImGui::Text("Path:");
+        ImGui::SameLine();
 
-        ImGui::Spacing();
+        // Sync path buffer
+        snprintf(browse_path_buf, sizeof(browse_path_buf), "%s", browse_current_dir.c_str());
+        ImGui::SetNextItemWidth(-60);
+        if (ImGui::InputText("##path", browse_path_buf, sizeof(browse_path_buf),
+                             ImGuiInputTextFlags_EnterReturnsTrue)) {
+            std::error_code ec;
+            if (fs::is_directory(browse_path_buf, ec)) {
+                browse_current_dir = browse_path_buf;
+                browse_needs_refresh = true;
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Up")) {
+            fs::path parent = fs::path(browse_current_dir).parent_path();
+            if (!parent.empty() && parent != browse_current_dir) {
+                browse_current_dir = parent.string();
+                browse_needs_refresh = true;
+                refresh_browse_entries();
+            }
+        }
+
+        ImGui::Separator();
+
+        // ── File list ────────────────────────────────────────────────────
+        float list_height = ImGui::GetContentRegionAvail().y - 90.0f;
+        if (ImGui::BeginChild("##FileList", ImVec2(0, list_height), ImGuiChildFlags_Border)) {
+            for (int i = 0; i < (int)browse_entries.size(); i++) {
+                const auto& entry = browse_entries[i];
+                bool selected = (browse_selected_idx == i);
+
+                // Build display label
+                char label[320];
+                if (entry.is_dir) {
+                    snprintf(label, sizeof(label), "[DIR]  %s/", entry.name.c_str());
+                } else {
+                    std::string sz = format_file_size(entry.size);
+                    snprintf(label, sizeof(label), "  %s", entry.name.c_str());
+
+                    // We'll draw the size right-aligned after the selectable
+                }
+
+                ImGui::PushID(i);
+                if (entry.is_dir) {
+                    // Directory — colored
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.7f, 1.0f, 1.0f));
+                    if (ImGui::Selectable(label, selected, ImGuiSelectableFlags_AllowDoubleClick)) {
+                        // Navigate into directory
+                        fs::path new_dir = fs::path(browse_current_dir) / entry.name;
+                        browse_current_dir = new_dir.string();
+                        browse_needs_refresh = true;
+                        refresh_browse_entries();
+                    }
+                    ImGui::PopStyleColor();
+                } else {
+                    // File
+                    if (ImGui::Selectable(label, selected, ImGuiSelectableFlags_AllowDoubleClick)) {
+                        browse_selected_idx = i;
+                        snprintf(browse_filename, sizeof(browse_filename), "%s", entry.name.c_str());
+
+                        // Double-click to load (in load mode)
+                        if (!show_save_dialog && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                            fs::path full = fs::path(browse_current_dir) / entry.name;
+                            snprintf(save_filename, sizeof(save_filename), "%s", full.string().c_str());
+                            request_load = true;
+                            show_load_dialog = false;
+                            show_save_dialog = false;
+                        }
+                    }
+
+                    // Right-align file size
+                    std::string sz = format_file_size(entry.size);
+                    float text_w = ImGui::CalcTextSize(sz.c_str()).x;
+                    float avail = ImGui::GetContentRegionAvail().x;
+                    ImGui::SameLine(avail - text_w + ImGui::GetCursorPosX() - 8);
+                    ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "%s", sz.c_str());
+                }
+                ImGui::PopID();
+            }
+
+            if (browse_entries.empty()) {
+                ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.7f), "  No .ppsg files in this directory");
+            }
+        }
+        ImGui::EndChild();
+
+        // ── Filename input + action buttons ──────────────────────────────
+        ImGui::Separator();
+
+        if (show_save_dialog) {
+            ImGui::Text("File:");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-180);
+            ImGui::InputText("##savename", browse_filename, sizeof(browse_filename));
+        }
 
         // Status message
         if (save_load_msg_timer > 0.0f) {
             ImVec4 color = (save_load_message[0] == 'S' || save_load_message[0] == 'L')
                 ? ImVec4(0.2f, 0.9f, 0.4f, std::min(1.0f, save_load_msg_timer))
                 : ImVec4(0.9f, 0.3f, 0.3f, std::min(1.0f, save_load_msg_timer));
+            if (show_save_dialog) ImGui::SameLine();
             ImGui::TextColored(color, "%s", save_load_message);
         }
 
@@ -3266,14 +3436,32 @@ void PhysicsInterface::draw_save_load_dialog() {
         float btn_w = 80.0f;
         if (show_save_dialog) {
             if (ImGui::Button("Save", ImVec2(btn_w, 28))) {
+                // Ensure .ppsg extension
+                std::string fname = browse_filename;
+                if (fname.size() < 5 || fname.substr(fname.size() - 5) != ".ppsg")
+                    fname += ".ppsg";
+                // Create saves dir if saving to it
+                std::error_code ec;
+                fs::create_directories(browse_current_dir, ec);
+                fs::path full = fs::path(browse_current_dir) / fname;
+                snprintf(save_filename, sizeof(save_filename), "%s", full.string().c_str());
                 request_save = true;
                 show_save_dialog = false;
+                browse_needs_refresh = true;
             }
         } else {
+            bool can_load = (browse_selected_idx >= 0 &&
+                             browse_selected_idx < (int)browse_entries.size() &&
+                             !browse_entries[browse_selected_idx].is_dir);
+            if (!can_load) ImGui::BeginDisabled();
             if (ImGui::Button("Load", ImVec2(btn_w, 28))) {
+                fs::path full = fs::path(browse_current_dir) / browse_entries[browse_selected_idx].name;
+                snprintf(save_filename, sizeof(save_filename), "%s", full.string().c_str());
                 request_load = true;
                 show_load_dialog = false;
+                browse_needs_refresh = true;
             }
+            if (!can_load) ImGui::EndDisabled();
         }
         ImGui::SameLine();
         if (ImGui::Button("Cancel", ImVec2(btn_w, 28))) {
@@ -3287,5 +3475,11 @@ void PhysicsInterface::draw_save_load_dialog() {
             show_load_dialog = false;
         }
     }
+
+    if (!open) {
+        show_save_dialog = false;
+        show_load_dialog = false;
+    }
+
     ImGui::End();
 }
