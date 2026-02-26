@@ -252,9 +252,14 @@ public:
         int electrons;      // bound electron count (or bound positrons for anti)
         uint32_t rep;       // nucleus representative index
         bool is_anti;       // antimatter element
+        float energy_MeV;   // total relativistic energy (sum of γm₀c² for all constituents)
+        uint32_t oldest_birth; // earliest birth frame among all constituents
     };
     std::vector<ElementSummary> element_list;
     bool show_element_list = false;
+
+    // Particle list (all active particles, populated each tick)
+    bool show_particle_list = false;
 
     // Electron cloud visualization
     bool show_electron_cloud = false;
@@ -347,6 +352,7 @@ private:
     void refresh_browse_entries();
     void draw_element_card(const Particles& particles);
     void draw_element_list();
+    void draw_particle_list(const Particles& particles);
     void draw_accelerator_panel();
     void draw_notifications();
     void draw_settings_menu();

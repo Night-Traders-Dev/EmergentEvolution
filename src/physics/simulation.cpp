@@ -654,71 +654,104 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
         if (N < 0) N = Z;  // fallback: equal protons and neutrons
         int A = Z + N;
 
-        // Generate nucleon positions in compact cluster
-        float nuc_spacing = 5.0f;
-        int cols = std::max(1, static_cast<int>(std::ceil(std::sqrt(static_cast<float>(A)))));
-        int rows_n = (A + cols - 1) / cols;
-        float cx = (cols - 1) * 0.5f * nuc_spacing;
-        float cy = (rows_n - 1) * 0.5f * nuc_spacing;
+        // ── Generate nucleon positions: hexagonal close-packing ──────────
+        // Equilibrium spacing ~3.8px (Yukawa attraction balances Pauli repulsion).
+        // Must keep all nucleons within 10px of a neighbor for BFS clustering
+        // in update_orbitals (NUCLEAR_CLUSTER_RADIUS = 10px).
+        const float NUC_SPACING = 3.8f;
 
-        // Place nucleons: alternate proton/neutron
-        int protons_placed = 0, neutrons_placed = 0;
+        // Pre-generate centered hexagonal positions for A nucleons
+        struct NucPos { float x, y; };
+        std::vector<NucPos> nuc_positions;
+        nuc_positions.reserve(A);
+
+        // Spiral outward from center in hex rings for compact packing
+        nuc_positions.push_back({0.0f, 0.0f});
+        int ring = 1;
+        while (static_cast<int>(nuc_positions.size()) < A) {
+            // Each ring has 6*ring positions
+            for (int side = 0; side < 6 && static_cast<int>(nuc_positions.size()) < A; ++side) {
+                for (int step = 0; step < ring && static_cast<int>(nuc_positions.size()) < A; ++step) {
+                    // Start at top of ring, walk 6 sides
+                    float angle0 = 3.14159265f / 3.0f * side + 3.14159265f / 2.0f;
+                    float angle1 = 3.14159265f / 3.0f * (side + 1) + 3.14159265f / 2.0f;
+                    float t = static_cast<float>(step) / static_cast<float>(ring);
+                    float px = ring * NUC_SPACING * std::cos(angle0) * (1.0f - t)
+                             + ring * NUC_SPACING * std::cos(angle1) * t;
+                    float py = ring * NUC_SPACING * std::sin(angle0) * (1.0f - t)
+                             + ring * NUC_SPACING * std::sin(angle1) * t;
+                    nuc_positions.push_back({px, py});
+                }
+            }
+            ++ring;
+        }
+
+        // Interleave protons and neutrons: alternate p, n, p, n, ...
+        // This distributes charge evenly throughout the nucleus.
+        std::vector<uint32_t> nuc_types;
+        nuc_types.reserve(A);
+        int p_left = Z, n_left = N;
+        for (int k = 0; k < A; ++k) {
+            if (k % 2 == 0) {
+                if (p_left > 0) { nuc_types.push_back(PROTON_TYPE); --p_left; }
+                else            { nuc_types.push_back(NEUTRON_TYPE); --n_left; }
+            } else {
+                if (n_left > 0) { nuc_types.push_back(NEUTRON_TYPE); --n_left; }
+                else            { nuc_types.push_back(PROTON_TYPE); --p_left; }
+            }
+        }
+
         uint32_t search_start = 0;
         std::vector<uint32_t> spawned_slots;
+
+        // Compute nucleus extent (max radial distance of any nucleon from center)
+        float nuc_extent = 0.0f;
+        for (int k = 0; k < A; ++k) {
+            float r2 = nuc_positions[k].x * nuc_positions[k].x
+                      + nuc_positions[k].y * nuc_positions[k].y;
+            nuc_extent = std::max(nuc_extent, std::sqrt(r2));
+        }
+        nuc_extent += NUC_SPACING * 0.5f;
+
+        // Energy-to-velocity scaling: KE ∝ v², so v ∝ sqrt(E)
+        const float e_scale = std::sqrt(std::max(iface.spawn_energy, 0.01f));
 
         for (int k = 0; k < A; ++k) {
             uint32_t slot = find_dormant(search_start);
             if (slot == UINT32_MAX) break;
             search_start = slot + 1;
 
-            float x = (k % cols) * nuc_spacing - cx;
-            float y = (k / cols) * nuc_spacing - cy;
-            readback_positions_[slot] = wrap_pos(world_pos + glm::vec2(x, y));
-            readback_velocities_[slot] = glm::vec2(0.0f);
+            readback_positions_[slot] = wrap_pos(world_pos + glm::vec2(nuc_positions[k].x, nuc_positions[k].y));
+            readback_velocities_[slot] = glm::vec2(0.0f);  // nucleons stay bound in nucleus
             readback_energies_[slot] = iface.spawn_energy;
 
-            // Alternate: fill protons first, then neutrons
-            uint32_t ptype;
-            if (protons_placed < Z) {
-                ptype = PROTON_TYPE;
-                protons_placed++;
-            } else {
-                ptype = NEUTRON_TYPE;
-                neutrons_placed++;
-            }
-            write_spawn_genome(particles, slot, ptype, rng, frame_counter_);
+            write_spawn_genome(particles, slot, nuc_types[k], rng, frame_counter_);
             spawned_slots.push_back(slot);
         }
 
-        // Place electrons in proper orbital shells outside the nucleus
-        // Compute nucleus physical extent (half-width of the nucleon grid)
-        float nuc_extent = std::max(cx, cy) + nuc_spacing * 0.5f;
-        // Shell radii: start outside nucleus, each shell separated by SHELL_GAP
-        const float SHELL_GAP = 15.0f;
-        const float MIN_INNER_SHELL = nuc_extent + 12.0f;  // clear of nucleus surface
+        // ── Place electrons in orbital shells ────────────────────────────
+        // Use exact same formula as update_orbitals (R_BOHR, SOFTEN_SQ, no MIN_INNER)
+        // with a floor to stay clear of nucleus surface.
+        const float NUC_CLEAR = nuc_extent + 4.0f;  // minimum clearance from nucleus edge
 
         int electrons_left = Z;
-        int inner_electrons = 0;
+        int shell_fill_spawn[3] = {0, 0, 0};
         for (int shell = 0; shell < 3 && electrons_left > 0; ++shell) {
             int cap = std::min(SHELL_CAP_SPAWN[shell], electrons_left);
             float n_shell = static_cast<float>(shell + 1);
 
-            // Slater screening: inner shells screen more effectively
-            // s=0.30 for 1s peers, s=0.85 for inner shells, s=1.0 for deeper
-            float screening = 0.0f;
-            if (shell == 0) screening = 0.30f * std::max(0, cap - 1);  // 1s: only peer screens
-            else if (shell == 1) screening = static_cast<float>(SHELL_CAP_SPAWN[0]) * 0.85f
-                                           + 0.35f * std::max(0, cap - 1);
-            else screening = static_cast<float>(SHELL_CAP_SPAWN[0]) * 1.0f
-                           + static_cast<float>(SHELL_CAP_SPAWN[1]) * 0.85f
-                           + 0.35f * std::max(0, cap - 1);
-            float Z_eff = std::max(1.0f, static_cast<float>(Z) - screening);
+            // Count inner electrons (same as update_orbitals)
+            int inner_e = 0;
+            for (int s = 0; s < shell; ++s)
+                inner_e += shell_fill_spawn[s];
 
-            // Bohr-like radius with floor to stay outside nucleus
+            float Z_eff = std::max(1.0f, static_cast<float>(Z) - static_cast<float>(inner_e));
             float R_bohr = n_shell * n_shell * R_BOHR_SPAWN / Z_eff;
-            float R_target = std::max(R_bohr, MIN_INNER_SHELL + shell * SHELL_GAP);
+            // Match update_orbitals: floor at 8px, then also ensure outside nucleus
+            float R_target = std::max(R_bohr, 8.0f);
+            R_target = std::max(R_target, NUC_CLEAR + shell * 8.0f);
 
-            // Compute L_ground for this shell (equilibrium: Coulomb = centrifugal)
+            // Compute L_ground (same formula as update_orbitals)
             float R3 = R_target * R_target * R_target;
             float R2_soft = R_target * R_target + SOFTEN_SQ_SPAWN;
             float L_ground = std::sqrt(Z_eff * K_COULOMB_SPAWN * R3 / R2_soft);
@@ -734,16 +767,15 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
                 glm::vec2 tangent(-std::sin(angle), std::cos(angle));
 
                 readback_positions_[slot] = wrap_pos(world_pos + offset);
-                readback_velocities_[slot] = tangent * v_orbital;
+                readback_velocities_[slot] = tangent * v_orbital * e_scale;
                 readback_energies_[slot] = iface.spawn_energy;
 
                 write_spawn_genome(particles, slot, ELECTRON_TYPE_PHYS, rng, frame_counter_);
-                // Write L_ground to genome[2] so shader uses correct orbital immediately
-                particles.genomes[slot * GENOME_SIZE + 2] = L_ground;
+                particles.genomes[slot * GENOME_SIZE + 2] = L_ground * e_scale;
                 spawned_slots.push_back(slot);
             }
 
-            inner_electrons += cap;
+            shell_fill_spawn[shell] = cap;
             electrons_left -= cap;
         }
     }
@@ -760,6 +792,7 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
 
     if (resolved_tmpl) {
         const auto& tmpl = *resolved_tmpl;
+        const float e_scale_g = std::sqrt(std::max(iface.spawn_energy, 0.01f));
 
         // Find nucleus center and count protons for Z
         glm::vec2 nucleus_center(0.0f);
@@ -846,7 +879,7 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
                     float v_orbital = L_g / std::max(r, 3.0f);
                     glm::vec2 radial = to_electron / r;
                     glm::vec2 tangent(-radial.y, radial.x);
-                    readback_velocities_[slot] = tangent * v_orbital;
+                    readback_velocities_[slot] = tangent * v_orbital * e_scale_g;
                 } else {
                     readback_velocities_[slot] = glm::vec2(0.0f);
                 }
@@ -856,12 +889,12 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
 
             write_spawn_genome(particles, slot, t, rng, frame_counter_);
 
-            // Write L_ground to genome[2] for electrons
+            // Write L_ground to genome[2] for electrons (scaled by energy)
             if (is_electron && nucleon_count > 0) {
                 for (size_t ei = 0; ei < electron_entries.size(); ++ei) {
                     if (std::abs(electron_entries[ei].dx - tmpl.atoms[a].dx) < 0.1f &&
                         std::abs(electron_entries[ei].dy - tmpl.atoms[a].dy) < 0.1f) {
-                        particles.genomes[slot * GENOME_SIZE + 2] = electron_shells[ei].L_ground;
+                        particles.genomes[slot * GENOME_SIZE + 2] = electron_shells[ei].L_ground * e_scale_g;
                         break;
                     }
                 }
@@ -869,6 +902,12 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
         }
     } else {
         // Single particle spawn
+        const float PHOTON_SPEED = 200.0f;      // massless particles travel at "c"
+        const float BASE_THERMAL_SPEED = 20.0f;  // massive particles' base thermal speed
+        bool is_massless = (particles.behavior_flags[type] & BEHAVIOR_PHOTON) != 0;
+        float e_scale_s = std::sqrt(std::max(iface.spawn_energy, 0.01f));
+        std::uniform_real_distribution<float> angle_dist(0.0f, 2.0f * 3.14159265f);
+
         for (int c = 0; c < count; ++c) {
             uint32_t slot = UINT32_MAX;
             for (uint32_t i = 0; i < n; ++i) {
@@ -881,7 +920,15 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
                 offset = glm::vec2(gauss(rng) * scatter, gauss(rng) * scatter);
 
             readback_positions_[slot] = wrap_pos(world_pos + offset);
-            readback_velocities_[slot] = glm::vec2(0.0f);
+
+            // Give particles initial velocity proportional to energy
+            float angle = angle_dist(rng);
+            glm::vec2 dir(std::cos(angle), std::sin(angle));
+            if (is_massless) {
+                readback_velocities_[slot] = dir * PHOTON_SPEED * e_scale_s;
+            } else {
+                readback_velocities_[slot] = dir * BASE_THERMAL_SPEED * e_scale_s;
+            }
             readback_energies_[slot] = iface.spawn_energy;
 
             write_spawn_genome(particles, slot, type, rng, frame_counter_);
@@ -4152,49 +4199,69 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
 
                 uint32_t search = 0;
                 int A_dup = Z_dup + N_dup;
-                float nuc_spacing = 5.0f;
-                int cols = std::max(1, static_cast<int>(std::ceil(std::sqrt(static_cast<float>(A_dup)))));
-                float cx = (cols - 1) * 0.5f * nuc_spacing;
-                float cy = ((A_dup + cols - 1) / cols - 1) * 0.5f * nuc_spacing;
+                const float NUC_SP = 3.8f;
 
-                int protons_placed = 0;
+                // Hex spiral positions for nucleons
+                struct NPos { float x, y; };
+                std::vector<NPos> npos;
+                npos.reserve(A_dup);
+                npos.push_back({0.0f, 0.0f});
+                for (int ring = 1; static_cast<int>(npos.size()) < A_dup; ++ring) {
+                    for (int side = 0; side < 6 && static_cast<int>(npos.size()) < A_dup; ++side) {
+                        for (int step = 0; step < ring && static_cast<int>(npos.size()) < A_dup; ++step) {
+                            float a0 = 3.14159265f / 3.0f * side + 3.14159265f / 2.0f;
+                            float a1 = 3.14159265f / 3.0f * (side + 1) + 3.14159265f / 2.0f;
+                            float t = static_cast<float>(step) / static_cast<float>(ring);
+                            float px = ring * NUC_SP * std::cos(a0) * (1.0f - t) + ring * NUC_SP * std::cos(a1) * t;
+                            float py = ring * NUC_SP * std::sin(a0) * (1.0f - t) + ring * NUC_SP * std::sin(a1) * t;
+                            npos.push_back({px, py});
+                        }
+                    }
+                }
+
+                // Interleave protons and neutrons
+                const float DUP_ENERGY = 0.7f;
+                const float e_scale_dup = std::sqrt(DUP_ENERGY);
+                int p_rem = Z_dup, n_rem = N_dup;
+                float nuc_ext = 0.0f;
                 std::vector<uint32_t> dup_slots;
                 for (int k = 0; k < A_dup; ++k) {
                     uint32_t slot = find_dormant(search);
                     if (slot == UINT32_MAX) break;
                     search = slot + 1;
-                    float x = (k % cols) * nuc_spacing - cx;
-                    float y = (k / cols) * nuc_spacing - cy;
-                    readback_positions_[slot] = wrap(dup_origin + glm::vec2(x, y));
-                    readback_velocities_[slot] = glm::vec2(0.0f);
-                    readback_energies_[slot] = 0.7f;
-                    uint32_t ptype = (protons_placed < Z_dup) ? PROTON_TYPE : NEUTRON_TYPE;
-                    if (ptype == PROTON_TYPE) protons_placed++;
+                    readback_positions_[slot] = wrap(dup_origin + glm::vec2(npos[k].x, npos[k].y));
+                    readback_velocities_[slot] = glm::vec2(0.0f);  // nucleons stay bound
+                    readback_energies_[slot] = DUP_ENERGY;
+                    uint32_t ptype;
+                    if (k % 2 == 0) {
+                        if (p_rem > 0) { ptype = PROTON_TYPE; --p_rem; }
+                        else           { ptype = NEUTRON_TYPE; --n_rem; }
+                    } else {
+                        if (n_rem > 0) { ptype = NEUTRON_TYPE; --n_rem; }
+                        else           { ptype = PROTON_TYPE; --p_rem; }
+                    }
                     write_spawn_genome(particles, slot, ptype, rng, frame_counter_);
                     dup_slots.push_back(slot);
+                    float r2 = npos[k].x * npos[k].x + npos[k].y * npos[k].y;
+                    nuc_ext = std::max(nuc_ext, std::sqrt(r2));
                 }
+                nuc_ext += NUC_SP * 0.5f;
 
-                // Place electrons in orbital shells
+                // Place electrons — match update_orbitals formula
                 const float R_BOHR = 15.0f, K_COULOMB = 1200.0f, SOFTEN_SQ = 64.0f;
                 const int SHELL_CAP[] = {2, 8, 18};
-                float nuc_extent = std::max(cx, cy) + nuc_spacing * 0.5f;
-                const float SHELL_GAP = 15.0f;
-                const float MIN_INNER = nuc_extent + 12.0f;
+                const float NUC_CLR = nuc_ext + 4.0f;
                 int e_left = Z_dup;
-                int inner_e = 0;
+                int shell_fill_dup[3] = {0, 0, 0};
                 for (int sh = 0; sh < 3 && e_left > 0; ++sh) {
                     int cap = std::min(SHELL_CAP[sh], e_left);
                     float n_sh = static_cast<float>(sh + 1);
-                    float screening = 0.0f;
-                    if (sh == 0) screening = 0.30f * std::max(0, cap - 1);
-                    else if (sh == 1) screening = static_cast<float>(SHELL_CAP[0]) * 0.85f
-                                                + 0.35f * std::max(0, cap - 1);
-                    else screening = static_cast<float>(SHELL_CAP[0]) * 1.0f
-                                   + static_cast<float>(SHELL_CAP[1]) * 0.85f
-                                   + 0.35f * std::max(0, cap - 1);
-                    float Z_eff = std::max(1.0f, static_cast<float>(Z_dup) - screening);
+                    int inner_e = 0;
+                    for (int s = 0; s < sh; ++s) inner_e += shell_fill_dup[s];
+                    float Z_eff = std::max(1.0f, static_cast<float>(Z_dup) - static_cast<float>(inner_e));
                     float R_bohr = n_sh * n_sh * R_BOHR / Z_eff;
-                    float R_target = std::max(R_bohr, MIN_INNER + sh * SHELL_GAP);
+                    float R_target = std::max(R_bohr, 8.0f);
+                    R_target = std::max(R_target, NUC_CLR + sh * 8.0f);
                     float R3 = R_target * R_target * R_target;
                     float R2_soft = R_target * R_target + SOFTEN_SQ;
                     float L_ground = std::sqrt(Z_eff * K_COULOMB * R3 / R2_soft);
@@ -4208,13 +4275,13 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                         glm::vec2 offset(R_target * std::cos(angle), R_target * std::sin(angle));
                         glm::vec2 tangent(-std::sin(angle), std::cos(angle));
                         readback_positions_[slot] = wrap(dup_origin + offset);
-                        readback_velocities_[slot] = tangent * v_orbital;
-                        readback_energies_[slot] = 0.7f;
+                        readback_velocities_[slot] = tangent * v_orbital * e_scale_dup;
+                        readback_energies_[slot] = DUP_ENERGY;
                         write_spawn_genome(particles, slot, ELECTRON_TYPE_PHYS, rng, frame_counter_);
-                        particles.genomes[slot * GENOME_SIZE + 2] = L_ground;
+                        particles.genomes[slot * GENOME_SIZE + 2] = L_ground * e_scale_dup;
                         dup_slots.push_back(slot);
                     }
-                    inner_e += cap;
+                    shell_fill_dup[sh] = cap;
                     e_left -= cap;
                 }
                 compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
@@ -4500,14 +4567,40 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     for (auto& nuc : detected_nuclei_) {
         if (nuc.Z <= 0) continue;
         int bound_leptons = 0;
+        float elem_energy_MeV = 0.0f;
+        uint32_t elem_oldest_birth = UINT32_MAX;
         // Count bound electrons for matter nuclei, bound positrons for antinuclei
+        // Also accumulate relativistic energy and track oldest birth for all constituents
         uint32_t lepton_type = nuc.is_anti ? POSITRON_TYPE_PHYS : ELECTRON_TYPE_PHYS;
+        constexpr float C_SIM_E = 300.0f;
+        auto rest_mass_MeV = [](uint32_t t) -> float {
+            if (t == 0 || t == 5) return 938.272f;
+            if (t == 1)           return 939.565f;
+            if (t == 2 || t == 4) return 0.511f;
+            return 0.0f;
+        };
         for (uint32_t i = 0; i < cfg.particle_count; ++i) {
-            if (particles.types[i] == lepton_type &&
-                particles.orbital_parent[i] == static_cast<int32_t>(nuc.rep))
-                bound_leptons++;
+            int32_t par = particles.orbital_parent[i];
+            if (par != static_cast<int32_t>(nuc.rep) && static_cast<int32_t>(i) != static_cast<int32_t>(nuc.rep)) continue;
+            uint32_t pt = particles.types[i];
+            bool is_nucleon = (pt == PROTON_TYPE || pt == NEUTRON_TYPE || pt == ANTIPROTON_TYPE_PHYS);
+            bool is_lepton = (pt == lepton_type);
+            if (!is_nucleon && !is_lepton) continue;
+            if (is_lepton) bound_leptons++;
+            // Accumulate relativistic energy
+            float m0 = rest_mass_MeV(pt);
+            if (m0 > 0.0f && i < static_cast<uint32_t>(readback_velocities_.size())) {
+                float spd = glm::length(readback_velocities_[i]);
+                float beta = std::min(spd / C_SIM_E, 0.9999f);
+                float gamma = 1.0f / std::sqrt(1.0f - beta * beta);
+                elem_energy_MeV += gamma * m0;
+            }
+            // Track oldest constituent
+            if (i < static_cast<uint32_t>(particles.birth_frames.size()) &&
+                particles.birth_frames[i] < elem_oldest_birth)
+                elem_oldest_birth = particles.birth_frames[i];
         }
-        iface.element_list.push_back({nuc.Z, nuc.N, bound_leptons, nuc.rep, nuc.is_anti});
+        iface.element_list.push_back({nuc.Z, nuc.N, bound_leptons, nuc.rep, nuc.is_anti, elem_energy_MeV, elem_oldest_birth});
 
         // Populate cloud info for electron shell visualization
         if (iface.show_electron_cloud) {

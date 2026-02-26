@@ -55,51 +55,67 @@ void PhysicsInterface::load_prefs() {
 // ── Nucleus / atom group templates ───────────────────────────────────────────
 
 // Hydrogen atom: 1 proton + 1 electron
+// Shell 0: Z_eff=1, R_bohr = 15px
 static const SubAtomicSpec H_ATOM[] = {
     { 0, 0, PROTON_TYPE },
-    { 20, 0, ELECTRON_TYPE_PHYS },
+    { 15, 0, ELECTRON_TYPE_PHYS },
 };
 
 // Deuterium: 1 proton + 1 neutron + 1 electron
+// Nucleon spacing ~3.8px; Shell 0: Z_eff=1, R_bohr = 15px
 static const SubAtomicSpec DEUTERIUM[] = {
-    { 0, 0, PROTON_TYPE },
-    { 5, 0, NEUTRON_TYPE },
-    { 25, 0, ELECTRON_TYPE_PHYS },
+    { -1.9f, 0, PROTON_TYPE },
+    {  1.9f, 0, NEUTRON_TYPE },
+    { 15, 0, ELECTRON_TYPE_PHYS },
 };
 
 // Helium-4 atom: 2p + 2n + 2e
+// Nucleons in 2x2 at 3.8px spacing, interleaved p/n
+// Shell 0: Z_eff=2, R_bohr = 7.5 -> floor 8px
 static const SubAtomicSpec HE4_ATOM[] = {
-    { -2.5f, -2.5f, PROTON_TYPE },
-    {  2.5f, -2.5f, NEUTRON_TYPE },
-    { -2.5f,  2.5f, NEUTRON_TYPE },
-    {  2.5f,  2.5f, PROTON_TYPE },
-    { -25, 0, ELECTRON_TYPE_PHYS },
-    {  25, 0, ELECTRON_TYPE_PHYS },
+    { -1.9f, -1.9f, PROTON_TYPE },
+    {  1.9f, -1.9f, NEUTRON_TYPE },
+    { -1.9f,  1.9f, NEUTRON_TYPE },
+    {  1.9f,  1.9f, PROTON_TYPE },
+    { -8, 0, ELECTRON_TYPE_PHYS },
+    {  8, 0, ELECTRON_TYPE_PHYS },
 };
 
 // Lithium-7: 3p + 4n + 3e
+// Center + hex ring at 3.8px, interleaved p/n
+// Shell 0: Z_eff=3, R=5 -> 8px (2e); Shell 1: Z_eff=1, R=60px (1e)
 static const SubAtomicSpec LI7_ATOM[] = {
-    { -3, -3, PROTON_TYPE },
-    {  3, -3, NEUTRON_TYPE },
-    { -3,  3, NEUTRON_TYPE },
-    {  3,  3, PROTON_TYPE },
-    {  0,  0, NEUTRON_TYPE },
-    {  0, -6, NEUTRON_TYPE },
-    {  0,  6, PROTON_TYPE },
-    { -30, 0, ELECTRON_TYPE_PHYS },
-    {  30, 0, ELECTRON_TYPE_PHYS },
-    {  0, 35, ELECTRON_TYPE_PHYS },
+    {  0,    0,     PROTON_TYPE },
+    {  3.8f, 0,     NEUTRON_TYPE },
+    { -3.8f, 0,     PROTON_TYPE },
+    {  1.9f, 3.29f, NEUTRON_TYPE },
+    { -1.9f, 3.29f, NEUTRON_TYPE },
+    {  1.9f,-3.29f, PROTON_TYPE },
+    { -1.9f,-3.29f, NEUTRON_TYPE },
+    { -8, 0, ELECTRON_TYPE_PHYS },
+    {  8, 0, ELECTRON_TYPE_PHYS },
+    {  0, 60, ELECTRON_TYPE_PHYS },
 };
 
 // Carbon-12 nucleus: 6p + 6n + 6e
+// Center + ring of 6 + partial ring of 5, interleaved p/n
+// Shell 0: Z_eff=6, R=2.5 -> 8px (2e); Shell 1: Z_eff=4, R=15px (4e)
 static const SubAtomicSpec C12_ATOM[] = {
-    { -5, -5, PROTON_TYPE }, {  0, -5, NEUTRON_TYPE }, {  5, -5, PROTON_TYPE },
-    { -5,  0, NEUTRON_TYPE }, {  0,  0, PROTON_TYPE }, {  5,  0, NEUTRON_TYPE },
-    { -5,  5, PROTON_TYPE }, {  0,  5, NEUTRON_TYPE }, {  5,  5, PROTON_TYPE },
-    { -2.5f, -2.5f, NEUTRON_TYPE }, {  2.5f, 2.5f, NEUTRON_TYPE }, { -2.5f, 2.5f, PROTON_TYPE },
-    { -35, 0, ELECTRON_TYPE_PHYS }, { 35, 0, ELECTRON_TYPE_PHYS },
-    { 0, -40, ELECTRON_TYPE_PHYS }, { 0, 40, ELECTRON_TYPE_PHYS },
-    { -28, -28, ELECTRON_TYPE_PHYS }, { 28, 28, ELECTRON_TYPE_PHYS },
+    {  0,    0,     PROTON_TYPE },
+    {  3.8f, 0,     NEUTRON_TYPE },
+    { -3.8f, 0,     PROTON_TYPE },
+    {  1.9f, 3.29f, NEUTRON_TYPE },
+    { -1.9f, 3.29f, PROTON_TYPE },
+    {  1.9f,-3.29f, NEUTRON_TYPE },
+    { -1.9f,-3.29f, PROTON_TYPE },
+    {  7.6f, 0,     NEUTRON_TYPE },
+    { -7.6f, 0,     PROTON_TYPE },
+    {  3.8f, 6.58f, NEUTRON_TYPE },
+    { -3.8f, 6.58f, NEUTRON_TYPE },
+    {  3.8f,-6.58f, PROTON_TYPE },
+    { -8, 0, ELECTRON_TYPE_PHYS }, { 8, 0, ELECTRON_TYPE_PHYS },
+    { 0, -15, ELECTRON_TYPE_PHYS }, { 0, 15, ELECTRON_TYPE_PHYS },
+    { -10.6f, -10.6f, ELECTRON_TYPE_PHYS }, { 10.6f, 10.6f, ELECTRON_TYPE_PHYS },
 };
 
 // Positronium: 1 electron + 1 positron (bound e-e+ pair)
@@ -116,25 +132,38 @@ static const SubAtomicSpec ANTI_H_ATOM[] = {
 
 // Anti-helium-4: 2 antiproton + 2 neutron + 2 positron
 static const SubAtomicSpec ANTI_HE4_ATOM[] = {
-    { -2.5f, -2.5f, ANTIPROTON_TYPE_PHYS },
-    {  2.5f, -2.5f, NEUTRON_TYPE },
-    { -2.5f,  2.5f, NEUTRON_TYPE },
-    {  2.5f,  2.5f, ANTIPROTON_TYPE_PHYS },
-    { -25, 0, POSITRON_TYPE_PHYS },
-    {  25, 0, POSITRON_TYPE_PHYS },
+    { -1.9f, -1.9f, ANTIPROTON_TYPE_PHYS },
+    {  1.9f, -1.9f, NEUTRON_TYPE },
+    { -1.9f,  1.9f, NEUTRON_TYPE },
+    {  1.9f,  1.9f, ANTIPROTON_TYPE_PHYS },
+    { -8, 0, POSITRON_TYPE_PHYS },
+    {  8, 0, POSITRON_TYPE_PHYS },
 };
 
 // Oxygen-16: 8p + 8n + 8e
+// Hex rings: center(1) + ring1(6) + ring2(9), interleaved p/n
+// Shell 0: Z_eff=8, R=1.875 -> 8px (2e); Shell 1: Z_eff=6, R=10px (6e)
 static const SubAtomicSpec O16_ATOM[] = {
-    { -5, -7, PROTON_TYPE }, { 0, -7, NEUTRON_TYPE }, { 5, -7, PROTON_TYPE },
-    { -5, -2, NEUTRON_TYPE }, { 0, -2, PROTON_TYPE }, { 5, -2, NEUTRON_TYPE },
-    { -5,  3, PROTON_TYPE }, { 0,  3, NEUTRON_TYPE }, { 5,  3, PROTON_TYPE },
-    { -2, -4, NEUTRON_TYPE }, { 2, 0, NEUTRON_TYPE }, { -2, 5, PROTON_TYPE },
-    { 2, -5, NEUTRON_TYPE }, { -3, 1, PROTON_TYPE }, { 3, 1, NEUTRON_TYPE }, { 0, 7, PROTON_TYPE },
-    { -40, 0, ELECTRON_TYPE_PHYS }, { 40, 0, ELECTRON_TYPE_PHYS },
-    { 0, -40, ELECTRON_TYPE_PHYS }, { 0, 40, ELECTRON_TYPE_PHYS },
-    { -30, -30, ELECTRON_TYPE_PHYS }, { 30, 30, ELECTRON_TYPE_PHYS },
-    { -30, 30, ELECTRON_TYPE_PHYS }, { 30, -30, ELECTRON_TYPE_PHYS },
+    {  0,    0,     PROTON_TYPE },
+    {  3.8f, 0,     NEUTRON_TYPE },
+    { -3.8f, 0,     PROTON_TYPE },
+    {  1.9f, 3.29f, NEUTRON_TYPE },
+    { -1.9f, 3.29f, PROTON_TYPE },
+    {  1.9f,-3.29f, NEUTRON_TYPE },
+    { -1.9f,-3.29f, PROTON_TYPE },
+    {  7.6f, 0,     NEUTRON_TYPE },
+    { -7.6f, 0,     PROTON_TYPE },
+    {  3.8f, 6.58f, NEUTRON_TYPE },
+    { -3.8f, 6.58f, PROTON_TYPE },
+    {  3.8f,-6.58f, NEUTRON_TYPE },
+    { -3.8f,-6.58f, PROTON_TYPE },
+    {  7.6f, 4.39f, NEUTRON_TYPE },
+    { -7.6f, 4.39f, NEUTRON_TYPE },
+    {  0,    8.78f, PROTON_TYPE },
+    { -8, 0, ELECTRON_TYPE_PHYS }, { 8, 0, ELECTRON_TYPE_PHYS },
+    { 10, 0, ELECTRON_TYPE_PHYS }, { -10, 0, ELECTRON_TYPE_PHYS },
+    { 5, 8.66f, ELECTRON_TYPE_PHYS }, { -5, 8.66f, ELECTRON_TYPE_PHYS },
+    { 5, -8.66f, ELECTRON_TYPE_PHYS }, { -5, -8.66f, ELECTRON_TYPE_PHYS },
 };
 
 // ── Quark-level baryons (3 quarks in triangle formation) ────────────────────
@@ -688,6 +717,9 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
 
     // Draw element list window (center, drawn before cards so cards overlay)
     draw_element_list();
+
+    // Draw particle list window
+    draw_particle_list(particles);
 
     // Draw decay log window
     draw_decay_log();
@@ -1895,6 +1927,24 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
             ImGui::PopStyleColor(4);
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Click to open decay/interaction event log");
+        }
+
+        // Particle count (clickable)
+        {
+            ImGui::SameLine(0, 20);
+            ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
+            ImGui::SameLine(0, 10);
+            char part_btn[48];
+            snprintf(part_btn, sizeof(part_btn), "Particles: %u###PartBtn", active_particle_display);
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.1f, 0.2f, 0.4f, 0.5f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.05f, 0.15f, 0.3f, 0.7f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.75f, 1.0f, 1.0f));
+            if (ImGui::SmallButton(part_btn))
+                show_particle_list = !show_particle_list;
+            ImGui::PopStyleColor(4);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Click to show particle list");
         }
 
         // Element count (clickable)
@@ -3175,6 +3225,64 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
             ImGui::SameLine(col_w);
             ImGui::Text("%.1f", momentum);
 
+            // Energy — relativistic E = γm₀c² (real rest masses, β = v/c_sim)
+            {
+                // Real rest mass energy in MeV (PDG values)
+                auto get_rest_mass_MeV = [](uint32_t t) -> float {
+                    if (t == 0 || t == 5) return 938.272f;    // proton/antiproton
+                    if (t == 1)           return 939.565f;    // neutron
+                    if (t == 2 || t == 4) return 0.511f;      // electron/positron
+                    if (t == 3)           return 0.0f;         // photon
+                    if (t == 6 || t == 11 || t == 12) return 0.0f; // neutrinos (~0)
+                    if (t == 7 || t == 8) return 105.658f;    // muon/antimuon
+                    if (t == 9 || t == 10) return 1776.86f;   // tau/antitau
+                    if (t == 13 || t == 19) return 2.16f;     // up/anti-up
+                    if (t == 14 || t == 20) return 4.67f;     // down/anti-down
+                    if (t == 15 || t == 21) return 93.4f;     // strange/anti-strange
+                    if (t == 16 || t == 22) return 1270.0f;   // charm/anti-charm
+                    if (t == 17 || t == 23) return 172760.0f; // top/anti-top
+                    if (t == 18 || t == 24) return 4180.0f;   // bottom/anti-bottom
+                    if (t == 25) return 0.0f;                  // gluon
+                    if (t == 26 || t == 27) return 80379.0f;  // W+/W-
+                    if (t == 28) return 91188.0f;              // Z0
+                    if (t == 29) return 125100.0f;             // Higgs
+                    if (t == 30) return 0.0f;                  // graviton
+                    if (t == 31) return 100000.0f;             // dark matter (hypothetical ~100 GeV)
+                    if (t == 32) return 0.001f;                // dark energy (near-massless)
+                    return 0.0f;
+                };
+
+                constexpr float C_SIM = 300.0f;  // sim speed of light
+                float m0 = get_rest_mass_MeV(ptype);
+                float beta = std::min(speed / C_SIM, 0.9999f);
+                float E_MeV;
+                if (m0 < 0.001f) {
+                    // Massless: E = pc; use sim momentum scaled to MeV
+                    // p_sim / c_sim gives a dimensionless ratio; scale by typical energy
+                    E_MeV = speed / C_SIM * 1.0f;  // ~1 MeV photon at c
+                    if (E_MeV < 0.001f) E_MeV = 0.0f;
+                } else {
+                    float gamma = 1.0f / std::sqrt(1.0f - beta * beta);
+                    E_MeV = gamma * m0;
+                }
+
+                float eV = E_MeV * 1e6f;
+                ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Energy");
+                ImGui::SameLine(col_w);
+                if (eV < 0.01f)
+                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "~0 eV");
+                else if (eV < 1e3f)
+                    ImGui::Text("%.1f eV", eV);
+                else if (eV < 1e6f)
+                    ImGui::Text("%.2f keV", eV / 1e3f);
+                else if (eV < 1e9f)
+                    ImGui::Text("%.2f MeV", eV / 1e6f);
+                else if (eV < 1e12f)
+                    ImGui::Text("%.2f GeV", eV / 1e9f);
+                else
+                    ImGui::Text("%.2f TeV", eV / 1e12f);
+            }
+
             ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Temp");
             ImGui::SameLine(col_w);
             if (particle_temp < 1000.0f)
@@ -3386,6 +3494,7 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
     std::vector<uint32_t> nucleon_indices;
     std::vector<uint32_t> lepton_indices;
     glm::vec2 sum_pos(0.0f), sum_mom(0.0f);
+    float total_energy_MeV = 0.0f;
     uint32_t oldest_birth = UINT32_MAX;
 
     auto get_mass_elem = [](uint32_t t) -> float {
@@ -3393,6 +3502,15 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
         if (t == 2 || t == 4) return 1.0f;
         return 1.0f;
     };
+
+    // Real rest mass energy in MeV (PDG values) — for element energy display
+    auto get_rest_mass_MeV = [](uint32_t t) -> float {
+        if (t == 0 || t == 5) return 938.272f;    // proton/antiproton
+        if (t == 1)           return 939.565f;    // neutron
+        if (t == 2 || t == 4) return 0.511f;      // electron/positron
+        return 0.0f;
+    };
+    constexpr float C_SIM_ELEM = 300.0f;
 
     for (uint32_t pi = 0; pi < n_total; ++pi) {
         if (pi >= particles.orbital_parent.size()) break;
@@ -3417,6 +3535,13 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
         if (readback_velocities && pi < readback_count) {
             float mass = get_mass_elem(pt);
             sum_mom += readback_velocities[pi] * mass;
+
+            // Accumulate relativistic energy: E = γm₀c²
+            float m0 = get_rest_mass_MeV(pt);
+            float spd = glm::length(readback_velocities[pi]);
+            float beta = std::min(spd / C_SIM_ELEM, 0.9999f);
+            float gamma = 1.0f / std::sqrt(1.0f - beta * beta);
+            total_energy_MeV += gamma * m0;
         }
 
         if (pi < particles.birth_frames.size()) {
@@ -3533,6 +3658,23 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
         // Momentum
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Momentum");
         ImGui::SameLine(col_w); ImGui::Text("%.1f", momentum);
+
+        // Energy — relativistic total (sum of γm₀c² for all constituents)
+        {
+            float eV = total_energy_MeV * 1e6f;
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Energy");
+            ImGui::SameLine(col_w);
+            if (eV < 1e3f)
+                ImGui::Text("%.1f eV", eV);
+            else if (eV < 1e6f)
+                ImGui::Text("%.2f keV", eV / 1e3f);
+            else if (eV < 1e9f)
+                ImGui::Text("%.2f MeV", eV / 1e6f);
+            else if (eV < 1e12f)
+                ImGui::Text("%.2f GeV", eV / 1e9f);
+            else
+                ImGui::Text("%.2f TeV", eV / 1e12f);
+        }
 
         // Age
         if (oldest_birth != UINT32_MAX) {
@@ -3938,7 +4080,7 @@ void PhysicsInterface::draw_element_list() {
                                     io.DisplaySize.y * 0.5f - win_h * 0.5f),
                             ImGuiCond_Appearing);
     ImGui::SetNextWindowSize(ImVec2(win_w, win_h), ImGuiCond_Appearing);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(280, 120), ImVec2(400, max_h));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(340, 120), ImVec2(480, max_h));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.05f, 0.09f, 0.95f));
     ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.08f, 0.06f, 0.03f, 0.95f));
@@ -3955,8 +4097,8 @@ void PhysicsInterface::draw_element_list() {
     }
 
     // Column headers
-    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "%-6s %-14s %4s %6s %3s",
-                       "Sym", "Name", "A", "Charge", "e");
+    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "%-6s %-12s %3s %3s %10s %6s",
+                       "Sym", "Name", "A", "Q", "Energy", "Age");
     ImGui::Separator();
 
     // Scrollable list
@@ -4017,11 +4159,39 @@ void PhysicsInterface::draw_element_list() {
             ImGui::ColorConvertFloat4ToU32(stab_col));
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.0f);
 
+        // Format energy string
+        char energy_str[32];
+        {
+            float eV = elem.energy_MeV * 1e6f;
+            if (eV < 1e3f)
+                snprintf(energy_str, sizeof(energy_str), "%.0f eV", eV);
+            else if (eV < 1e6f)
+                snprintf(energy_str, sizeof(energy_str), "%.1f keV", eV / 1e3f);
+            else if (eV < 1e9f)
+                snprintf(energy_str, sizeof(energy_str), "%.1f MeV", eV / 1e6f);
+            else if (eV < 1e12f)
+                snprintf(energy_str, sizeof(energy_str), "%.2f GeV", eV / 1e9f);
+            else
+                snprintf(energy_str, sizeof(energy_str), "%.2f TeV", eV / 1e12f);
+        }
+
+        // Format age string
+        char age_str[16];
+        if (elem.oldest_birth != UINT32_MAX) {
+            float age_sec = (frame_counter_display - elem.oldest_birth) / 60.0f;
+            if (age_sec < 60.0f)
+                snprintf(age_str, sizeof(age_str), "%.0fs", age_sec);
+            else
+                snprintf(age_str, sizeof(age_str), "%.1fm", age_sec / 60.0f);
+        } else {
+            snprintf(age_str, sizeof(age_str), "-");
+        }
+
         // Selectable row
         const char* lepton_label = elem.is_anti ? "e+" : "e-";
-        char row_text[128];
-        snprintf(row_text, sizeof(row_text), "%-4s %-4s-%-3d  %-14s %3s  %d%s",
-                 sym, sym, A, name, charge_str, elem.electrons, lepton_label);
+        char row_text[192];
+        snprintf(row_text, sizeof(row_text), "%-4s %-4s-%-3d  %-10s %3s %10s %6s",
+                 sym, sym, A, name, charge_str, energy_str, age_str);
 
         if (ImGui::Selectable(row_text, is_selected, ImGuiSelectableFlags_None, ImVec2(0, 22))) {
             element_card_nucleus_rep = static_cast<int32_t>(elem.rep);
@@ -4054,6 +4224,185 @@ void PhysicsInterface::draw_element_list() {
             ImGui::EndTooltip();
         }
 
+        ImGui::PopID();
+    }
+
+    ImGui::EndChild();
+    ImGui::End();
+    ImGui::PopStyleColor(3);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Particle List Window ─────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_particle_list(const Particles& particles) {
+    if (!show_particle_list || active_particle_display == 0) return;
+
+    // Real rest mass energy in MeV (PDG values)
+    auto rest_mass_MeV = [](uint32_t t) -> float {
+        if (t == 0 || t == 5) return 938.272f;    // proton/antiproton
+        if (t == 1)           return 939.565f;     // neutron
+        if (t == 2 || t == 4) return 0.511f;       // electron/positron
+        if (t == 3)           return 0.0f;          // photon
+        if (t == 6 || t == 11 || t == 12) return 0.0f; // neutrinos
+        if (t == 7 || t == 8) return 105.658f;     // muon/antimuon
+        if (t == 9 || t == 10) return 1776.86f;    // tau/antitau
+        if (t == 13 || t == 19) return 2.16f;      // up/anti-up
+        if (t == 14 || t == 20) return 4.67f;      // down/anti-down
+        if (t == 15 || t == 21) return 93.4f;      // strange
+        if (t == 16 || t == 22) return 1270.0f;    // charm
+        if (t == 17 || t == 23) return 172760.0f;  // top
+        if (t == 18 || t == 24) return 4180.0f;    // bottom
+        if (t == 25) return 0.0f;                   // gluon
+        if (t == 26 || t == 27) return 80379.0f;   // W+/W-
+        if (t == 28) return 91188.0f;               // Z0
+        if (t == 29) return 125100.0f;              // Higgs
+        if (t == 30) return 0.0f;                   // graviton
+        if (t == 31) return 100000.0f;              // dark matter
+        if (t == 32) return 0.001f;                 // dark energy
+        return 0.0f;
+    };
+
+    constexpr float C_SIM_PL = 300.0f;
+
+    // Format energy value into string
+    auto fmt_energy = [](char* buf, size_t sz, float MeV) {
+        float eV = MeV * 1e6f;
+        if (eV < 1e3f)
+            snprintf(buf, sz, "%.0f eV", eV);
+        else if (eV < 1e6f)
+            snprintf(buf, sz, "%.1f keV", eV / 1e3f);
+        else if (eV < 1e9f)
+            snprintf(buf, sz, "%.1f MeV", eV / 1e6f);
+        else if (eV < 1e12f)
+            snprintf(buf, sz, "%.2f GeV", eV / 1e9f);
+        else
+            snprintf(buf, sz, "%.2f TeV", eV / 1e12f);
+    };
+
+    ImGuiIO& io = ImGui::GetIO();
+    float win_w = 380.0f;
+    float max_h = io.DisplaySize.y - 120.0f;
+
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
+                                    io.DisplaySize.y * 0.5f - max_h * 0.35f),
+                            ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(win_w, max_h * 0.7f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(340, 150), ImVec2(500, max_h));
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.05f, 0.09f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.03f, 0.06f, 0.10f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.05f, 0.10f, 0.18f, 0.95f));
+
+    char ptitle[64];
+    snprintf(ptitle, sizeof(ptitle), "Particles (%u)###ParticleList", active_particle_display);
+
+    if (!ImGui::Begin(ptitle, &show_particle_list)) {
+        ImGui::End();
+        ImGui::PopStyleColor(3);
+        return;
+    }
+
+    // Column headers
+    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), " %-4s %-12s %6s  %10s %6s",
+                       "ID", "Type", "Speed", "Energy", "Age");
+    ImGui::Separator();
+
+    // Scrollable list — grouped by type
+    ImGui::BeginChild("##PartListScroll", ImVec2(0, 0), false);
+
+    uint32_t n = static_cast<uint32_t>(particles.types.size());
+
+    // Iterate by type group for organization
+    for (uint32_t t = 0; t < PHYS_PARTICLE_TYPES; ++t) {
+        if (type_counts_display[t] == 0) continue;
+
+        // Type group header
+        const char* tname = (t < PHYS_PARTICLE_TYPES) ? PHYS_TYPE_NAMES[t] : "Unknown";
+        ImVec4 tcol = (t < PHYS_PARTICLE_TYPES) ? PHYS_TYPE_UI_COLORS[t] : ImVec4(1,1,1,1);
+
+        ImGui::PushID(static_cast<int>(t + 1000));
+        bool header_open = ImGui::TreeNodeEx(tname,
+            ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth,
+            "%s (%u)", tname, type_counts_display[t]);
+
+        if (header_open) {
+            float m0 = rest_mass_MeV(t);
+            bool massless = (m0 < 0.001f);
+
+            for (uint32_t i = 0; i < n; ++i) {
+                if (particles.types[i] != t) continue;
+                if (readback_energies_ptr && readback_energies_ptr[i] < 0.01f) continue;
+
+                // Compute energy
+                float E_MeV = m0;
+                float speed = 0.0f;
+                if (readback_velocities && i < readback_count) {
+                    speed = glm::length(readback_velocities[i]);
+                    float beta = std::min(speed / C_SIM_PL, 0.9999f);
+                    if (massless) {
+                        E_MeV = beta * 1.0f;
+                    } else {
+                        float gamma = 1.0f / std::sqrt(1.0f - beta * beta);
+                        E_MeV = gamma * m0;
+                    }
+                }
+
+                char energy_str[32];
+                fmt_energy(energy_str, sizeof(energy_str), E_MeV);
+
+                // Speed as fraction of c
+                char speed_str[16];
+                float beta_disp = speed / C_SIM_PL;
+                if (beta_disp > 0.01f)
+                    snprintf(speed_str, sizeof(speed_str), "%.2fc", beta_disp);
+                else
+                    snprintf(speed_str, sizeof(speed_str), "%.0f", speed);
+
+                bool is_selected = (selected_particle_idx == static_cast<int32_t>(i));
+                ImGui::PushID(static_cast<int>(i));
+
+                // Color dot
+                ImVec2 cursor = ImGui::GetCursorScreenPos();
+                ImGui::GetWindowDrawList()->AddCircleFilled(
+                    ImVec2(cursor.x + 5.0f, cursor.y + 10.0f), 3.0f,
+                    ImGui::ColorConvertFloat4ToU32(tcol));
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.0f);
+
+                // Format age
+                char age_str[16];
+                if (i < static_cast<uint32_t>(particles.birth_frames.size())) {
+                    float age_sec = (frame_counter_display - particles.birth_frames[i]) / 60.0f;
+                    if (age_sec < 60.0f)
+                        snprintf(age_str, sizeof(age_str), "%.0fs", age_sec);
+                    else
+                        snprintf(age_str, sizeof(age_str), "%.1fm", age_sec / 60.0f);
+                } else {
+                    snprintf(age_str, sizeof(age_str), "-");
+                }
+
+                char row[160];
+                snprintf(row, sizeof(row), "#%-5u %-10s %6s  %10s %6s",
+                         i, tname, speed_str, energy_str, age_str);
+
+                if (ImGui::Selectable(row, is_selected, ImGuiSelectableFlags_None, ImVec2(0, 20))) {
+                    selected_particle_idx = static_cast<int32_t>(i);
+                    navigate_to_particle = static_cast<int32_t>(i);
+                }
+
+                if (ImGui::IsItemHovered()) {
+                    ImGui::BeginTooltip();
+                    ImGui::TextColored(tcol, "%s #%u", tname, i);
+                    ImGui::Text("Speed: %s  Energy: %s  Age: %s", speed_str, energy_str, age_str);
+                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "Click to inspect & navigate");
+                    ImGui::EndTooltip();
+                }
+
+                ImGui::PopID();
+            }
+            ImGui::TreePop();
+        }
         ImGui::PopID();
     }
 

@@ -27,8 +27,10 @@ entanglement, antimatter element detection, electron cloud visualization, a pers
 an achievement system, measurement tools (thermometer, velocity meter, ruler with nanometer scale,
 density counter), visualization overlays (energy heatmap, velocity field, trajectory tracer, force
 vectors, atom grid, wave-particle duality mode), interactive tools (particle accelerator, mirrors),
-12 UI themes, 12 environment presets, element export/import, six per-force multiplier knobs, and
-an animated particle splash screen.
+12 UI themes, 12 environment presets, element export/import, six per-force multiplier knobs,
+relativistic energy readouts in electronvolts (PDG rest masses, E = γm₀c²), a browsable
+particle list and element list with live energy/age tracking, and an animated particle
+splash screen.
 
 Simulates up to **100,000 particles** in real time on a toroidal 2560 x 1440 world. GPU compute
 shaders handle O(n^2) pairwise forces; CPU-side physics uses a **spatial acceleration grid** for
@@ -49,7 +51,7 @@ O(n) neighbor queries with **OpenMP** parallelization across all available cores
 - [Photon-Matter Interactions](#photon-matter-interactions)
 - [Nuclear Spallation & Photonuclear Processes](#nuclear-spallation--photonuclear-processes)
 - [Element Detection & Info Cards](#element-detection--info-cards)
-- [Element List & Event Log](#element-list--event-log)
+- [Particle List, Element List & Event Log](#particle-list-element-list--event-log)
 - [Electron Cloud Visualization](#electron-cloud-visualization)
 - [Hard-Sphere Collisions](#hard-sphere-collisions)
 - [Virtual Particle Pairs](#virtual-particle-pairs)
@@ -364,7 +366,10 @@ counted by proximity. Both matter and **antimatter elements** (antiproton nuclei
 clouds) are detected and displayed with distinct cyan-tinted UI styling.
 
 **Particle Info Card** (bottom-right notification):
-- Shows particle type, charge, spin, mass, energy, age, momentum
+- Shows particle type, charge, spin, mass, age, momentum
+- **Relativistic energy** displayed in electronvolts (eV/keV/MeV/GeV/TeV) computed from
+  real PDG rest masses and E = γm₀c² with β = v/c_sim
+- Temperature, magnetic moment
 - If the particle belongs to a nucleus: shows element name, composition, and a clickable
   link to the **Element Detail Card**
 - Antimatter elements display as "Anti-Hydrogen", "Anti-Helium", etc. with cyan accent
@@ -373,6 +378,7 @@ clouds) are detected and displayed with distinct cyan-tinted UI styling.
 - Full element name and symbol (all 118 elements + antimatter variants)
 - Composition: Z, N, A, electron count, shell configuration
 - Net charge, total mass, momentum, age
+- **Total relativistic energy** in eV — sum of γm₀c² for all constituent particles
 - **Stability indicator** with isotope half-life lookup (color-coded)
 - Clickable nucleon/electron particle list for navigation
 - **Move**: relocate entire element (all constituent particles) by clicking
@@ -382,14 +388,27 @@ clouds) are detected and displayed with distinct cyan-tinted UI styling.
 
 ---
 
-## Element List & Event Log
+## Particle List, Element List & Event Log
+
+**Particle List** — The bottom bar displays a clickable **"Particles: N"** counter showing
+all active particles. Clicking opens a scrollable window with particles grouped by type
+in collapsible tree nodes:
+
+- **Per-type headers**: particle type name with count (e.g. "Proton (24)")
+- **Per-particle row**: ID, type, speed (as fraction of c), relativistic energy (eV), age
+- **Color dot**: type-colored indicator matching the simulation rendering
+- **Click to inspect**: clicking any row navigates the camera to that particle and selects
+  it for the info card
+- **Hover tooltip**: speed, energy, age summary
 
 **Element List** — The bottom bar displays a clickable **"Elements: N"** counter showing
 the total number of detected elements in the simulation. Clicking opens a centered,
 scrollable window listing every element with:
 
 - **Stability dot**: green (stable), yellow (long-lived), orange (medium), red (short-lived)
-- **Composition**: symbol, mass number (A), element name, charge, electron count
+- **Composition**: symbol, mass number (A), element name, charge
+- **Relativistic energy**: total E = Σγm₀c² across all constituents (eV/keV/MeV/GeV)
+- **Age**: time since the oldest constituent was spawned
 - **Tooltip**: Z, N, electrons, decay mode and half-life for unstable isotopes
 - **Click to inspect**: clicking any row navigates the camera to that element and opens
   its Element Detail Card
@@ -626,6 +645,8 @@ counts and orbital velocities:
 | **Kaon+** K+ | u + s&#773; | 2 |
 
 Each section has configurable count (1-100), energy (0.1-1.0), and scatter radius (1-100px).
+The **energy slider** directly affects spawn velocity: electron orbital speeds and single
+particle thermal velocities scale as √E, so low-energy spawns produce visibly slower particles.
 
 ---
 
