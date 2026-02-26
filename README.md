@@ -2,7 +2,7 @@
 
 # Particle Playground
 
-**A GPU-accelerated quantum particle physics and chemistry sandbox**
+**A GPU-accelerated quantum particle physics sandbox**
 
 Standard Model + Beyond · Nuclear fusion & fission · Orbital mechanics · Emergent thermodynamics · Quantum entanglement · Tools · Save/Load
 
@@ -15,18 +15,15 @@ Standard Model + Beyond · Nuclear fusion & fission · Orbital mechanics · Emer
 
 ---
 
-Particle Playground ships two simulation modes sharing the same Vulkan compute engine:
+Particle Playground is a real-time particle physics sandbox powered by Vulkan compute shaders.
+33 particle types spanning the Standard Model and beyond interact through all four fundamental
+forces: Coulomb + Yukawa + QCD + weak, with centrifugal barrier orbitals, nuclear fusion/fission,
+radioactive decay with realistic isotope half-lives, Compton scattering, hard-sphere collisions,
+emergent thermodynamics, virtual particle pair creation, quantum entanglement, element detection
+with info cards, interactive tools (particle accelerator, mirrors), and six per-force multiplier
+knobs.
 
-- **Particle Physics** (`particle_physics`) — 33 particle types spanning the Standard Model and
-  beyond, with real quantum mechanics: Coulomb + Yukawa + QCD forces, centrifugal barrier orbitals,
-  nuclear fusion/fission, radioactive decay with realistic isotope half-lives, Compton scattering,
-  hard-sphere collisions, emergent thermodynamics, virtual particle pair creation, quantum
-  entanglement, element detection with info cards, interactive tools (particle accelerator, mirrors),
-  and six per-force multiplier knobs
-- **Particle Chemistry** (`particle_life`) — 18 elements with persistent covalent/ionic bonds,
-  molecular aggregates, vesicles, proto-cells, and Darwinian evolution
-
-Both simulate up to **22,500 particles** in real time on a toroidal 2560 x 1440 world using O(n^2)
+Simulates up to **22,500 particles** in real time on a toroidal 2560 x 1440 world using O(n^2)
 pairwise GPU compute shaders.
 
 ---
@@ -34,32 +31,25 @@ pairwise GPU compute shaders.
 ## Table of Contents
 
 - [Physics Engine](#physics-engine)
-- [Particle Physics Mode](#particle-physics-mode)
-  - [Standard Model + Beyond — 33 Particle Types](#standard-model--beyond--33-particle-types)
-  - [Four Fundamental Forces + Multipliers](#four-fundamental-forces--multipliers)
-  - [Orbital Mechanics](#orbital-mechanics)
-  - [Nuclear Fusion](#nuclear-fusion)
-  - [Nuclear Fission](#nuclear-fission)
-  - [Radioactive Decay](#radioactive-decay)
-  - [Isotope Half-Lives](#isotope-half-lives)
-  - [Element Detection & Info Cards](#element-detection--info-cards)
-  - [Element List & Event Notifications](#element-list--event-notifications)
-  - [Compton Scattering](#compton-scattering)
-  - [Hard-Sphere Collisions](#hard-sphere-collisions)
-  - [Virtual Particle Pairs](#virtual-particle-pairs)
-  - [Quantum Entanglement](#quantum-entanglement)
-  - [Emergent Thermodynamics](#emergent-thermodynamics)
-  - [Field Visualization](#field-visualization)
-  - [Environment Presets](#environment-presets-physics)
-  - [Spawn Picker — Physics](#spawn-picker--physics)
-  - [Tools](#tools)
-  - [Save / Load](#save--load)
-- [Particle Chemistry Mode](#particle-chemistry-mode)
-  - [Periodic Table — 18 Elements](#periodic-table--18-elements)
-  - [Environment Templates](#environment-templates)
-  - [Chemistry & Bonding](#chemistry--bonding)
-  - [Aggregates & Cells](#aggregates--cells)
-  - [Spawn Picker — Chemistry](#spawn-picker--chemistry)
+- [Standard Model + Beyond — 33 Particle Types](#standard-model--beyond--33-particle-types)
+- [Four Fundamental Forces + Multipliers](#four-fundamental-forces--multipliers)
+- [Orbital Mechanics](#orbital-mechanics)
+- [Nuclear Fusion](#nuclear-fusion)
+- [Nuclear Fission](#nuclear-fission)
+- [Radioactive Decay](#radioactive-decay)
+- [Isotope Half-Lives](#isotope-half-lives)
+- [Element Detection & Info Cards](#element-detection--info-cards)
+- [Element List & Event Notifications](#element-list--event-notifications)
+- [Compton Scattering](#compton-scattering)
+- [Hard-Sphere Collisions](#hard-sphere-collisions)
+- [Virtual Particle Pairs](#virtual-particle-pairs)
+- [Quantum Entanglement](#quantum-entanglement)
+- [Emergent Thermodynamics](#emergent-thermodynamics)
+- [Field Visualization](#field-visualization)
+- [Environment Presets](#environment-presets)
+- [Spawn Picker](#spawn-picker)
+- [Tools](#tools)
+- [Save / Load](#save--load)
 - [Controls](#controls)
 - [Build](#build)
 - [Architecture](#architecture)
@@ -68,7 +58,7 @@ pairwise GPU compute shaders.
 
 ## Physics Engine
 
-Both modes share the same Vulkan compute pipeline dispatched each frame.
+The Vulkan compute pipeline is dispatched each frame.
 
 | Property | Detail |
 |---|---|
@@ -78,16 +68,6 @@ Both modes share the same Vulkan compute pipeline dispatched each frame.
 | Buffers | Double-buffered ping-pong (position, velocity, angle, angular velocity, energy, genome) |
 | Genome | 4 floats per particle: charge, spin, color charge / orbital L, decay rate |
 | Push Constants | 128 bytes (Vulkan guaranteed minimum) — all simulation parameters per frame |
-
----
-
-# Particle Physics Mode
-
-A particle sandbox where protons, neutrons, electrons, quarks, gauge bosons, and hypothetical
-particles interact through all four fundamental forces. Electrons orbit nuclei via quantum-mechanical
-centrifugal barriers, nucleons fuse under extreme temperature and pressure, heavy nuclei undergo
-fission when struck by fast neutrons, and virtual particle-antiparticle pairs spontaneously appear
-from high-energy encounters.
 
 ---
 
@@ -443,8 +423,8 @@ Five independent quantum field overlays, each toggled separately.
 
 ---
 
-<a name="environment-presets-physics"></a>
-## Environment Presets (Physics)
+<a name="environment-presets"></a>
+## Environment Presets
 
 Twelve presets spanning vacuum to dark sector. Select from the **Environment** dropdown.
 
@@ -465,7 +445,7 @@ Twelve presets spanning vacuum to dark sector. Select from the **Environment** d
 
 ---
 
-## Spawn Picker — Physics
+## Spawn Picker
 
 Press **F3** to open the spawn menu with categorized sections:
 
@@ -569,131 +549,6 @@ Simulation state can be saved and loaded as binary `.ppsg` files.
 
 ---
 
-# Particle Chemistry Mode
-
-The chemistry simulation models 18 elements forming persistent bonds, molecular aggregates,
-and evolving proto-organisms — all governed by the same four fundamental forces.
-
----
-
-## Periodic Table — 18 Elements
-
-Three nucleosynthesis groups spanning the periodic table:
-
-<table>
-<thead><tr><th>#</th><th>Element</th><th>Group</th><th>Valence</th><th>Special Behaviour</th></tr></thead>
-<tbody>
-<tr><td>0</td><td><b>H</b> Hydrogen</td><td>Biogenic</td><td>1</td><td>Polar — dipole rotation</td></tr>
-<tr><td>1</td><td><b>C</b> Carbon</td><td>Biogenic</td><td>4</td><td>Neutral backbone</td></tr>
-<tr><td>2</td><td><b>N</b> Nitrogen</td><td>Biogenic</td><td>3</td><td>Electron donor</td></tr>
-<tr><td>3</td><td><b>O</b> Oxygen</td><td>Biogenic</td><td>2</td><td>Polar + electron acceptor</td></tr>
-<tr><td>4</td><td><b>P</b> Phosphorus</td><td>Biogenic</td><td>5</td><td>Heavy, enzymatic catalyst</td></tr>
-<tr><td>5</td><td><b>S</b> Sulfur</td><td>Biogenic</td><td>2</td><td>Heavy</td></tr>
-<tr><td>6</td><td><b>Na</b> Sodium</td><td>Stellar</td><td>1</td><td>Heavy, ionic (+), adhesive</td></tr>
-<tr><td>7</td><td><b>Cl</b> Chlorine</td><td>Stellar</td><td>1</td><td>Heavy, ionic (-), adhesive</td></tr>
-<tr><td>8</td><td><b>Fe</b> Iron</td><td>Stellar</td><td>3</td><td>Heavy, polar, redox-active</td></tr>
-<tr><td>9</td><td><b>Ni</b> Nickel</td><td>Stellar</td><td>2</td><td>Heavy, catalyst, beta+ unstable to Fe</td></tr>
-<tr><td>10</td><td><b>Si</b> Silicon</td><td>Stellar</td><td>4</td><td>Heavy, silicate network former</td></tr>
-<tr><td>11</td><td><b>Ca</b> Calcium</td><td>Stellar</td><td>2</td><td>Heavy, ionic (+)</td></tr>
-<tr><td>12</td><td><b>Ti</b> Titanium</td><td>Stellar</td><td>4</td><td>Heavy, refractory</td></tr>
-<tr><td>13</td><td><b>Sr</b> Strontium</td><td>r-process</td><td>2</td><td>Heavy, ionic, beta- unstable to Ca</td></tr>
-<tr><td>14</td><td><b>Au</b> Gold</td><td>r-process</td><td>1</td><td>Heavy, adhesive, noble</td></tr>
-<tr><td>15</td><td><b>Pb</b> Lead</td><td>r-process</td><td>4</td><td>Heavy, stable decay endpoint</td></tr>
-<tr><td>16</td><td><b>Eu</b> Europium</td><td>r-process</td><td>3</td><td>Heavy, radical, beta- unstable to Fe</td></tr>
-<tr><td>17</td><td><b>U</b> Uranium</td><td>r-process</td><td>6</td><td>Heavy, radical, catalyst, alpha unstable to Pb</td></tr>
-</tbody>
-</table>
-
----
-
-## Environment Templates
-
-Nine environment presets control particle abundance, temperature, dampening, and physics on reset.
-
-| # | Environment | Temp | Dampening | Key Atoms | Special |
-|---|---|---|---|---|---|
-| 0 | **Lab Mode** | 27 C | 0.85 | *(empty)* | Use F3 to place structures |
-| 1 | **Tide Pool** | 27 C | 0.93 | H, O, Na, Cl, C, N | Salt water + organics |
-| 2 | **Hydrothermal Vent** | 350 C | 0.90 | H, O, S, Fe, Si, Ca | Hot, mineral-rich water |
-| 3 | **Primordial Soup** | 80 C | 0.88 | H, C, N, O, P, S | Early Earth organics |
-| 4 | **Freshwater Pond** | 20 C | 0.91 | H, O, Ca, Na | Pure water + trace minerals |
-| 5 | **Deep Space** | -270 C | 0.99 | H, C, N, O | Sparse, cosmic ray bombardment |
-| 6 | **Nebula** | -250 C | 0.98 | H, C, N, O, Si, Fe | Dense hydrogen cloud, gravity = 0.1 |
-| 7 | **Asteroid Surface** | -50 C | 0.95 | Fe, Si, Ni, Ca, O, Ti | Rocky metallic body |
-| 8 | **Comet** | -100 C | 0.97 | H, O, C, N, Si, Fe, S, P | Ice + dust + organics |
-
----
-
-## Chemistry & Bonding
-
-### Persistent Bonds
-
-Every 2 frames the CPU bond manager (spatial hash, O(N)) evaluates the particle population:
-
-- **Formation** — Two compatible atoms within `bond_form_radius` with free valence slots snap together
-- **Breaking** — A bond stretched beyond `rest_length * break_factor` snaps and emits a photon
-- **Spring force** — `F = k_eff * extension` where `k_eff = bond_spring_k * clamp(bond_str + 0.5, 0.2, 1.5)`
-
-Bond compatibility respects real chemistry:
-`C-C, C-N, C-O, O-H` (covalent), `Na-Cl` (ionic), `Fe-O, Fe-S, Si-O, Au-S, U-O, P-O, N-H`
-
-### Genome (Chemistry)
-
-| Gene | Range | Effect |
-|---|---|---|
-| Charge | -1.0 to +1.0 | Coulomb + Lorentz weighting |
-| Electronegativity | 0.2 to 2.0 | Electron-transfer energy yield |
-| Reactivity | 0.2 to 2.0 | Bond-strain cost; coupled to nuclear stability |
-| Bond strength | -0.5 to +0.5 | Spring constant multiplier |
-
----
-
-## Aggregates & Cells
-
-Every 5 frames, DBSCAN clustering groups nearby atoms into **molecular aggregates**.
-
-### Molecular Classification
-
-| Class | Rule |
-|---|---|
-| **H2O** water | H > 3/4 cluster & O > 1 |
-| **LIPID** | (C+H) > 2/3 cluster |
-| **AACD** amino acid | (N+O)*2 > size & C > 0 |
-| **NUCL** nucleotide | P*3 > size |
-| **RAD!** radical | any RADICAL member |
-| **POLY** polymer | C > 1/2 cluster & size > 20 |
-| **INRG** inorganic | otherwise |
-
-### Biological Complexity Hierarchy
-
-| Tier | Label | Criteria |
-|---|---|---|
-| AGGREGATE | -- | Any cluster |
-| **VESICLE** | `VSIC` | LIPID cluster with ring topology (ring_factor > 0.65), size >= 8 |
-| **PROTO-CELL** | `PCLL` | Vesicle enclosing at least one non-lipid cluster |
-| **CELL** | `CELL` | Proto-cell enclosing a nucleotide cluster (DNA/RNA analog) |
-
-### Darwinian Evolution (vesicle+ only)
-
-| Mechanism | Detail |
-|---|---|
-| **Division mutation** | On division, +/-3% drift to electronegativity and reactivity |
-| **Fitness-driven adaptation** | Top-3 vesicle+ structures nudge their type's self-cohesion force |
-| **Trait-scale amplification** | Bond-rich cell-class clusters boost their type's force row up to 2.5x |
-
----
-
-## Spawn Picker — Chemistry
-
-Press **F3** to open the spawn picker with tabs for **Atoms** (18 elements), **Groups**
-(14 inorganic / small-molecule templates), **Organics** (8 bio-molecule templates), and
-**Organisms** (clone aggregates or place predefined templates).
-
-Group templates include: H2O, CH4, NaCl, NH3, CO2, Glycine, Benzene, SiO4, Fe2O3, EtOH,
-CaCO3, Au3, UO2, FeS2.
-
----
-
 ## Controls
 
 | Key / Input | Action |
@@ -751,10 +606,6 @@ Compiled SPIR-V shaders are written to both `build/shaders/` and `shaders/` (sou
 ### Run
 
 ```bash
-# Chemistry simulation
-./build/particle_life
-
-# Physics simulation
 ./build/particle_physics
 ```
 
@@ -766,28 +617,20 @@ Compiled SPIR-V shaders are written to both `build/shaders/` and `shaders/` (sou
 EmergentEvolution/
 ├── src/
 │   ├── types.h                  # SimConfig, PushConstants (128 bytes), shared constants
-│   ├── particles.h/.cpp         # CPU arrays, CPK colours, electrochemistry force matrix
-│   ├── bond_manager.h/.cpp      # Spatial-hash bond formation/breaking, BOND_COMPAT
-│   ├── decay_manager.h/.cpp     # Stochastic half-life decay, annihilation, DECAY_TABLE
-│   ├── organism.h/.cpp          # DBSCAN clustering, molecule classification, trait feedback
-│   ├── sub_atomic.h/.cpp        # Sub-atomic LOD: Bohr nucleon/electron, Cornell quark
-│   ├── stb_image.h              # Single-header image loading (window icon)
-│   ├── stb_image_impl.cpp       # stb_image implementation unit
+│   ├── particles.h/.cpp         # CPU arrays, particle type data
 │   ├── vulkan_context.h/.cpp    # Vulkan instance, device, swapchain, buffer helpers
 │   ├── compute_pipeline.h/.cpp  # 18-binding descriptor layout, buffer lifecycle, readback
 │   ├── renderer.h/.cpp          # Fullscreen-quad pipeline, ImGui integration
-│   ├── interface.h/.cpp         # Chemistry ImGui panels, F3 spawn picker
-│   ├── simulation.h/.cpp        # Chemistry main loop, input, camera, orchestration
-│   └── main.cpp                 # Chemistry entry point
+│   ├── stb_image.h              # Single-header image loading (window icon)
+│   └── stb_image_impl.cpp       # stb_image implementation unit
 ├── src/physics/
 │   ├── phys_particles.h/.cpp    # 33 particle types, masses, charges, decay rates, isotope table, environments
-│   ├── interface.h/.cpp         # Physics ImGui: spawn picker, force multipliers, element cards, tools, save/load
-│   ├── simulation.h/.cpp        # Physics main loop: fusion, fission, decay, orbitals, entanglement, accelerator
+│   ├── interface.h/.cpp         # ImGui: spawn picker, force multipliers, element cards, tools, save/load
+│   ├── simulation.h/.cpp        # Main loop: fusion, fission, decay, orbitals, entanglement, accelerator
 │   ├── save_load.h/.cpp         # Binary .ppsg save/load serialization
-│   └── main.cpp                 # Physics entry point (borderless maximized, window icon via stb_image)
+│   └── main.cpp                 # Entry point (borderless maximized, window icon via stb_image)
 ├── shaders/
-│   ├── compute.comp             # Chemistry GPU: forces, bonds, metabolism
-│   ├── physics.comp             # Physics GPU: 7 forces, centrifugal barrier, hard-sphere, mirror reflection, 5 field viz
+│   ├── physics.comp             # GPU: 7 forces, centrifugal barrier, hard-sphere, mirror reflection, 5 field viz
 │   ├── fullscreen.vert          # Fullscreen triangle vertex shader
 │   └── fullscreen.frag          # Particle texture blit
 └── CMakeLists.txt

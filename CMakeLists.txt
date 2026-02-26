@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(particle_life LANGUAGES CXX)
+project(particle_playground LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,50 +19,6 @@ FetchContent_Declare(imgui
     GIT_TAG        v1.91.0
 )
 FetchContent_MakeAvailable(imgui)
-
-# ── Chemistry Simulation ─────────────────────────────────────────────────────
-
-add_executable(particle_life
-    src/main.cpp
-    src/vulkan_context.cpp
-    src/particles.cpp
-    src/compute_pipeline.cpp
-    src/renderer.cpp
-    src/interface.cpp
-    src/simulation.cpp
-    src/organism.cpp
-    src/bond_manager.cpp
-    src/sub_atomic.cpp
-    src/decay_manager.cpp
-
-    # ImGui core
-    ${imgui_SOURCE_DIR}/imgui.cpp
-    ${imgui_SOURCE_DIR}/imgui_draw.cpp
-    ${imgui_SOURCE_DIR}/imgui_tables.cpp
-    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-
-    # ImGui platform/renderer backends
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
-)
-
-target_include_directories(particle_life PRIVATE
-    src/
-    ${imgui_SOURCE_DIR}
-    ${imgui_SOURCE_DIR}/backends
-)
-
-target_link_libraries(particle_life PRIVATE
-    Vulkan::Vulkan
-    glfw
-    glm::glm
-    OpenMP::OpenMP_CXX
-)
-
-target_compile_options(particle_life PRIVATE
-    -Wall -Wextra -Wpedantic
-    $<$<CONFIG:Release>:-O3>
-)
 
 # ── Physics Simulation ───────────────────────────────────────────────────────
 
@@ -139,21 +95,18 @@ macro(compile_shader INPUT OUTPUT)
     )
 endmacro()
 
-compile_shader(compute.comp      compute.spv)
 compile_shader(physics.comp      physics.spv)
 compile_shader(fullscreen.vert   fullscreen.vert.spv)
 compile_shader(fullscreen.frag   fullscreen.frag.spv)
 
 add_custom_target(shaders ALL DEPENDS
-    ${SHADER_BIN_DIR}/compute.spv
     ${SHADER_BIN_DIR}/physics.spv
     ${SHADER_BIN_DIR}/fullscreen.vert.spv
     ${SHADER_BIN_DIR}/fullscreen.frag.spv
 )
-add_dependencies(particle_life shaders)
 add_dependencies(particle_physics shaders)
 
 # ── Install ───────────────────────────────────────────────────────────────────
 
-install(TARGETS particle_life particle_physics DESTINATION bin)
+install(TARGETS particle_physics DESTINATION bin)
 install(DIRECTORY ${SHADER_BIN_DIR}/ DESTINATION bin/shaders)

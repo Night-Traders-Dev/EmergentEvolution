@@ -180,6 +180,10 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
         std::uniform_real_distribution<float> dx(0.0f, static_cast<float>(REGION_W));
         std::uniform_real_distribution<float> dy(0.0f, static_cast<float>(REGION_H));
 
+        p.birth_frames.assign(pool, 0u);
+        p.orbital_parent.assign(pool, -1);
+        p.entangled_partner.assign(pool, 0xFFFFFFFFu);
+
         for (uint32_t i = 0; i < pool; ++i) {
             p.positions[i] = glm::vec2(dx(rng), dy(rng));
             // Dormant: all genome slots zero (no charge, no spin, no color, no decay)
@@ -367,4 +371,9 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
         // Full genome: [charge, spin, color_charge, decay_rate]
         write_genome(p, type, rng);
     }
+
+    // Auxiliary vectors (not populated in the per-particle loop above)
+    p.birth_frames.assign(count, 0u);
+    p.orbital_parent.assign(count, -1);
+    p.entangled_partner.assign(count, 0xFFFFFFFFu);
 }
