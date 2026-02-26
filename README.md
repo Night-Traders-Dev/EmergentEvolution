@@ -4,7 +4,7 @@
 
 **A GPU-accelerated quantum particle physics sandbox**
 
-Standard Model + Beyond · Nuclear fusion & fission · Orbital mechanics · Emergent thermodynamics · Quantum entanglement · Tools · Save/Load
+Standard Model + Beyond · Nuclear fusion & fission · Photon-matter interactions · Orbital mechanics · Emergent thermodynamics · Quantum entanglement · Achievements · Tools · Save/Load
 
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
 [![Vulkan](https://img.shields.io/badge/Vulkan-1.3-red.svg)](https://www.vulkan.org/)
@@ -18,10 +18,12 @@ Standard Model + Beyond · Nuclear fusion & fission · Orbital mechanics · Emer
 Particle Playground is a real-time particle physics sandbox powered by Vulkan compute shaders.
 33 particle types spanning the Standard Model and beyond interact through all four fundamental
 forces: Coulomb + Yukawa + QCD + weak, with centrifugal barrier orbitals, nuclear fusion/fission,
-radioactive decay with realistic isotope half-lives, Compton scattering, hard-sphere collisions,
-emergent thermodynamics, virtual particle pair creation, quantum entanglement, element detection
-with info cards, interactive tools (particle accelerator, mirrors), and six per-force multiplier
-knobs.
+radioactive decay with realistic isotope half-lives, photoelectric effect, Compton scattering,
+nuclear spallation, photodisintegration, pair production, pion production, vector meson dominance,
+hard-sphere collisions, emergent thermodynamics, virtual particle pair creation, quantum
+entanglement, antimatter element detection, electron cloud visualization, a persistent event log,
+an achievement system, interactive tools (particle accelerator, mirrors), 8 UI themes, 12
+environment presets, element export/import, and six per-force multiplier knobs.
 
 Simulates up to **22,500 particles** in real time on a toroidal 2560 x 1440 world using O(n^2)
 pairwise GPU compute shaders.
@@ -38,9 +40,11 @@ pairwise GPU compute shaders.
 - [Nuclear Fission](#nuclear-fission)
 - [Radioactive Decay](#radioactive-decay)
 - [Isotope Half-Lives](#isotope-half-lives)
+- [Photon-Matter Interactions](#photon-matter-interactions)
+- [Nuclear Spallation & Photonuclear Processes](#nuclear-spallation--photonuclear-processes)
 - [Element Detection & Info Cards](#element-detection--info-cards)
-- [Element List & Event Notifications](#element-list--event-notifications)
-- [Compton Scattering](#compton-scattering)
+- [Element List & Event Log](#element-list--event-log)
+- [Electron Cloud Visualization](#electron-cloud-visualization)
 - [Hard-Sphere Collisions](#hard-sphere-collisions)
 - [Virtual Particle Pairs](#virtual-particle-pairs)
 - [Quantum Entanglement](#quantum-entanglement)
@@ -49,7 +53,9 @@ pairwise GPU compute shaders.
 - [Environment Presets](#environment-presets)
 - [Spawn Picker](#spawn-picker)
 - [Tools](#tools)
+- [Achievements](#achievements)
 - [Save / Load](#save--load)
+- [UI Themes](#ui-themes)
 - [Controls](#controls)
 - [Build](#build)
 - [Architecture](#architecture)
@@ -266,19 +272,91 @@ Decay probability per frame: P = 1 &minus; exp(&minus;ln(2) / t&frac12;)
 
 ---
 
+## Photon-Matter Interactions
+
+High-energy photons interact with matter through multiple CPU-side physics channels, in addition
+to GPU-side Compton radiation pressure. Max 8 interactions per frame.
+
+### GPU-Side (Compton Scattering)
+
+- Scans nearby charged particles (strided sampling, 30px radius)
+- Photon deflects toward closest charged particle, losing energy proportional to proximity
+- Radiation pressure pushes charged matter along photon travel direction
+- Photon's oscillating B-field exerts Lorentz force: `F = q * Bz * (vy, -vx)`
+- Both scale with photon energy / r^2
+
+### CPU-Side Processes
+
+| Process | Threshold | Effect |
+|---|---|---|
+| **Photoelectric Effect** | E&gamma; &ge; 1.5 &times; binding energy | Photon fully absorbed, electron ionized (ejected from orbit) |
+| **Compton Scattering** (bound) | E&gamma; &ge; 0.6 &times; binding energy | 40% energy transfer; electron kicked to higher shell or ionized |
+| **Free Electron Scattering** | E&gamma; &ge; 0.3 | 30% energy transfer, momentum along original photon direction |
+| **Nuclear Compton** | E&gamma; &ge; 0.25 | Photon scatters off free nucleon; 8% energy transfer + momentum kick |
+
+**Shell-dependent binding energy**: Binding scales with &radic;Z (heavier atoms bind tighter).
+Inner shells (1s) require more energy to ionize than outer shells (3s3p3d).
+
+**Shell promotion**: When Compton transfer is below the ionization threshold, the electron is
+promoted to a higher shell by boosting its orbital angular momentum (L) and applying a radial
+kick outward from the nucleus.
+
+---
+
+## Nuclear Spallation & Photonuclear Processes
+
+High-energy particles and photons can shatter or transform nuclei through several distinct
+processes. Max 3 events per frame.
+
+### Massive Particle Spallation
+
+| Property | Detail |
+|---|---|
+| **Trigger** | Any massive particle with speed > 120 px/frame, energy > 0.5 |
+| **Target** | Nucleus with 2+ nucleons (detected via BFS clustering) |
+| **Hit radius** | 10 px from nucleus center |
+| **Damage** | Proportional to projectile kinetic energy; scales from 1 nucleon to total disintegration |
+| **Products** | Ejected nucleons + scattered electrons; projectile loses ~70% energy |
+
+### High-Energy Photon-Nucleus Interactions
+
+Processes ordered by energy threshold. A given photon triggers at most one per frame, selected
+probabilistically (higher energy unlocks more channels):
+
+| Process | E&gamma; Threshold | Products | Color |
+|---|---|---|---|
+| **Photodisintegration** | &ge; 0.50 | &gamma; + A &rarr; (A&minus;1) + nucleon (giant dipole resonance); ejects 1&ndash;2 nucleons | Purple |
+| **Pair Production** | &ge; 0.60 | &gamma; &rarr; e&#8314; + e&#8315; in nuclear Coulomb field (15px interaction radius) | Blue |
+| **Photopion Production** | &ge; 0.80 | &gamma; + N &rarr; N' + &pi; via &Delta; resonance; pion as quark-antiquark pair (u+d&#773; or u&#773;+d) | Green |
+| **Vector Meson Dominance** | &ge; 0.85 | &gamma; &rarr; &rho;&#8304; meson &rarr; hadronic shower: multiple nucleon ejections + quark-antiquark debris | Magenta |
+
+**Pair production** requires a nearby nucleus for momentum conservation. The electron and positron
+open in directions roughly perpendicular to the photon path with a slight forward boost.
+
+**Photopion production** models the &Delta;(1232) resonance: the photon excites a nucleon to a
+&Delta; baryon, which immediately decays into a nucleon (isospin-flipped) + pion.
+
+**Vector meson dominance** is the highest-energy channel: the photon fluctuates into a virtual
+&rho;&#8304; meson that interacts hadronically, producing a shower of nucleon fragments and
+quark-antiquark debris.
+
+---
+
 ## Element Detection & Info Cards
 
 Nuclei are dynamically detected each frame by BFS clustering protons and neutrons within
 a 10px radius. Each cluster yields an element identity (Z, N, A) with bound electrons
-counted by proximity.
+counted by proximity. Both matter and **antimatter elements** (antiproton nuclei with positron
+clouds) are detected and displayed with distinct cyan-tinted UI styling.
 
 **Particle Info Card** (bottom-right notification):
 - Shows particle type, charge, spin, mass, energy, age, momentum
 - If the particle belongs to a nucleus: shows element name, composition, and a clickable
   link to the **Element Detail Card**
+- Antimatter elements display as "Anti-Hydrogen", "Anti-Helium", etc. with cyan accent
 
 **Element Detail Card** (bottom-right, left of info card):
-- Full element name and symbol (all 118 elements)
+- Full element name and symbol (all 118 elements + antimatter variants)
 - Composition: Z, N, A, electron count, shell configuration
 - Net charge, total mass, momentum, age
 - **Stability indicator** with isotope half-life lookup (color-coded)
@@ -286,10 +364,11 @@ counted by proximity.
 - **Move**: relocate entire element (all constituent particles) by clicking
 - **Delete**: remove all particles in the element
 - **Duplicate**: spawn a copy of the element nearby with correct orbital structure
+- **Export**: save the element to a `.ppel` file for import into other simulations
 
 ---
 
-## Element List & Event Notifications
+## Element List & Event Log
 
 **Element List** — The bottom bar displays a clickable **"Elements: N"** counter showing
 the total number of detected elements in the simulation. Clicking opens a centered,
@@ -302,32 +381,45 @@ scrollable window listing every element with:
   its Element Detail Card
 
 **Event Notifications** — Toast-style notifications appear in the top-right corner when
-nuclear events occur, stacking vertically with a 5-second timeout and fade-out:
+physics events occur, stacking vertically with a 5-second timeout and fade-out (max 8).
 
-| Event | Example | Color |
+**Decay / Event Log** — Click the **"Events: N"** counter in the bottom bar to open a
+persistent, scrollable log of all physics events. The log tracks up to 500 entries across
+11 event categories:
+
+| Category | Examples | Color |
 |---|---|---|
-| **Fusion** | `Fusion: p + p → d + e⁺ + ν` | Cyan |
-| **Fission** | `Fission: 8-nucleon cluster split + 3n` | Orange |
-| **Particle Decay** | `Decay: μ⁻ → e⁻ + νμ + ν̄e` | Warm yellow |
-| **Nuclear Decay** | `α Decay: U-238 → Th-234 + He-4` | Red-orange |
+| **Particle Decay** | t &rarr; b + W&#8314;, &mu;&#8315; &rarr; e&#8315; + &nu;&mu; + &nu;&#773;e | Warm yellow |
+| **Nuclear Decay** | &alpha; Decay: U-238 &rarr; Th-234 + He-4, &beta;&#8315; Decay | Red-orange / Blue |
+| **Fusion** | p + p &rarr; d + e&#8314; + &nu;, p + n &rarr; d | Cyan |
+| **Fission** | Cluster split + free neutrons | Orange |
+| **Annihilation** | e&#8314; + e&#8315; &rarr; &gamma;&gamma; | Red |
+| **Photoelectric** | &gamma; absorbed, e&#8315; ionized; Compton scatter | Blue |
+| **Spallation** | Nucleus disintegrated; N nucleons ejected | Red-orange |
+| **Pair Production** | &gamma; &rarr; e&#8314; + e&#8315; | Blue |
+| **Pion Production** | &gamma; + p &rarr; n + &pi;&#8314; | Green |
+| **Vector Meson Dominance** | &rho;&#8304; meson shower | Magenta |
+| **Photodisintegration** | &gamma; ejected nucleon from nucleus | Purple |
 
-Up to 8 notifications can stack simultaneously; oldest are dropped when the limit is reached.
+The log window displays a summary bar with per-category counts and supports a **Clear** button
+to reset the log. Events are listed newest-first with frame timestamps and color-coded type tags.
 
 ---
 
-## Compton Scattering
+## Electron Cloud Visualization
 
-High-energy photons interact bidirectionally with charged matter:
+Toggle via **Menu > Tools > Electron Cloud** to overlay Bohr-model orbital shell rings around
+all detected nuclei.
 
-**Photon fast-path** (GPU):
-- Scans nearby charged particles (strided sampling, 30px radius)
-- Photon deflects toward closest charged particle, losing energy proportional to proximity
-- Maintains light speed after deflection
-
-**Matter response** (GPU j-loop):
-- Photon radiation pressure pushes charged matter along photon travel direction
-- Photon's oscillating B-field exerts Lorentz force: `F = q * Bz * (vy, -vx)`
-- Both scale with photon energy / r^2
+| Property | Detail |
+|---|---|
+| **Shell display** | Up to 3 concentric rings per nucleus: 1s (2), 2s2p (8), 3s3p3d (18) |
+| **Radii** | Computed from Bohr model with Slater screening: `R = n^2 * R_BOHR / Z_eff` |
+| **Fill indicator** | Solid ring = full shell, dashed = empty, partial arc = partially filled |
+| **Labels** | Each ring shows N/M (electrons present / shell capacity) |
+| **Center label** | Element symbol displayed at nucleus center |
+| **Antimatter** | Anti-elements show cyan-tinted rings with positron shell counts |
+| **Colors** | Matter: red/green/blue shells; Antimatter: cyan/magenta/yellow shells |
 
 ---
 
@@ -534,18 +626,84 @@ force object.
 | **Rendering** | Silver-blue core with glow falloff and animated shimmer |
 | **GPU-side** | Post-integration reflection in compute shader (not a force — particles bounce) |
 
+### Utility Tools
+
+Additional tools available in the **Menu > Tools** popup:
+
+| Tool | Effect |
+|---|---|
+| **Halt Velocities** | Instantly zeroes all particle velocities (freeze-frame) |
+| **Show Trails** | Toggles particle path visualization with fade effect |
+| **Electron Cloud** | Toggles Bohr-model shell ring overlay on all nuclei |
+| **Remove Massless** | Deletes all photons, gluons, gravitons, and neutrinos |
+| **Remove Massive** | Deletes all massive particles |
+| **Import Element** | Opens file browser to import `.ppel` element files |
+
+---
+
+## Achievements
+
+An achievement system tracks 36 milestones across 5 categories. Achievements persist across
+sessions via a save file. Open the achievements panel from **Menu > Achievements**.
+
+### Categories
+
+| Category | Achievements | Examples |
+|---|---|---|
+| **Nuclear Physics** | 8 | First Fusion, First Fission, First Annihilation, Chain Reaction (3+ fissions in 60 frames), 100 Fusions |
+| **Element Creation** | 8 | Create Hydrogen, Helium, Carbon, Iron (peak binding energy), Gold, Uranium; 10 distinct elements |
+| **Particle Zoo** | 7 | First Positron, First Neutrino, First Quark, First W/Z/Higgs, Dark Matter, All 33 types simultaneously |
+| **Thermodynamics** | 4 | Reach 1,000 K, 1 MK, 1 GK; Cool below 2 K |
+| **Milestones** | 9 | 1000/5000 particles, First Entangled Pair, 10+ Entangled Pairs, First Force Object, First Mirror, First Save/Load, Try All 12 Environments |
+
+When an achievement unlocks, a toast notification appears. The achievements panel shows progress
+with unlocked/locked status and descriptions for each achievement.
+
 ---
 
 ## Save / Load
 
-Simulation state can be saved and loaded as binary `.ppsg` files.
+Simulation state can be saved and loaded in two binary formats.
+
+### Simulation Files (.ppsg)
 
 | Feature | Detail |
 |---|---|
 | **Hotkeys** | `Ctrl+S` save, `Ctrl+L` load |
-| **UI** | Save/Load buttons in bottom bar and pause menu |
+| **UI** | Save/Load buttons in bottom bar, pause menu, and Tools popup |
 | **Format** | Binary `.ppsg` (magic `0x47535050`, version 1) |
 | **Contents** | Full SimConfig, particle positions/velocities/energies/types/angles/genomes, per-type data (forces, colors, behavior flags), force objects, UI field state |
+| **File browser** | Built-in file browser with directory navigation, file size display, and path editing |
+
+### Element Files (.ppel)
+
+| Feature | Detail |
+|---|---|
+| **Export** | From Element Detail Card > Export button |
+| **Import** | From Menu > Tools > Import Element |
+| **Format** | Binary `.ppel` (magic `0x4C455050`, version 1) |
+| **Contents** | Z, N, electron count, all constituent particles with positions (relative to nucleus center), velocities, energies, types, genomes |
+| **Portability** | Positions stored as offsets from centroid — elements can be imported into any simulation at any location |
+
+---
+
+## UI Themes
+
+Eight color themes are available in **Settings > Theme**:
+
+| # | Theme | Background | Accent |
+|---|---|---|---|
+| 0 | **Dark Navy** | Navy | Cyan |
+| 1 | **Midnight** | Deep navy | Violet |
+| 2 | **Slate** | Grey-blue | Teal |
+| 3 | **Ember** | Charcoal | Orange |
+| 4 | **Synthwave** | Dark magenta | Hot pink |
+| 5 | **Forest** | Dark green | Lime green |
+| 6 | **Arctic** | Dark steel-blue | Ice white-blue |
+| 7 | **Solar** | Near-black warm | Golden yellow |
+
+User preferences (theme, temperature unit, FPS cap, thread count, UI scale) are persisted
+across sessions.
 
 ---
 
@@ -566,18 +724,22 @@ Simulation state can be saved and loaded as binary `.ppsg` files.
 | Scroll wheel | Zoom in / out |
 | Left click | Place particle (spawn mode) / Select particle (select mode) / Fire accelerator / Place mirror endpoint |
 
-> **Tools** — Open **Menu > Tools** to access the Particle Accelerator (fire projectiles at a
-> target particle) and Mirror (place reflective line segments). Only one tool is active at a time.
+> **Tools** — Open **Menu > Tools** to access the Particle Accelerator, Mirror, Electron Cloud,
+> Halt Velocities, trail visualization, and particle removal utilities.
 
 > **Info Card** — Select a particle to see its type, charge, spin, energy, age, momentum,
 > temperature, magnetic moment, orbital parent, and element membership. If the particle
 > belongs to a nucleus, click the element button to open the **Element Detail Card** with
-> full composition, stability info, and Move / Delete / Duplicate actions.
+> full composition, stability info, and Move / Delete / Duplicate / Export actions.
 >
 > **Element List** — Click the gold **"Elements: N"** counter in the bottom bar to open a
 > scrollable list of all detected elements. Each row shows symbol, mass number, name,
 > charge, electrons, and a stability indicator. Click any element to navigate to it and
 > open its detail card.
+>
+> **Event Log** — Click the **"Events: N"** counter in the bottom bar to open the decay/event
+> log showing all physics events (decays, fusions, fissions, annihilations, photoelectric,
+> spallation, pair production, and more) with frame timestamps and color-coded type tags.
 
 ---
 
@@ -625,9 +787,10 @@ EmergentEvolution/
 │   └── stb_image_impl.cpp       # stb_image implementation unit
 ├── src/physics/
 │   ├── phys_particles.h/.cpp    # 33 particle types, masses, charges, decay rates, isotope table, environments
-│   ├── interface.h/.cpp         # ImGui: spawn picker, force multipliers, element cards, tools, save/load
-│   ├── simulation.h/.cpp        # Main loop: fusion, fission, decay, orbitals, entanglement, accelerator
-│   ├── save_load.h/.cpp         # Binary .ppsg save/load serialization
+│   ├── interface.h/.cpp         # ImGui: spawn picker, force multipliers, element cards, tools, event log, achievements
+│   ├── simulation.h/.cpp        # Main loop: fusion, fission, decay, orbitals, entanglement, photoelectric, spallation
+│   ├── achievements.h/.cpp      # 36 achievements across 5 categories with persistence
+│   ├── save_load.h/.cpp         # Binary .ppsg/.ppel save/load/export/import serialization
 │   └── main.cpp                 # Entry point (borderless maximized, window icon via stb_image)
 ├── shaders/
 │   ├── physics.comp             # GPU: 7 forces, centrifugal barrier, hard-sphere, mirror reflection, 5 field viz

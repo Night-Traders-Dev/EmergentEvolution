@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <omp.h>
 
 namespace fs = std::filesystem;
@@ -13,6 +14,34 @@ namespace fs = std::filesystem;
 void PhysicsInterface::init() {
     std::random_device rd;
     seed_value = static_cast<int>(rd() % 100000);
+    load_prefs();
+}
+
+// ── Settings persistence ────────────────────────────────────────────────────
+
+static constexpr uint32_t PPCFG_MAGIC   = 0x47464350;  // "PCFG" little-endian
+static constexpr uint32_t PPCFG_VERSION = 1;
+
+void PhysicsInterface::save_prefs() {
+    std::error_code ec;
+    fs::create_directories("saves", ec);
+    std::ofstream f("saves/settings.ppcfg", std::ios::binary);
+    if (!f.is_open()) return;
+    f.write(reinterpret_cast<const char*>(&PPCFG_MAGIC), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&PPCFG_VERSION), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&prefs), sizeof(UserPrefs));
+}
+
+void PhysicsInterface::load_prefs() {
+    std::ifstream f("saves/settings.ppcfg", std::ios::binary);
+    if (!f.is_open()) return;
+    uint32_t magic = 0, version = 0;
+    f.read(reinterpret_cast<char*>(&magic), sizeof(uint32_t));
+    f.read(reinterpret_cast<char*>(&version), sizeof(uint32_t));
+    if (magic != PPCFG_MAGIC || version != PPCFG_VERSION) return;
+    UserPrefs loaded{};
+    f.read(reinterpret_cast<char*>(&loaded), sizeof(UserPrefs));
+    if (f.good()) prefs = loaded;
 }
 
 // ── Nucleus / atom group templates ───────────────────────────────────────────
@@ -596,6 +625,13 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         return;
     }
 
+    // Achievements panel (blocks other UI when visible)
+    if (show_achievements_panel) {
+        draw_achievements_panel();
+        pop_theme();
+        return;
+    }
+
     // Draw event notifications (top-right toast stack)
     draw_notifications();
 
@@ -624,6 +660,9 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
 
     // Draw element list window (center, drawn before cards so cards overlay)
     draw_element_list();
+
+    // Draw decay log window
+    draw_decay_log();
 
     // Draw particle info card (bottom-right, always on top)
     draw_info_card(particles);
@@ -744,6 +783,146 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         ImVec2 ts = ImGui::CalcTextSize(txt);
         ImVec2 pos(mio.DisplaySize.x * 0.5f - ts.x * 0.5f, 30.0f);
         fg->AddText(pos, ImGui::ColorConvertFloat4ToU32(ImVec4(0.7f, 0.7f, 0.8f, 1.0f)), txt);
+    }
+
+    // ── Electron cloud (orbital shell rings) overlay ──
+    if (show_electron_cloud && !nucleus_clouds.empty()) {
+        ImGuiIO& cio = ImGui::GetIO();
+        float win_w = cio.DisplaySize.x, win_h = cio.DisplaySize.y;
+        auto w2s_cloud = [&](glm::vec2 w) -> ImVec2 {
+            glm::vec2 s = glm::vec2(win_w, win_h) * 0.5f
+                        + (w - cfg.camera_origin) * cfg.current_camera_zoom;
+            return ImVec2(s.x, s.y);
+        };
+
+        ImDrawList* fg = ImGui::GetForegroundDrawList();
+
+        // Shell colors: inner → outer, more saturated when filled
+        const ImVec4 SHELL_COLORS_MATTER[] = {
+            ImVec4(0.3f, 0.6f, 1.0f, 1.0f),   // shell 1: blue
+            ImVec4(0.3f, 0.9f, 0.5f, 1.0f),   // shell 2: green
+            ImVec4(0.9f, 0.7f, 0.2f, 1.0f),   // shell 3: gold
+        };
+        const ImVec4 SHELL_COLORS_ANTI[] = {
+            ImVec4(0.0f, 0.85f, 0.95f, 1.0f),  // shell 1: cyan
+            ImVec4(0.6f, 0.3f, 0.95f, 1.0f),   // shell 2: purple
+            ImVec4(0.95f, 0.4f, 0.6f, 1.0f),   // shell 3: pink
+        };
+
+        for (const auto& cloud : nucleus_clouds) {
+            ImVec2 center = w2s_cloud(cloud.center);
+
+            // Cull offscreen nuclei (generous margin for large shells)
+            float max_r = cloud.shell_radii[2] * cfg.current_camera_zoom;
+            if (center.x < -max_r || center.x > win_w + max_r ||
+                center.y < -max_r || center.y > win_h + max_r) continue;
+
+            // Skip if rings would be too tiny to see
+            float min_r_px = cloud.shell_radii[0] * cfg.current_camera_zoom;
+            if (min_r_px < 2.0f) continue;
+
+            const ImVec4* shell_colors = cloud.is_anti ? SHELL_COLORS_ANTI : SHELL_COLORS_MATTER;
+
+            for (int s = 0; s < 3; ++s) {
+                if (cloud.shell_cap[s] == 0) continue;  // shouldn't happen
+
+                float r_px = cloud.shell_radii[s] * cfg.current_camera_zoom;
+                if (r_px < 1.5f) continue;
+
+                float fill_frac = static_cast<float>(cloud.shell_fill[s])
+                                / static_cast<float>(cloud.shell_cap[s]);
+                bool is_full = (cloud.shell_fill[s] >= cloud.shell_cap[s]);
+                bool is_empty = (cloud.shell_fill[s] == 0);
+
+                ImVec4 sc = shell_colors[s];
+
+                if (is_empty) {
+                    // Empty shell: dim dashed ring
+                    float alpha = 0.15f;
+                    ImU32 col = ImGui::ColorConvertFloat4ToU32(
+                        ImVec4(sc.x, sc.y, sc.z, alpha));
+
+                    // Draw dashed circle
+                    float circumference = 2.0f * 3.14159265f * r_px;
+                    int segments = std::max(24, static_cast<int>(circumference / 6.0f));
+                    float dash_angle = 3.14159265f * 2.0f / segments;
+                    for (int seg = 0; seg < segments; seg += 2) {
+                        float a1 = seg * dash_angle;
+                        float a2 = (seg + 1) * dash_angle;
+                        ImVec2 p1(center.x + std::cos(a1) * r_px,
+                                  center.y + std::sin(a1) * r_px);
+                        ImVec2 p2(center.x + std::cos(a2) * r_px,
+                                  center.y + std::sin(a2) * r_px);
+                        fg->AddLine(p1, p2, col, 1.0f);
+                    }
+                } else if (is_full) {
+                    // Full shell: solid bright ring
+                    float alpha = 0.5f;
+                    ImU32 col = ImGui::ColorConvertFloat4ToU32(
+                        ImVec4(sc.x, sc.y, sc.z, alpha));
+                    fg->AddCircle(center, r_px, col, 0, 1.5f);
+                } else {
+                    // Partial fill: draw filled arc + dashed remainder
+                    float filled_angle = fill_frac * 2.0f * 3.14159265f;
+                    float alpha_filled = 0.4f;
+                    float alpha_empty = 0.12f;
+
+                    ImU32 col_filled = ImGui::ColorConvertFloat4ToU32(
+                        ImVec4(sc.x, sc.y, sc.z, alpha_filled));
+                    ImU32 col_empty = ImGui::ColorConvertFloat4ToU32(
+                        ImVec4(sc.x, sc.y, sc.z, alpha_empty));
+
+                    // Filled portion: solid arc
+                    float circumference = 2.0f * 3.14159265f * r_px;
+                    int total_segs = std::max(32, static_cast<int>(circumference / 4.0f));
+                    float seg_angle = 2.0f * 3.14159265f / total_segs;
+
+                    for (int seg = 0; seg < total_segs; ++seg) {
+                        float a1 = seg * seg_angle;
+                        float a2 = (seg + 1) * seg_angle;
+                        ImVec2 p1(center.x + std::cos(a1) * r_px,
+                                  center.y + std::sin(a1) * r_px);
+                        ImVec2 p2(center.x + std::cos(a2) * r_px,
+                                  center.y + std::sin(a2) * r_px);
+
+                        if (a1 < filled_angle) {
+                            fg->AddLine(p1, p2, col_filled, 1.5f);
+                        } else if (seg % 2 == 0) {
+                            fg->AddLine(p1, p2, col_empty, 1.0f);
+                        }
+                    }
+                }
+
+                // Label: "N/M" fill count on the ring (if big enough to read)
+                if (r_px > 20.0f) {
+                    char label[16];
+                    snprintf(label, sizeof(label), "%d/%d", cloud.shell_fill[s], cloud.shell_cap[s]);
+                    ImVec2 ts = ImGui::CalcTextSize(label);
+                    // Position label at top of ring
+                    ImVec2 label_pos(center.x - ts.x * 0.5f,
+                                     center.y - r_px - ts.y - 1.0f);
+                    ImU32 text_col = ImGui::ColorConvertFloat4ToU32(
+                        ImVec4(sc.x, sc.y, sc.z, 0.7f));
+                    fg->AddText(label_pos, text_col, label);
+                }
+            }
+
+            // Element symbol at nucleus center (if zoomed in enough)
+            float inner_r_px = cloud.shell_radii[0] * cfg.current_camera_zoom;
+            if (inner_r_px > 10.0f && cloud.Z >= 1 && cloud.Z <= FULL_ELEMENT_COUNT) {
+                const char* sym = ELEMENT_SYMBOLS[cloud.Z];
+                char label[16];
+                if (cloud.is_anti)
+                    snprintf(label, sizeof(label), "%s", sym);
+                else
+                    snprintf(label, sizeof(label), "%s", sym);
+                ImVec2 ts = ImGui::CalcTextSize(label);
+                ImVec2 lp(center.x - ts.x * 0.5f, center.y - ts.y * 0.5f);
+                ImVec4 lc = cloud.is_anti ? ImVec4(0.0f, 0.9f, 1.0f, 0.6f)
+                                          : ImVec4(0.9f, 0.85f, 0.6f, 0.6f);
+                fg->AddText(lp, ImGui::ColorConvertFloat4ToU32(lc), label);
+            }
+        }
     }
 
     // ── Entanglement visualization overlay ──
@@ -991,15 +1170,22 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
             show_pause_menu = false;
         }
 
-        // Settings
+        // Achievements
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 5));
+        if (ImGui::Button("Achievements", ImVec2(btn_w, btn_h))) {
+            show_achievements_panel = true;
+            show_pause_menu = false;
+        }
+
+        // Settings
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 6));
         if (ImGui::Button("Settings", ImVec2(btn_w, btn_h))) {
             show_settings_menu = true;
             show_pause_menu = false;
         }
 
         // Quit
-        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 6));
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 7));
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.4f, 0.08f, 0.08f, 0.90f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.6f, 0.15f, 0.15f, 0.95f));
         if (ImGui::Button("Quit", ImVec2(btn_w, btn_h))) {
@@ -1013,7 +1199,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         // Hint text
         const char* hint = "Press Escape to resume";
         ImVec2 hint_size = ImGui::CalcTextSize(hint);
-        ImGui::SetCursorPos(ImVec2(cx - hint_size.x * 0.5f, btn_y + btn_spacing * 7 + 20.0f));
+        ImGui::SetCursorPos(ImVec2(cx - hint_size.x * 0.5f, btn_y + btn_spacing * 8 + 20.0f));
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.6f), "%s", hint);
     }
     ImGui::End();
@@ -1150,6 +1336,7 @@ void PhysicsInterface::draw_settings_menu() {
         if (ImGui::Button("Back", ImVec2(btn_w, btn_h))) {
             show_settings_menu = false;
             show_pause_menu = true;
+            save_prefs();
         }
         ImGui::PopStyleVar();
 
@@ -1158,6 +1345,162 @@ void PhysicsInterface::draw_settings_menu() {
         ImVec2 hint_size = ImGui::CalcTextSize(hint);
         ImGui::SetCursorPos(ImVec2(cx - hint_size.x * 0.5f, cy + 250.0f));
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.6f), "%s", hint);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Achievements Panel ──────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_achievements_panel() {
+    if (!achievements_ptr) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+
+    // Fullscreen overlay
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGuiWindowFlags overlay_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
+        | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav;
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.03f, 0.06f, 0.92f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+
+    if (ImGui::Begin("##AchievementsOverlay", nullptr, overlay_flags)) {
+        float cx = io.DisplaySize.x * 0.5f;
+
+        // Title
+        float old_scale = ImGui::GetFont()->Scale;
+        ImGui::GetFont()->Scale = 2.0f;
+        ImGui::PushFont(ImGui::GetFont());
+        const char* title = "ACHIEVEMENTS";
+        ImVec2 title_size = ImGui::CalcTextSize(title);
+        ImGui::SetCursorPos(ImVec2(cx - title_size.x * 0.5f, 30.0f));
+        ImGui::TextColored(ImVec4(1.0f, 0.843f, 0.0f, 1.0f), "%s", title);
+        ImGui::GetFont()->Scale = old_scale;
+        ImGui::PopFont();
+
+        // Progress summary
+        int unlocked = achievements_ptr->unlocked_count();
+        char progress_buf[64];
+        snprintf(progress_buf, sizeof(progress_buf), "%d / %d Unlocked", unlocked, ACH_COUNT);
+        ImVec2 prog_size = ImGui::CalcTextSize(progress_buf);
+        ImGui::SetCursorPos(ImVec2(cx - prog_size.x * 0.5f, 72.0f));
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.8f, 1.0f), "%s", progress_buf);
+
+        // Progress bar
+        float bar_w = 400.0f;
+        ImGui::SetCursorPos(ImVec2(cx - bar_w * 0.5f, 95.0f));
+        float fraction = (ACH_COUNT > 0) ? static_cast<float>(unlocked) / static_cast<float>(ACH_COUNT) : 0.0f;
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(1.0f, 0.843f, 0.0f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.1f, 0.1f, 0.15f, 1.0f));
+        ImGui::PushItemWidth(bar_w);
+        ImGui::ProgressBar(fraction, ImVec2(bar_w, 16.0f), "");
+        ImGui::PopItemWidth();
+        ImGui::PopStyleColor(2);
+
+        // Scrollable content area with category tabs
+        float content_top = 125.0f;
+        float content_bottom = io.DisplaySize.y - 70.0f;
+        float panel_w = std::min(700.0f, io.DisplaySize.x - 80.0f);
+
+        ImGui::SetCursorPos(ImVec2(cx - panel_w * 0.5f, content_top));
+        ImGui::BeginChild("##AchContent", ImVec2(panel_w, content_bottom - content_top), ImGuiChildFlags_Border);
+
+        for (int cat = 0; cat < ACAT_COUNT; cat++) {
+            ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.15f, 0.18f, 0.28f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.20f, 0.24f, 0.35f, 1.0f));
+
+            // Count unlocked in this category
+            int cat_total = 0, cat_unlocked = 0;
+            for (uint32_t i = 0; i < ACH_COUNT; i++) {
+                if (ACHIEVEMENT_DEFS[i].category == cat) {
+                    cat_total++;
+                    if (achievements_ptr->is_unlocked(static_cast<AchievementID>(i)))
+                        cat_unlocked++;
+                }
+            }
+
+            char cat_label[128];
+            snprintf(cat_label, sizeof(cat_label), "%s  (%d/%d)",
+                     ACHIEVEMENT_CATEGORY_NAMES[cat], cat_unlocked, cat_total);
+
+            bool open = ImGui::CollapsingHeader(cat_label, ImGuiTreeNodeFlags_DefaultOpen);
+            ImGui::PopStyleColor(2);
+
+            if (open) {
+                for (uint32_t i = 0; i < ACH_COUNT; i++) {
+                    const auto& def = ACHIEVEMENT_DEFS[i];
+                    if (def.category != cat) continue;
+
+                    bool done = achievements_ptr->is_unlocked(def.id);
+
+                    // Achievement row
+                    ImGui::PushID(i);
+                    float row_h = 44.0f;
+                    ImVec2 cursor = ImGui::GetCursorPos();
+
+                    // Background highlight for unlocked
+                    if (done) {
+                        ImVec2 p0 = ImGui::GetCursorScreenPos();
+                        ImVec2 p1 = ImVec2(p0.x + panel_w - 20.0f, p0.y + row_h);
+                        ImGui::GetWindowDrawList()->AddRectFilled(
+                            p0, p1, IM_COL32(40, 60, 30, 100), 4.0f);
+                    }
+
+                    // Icon
+                    ImGui::SetCursorPos(ImVec2(cursor.x + 8.0f, cursor.y + 4.0f));
+                    if (done) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.843f, 0.0f, 1.0f), "%s", def.icon);
+                    } else {
+                        ImGui::TextColored(ImVec4(0.3f, 0.3f, 0.35f, 1.0f), "[?]");
+                    }
+
+                    // Name
+                    ImGui::SameLine(60.0f);
+                    ImGui::SetCursorPosY(cursor.y + 4.0f);
+                    if (done) {
+                        ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1.0f), "%s", def.name);
+                    } else {
+                        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.55f, 1.0f), "%s", def.name);
+                    }
+
+                    // Description
+                    ImGui::SetCursorPos(ImVec2(cursor.x + 60.0f, cursor.y + 22.0f));
+                    if (done) {
+                        ImGui::TextColored(ImVec4(0.6f, 0.7f, 0.6f, 1.0f), "%s", def.description);
+                    } else {
+                        ImGui::TextColored(ImVec4(0.35f, 0.35f, 0.4f, 1.0f), "%s", def.description);
+                    }
+
+                    ImGui::SetCursorPosY(cursor.y + row_h);
+                    ImGui::Separator();
+                    ImGui::PopID();
+                }
+            }
+        }
+
+        ImGui::EndChild();
+
+        // Back button
+        float btn_w = 160.0f;
+        float btn_h = 36.0f;
+        ImGui::SetCursorPos(ImVec2(cx - btn_w * 0.5f, content_bottom + 12.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.14f, 0.22f, 0.90f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.25f, 0.40f, 0.95f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.20f, 0.35f, 1.0f));
+        if (ImGui::Button("Back", ImVec2(btn_w, btn_h))) {
+            show_achievements_panel = false;
+            show_pause_menu = true;
+        }
+        ImGui::PopStyleColor(3);
+        ImGui::PopStyleVar();
     }
     ImGui::End();
     ImGui::PopStyleVar(2);
@@ -1246,12 +1589,23 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
         ImGui::SameLine(0, 10);
         ImGui::Text("E: %.2f avg", avg_energy_display);
 
-        // Nuclear decays
-        if (nuclear_decay_count_display > 0) {
+        // Nuclear decays (clickable — opens decay log)
+        if (nuclear_decay_count_display > 0 || !decay_log.empty()) {
             ImGui::SameLine(0, 20);
             ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
             ImGui::SameLine(0, 10);
-            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "Decays: %u", nuclear_decay_count_display);
+            char decay_btn[64];
+            snprintf(decay_btn, sizeof(decay_btn), "Events: %u###DecayBtn",
+                     static_cast<unsigned>(decay_log.size()));
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.2f, 0.1f, 0.5f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.2f, 0.15f, 0.05f, 0.7f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.6f, 0.2f, 1.0f));
+            if (ImGui::SmallButton(decay_btn))
+                show_decay_log = !show_decay_log;
+            ImGui::PopStyleColor(4);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Click to open decay/interaction event log");
         }
 
         // Element count (clickable)
@@ -1396,6 +1750,10 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                     ImGui::MenuItem("Show Trails", nullptr, &cfg.show_trails);
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Draw particle paths (fade effect)");
+
+                    ImGui::MenuItem("Electron Cloud", nullptr, &show_electron_cloud);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Show orbital shell rings around nuclei\nDisplays expected electron shells and occupancy");
 
                     if (ImGui::MenuItem("Remove Massless")) {
                         request_remove_massless = true;
@@ -2478,64 +2836,78 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
             // Find nucleus representative for this particle
             int32_t nuc_rep = -1;
             bool is_nucleon = (ptype == PROTON_TYPE || ptype == NEUTRON_TYPE || ptype == ANTIPROTON_TYPE_PHYS);
-            bool is_electron = (ptype == ELECTRON_TYPE_PHYS);
+            bool is_lepton  = (ptype == ELECTRON_TYPE_PHYS || ptype == POSITRON_TYPE_PHYS);
 
-            if (is_nucleon || is_electron) {
+            if (is_nucleon || is_lepton) {
                 int32_t op = particles.orbital_parent[idx];
                 if (op >= 0 && static_cast<uint32_t>(op) < particles.types.size()) {
-                    // For nucleons, orbital_parent points to the nucleus rep proton
-                    // For electrons, orbital_parent points to the nucleus rep proton
                     nuc_rep = op;
                 }
-                // If this IS a nucleus rep proton (orbital_parent == self or -1 for solo)
-                if (is_nucleon && nuc_rep < 0 && ptype == PROTON_TYPE) {
-                    // Check if any other particle references this one as parent
+                // If this IS a nucleus rep (proton or antiproton with no parent)
+                if (is_nucleon && nuc_rep < 0 && (ptype == PROTON_TYPE || ptype == ANTIPROTON_TYPE_PHYS)) {
                     nuc_rep = static_cast<int32_t>(idx);
                 }
             }
 
             if (nuc_rep >= 0) {
-                // Count protons, neutrons, electrons for this nucleus
-                int Z = 0, N_count = 0, e_count = 0;
+                // Determine if this is an antimatter nucleus
+                uint32_t rep_type = particles.types[static_cast<uint32_t>(nuc_rep)];
+                bool is_anti = (rep_type == ANTIPROTON_TYPE_PHYS);
+
+                // Count constituents for this nucleus
+                int Z = 0, N_count = 0, lepton_count = 0;
                 uint32_t n_total = static_cast<uint32_t>(particles.types.size());
                 for (uint32_t pi = 0; pi < n_total; ++pi) {
                     if (particles.orbital_parent.size() <= pi) break;
                     int32_t their_parent = particles.orbital_parent[pi];
                     if (their_parent != nuc_rep && static_cast<int32_t>(pi) != nuc_rep) continue;
                     uint32_t pt = particles.types[pi];
-                    if (pt == PROTON_TYPE) Z++;
-                    else if (pt == NEUTRON_TYPE) N_count++;
-                    else if (pt == ELECTRON_TYPE_PHYS) e_count++;
+                    if (is_anti) {
+                        if (pt == ANTIPROTON_TYPE_PHYS) Z++;
+                        else if (pt == NEUTRON_TYPE) N_count++;
+                        else if (pt == POSITRON_TYPE_PHYS) lepton_count++;
+                    } else {
+                        if (pt == PROTON_TYPE) Z++;
+                        else if (pt == NEUTRON_TYPE) N_count++;
+                        else if (pt == ELECTRON_TYPE_PHYS) lepton_count++;
+                    }
                 }
 
                 if (Z > 0 && Z <= FULL_ELEMENT_COUNT) {
                     int A = Z + N_count;
-                    int net_charge = Z - e_count;
+                    int net_charge = Z - lepton_count;
 
                     ImGui::Spacing();
                     ImGui::Separator();
 
                     // Element header with symbol
-                    ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "Element");
+                    ImVec4 elem_header_color = is_anti
+                        ? ImVec4(0.0f, 0.85f, 0.95f, 1.0f)   // cyan for antimatter
+                        : ImVec4(0.302f, 0.749f, 0.953f, 1.0f);
+                    ImGui::TextColored(elem_header_color, is_anti ? "Anti-Element" : "Element");
                     ImGui::SameLine(col_w);
 
                     // Clickable element button
-                    char elem_label[64];
+                    char elem_label[96];
+                    const char* prefix = is_anti ? "Anti-" : "";
                     if (net_charge == 0)
-                        snprintf(elem_label, sizeof(elem_label), "%s-%d (%s)",
-                                 ELEMENT_SYMBOLS[Z], A, ELEMENT_NAMES[Z]);
+                        snprintf(elem_label, sizeof(elem_label), "%s%s-%d (%s%s)",
+                                 prefix, ELEMENT_SYMBOLS[Z], A, prefix, ELEMENT_NAMES[Z]);
                     else
-                        snprintf(elem_label, sizeof(elem_label), "%s-%d %s%d",
-                                 ELEMENT_SYMBOLS[Z], A,
+                        snprintf(elem_label, sizeof(elem_label), "%s%s-%d %s%d",
+                                 prefix, ELEMENT_SYMBOLS[Z], A,
                                  net_charge > 0 ? "+" : "", net_charge);
 
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.85f, 0.6f, 1.0f));
+                    ImVec4 elem_btn_color = is_anti
+                        ? ImVec4(0.6f, 0.9f, 0.95f, 1.0f)   // cyan-tinted for antimatter
+                        : ImVec4(0.9f, 0.85f, 0.6f, 1.0f);  // gold for matter
+                    ImGui::PushStyleColor(ImGuiCol_Text, elem_btn_color);
                     if (ImGui::SmallButton(elem_label)) {
                         element_card_nucleus_rep = nuc_rep;
                     }
                     ImGui::PopStyleColor();
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Click for element details");
+                        ImGui::SetTooltip("Click for %selement details", prefix);
                 }
             }
         }
@@ -2588,11 +2960,15 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
         return;
     }
 
+    // Determine if this is an antimatter nucleus
+    uint32_t rep_type = particles.types[static_cast<uint32_t>(nuc_rep)];
+    bool is_anti = (rep_type == ANTIPROTON_TYPE_PHYS);
+
     // Gather all particles belonging to this nucleus
     uint32_t n_total = static_cast<uint32_t>(particles.types.size());
-    int Z = 0, N_count = 0, e_count = 0;
+    int Z = 0, N_count = 0, lepton_count = 0;
     std::vector<uint32_t> nucleon_indices;
-    std::vector<uint32_t> electron_indices;
+    std::vector<uint32_t> lepton_indices;
     glm::vec2 sum_pos(0.0f), sum_mom(0.0f);
     uint32_t oldest_birth = UINT32_MAX;
 
@@ -2608,18 +2984,17 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
         if (their_parent != nuc_rep && static_cast<int32_t>(pi) != nuc_rep) continue;
 
         uint32_t pt = particles.types[pi];
-        if (pt == PROTON_TYPE) {
-            Z++;
-            nucleon_indices.push_back(pi);
-        } else if (pt == NEUTRON_TYPE) {
-            N_count++;
-            nucleon_indices.push_back(pi);
-        } else if (pt == ELECTRON_TYPE_PHYS) {
-            e_count++;
-            electron_indices.push_back(pi);
+        bool counted = false;
+        if (is_anti) {
+            if (pt == ANTIPROTON_TYPE_PHYS) { Z++; nucleon_indices.push_back(pi); counted = true; }
+            else if (pt == NEUTRON_TYPE)    { N_count++; nucleon_indices.push_back(pi); counted = true; }
+            else if (pt == POSITRON_TYPE_PHYS) { lepton_count++; lepton_indices.push_back(pi); counted = true; }
         } else {
-            continue;
+            if (pt == PROTON_TYPE)          { Z++; nucleon_indices.push_back(pi); counted = true; }
+            else if (pt == NEUTRON_TYPE)    { N_count++; nucleon_indices.push_back(pi); counted = true; }
+            else if (pt == ELECTRON_TYPE_PHYS) { lepton_count++; lepton_indices.push_back(pi); counted = true; }
         }
+        if (!counted) continue;
 
         sum_pos += particles.positions[pi];
 
@@ -2637,14 +3012,14 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
     if (Z == 0) { element_card_nucleus_rep = -1; return; }
 
     int A = Z + N_count;
-    int net_charge = Z - e_count;
-    float total_mass = Z * 40.0f + N_count * 40.0f + e_count * 1.0f;
+    int net_charge = Z - lepton_count;
+    float total_mass = Z * 40.0f + N_count * 40.0f + lepton_count * 1.0f;
     float momentum = glm::length(sum_mom);
     // Shell configuration string
     const int SHELL_CAP[] = {2, 8, 18, 32, 32, 18, 8};
     char shell_str[64] = {};
     {
-        int remaining = e_count;
+        int remaining = lepton_count;
         int pos = 0;
         for (int s = 0; s < 7 && remaining > 0; ++s) {
             int in_shell = std::min(remaining, SHELL_CAP[s]);
@@ -2664,28 +3039,46 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
         | ImGuiWindowFlags_NoNav;
 
     bool open = true;
-    char title[64];
-    snprintf(title, sizeof(title), "%s (%s-%d)###ElementCard",
+    char title[96];
+    const char* title_prefix = is_anti ? "Anti-" : "";
+    snprintf(title, sizeof(title), "%s%s (%s%s-%d)###ElementCard",
+             title_prefix,
              (Z <= FULL_ELEMENT_COUNT) ? ELEMENT_NAMES[Z] : "?",
+             title_prefix,
              (Z <= FULL_ELEMENT_COUNT) ? ELEMENT_SYMBOLS[Z] : "?", A);
 
-    ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.12f, 0.10f, 0.05f, 0.95f));
-    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.20f, 0.16f, 0.06f, 0.95f));
+    // Antimatter: cyan-tinted title bar; matter: warm gold
+    ImVec4 title_bg = is_anti ? ImVec4(0.02f, 0.10f, 0.12f, 0.95f) : ImVec4(0.12f, 0.10f, 0.05f, 0.95f);
+    ImVec4 title_bg_active = is_anti ? ImVec4(0.04f, 0.16f, 0.20f, 0.95f) : ImVec4(0.20f, 0.16f, 0.06f, 0.95f);
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, title_bg);
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, title_bg_active);
 
     if (ImGui::Begin(title, &open, flags)) {
         float col_w = 110.0f;
 
         // Big element symbol + name
         if (Z <= FULL_ELEMENT_COUNT) {
-            ImGui::TextColored(ImVec4(0.9f, 0.85f, 0.6f, 1.0f), "%s", ELEMENT_SYMBOLS[Z]);
+            ImVec4 sym_color = is_anti ? ImVec4(0.6f, 0.95f, 1.0f, 1.0f) : ImVec4(0.9f, 0.85f, 0.6f, 1.0f);
+            ImVec4 name_color = is_anti ? ImVec4(0.4f, 0.85f, 0.9f, 1.0f) : ImVec4(0.8f, 0.75f, 0.5f, 1.0f);
+            if (is_anti) {
+                ImGui::TextColored(sym_color, "%s%s", title_prefix, ELEMENT_SYMBOLS[Z]);
+                ImGui::SameLine();
+                ImGui::TextColored(name_color, "Anti-%s", ELEMENT_NAMES[Z]);
+            } else {
+                ImGui::TextColored(sym_color, "%s", ELEMENT_SYMBOLS[Z]);
+                ImGui::SameLine();
+                ImGui::TextColored(name_color, "%s", ELEMENT_NAMES[Z]);
+            }
+        }
+        if (is_anti) {
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.8f, 0.75f, 0.5f, 1.0f), "%s", ELEMENT_NAMES[Z]);
+            ImGui::TextColored(ImVec4(0.0f, 0.85f, 0.95f, 0.7f), "(antimatter)");
         }
 
         ImGui::Separator();
 
         // Composition
-        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Atomic No.");
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), is_anti ? "Antiprotons" : "Atomic No.");
         ImGui::SameLine(col_w); ImGui::Text("Z = %d", Z);
 
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Neutrons");
@@ -2694,8 +3087,8 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Mass No.");
         ImGui::SameLine(col_w); ImGui::Text("A = %d", A);
 
-        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Electrons");
-        ImGui::SameLine(col_w); ImGui::Text("%d", e_count);
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), is_anti ? "Positrons" : "Electrons");
+        ImGui::SameLine(col_w); ImGui::Text("%d", lepton_count);
 
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Shells");
         ImGui::SameLine(col_w); ImGui::Text("%s", shell_str);
@@ -2719,7 +3112,7 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
 
         // Particles
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Particles");
-        ImGui::SameLine(col_w); ImGui::Text("%d", Z + N_count + e_count);
+        ImGui::SameLine(col_w); ImGui::Text("%d", Z + N_count + lepton_count);
 
         // Momentum
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Momentum");
@@ -2792,19 +3185,22 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
         if (nucleon_indices.size() > 12) ImGui::Text("+%zu", nucleon_indices.size() - 12);
         else ImGui::NewLine();
 
-        if (!electron_indices.empty()) {
-            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Electrons:");
+        if (!lepton_indices.empty()) {
+            const char* lepton_label = is_anti ? "Positrons:" : "Electrons:";
+            const char* lepton_btn_label = is_anti ? "e+" : "e-";
+            uint32_t lepton_type = is_anti ? POSITRON_TYPE_PHYS : ELECTRON_TYPE_PHYS;
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "%s", lepton_label);
             ImGui::SameLine(col_w);
-            for (size_t ei = 0; ei < electron_indices.size() && ei < 12; ++ei) {
-                uint32_t pi = electron_indices[ei];
+            for (size_t ei = 0; ei < lepton_indices.size() && ei < 12; ++ei) {
+                uint32_t pi = lepton_indices[ei];
                 char btn[32];
-                snprintf(btn, sizeof(btn), "e-##ee%zu", ei);
-                ImGui::PushStyleColor(ImGuiCol_Text, PHYS_TYPE_UI_COLORS[ELECTRON_TYPE_PHYS]);
+                snprintf(btn, sizeof(btn), "%s##ee%zu", lepton_btn_label, ei);
+                ImGui::PushStyleColor(ImGuiCol_Text, PHYS_TYPE_UI_COLORS[lepton_type]);
                 if (ImGui::SmallButton(btn)) navigate_to_particle = static_cast<int32_t>(pi);
                 ImGui::PopStyleColor();
                 ImGui::SameLine();
             }
-            if (electron_indices.size() > 12) ImGui::Text("+%zu", electron_indices.size() - 12);
+            if (lepton_indices.size() > 12) ImGui::Text("+%zu", lepton_indices.size() - 12);
             else ImGui::NewLine();
         }
 
@@ -2870,6 +3266,126 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
 // ══════════════════════════════════════════════════════════════════════════════
 // ── Event Notifications (Top-Right Toast Stack) ─────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Particle Accelerator Panel ──────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Decay / Interaction Event Log ────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_decay_log() {
+    if (!show_decay_log) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    float win_w = 420.0f;
+    float max_h = io.DisplaySize.y - 120.0f;
+    float win_h = std::min(500.0f, max_h);
+
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
+                                    io.DisplaySize.y * 0.5f - win_h * 0.5f),
+                            ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(win_w, win_h), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(340, 200), ImVec2(560, max_h));
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.04f, 0.07f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.10f, 0.06f, 0.02f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.16f, 0.10f, 0.03f, 0.95f));
+
+    char title[64];
+    snprintf(title, sizeof(title), "Event Log (%d)###DecayLog",
+             static_cast<int>(decay_log.size()));
+
+    if (!ImGui::Begin(title, &show_decay_log)) {
+        ImGui::End();
+        ImGui::PopStyleColor(3);
+        return;
+    }
+
+    // Event type filter labels
+    static const char* TYPE_LABELS[] = {
+        "Decay", "Nuclear", "Fusion", "Fission", "Annihil.",
+        "Photo-e", "Spall.", "Pair", "Pion", "VMD", "Photodis."
+    };
+    static const ImVec4 TYPE_COLORS[] = {
+        ImVec4(1.0f, 0.8f, 0.5f, 1.0f),   // PARTICLE_DECAY — warm yellow
+        ImVec4(1.0f, 0.5f, 0.3f, 1.0f),   // NUCLEAR_DECAY — orange
+        ImVec4(0.4f, 0.9f, 0.6f, 1.0f),   // FUSION — green
+        ImVec4(1.0f, 0.6f, 0.2f, 1.0f),   // FISSION — amber
+        ImVec4(1.0f, 0.3f, 0.3f, 1.0f),   // ANNIHILATION — red
+        ImVec4(0.3f, 0.7f, 1.0f, 1.0f),   // PHOTOELECTRIC — blue
+        ImVec4(1.0f, 0.5f, 0.3f, 1.0f),   // SPALLATION — orange
+        ImVec4(0.3f, 0.7f, 1.0f, 1.0f),   // PAIR_PRODUCTION — blue
+        ImVec4(0.4f, 0.9f, 0.6f, 1.0f),   // PION_PRODUCTION — green
+        ImVec4(0.9f, 0.3f, 0.9f, 1.0f),   // VMD — magenta
+        ImVec4(0.8f, 0.6f, 1.0f, 1.0f),   // PHOTODISINTEGRATION — purple
+    };
+
+    // Summary counts by type
+    int type_counts[11] = {};
+    for (const auto& e : decay_log) {
+        if (e.type < 11) type_counts[e.type]++;
+    }
+
+    // Summary bar
+    for (int t = 0; t < 11; ++t) {
+        if (type_counts[t] == 0) continue;
+        ImGui::SameLine(0, t == 0 ? 0 : 6);
+        ImGui::TextColored(TYPE_COLORS[t], "%s:%d", TYPE_LABELS[t], type_counts[t]);
+    }
+    if (decay_log.empty()) {
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "No events yet");
+    }
+
+    ImGui::Spacing();
+
+    // Clear button
+    if (!decay_log.empty()) {
+        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 50.0f);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.1f, 0.1f, 0.5f));
+        if (ImGui::SmallButton("Clear")) {
+            decay_log.clear();
+        }
+        ImGui::PopStyleColor();
+    }
+
+    ImGui::Separator();
+
+    // Scrollable event list (newest at top)
+    ImGui::BeginChild("##DecayLogScroll", ImVec2(0, 0), false);
+
+    for (int idx = static_cast<int>(decay_log.size()) - 1; idx >= 0; --idx) {
+        const auto& entry = decay_log[idx];
+
+        // Frame timestamp
+        float age_sec = static_cast<float>(frame_counter_display - entry.frame) / 60.0f;
+        if (age_sec < 60.0f)
+            ImGui::TextColored(ImVec4(0.35f, 0.38f, 0.48f, 1.0f), "%5.1fs", age_sec);
+        else
+            ImGui::TextColored(ImVec4(0.35f, 0.38f, 0.48f, 1.0f), "%4.1fm", age_sec / 60.0f);
+
+        // Type tag
+        ImGui::SameLine(50.0f);
+        const char* tag = (entry.type < 11) ? TYPE_LABELS[entry.type] : "?";
+        ImVec4 tag_color = (entry.type < 11) ? TYPE_COLORS[entry.type] : ImVec4(1,1,1,1);
+        ImGui::TextColored(ImVec4(tag_color.x * 0.7f, tag_color.y * 0.7f,
+                                   tag_color.z * 0.7f, 0.8f), "[%s]", tag);
+
+        // Description
+        ImGui::SameLine(120.0f);
+        ImGui::TextColored(entry.color, "%s", entry.description.c_str());
+    }
+
+    // Auto-scroll to top (newest) when new events arrive
+    if (ImGui::GetScrollY() < 10.0f)
+        ImGui::SetScrollHereY(0.0f);
+
+    ImGui::EndChild();
+
+    ImGui::End();
+    ImGui::PopStyleColor(3);
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ── Particle Accelerator Panel ──────────────────────────────────────────────
@@ -3020,8 +3536,8 @@ void PhysicsInterface::draw_element_list() {
     }
 
     // Column headers
-    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "%-6s %-12s %4s %6s %3s",
-                       "Sym", "Name", "A", "Charge", "e-");
+    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "%-6s %-14s %4s %6s %3s",
+                       "Sym", "Name", "A", "Charge", "e");
     ImGui::Separator();
 
     // Scrollable list
@@ -3033,18 +3549,30 @@ void PhysicsInterface::draw_element_list() {
         int A = elem.Z + elem.N;
         int net_charge = Z - elem.electrons;
 
-        const char* sym = (Z >= 1 && Z <= FULL_ELEMENT_COUNT) ? ELEMENT_SYMBOLS[Z] : "?";
-        const char* name = (Z >= 1 && Z <= FULL_ELEMENT_COUNT) ? ELEMENT_NAMES[Z] : "Unknown";
+        const char* sym_base = (Z >= 1 && Z <= FULL_ELEMENT_COUNT) ? ELEMENT_SYMBOLS[Z] : "?";
+        const char* name_base = (Z >= 1 && Z <= FULL_ELEMENT_COUNT) ? ELEMENT_NAMES[Z] : "Unknown";
 
-        // Stability color indicator
-        const IsotopeDecayEntry* decay = lookup_isotope_decay(Z, elem.N);
+        // Add anti- prefix for antimatter elements
+        char sym[16], name[64];
+        if (elem.is_anti) {
+            snprintf(sym, sizeof(sym), "\xc4\x80%s", sym_base);   // macron-A + symbol (anti prefix)
+            snprintf(name, sizeof(name), "Anti-%s", name_base);
+        } else {
+            snprintf(sym, sizeof(sym), "%s", sym_base);
+            snprintf(name, sizeof(name), "%s", name_base);
+        }
+
+        // Stability color indicator (antinuclei are always "stable" in our model since
+        // nuclear decay table is for matter nuclei only — show as cyan)
+        const IsotopeDecayEntry* decay = elem.is_anti ? nullptr : lookup_isotope_decay(Z, elem.N);
         float hl = 0.0f;
         NuclearDecayMode dmode = NDECAY_NONE;
         if (decay) { dmode = decay->mode; hl = decay->half_life_frames; }
-        else { dmode = general_stability_rule(Z, elem.N, hl); }
+        else if (!elem.is_anti) { dmode = general_stability_rule(Z, elem.N, hl); }
 
         ImVec4 stab_col;
-        if (dmode == NDECAY_NONE)       stab_col = ImVec4(0.3f, 0.9f, 0.4f, 1.0f);  // stable green
+        if (elem.is_anti)               stab_col = ImVec4(0.5f, 0.8f, 1.0f, 1.0f);  // antimatter cyan
+        else if (dmode == NDECAY_NONE)   stab_col = ImVec4(0.3f, 0.9f, 0.4f, 1.0f);  // stable green
         else if (hl > 7200.0f)          stab_col = ImVec4(0.9f, 0.9f, 0.5f, 1.0f);  // long-lived yellow
         else if (hl > 60.0f)            stab_col = ImVec4(1.0f, 0.65f, 0.2f, 1.0f); // medium orange
         else                            stab_col = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);  // short red
@@ -3071,9 +3599,10 @@ void PhysicsInterface::draw_element_list() {
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.0f);
 
         // Selectable row
+        const char* lepton_label = elem.is_anti ? "e+" : "e-";
         char row_text[128];
-        snprintf(row_text, sizeof(row_text), "%-3s %-2s-%-3d  %-12s  %3s  %2de-",
-                 sym, sym, A, name, charge_str, elem.electrons);
+        snprintf(row_text, sizeof(row_text), "%-4s %-4s-%-3d  %-14s %3s  %d%s",
+                 sym, sym, A, name, charge_str, elem.electrons, lepton_label);
 
         if (ImGui::Selectable(row_text, is_selected, ImGuiSelectableFlags_None, ImVec2(0, 22))) {
             element_card_nucleus_rep = static_cast<int32_t>(elem.rep);
@@ -3083,9 +3612,12 @@ void PhysicsInterface::draw_element_list() {
         // Tooltip with details
         if (ImGui::IsItemHovered()) {
             ImGui::BeginTooltip();
-            ImGui::TextColored(ImVec4(0.9f, 0.85f, 0.6f, 1.0f), "%s-%d", sym, A);
-            ImGui::Text("Z=%d  N=%d  e-=%d", Z, elem.N, elem.electrons);
-            if (dmode == NDECAY_NONE) {
+            ImGui::TextColored(elem.is_anti ? ImVec4(0.5f, 0.8f, 1.0f, 1.0f) : ImVec4(0.9f, 0.85f, 0.6f, 1.0f),
+                               "%s-%d%s", sym, A, elem.is_anti ? " (antimatter)" : "");
+            ImGui::Text("Z=%d  N=%d  %s=%d", Z, elem.N, lepton_label, elem.electrons);
+            if (elem.is_anti) {
+                ImGui::TextColored(stab_col, "Antimatter");
+            } else if (dmode == NDECAY_NONE) {
                 ImGui::TextColored(stab_col, "Stable");
             } else {
                 const char* mode_str = "";
@@ -3115,6 +3647,12 @@ void PhysicsInterface::push_notification(const char* text, ImVec4 color) {
     if (static_cast<int>(notifications.size()) >= NOTIFY_MAX)
         notifications.erase(notifications.begin());  // drop oldest
     notifications.push_back({std::string(text), color, NOTIFY_DURATION});
+}
+
+void PhysicsInterface::push_decay_event(const char* desc, DecayEventType type, ImVec4 color) {
+    if (static_cast<int>(decay_log.size()) >= DECAY_LOG_MAX)
+        decay_log.erase(decay_log.begin());  // drop oldest
+    decay_log.push_back({std::string(desc), type, color, frame_counter_display});
 }
 
 void PhysicsInterface::draw_notifications() {

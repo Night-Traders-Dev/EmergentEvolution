@@ -64,7 +64,12 @@ void PhysicsSimulation::init(GLFWwindow* window) {
     cfg.field_flags        = 0;  // assembled from iface bools each frame
 
     iface.init();
+    iface.achievements_ptr = &achievements;
     cfg.generation_seed = static_cast<uint32_t>(iface.seed_value);
+
+    // Load persistent achievements from disk
+    fs::create_directories("saves");
+    achievements.load("saves/achievements.ppach");
 
     vk.init(window);
     compute.init(vk, COMPUTE_SPV);
@@ -74,6 +79,7 @@ void PhysicsSimulation::init(GLFWwindow* window) {
 }
 
 void PhysicsSimulation::destroy() {
+    achievements.save("saves/achievements.ppach");
     vkDeviceWaitIdle(vk.device);
     compute.destroy(vk);
     renderer.destroy(vk);
@@ -192,6 +198,10 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
     if (esc_now && !esc_was) {
         if (iface.show_settings_menu) {
             iface.show_settings_menu = false;
+            iface.show_pause_menu = true;
+            iface.save_prefs();
+        } else if (iface.show_achievements_panel) {
+            iface.show_achievements_panel = false;
             iface.show_pause_menu = true;
         } else {
             iface.show_pause_menu = !iface.show_pause_menu;
@@ -849,6 +859,24 @@ void PhysicsSimulation::check_annihilation() {
         consumed[i] = true;
         consumed[best_j] = true;
         any_annihilated = true;
+        achievements.total_annihilations++;
+        try_unlock(ACH_FIRST_ANNIHILATION);
+        {
+            static const char* const SM_LABELS[] = {
+                "p","n","e\xe2\x81\xbb","\xce\xb3","e\xe2\x81\xba","p\xcc\x84",
+                "\xce\xbd" "e","\xce\xbc\xe2\x81\xbb","\xce\xbc\xe2\x81\xba",
+                "\xcf\x84\xe2\x81\xbb","\xcf\x84\xe2\x81\xba","\xce\xbd\xce\xbc","\xce\xbd\xcf\x84",
+                "u","d","s","c","t","b",
+                "u\xcc\x84","d\xcc\x84","s\xcc\x84","c\xcc\x84","t\xcc\x84","b\xcc\x84",
+                "g","W\xe2\x81\xba","W\xe2\x81\xbb","Z\xe2\x81\xb0","H",
+                "G","DM","DE"
+            };
+            const char* name_i = (type_i < PHYS_PARTICLE_TYPES) ? SM_LABELS[type_i] : "?";
+            const char* name_j = (target_type < PHYS_PARTICLE_TYPES) ? SM_LABELS[target_type] : "?";
+            char amsg[128];
+            snprintf(amsg, sizeof(amsg), "%s + %s \xe2\x86\x92 \xce\xb3\xce\xb3", name_i, name_j);
+            iface.push_decay_event(amsg, PhysicsInterface::DEVT_ANNIHILATION, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+        }
 
         glm::vec2 mid = (readback_positions_[i] + readback_positions_[best_j]) * 0.5f;
         float angle = static_cast<float>(i * 1664525u + best_j * 1013904223u) * (6.2831853f / 4294967296.0f);
@@ -988,6 +1016,10 @@ void PhysicsSimulation::check_fusion() {
             }
             iface.push_notification("Fusion: p + p \xe2\x86\x92 d + e\xe2\x81\xba + \xce\xbd",
                                     ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
+            iface.push_decay_event("p + p \xe2\x86\x92 d + e\xe2\x81\xba + \xce\xbd",
+                                    PhysicsInterface::DEVT_FUSION, ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
+            achievements.total_fusions++;
+            try_unlock(ACH_FIRST_FUSION);
             break;
         }
     }
@@ -1032,6 +1064,10 @@ void PhysicsSimulation::check_fusion() {
             readback_energies_[j] += 0.15f;
             iface.push_notification("Fusion: p + n \xe2\x86\x92 deuteron",
                                     ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
+            iface.push_decay_event("p + n \xe2\x86\x92 deuteron",
+                                    PhysicsInterface::DEVT_FUSION, ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
+            achievements.total_fusions++;
+            try_unlock(ACH_FIRST_FUSION);
             break;
         }
     }
@@ -1146,6 +1182,10 @@ void PhysicsSimulation::check_fission() {
             snprintf(msg, sizeof(msg), "Fission: %d-nucleon cluster split + %dn",
                      static_cast<int>(cluster.size()), free_neutrons);
             iface.push_notification(msg, ImVec4(1.0f, 0.6f, 0.2f, 1.0f));
+            iface.push_decay_event(msg, PhysicsInterface::DEVT_FISSION, ImVec4(1.0f, 0.6f, 0.2f, 1.0f));
+            achievements.total_fissions++;
+            achievements.fission_recent_count++;
+            try_unlock(ACH_FIRST_FISSION);
         }
     }
 
@@ -1266,19 +1306,91 @@ void PhysicsSimulation::update_orbitals() {
         detected_nuclei_.push_back(std::move(fn));
     }
 
+    // ── Step 1b: Cluster antiprotons into antinuclei ────────────────────
+    // Antinuclei are made of antiprotons (no antineutron type exists yet,
+    // so Z = antiproton count, N = 0 for now).
+    std::vector<Nucleus> antinuclei;
+    for (uint32_t i = 0; i < n; ++i) {
+        if (clustered[i]) continue;
+        if (readback_energies_[i] < 0.01f) continue;
+        if (particles.types[i] != ANTIPROTON_TYPE_PHYS) continue;
+
+        // BFS: gather all nearby antiprotons
+        std::vector<uint32_t> members;
+        members.push_back(i);
+        clustered[i] = true;
+
+        for (size_t front = 0; front < members.size(); ++front) {
+            uint32_t mi = members[front];
+            for (uint32_t j = 0; j < n; ++j) {
+                if (clustered[j]) continue;
+                if (readback_energies_[j] < 0.01f) continue;
+                if (particles.types[j] != ANTIPROTON_TYPE_PHYS) continue;
+
+                glm::vec2 d = readback_positions_[j] - readback_positions_[mi];
+                if (glm::dot(d, d) < NUCLEAR_CLUSTER_RADIUS_SQ) {
+                    members.push_back(j);
+                    clustered[j] = true;
+                }
+            }
+        }
+
+        Nucleus anuc{};
+        anuc.rep = members[0];
+        anuc.Z = static_cast<int>(members.size());
+        anuc.total = anuc.Z;
+        for (uint32_t mi : members) {
+            anuc.center += readback_positions_[mi];
+            particles.orbital_parent[mi] = static_cast<int32_t>(anuc.rep);
+        }
+        anuc.center /= static_cast<float>(anuc.total);
+        antinuclei.push_back(anuc);
+
+        NucleusInfo ani;
+        ani.center = anuc.center;
+        ani.Z = anuc.Z;
+        ani.N = 0;
+        ani.rep = anuc.rep;
+        ani.is_anti = true;
+        for (uint32_t mi : members)
+            ani.proton_indices.push_back(mi);
+        detected_nuclei_.push_back(std::move(ani));
+    }
+
     // ── Step 2: Find electrons and assign to nearest nucleus ────────────
+    //            Also find positrons and assign to nearest antinucleus.
     struct ElectronBind {
         uint32_t idx;
         int nuc_idx;
         float dist;
     };
     std::vector<ElectronBind> bindings;
+    std::vector<ElectronBind> anti_bindings;  // positrons → antinuclei
 
     for (uint32_t i = 0; i < n; ++i) {
         if (readback_energies_[i] < 0.01f) continue;
         uint32_t t = particles.types[i];
 
-        // Only bind electrons to proton-nuclei (not positrons, not to anti-nuclei)
+        // Bind positrons to antinuclei
+        if (t == POSITRON_TYPE_PHYS && !antinuclei.empty()) {
+            float best_d = BINDING_RADIUS;
+            int best_anuc = -1;
+            for (int ai = 0; ai < static_cast<int>(antinuclei.size()); ++ai) {
+                glm::vec2 d = readback_positions_[i] - antinuclei[ai].center;
+                float dist = glm::length(d);
+                if (dist < best_d) {
+                    best_d = dist;
+                    best_anuc = ai;
+                }
+            }
+            if (best_anuc >= 0) {
+                anti_bindings.push_back({i, best_anuc, best_d});
+                particles.orbital_parent[i] = static_cast<int32_t>(antinuclei[best_anuc].rep);
+            }
+            continue;
+        }
+
+        // Only bind electrons to proton-nuclei
         if (t != ELECTRON_TYPE_PHYS) {
             // Clear orbital data for non-electrons that might have stale genome[2]
             if (t == POSITRON_TYPE_PHYS || t == MUON_TYPE_PHYS || t == ANTIMUON_TYPE_PHYS ||
@@ -1365,6 +1477,56 @@ void PhysicsSimulation::update_orbitals() {
 
         particles.genomes[b.idx * GENOME_SIZE + 2] = L_ground;
     }
+
+    // ── Step 3b: Assign positron orbital shells around antinuclei ─────────
+    if (!anti_bindings.empty()) {
+        std::sort(anti_bindings.begin(), anti_bindings.end(),
+                  [](const ElectronBind& a, const ElectronBind& b) {
+                      if (a.nuc_idx != b.nuc_idx) return a.nuc_idx < b.nuc_idx;
+                      return a.dist < b.dist;
+                  });
+        std::vector<int> anti_shell_fill(antinuclei.size() * NUM_SHELLS, 0);
+
+        for (auto& b : anti_bindings) {
+            int Z = antinuclei[b.nuc_idx].Z;
+
+            int total_assigned = 0;
+            for (int s = 0; s < NUM_SHELLS; ++s)
+                total_assigned += anti_shell_fill[b.nuc_idx * NUM_SHELLS + s];
+
+            if (total_assigned >= std::min(Z, MAX_ELECTRONS)) {
+                particles.genomes[b.idx * GENOME_SIZE + 2] = 0.0f;
+                continue;
+            }
+
+            int shell = -1;
+            for (int s = 0; s < NUM_SHELLS; ++s) {
+                if (anti_shell_fill[b.nuc_idx * NUM_SHELLS + s] < SHELL_CAP[s]) {
+                    shell = s;
+                    break;
+                }
+            }
+            if (shell < 0) {
+                particles.genomes[b.idx * GENOME_SIZE + 2] = 0.0f;
+                continue;
+            }
+
+            anti_shell_fill[b.nuc_idx * NUM_SHELLS + shell]++;
+
+            int inner = 0;
+            for (int s = 0; s < shell; ++s)
+                inner += anti_shell_fill[b.nuc_idx * NUM_SHELLS + s];
+
+            float Z_eff = std::max(1.0f, static_cast<float>(Z - inner));
+            float n_shell = static_cast<float>(shell + 1);
+            float R_target = std::max(n_shell * n_shell * R_BOHR / Z_eff, 8.0f);
+            float R3 = R_target * R_target * R_target;
+            float R2_soft = R_target * R_target + SOFTEN_SQ;
+            float L_ground = std::sqrt(Z_eff * K_COULOMB_F * R3 / R2_soft);
+
+            particles.genomes[b.idx * GENOME_SIZE + 2] = L_ground;
+        }
+    }
 }
 
 // ── CPU-side particle decay ──────────────────────────────────────────────────
@@ -1427,6 +1589,7 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[w_slot] = PRODUCT_ENERGY;
                 }
                 iface.push_notification("Decay: t \xe2\x86\x92 b + W\xe2\x81\xba", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                iface.push_decay_event("t \xe2\x86\x92 b + W\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
             case ANTI_TOP_TYPE: {
@@ -1441,6 +1604,7 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[w_slot] = PRODUCT_ENERGY;
                 }
                 iface.push_notification("Decay: \xc4\xab \xe2\x86\x92 b\xcc\x84 + W\xe2\x81\xbb", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                iface.push_decay_event("\xc4\xab \xe2\x86\x92 b\xcc\x84 + W\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
 
@@ -1457,6 +1621,7 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[nu_slot] = PRODUCT_ENERGY * 0.5f;
                 }
                 iface.push_notification("Decay: W\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                iface.push_decay_event("W\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
 
@@ -1473,6 +1638,7 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[nu_slot] = PRODUCT_ENERGY * 0.5f;
                 }
                 iface.push_notification("Decay: W\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xcc\x84", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                iface.push_decay_event("W\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xcc\x84", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
 
@@ -1489,6 +1655,7 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[e_slot] = PRODUCT_ENERGY;
                 }
                 iface.push_notification("Decay: Z\xe2\x81\xb0 \xe2\x86\x92 e\xe2\x81\xbb + e\xe2\x81\xba", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                iface.push_decay_event("Z\xe2\x81\xb0 \xe2\x86\x92 e\xe2\x81\xbb + e\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
 
@@ -1505,6 +1672,7 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[g_slot] = PRODUCT_ENERGY;
                 }
                 iface.push_notification("Decay: H \xe2\x86\x92 \xce\xb3 + \xce\xb3", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                iface.push_decay_event("H \xe2\x86\x92 \xce\xb3\xce\xb3", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
 
@@ -1521,6 +1689,7 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[nu_slot] = PRODUCT_ENERGY * 0.4f;
                 }
                 iface.push_notification("Decay: \xcf\x84 \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xcf\x84", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                iface.push_decay_event("\xcf\x84 \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xcf\x84", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
             case ANTITAU_TYPE_PHYS: {
@@ -1535,6 +1704,7 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[nu_slot] = PRODUCT_ENERGY * 0.4f;
                 }
                 iface.push_notification("Decay: \xcf\x84\xcc\x84 \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xcf\x84", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                iface.push_decay_event("\xcf\x84\xcc\x84 \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xcf\x84", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
 
@@ -1551,6 +1721,7 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[w_slot] = PRODUCT_ENERGY;
                 }
                 iface.push_notification("Decay: b \xe2\x86\x92 c + W\xe2\x81\xbb", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                iface.push_decay_event("b \xe2\x86\x92 c + W\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
             case ANTI_BOTTOM_TYPE: {
@@ -1565,6 +1736,7 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[w_slot] = PRODUCT_ENERGY;
                 }
                 iface.push_notification("Decay: b\xcc\x84 \xe2\x86\x92 c\xcc\x84 + W\xe2\x81\xba", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                iface.push_decay_event("b\xcc\x84 \xe2\x86\x92 c\xcc\x84 + W\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
 
@@ -1581,6 +1753,7 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[w_slot] = PRODUCT_ENERGY;
                 }
                 iface.push_notification("Decay: c \xe2\x86\x92 s + W\xe2\x81\xba", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                iface.push_decay_event("c \xe2\x86\x92 s + W\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
             case ANTI_CHARM_TYPE: {
@@ -1595,6 +1768,7 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[w_slot] = PRODUCT_ENERGY;
                 }
                 iface.push_notification("Decay: c\xcc\x84 \xe2\x86\x92 s\xcc\x84 + W\xe2\x81\xbb", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                iface.push_decay_event("c\xcc\x84 \xe2\x86\x92 s\xcc\x84 + W\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
 
@@ -1611,6 +1785,7 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[w_slot] = PRODUCT_ENERGY;
                 }
                 iface.push_notification("Decay: s \xe2\x86\x92 u + W\xe2\x81\xbb", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                iface.push_decay_event("s \xe2\x86\x92 u + W\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
             case ANTI_STRANGE_TYPE: {
@@ -1625,6 +1800,7 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[w_slot] = PRODUCT_ENERGY;
                 }
                 iface.push_notification("Decay: s\xcc\x84 \xe2\x86\x92 u\xcc\x84 + W\xe2\x81\xba", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                iface.push_decay_event("s\xcc\x84 \xe2\x86\x92 u\xcc\x84 + W\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
 
@@ -1648,6 +1824,7 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[nu2] = PRODUCT_ENERGY * 0.3f;
                 }
                 iface.push_notification("Decay: \xce\xbc\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xce\xbc + \xce\xbd\xcc\x84" "e", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                iface.push_decay_event("\xce\xbc\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xce\xbc + \xce\xbd\xcc\x84" "e", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
             case ANTIMUON_TYPE_PHYS: {
@@ -1669,6 +1846,7 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[nu2] = PRODUCT_ENERGY * 0.3f;
                 }
                 iface.push_notification("Decay: \xce\xbc\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xce\xbc + \xce\xbd" "e", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                iface.push_decay_event("\xce\xbc\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xce\xbc + \xce\xbd" "e", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
 
@@ -1768,6 +1946,8 @@ void PhysicsSimulation::check_nuclear_decay() {
                 nuc.Z -= 2; nuc.N -= 2;
                 any_decayed = true;
                 nuclear_decay_count_++;
+                achievements.total_alpha_decays++;
+                try_unlock(ACH_FIRST_ALPHA_DECAY);
                 {
                     char msg[128];
                     int A_parent = nuc.Z + nuc.N + 4;
@@ -1775,6 +1955,7 @@ void PhysicsSimulation::check_nuclear_decay() {
                              element_symbol(nuc.Z + 2), A_parent,
                              element_symbol(nuc.Z), nuc.Z + nuc.N);
                     iface.push_notification(msg, ImVec4(1.0f, 0.5f, 0.3f, 1.0f));
+                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(1.0f, 0.5f, 0.3f, 1.0f));
                 }
                 break;
             }
@@ -1809,6 +1990,8 @@ void PhysicsSimulation::check_nuclear_decay() {
                 }
                 any_decayed = true;
                 nuclear_decay_count_++;
+                achievements.total_beta_decays++;
+                try_unlock(ACH_FIRST_BETA_DECAY);
                 {
                     char msg[128];
                     int A = nuc.Z + nuc.N;
@@ -1816,6 +1999,7 @@ void PhysicsSimulation::check_nuclear_decay() {
                              element_symbol(nuc.Z - 1), A,
                              element_symbol(nuc.Z), A);
                     iface.push_notification(msg, ImVec4(0.5f, 0.8f, 1.0f, 1.0f));
+                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(0.5f, 0.8f, 1.0f, 1.0f));
                 }
                 break;
             }
@@ -1850,6 +2034,8 @@ void PhysicsSimulation::check_nuclear_decay() {
                 }
                 any_decayed = true;
                 nuclear_decay_count_++;
+                achievements.total_beta_decays++;
+                try_unlock(ACH_FIRST_BETA_DECAY);
                 {
                     char msg[128];
                     int A = nuc.Z + nuc.N;
@@ -1857,6 +2043,7 @@ void PhysicsSimulation::check_nuclear_decay() {
                              element_symbol(nuc.Z + 1), A,
                              element_symbol(nuc.Z), A);
                     iface.push_notification(msg, ImVec4(0.5f, 0.8f, 1.0f, 1.0f));
+                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(0.5f, 0.8f, 1.0f, 1.0f));
                 }
                 break;
             }
@@ -1879,6 +2066,7 @@ void PhysicsSimulation::check_nuclear_decay() {
                              element_symbol(nuc.Z), A_parent,
                              element_symbol(nuc.Z), nuc.Z + nuc.N);
                     iface.push_notification(msg, ImVec4(0.7f, 0.7f, 1.0f, 1.0f));
+                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(0.7f, 0.7f, 1.0f, 1.0f));
                 }
                 break;
             }
@@ -1901,6 +2089,7 @@ void PhysicsSimulation::check_nuclear_decay() {
                              element_symbol(nuc.Z + 1), A_parent,
                              element_symbol(nuc.Z), nuc.Z + nuc.N);
                     iface.push_notification(msg, ImVec4(0.7f, 0.7f, 1.0f, 1.0f));
+                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(0.7f, 0.7f, 1.0f, 1.0f));
                 }
                 break;
             }
@@ -1911,6 +2100,801 @@ void PhysicsSimulation::check_nuclear_decay() {
     }
 
     if (any_decayed) {
+        vkDeviceWaitIdle(vk.device);
+        compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+        compute.upload_dynamic_data(vk, particles);
+    }
+}
+
+// ── Photoelectric effect & Compton scattering ────────────────────────────────
+// High-energy photons interact with bound electrons:
+//   - Photoelectric: photon absorbed, electron ionized (ejected from orbit)
+//   - Compton: photon partially transfers energy, electron kicked to higher shell or out
+// Also handles general photon-electron energy transfer for free electrons.
+
+void PhysicsSimulation::check_photoelectric() {
+    if (readback_positions_.empty()) return;
+
+    const uint32_t n = cfg.particle_count;
+    const float INTERACTION_RADIUS = 25.0f;
+    const float INTERACTION_RADIUS_SQ = INTERACTION_RADIUS * INTERACTION_RADIUS;
+    const float PHOTON_SPEED = 300.0f;
+
+    // Binding energy per shell (game units): how much photon energy needed to ionize
+    // Shell 1 (1s) is tightest, shell 3 (3s3p3d) loosest
+    const float BINDING_ENERGY[] = {0.5f, 0.3f, 0.15f};  // indexed by shell
+    const int SHELL_CAP[] = {2, 8, 18};
+
+    const int MAX_INTERACTIONS_PER_FRAME = 8;
+    int interaction_count = 0;
+    bool any_changed = false;
+
+    std::mt19937 rng(frame_counter_ * 314159265u + 1);
+    std::vector<bool> used(n, false);
+
+    auto rand_dir = [&]() -> glm::vec2 {
+        std::uniform_real_distribution<float> a(0.0f, 6.2831853f);
+        float angle = a(rng);
+        return glm::vec2(std::cos(angle), std::sin(angle));
+    };
+
+    // Scan all photons for interactions with bound electrons
+    for (uint32_t i = 0; i < n && interaction_count < MAX_INTERACTIONS_PER_FRAME; ++i) {
+        if (used[i]) continue;
+        if (particles.types[i] != PHOTON_TYPE_PHYS) continue;
+        float ph_energy = readback_energies_[i];
+        if (ph_energy < 0.15f) continue;  // too low energy for meaningful interaction
+
+        float ph_speed = glm::length(readback_velocities_[i]);
+        if (ph_speed < 10.0f) continue;
+
+        // Find nearest bound electron/positron within interaction radius
+        float best_dist_sq = INTERACTION_RADIUS_SQ;
+        uint32_t best_e = UINT32_MAX;
+
+        for (uint32_t j = 0; j < n; ++j) {
+            if (j == i || used[j]) continue;
+            if (readback_energies_[j] < 0.01f) continue;
+            uint32_t t = particles.types[j];
+            if (t != ELECTRON_TYPE_PHYS && t != POSITRON_TYPE_PHYS) continue;
+
+            glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
+            float d2 = delta.x * delta.x + delta.y * delta.y;
+            if (d2 < best_dist_sq) {
+                best_dist_sq = d2;
+                best_e = j;
+            }
+        }
+        if (best_e == UINT32_MAX) continue;
+
+        // Determine if the electron is bound (has orbital parent)
+        int32_t orbital_parent = -1;
+        if (best_e < particles.orbital_parent.size())
+            orbital_parent = particles.orbital_parent[best_e];
+
+        bool is_bound = (orbital_parent >= 0);
+
+        if (is_bound) {
+            // ── Bound electron: photoelectric effect / Compton ──
+
+            // Determine which shell this electron is in
+            // We check which nucleus it belongs to and compute its shell
+            int shell = -1;
+            int Z_nucleus = 0;
+            for (const auto& nuc : detected_nuclei_) {
+                if (static_cast<int32_t>(nuc.rep) != orbital_parent) continue;
+                Z_nucleus = nuc.Z;
+
+                // Calculate shell radii and determine which shell the electron is in
+                float R_BOHR_PE = 15.0f;
+
+                int shell_fill[3] = {0, 0, 0};
+                float shell_radii[3];
+                // Count electrons per shell for this nucleus
+                for (uint32_t k = 0; k < n; ++k) {
+                    if (k >= particles.orbital_parent.size()) break;
+                    if (particles.orbital_parent[k] != static_cast<int32_t>(nuc.rep)) continue;
+                    uint32_t kt = particles.types[k];
+                    bool is_lepton = (nuc.is_anti) ? (kt == POSITRON_TYPE_PHYS) : (kt == ELECTRON_TYPE_PHYS);
+                    if (!is_lepton) continue;
+
+                    float kd = glm::length(readback_positions_[k] - nuc.center);
+                    for (int s = 0; s < 3; ++s) {
+                        float screening = 0.0f;
+                        if (s == 1) screening = static_cast<float>(SHELL_CAP[0]) * 0.85f;
+                        else if (s == 2) screening = static_cast<float>(SHELL_CAP[0]) + static_cast<float>(SHELL_CAP[1]) * 0.85f;
+                        float Z_eff = std::max(1.0f, static_cast<float>(nuc.Z) - screening);
+                        float n_sh = static_cast<float>(s + 1);
+                        shell_radii[s] = std::max(n_sh * n_sh * R_BOHR_PE / Z_eff, 8.0f);
+                    }
+
+                    // Assign to shell by nearest radius
+                    int best_s = 0;
+                    float best_diff = std::abs(kd - shell_radii[0]);
+                    for (int s = 1; s < 3; ++s) {
+                        float diff = std::abs(kd - shell_radii[s]);
+                        if (diff < best_diff) { best_diff = diff; best_s = s; }
+                    }
+                    if (shell_fill[best_s] < SHELL_CAP[best_s])
+                        shell_fill[best_s]++;
+
+                    if (k == best_e) shell = best_s;
+                }
+                break;
+            }
+
+            if (shell < 0) shell = 0;  // fallback
+
+            // Scale binding energy by Z (heavier atoms bind tighter)
+            float Z_factor = std::max(1.0f, static_cast<float>(Z_nucleus));
+            float binding = BINDING_ENERGY[shell] * std::sqrt(Z_factor);
+
+            if (ph_energy >= binding * 1.5f) {
+                // ── PHOTOELECTRIC EFFECT: photon fully absorbed, electron ionized ──
+                // Electron gets ejected with kinetic energy = photon_energy - binding_energy
+                float kick_energy = ph_energy - binding;
+
+                // Absorb photon (kill it)
+                used[i] = true;
+                readback_energies_[i] = 0.0f;
+                readback_velocities_[i] = glm::vec2(0.0f);
+
+                // Eject electron: direction = away from nucleus
+                glm::vec2 eject_dir = rand_dir();
+                if (orbital_parent >= 0 && static_cast<uint32_t>(orbital_parent) < n) {
+                    glm::vec2 to_electron = readback_positions_[best_e] - readback_positions_[orbital_parent];
+                    float len = glm::length(to_electron);
+                    if (len > 0.1f) eject_dir = to_electron / len;
+                }
+
+                float eject_speed = std::min(std::sqrt(kick_energy) * 80.0f, 250.0f);
+                readback_velocities_[best_e] = eject_dir * eject_speed;
+                readback_energies_[best_e] = std::min(readback_energies_[best_e] + kick_energy, 1.0f);
+                particles.orbital_parent[best_e] = -1;  // ionized — no longer bound
+                particles.genomes[best_e * GENOME_SIZE + 2] = 0.0f;  // clear orbital L
+
+                used[best_e] = true;
+                any_changed = true;
+                interaction_count++;
+                iface.push_decay_event("Photoelectric: \xce\xb3 absorbed, e\xe2\x81\xbb ionized", PhysicsInterface::DEVT_PHOTOELECTRIC, ImVec4(0.3f, 0.7f, 1.0f, 1.0f));
+
+            } else if (ph_energy >= binding * 0.6f) {
+                // ── COMPTON SCATTERING: partial energy transfer ──
+                // Photon deflected with reduced energy, electron boosted
+                float transfer = ph_energy * 0.4f;  // 40% of photon energy transferred
+
+                // Reduce photon energy and deflect
+                readback_energies_[i] = std::max(ph_energy - transfer, 0.05f);
+                glm::vec2 deflect = rand_dir();
+                readback_velocities_[i] = deflect * PHOTON_SPEED;
+
+                // Boost electron: if transfer > binding, ionize; otherwise kick to higher shell
+                if (transfer >= binding) {
+                    // Ionize
+                    glm::vec2 kick_dir = glm::normalize(readback_positions_[best_e] - readback_positions_[i] + glm::vec2(0.001f));
+                    float eject_speed = std::min(std::sqrt(transfer - binding) * 60.0f, 200.0f);
+                    readback_velocities_[best_e] = kick_dir * eject_speed;
+                    readback_energies_[best_e] = std::min(readback_energies_[best_e] + transfer, 1.0f);
+                    particles.orbital_parent[best_e] = -1;
+                    particles.genomes[best_e * GENOME_SIZE + 2] = 0.0f;
+                } else {
+                    // Excite: push electron outward (simulate shell promotion)
+                    // Increase its orbital angular momentum → it drifts to a higher shell
+                    float current_L = particles.genomes[best_e * GENOME_SIZE + 2];
+                    float boost_L = transfer * 200.0f;  // energy → angular momentum boost
+                    particles.genomes[best_e * GENOME_SIZE + 2] = current_L + boost_L;
+                    readback_energies_[best_e] = std::min(readback_energies_[best_e] + transfer * 0.5f, 1.0f);
+
+                    // Small radial kick outward
+                    glm::vec2 outward(0.0f);
+                    if (orbital_parent >= 0 && static_cast<uint32_t>(orbital_parent) < n) {
+                        outward = readback_positions_[best_e] - readback_positions_[orbital_parent];
+                        float len = glm::length(outward);
+                        if (len > 0.1f) outward /= len;
+                    }
+                    readback_velocities_[best_e] += outward * transfer * 30.0f;
+                }
+
+                used[i] = true;
+                used[best_e] = true;
+                any_changed = true;
+                interaction_count++;
+                iface.push_decay_event("Compton: \xce\xb3 scattered off bound e\xe2\x81\xbb", PhysicsInterface::DEVT_PHOTOELECTRIC, ImVec4(0.4f, 0.7f, 0.9f, 1.0f));
+            }
+            // else: photon too weak, passes through (handled by shader deflection)
+
+        } else {
+            // ── Free electron: Compton scattering / energy transfer ──
+            // High-energy photon transfers momentum to free electron
+            if (ph_energy >= 0.3f) {
+                float transfer = ph_energy * 0.3f;
+
+                // Photon loses energy and deflects
+                glm::vec2 orig_ph_dir = glm::normalize(readback_velocities_[i] + glm::vec2(0.001f));
+                readback_energies_[i] = std::max(ph_energy - transfer, 0.05f);
+                readback_velocities_[i] = rand_dir() * PHOTON_SPEED;
+
+                // Electron gains momentum in photon's original direction
+                readback_velocities_[best_e] += orig_ph_dir * transfer * 100.0f;
+                readback_energies_[best_e] = std::min(readback_energies_[best_e] + transfer, 1.0f);
+
+                used[i] = true;
+                used[best_e] = true;
+                any_changed = true;
+                interaction_count++;
+                iface.push_decay_event("Free e\xe2\x81\xbb Compton scatter", PhysicsInterface::DEVT_PHOTOELECTRIC, ImVec4(0.5f, 0.6f, 0.8f, 1.0f));
+            }
+        }
+    }
+
+    // ── Nuclear Compton scattering: photon + free nucleon ──
+    // Photon scatters off a free proton or neutron, transferring momentum.
+    // Lower threshold than photodisintegration — just elastic scattering.
+    for (uint32_t i = 0; i < n && interaction_count < MAX_INTERACTIONS_PER_FRAME; ++i) {
+        if (used[i]) continue;
+        if (particles.types[i] != PHOTON_TYPE_PHYS) continue;
+        float ph_energy = readback_energies_[i];
+        if (ph_energy < 0.25f) continue;
+
+        float ph_speed = glm::length(readback_velocities_[i]);
+        if (ph_speed < 10.0f) continue;
+        glm::vec2 ph_dir = readback_velocities_[i] / ph_speed;
+
+        // Find nearest free nucleon (not part of a nucleus)
+        float best_dist_sq = INTERACTION_RADIUS_SQ;
+        uint32_t best_nuc = UINT32_MAX;
+
+        for (uint32_t j = 0; j < n; ++j) {
+            if (j == i || used[j]) continue;
+            if (readback_energies_[j] < 0.01f) continue;
+            uint32_t t = particles.types[j];
+            if (t != PROTON_TYPE && t != NEUTRON_TYPE && t != ANTIPROTON_TYPE_PHYS) continue;
+
+            // Must be free (not part of a nucleus with other nucleons)
+            if (j < particles.orbital_parent.size() && particles.orbital_parent[j] >= 0 &&
+                particles.orbital_parent[j] != static_cast<int32_t>(j)) continue;
+
+            glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
+            float d2 = delta.x * delta.x + delta.y * delta.y;
+            if (d2 < best_dist_sq) {
+                best_dist_sq = d2;
+                best_nuc = j;
+            }
+        }
+        if (best_nuc == UINT32_MAX) continue;
+
+        // Nuclear Compton: photon deflects, nucleon gets momentum kick
+        // Much less energy transfer than electron Compton (nucleon is ~2000x heavier)
+        float transfer = ph_energy * 0.08f;  // small fraction due to heavy target
+
+        readback_energies_[i] = std::max(ph_energy - transfer, 0.05f);
+        readback_velocities_[i] = rand_dir() * PHOTON_SPEED;
+
+        // Nucleon recoil in photon's original direction
+        readback_velocities_[best_nuc] += ph_dir * transfer * 15.0f;
+        readback_energies_[best_nuc] = std::min(readback_energies_[best_nuc] + transfer * 0.3f, 1.0f);
+
+        used[i] = true;
+        used[best_nuc] = true;
+        any_changed = true;
+        interaction_count++;
+        iface.push_decay_event("Nuclear Compton: \xce\xb3 + N scatter", PhysicsInterface::DEVT_PHOTOELECTRIC, ImVec4(0.6f, 0.5f, 0.9f, 1.0f));
+    }
+
+    if (any_changed) {
+        vkDeviceWaitIdle(vk.device);
+        compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+        compute.upload_dynamic_data(vk, particles);
+    }
+}
+
+// ── Nuclear spallation ──────────────────────────────────────────────────────
+// When a high-energy particle (any massive particle) strikes a nucleus with
+// sufficient kinetic energy, the nucleus shatters into individual nucleon
+// fragments. This is different from fission (which requires a fast neutron
+// and a minimum cluster size). Spallation works with any projectile type
+// and can break apart nuclei of any size.
+
+void PhysicsSimulation::check_spallation() {
+    if (readback_positions_.empty() || detected_nuclei_.empty()) return;
+
+    const uint32_t n = cfg.particle_count;
+    const float HIT_RADIUS = 10.0f;
+    const float HIT_RADIUS_SQ = HIT_RADIUS * HIT_RADIUS;
+    const float MIN_PROJECTILE_SPEED = 120.0f;      // must be moving fast
+    const float MIN_PROJECTILE_ENERGY = 0.5f;
+    const int MIN_NUCLEUS_SIZE = 2;                  // at least deuteron
+    const float FRAGMENT_SPEED = 100.0f;
+    const float FRAGMENT_ENERGY = 0.6f;
+    const int MAX_SPALLATIONS_PER_FRAME = 3;
+
+    int spallation_count = 0;
+    bool any_spallated = false;
+    std::vector<bool> used(n, false);
+    std::mt19937 rng(frame_counter_ * 1618033989u);
+
+    auto rand_dir = [&]() -> glm::vec2 {
+        std::uniform_real_distribution<float> a(0.0f, 6.2831853f);
+        float angle = a(rng);
+        return glm::vec2(std::cos(angle), std::sin(angle));
+    };
+
+    // Identify projectiles: any fast-moving massive particle (not photon/neutrino/gluon)
+    for (uint32_t i = 0; i < n && spallation_count < MAX_SPALLATIONS_PER_FRAME; ++i) {
+        if (used[i]) continue;
+        if (readback_energies_[i] < MIN_PROJECTILE_ENERGY) continue;
+
+        uint32_t ptype = particles.types[i];
+        // Skip massless particles (they don't cause spallation directly —
+        // photonuclear is handled in check_photoelectric via a separate path)
+        if (ptype >= PHYS_PARTICLE_TYPES) continue;
+        uint32_t bhv = particles.behavior_flags[ptype];
+        if (bhv & BEHAVIOR_PHOTON) continue;
+        if (bhv & BEHAVIOR_NEUTRINO) continue;
+
+        float speed = glm::length(readback_velocities_[i]);
+        if (speed < MIN_PROJECTILE_SPEED) continue;
+
+        glm::vec2 proj_pos = readback_positions_[i];
+
+        // Check against each detected nucleus
+        for (auto& nuc : detected_nuclei_) {
+            if (spallation_count >= MAX_SPALLATIONS_PER_FRAME) break;
+
+            int total_nucleons = nuc.Z + static_cast<int>(nuc.neutron_indices.size());
+            if (total_nucleons < MIN_NUCLEUS_SIZE) continue;
+
+            // Check if projectile is inside the nucleus
+            glm::vec2 delta = proj_pos - nuc.center;
+            float d2 = delta.x * delta.x + delta.y * delta.y;
+            if (d2 > HIT_RADIUS_SQ) continue;
+
+            // Don't spall if the projectile IS part of this nucleus
+            bool is_constituent = false;
+            for (uint32_t pi : nuc.proton_indices) {
+                if (pi == i) { is_constituent = true; break; }
+            }
+            if (!is_constituent) {
+                for (uint32_t ni : nuc.neutron_indices) {
+                    if (ni == i) { is_constituent = true; break; }
+                }
+            }
+            if (is_constituent) continue;
+
+            // ── SPALLATION: shatter the nucleus ──
+            // Scale damage by projectile kinetic energy
+            // Higher energy → more nucleons ejected
+            float kinetic = 0.5f * speed * speed * 0.001f;  // normalized KE
+            float damage_frac = std::min(kinetic / 10.0f, 1.0f);  // 0..1
+
+            // Number of nucleons ejected: proportional to damage and nucleus size
+            int max_eject = total_nucleons;
+            int num_eject = std::max(1, static_cast<int>(damage_frac * max_eject));
+            num_eject = std::min(num_eject, max_eject);
+
+            // If we're ejecting less than half, it's partial spallation (knock-out)
+            // If we're ejecting all, it's total disintegration
+            bool total_disintegration = (num_eject >= total_nucleons - 1);
+
+            glm::vec2 proj_dir = glm::normalize(readback_velocities_[i] + glm::vec2(0.001f));
+            int ejected = 0;
+
+            // Eject from proton indices
+            auto eject_nucleon = [&](uint32_t idx) {
+                if (used[idx]) return;
+                used[idx] = true;
+
+                // Give fragment velocity: combination of projectile direction + random scatter
+                glm::vec2 scatter = rand_dir() * 0.5f + proj_dir * 0.5f;
+                scatter = glm::normalize(scatter);
+                float frag_speed = FRAGMENT_SPEED + speed * 0.2f * damage_frac;
+                readback_velocities_[idx] = scatter * frag_speed;
+                readback_energies_[idx] = FRAGMENT_ENERGY;
+                particles.orbital_parent[idx] = -1;  // unbind from nucleus
+            };
+
+            // Eject protons first (from the back to avoid index invalidation)
+            while (ejected < num_eject && !nuc.proton_indices.empty()) {
+                uint32_t pi = nuc.proton_indices.back();
+                nuc.proton_indices.pop_back();
+                eject_nucleon(pi);
+                nuc.Z--;
+                ejected++;
+            }
+
+            // Then eject neutrons
+            while (ejected < num_eject && !nuc.neutron_indices.empty()) {
+                uint32_t ni = nuc.neutron_indices.back();
+                nuc.neutron_indices.pop_back();
+                eject_nucleon(ni);
+                nuc.N--;
+                ejected++;
+            }
+
+            // Projectile loses energy and slows down
+            readback_energies_[i] = std::max(readback_energies_[i] * 0.3f, 0.1f);
+            readback_velocities_[i] *= 0.3f;
+            used[i] = true;
+
+            // Recoil on remaining nucleus
+            if (!total_disintegration) {
+                glm::vec2 recoil = -proj_dir * speed * 0.15f;
+                for (uint32_t pi : nuc.proton_indices) {
+                    if (!used[pi]) readback_velocities_[pi] += recoil;
+                }
+                for (uint32_t ni : nuc.neutron_indices) {
+                    if (!used[ni]) readback_velocities_[ni] += recoil;
+                }
+            }
+
+            // Also free any bound electrons/positrons (they scatter)
+            uint32_t lepton_type = nuc.is_anti ? POSITRON_TYPE_PHYS : ELECTRON_TYPE_PHYS;
+            for (uint32_t k = 0; k < n; ++k) {
+                if (used[k]) continue;
+                if (particles.types[k] != lepton_type) continue;
+                if (k >= particles.orbital_parent.size()) continue;
+                if (particles.orbital_parent[k] != static_cast<int32_t>(nuc.rep)) continue;
+
+                // Scatter the electron/positron
+                if (total_disintegration || (ejected > total_nucleons / 2)) {
+                    readback_velocities_[k] += rand_dir() * 40.0f;
+                    particles.orbital_parent[k] = -1;
+                    particles.genomes[k * GENOME_SIZE + 2] = 0.0f;
+                }
+            }
+
+            any_spallated = true;
+            spallation_count++;
+
+            {
+                char msg[128];
+                if (total_disintegration)
+                    snprintf(msg, sizeof(msg), "Spallation: nucleus (Z=%d) disintegrated!",
+                             nuc.Z + ejected);
+                else
+                    snprintf(msg, sizeof(msg), "Spallation: %d nucleons ejected from Z=%d nucleus",
+                             ejected, nuc.Z + ejected);
+                iface.push_notification(msg, ImVec4(1.0f, 0.5f, 0.3f, 1.0f));
+                iface.push_decay_event(msg, PhysicsInterface::DEVT_SPALLATION, ImVec4(1.0f, 0.5f, 0.3f, 1.0f));
+            }
+
+            break;  // one spallation per projectile
+        }
+    }
+
+    // ── High-energy photon–nucleus interactions ────────────────────────────
+    // Processes ordered by energy threshold (ascending):
+    //   0.50+ : Photodisintegration  — γ + A → (A-1) + nucleon
+    //   0.60+ : Pair production      — γ → e⁺ + e⁻ (needs nuclear field)
+    //   0.80+ : Pion production      — γ + N → N' + π (quark-antiquark pair)
+    //   0.85+ : Vector meson dom.    — γ → ρ/ω meson → hadronic shower
+    //
+    // A given photon triggers AT MOST one of these per frame.
+
+    auto find_dormant_sp = [&](uint32_t start) -> uint32_t {
+        for (uint32_t k = start; k < n; ++k)
+            if (readback_energies_[k] < 0.01f && !used[k]) return k;
+        for (uint32_t k = 0; k < start; ++k)
+            if (readback_energies_[k] < 0.01f && !used[k]) return k;
+        return UINT32_MAX;
+    };
+
+    for (uint32_t i = 0; i < n && spallation_count < MAX_SPALLATIONS_PER_FRAME; ++i) {
+        if (used[i]) continue;
+        if (particles.types[i] != PHOTON_TYPE_PHYS) continue;
+        float ph_energy = readback_energies_[i];
+        if (ph_energy < 0.50f) continue;
+
+        float ph_speed = glm::length(readback_velocities_[i]);
+        if (ph_speed < 80.0f) continue;
+        glm::vec2 ph_dir = readback_velocities_[i] / ph_speed;
+
+        glm::vec2 ph_pos = readback_positions_[i];
+
+        for (auto& nuc : detected_nuclei_) {
+            if (spallation_count >= MAX_SPALLATIONS_PER_FRAME) break;
+
+            int total_nucleons = nuc.Z + static_cast<int>(nuc.neutron_indices.size());
+            if (total_nucleons < 2) continue;
+
+            glm::vec2 delta = ph_pos - nuc.center;
+            float d2 = delta.x * delta.x + delta.y * delta.y;
+
+            // Use a larger interaction radius for pair production (virtual photon
+            // couples to nuclear Coulomb field at longer range)
+            float radius_sq = (ph_energy >= 0.60f) ? 225.0f : HIT_RADIUS_SQ;  // 15² or 10²
+            if (d2 > radius_sq) continue;
+
+            // ── Probabilistic process selection based on energy ──
+            // Higher energy unlocks more processes; we pick the highest available
+            // with some randomness (the distribution favors dominant channels).
+            std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+            float roll = unit(rng);
+
+            if (ph_energy >= 0.85f && roll < 0.25f) {
+                // ═══ VECTOR MESON DOMINANCE ═══
+                // γ fluctuates into a virtual ρ⁰ meson (uū–dd̄ superposition)
+                // which interacts hadronically → multiple nucleon ejections +
+                // quark-antiquark debris (hadronic shower).
+                // This is the dominant process at very high energies for heavy nuclei.
+
+                used[i] = true;
+                readback_energies_[i] = 0.0f;
+                readback_velocities_[i] = glm::vec2(0.0f);
+
+                // Eject multiple nucleons (scaled by energy and nucleus size)
+                int num_eject = std::min(std::max(2, static_cast<int>(ph_energy * 4.0f)),
+                                         total_nucleons - 1);
+                int ejected = 0;
+
+                while (ejected < num_eject && !nuc.neutron_indices.empty()) {
+                    uint32_t ni = nuc.neutron_indices.back();
+                    nuc.neutron_indices.pop_back();
+                    readback_velocities_[ni] = rand_dir() * (FRAGMENT_SPEED + ph_energy * 50.0f);
+                    readback_energies_[ni] = FRAGMENT_ENERGY;
+                    particles.orbital_parent[ni] = -1;
+                    used[ni] = true;
+                    nuc.N--;
+                    ejected++;
+                }
+                while (ejected < num_eject && !nuc.proton_indices.empty()) {
+                    uint32_t pi = nuc.proton_indices.back();
+                    nuc.proton_indices.pop_back();
+                    readback_velocities_[pi] = rand_dir() * (FRAGMENT_SPEED + ph_energy * 50.0f);
+                    readback_energies_[pi] = FRAGMENT_ENERGY;
+                    particles.orbital_parent[pi] = -1;
+                    used[pi] = true;
+                    nuc.Z--;
+                    ejected++;
+                }
+
+                // Spawn quark-antiquark debris (the ρ meson decay products)
+                // ρ⁰ → u + ū  (or d + d̄) — spawn as quark pair
+                uint32_t q_slot = find_dormant_sp(0);
+                uint32_t qbar_slot = (q_slot != UINT32_MAX) ? find_dormant_sp(q_slot + 1) : UINT32_MAX;
+                if (q_slot != UINT32_MAX && qbar_slot != UINT32_MAX) {
+                    glm::vec2 q_dir = rand_dir();
+                    bool pick_up = (unit(rng) < 0.5f);
+                    uint32_t q_type = pick_up ? UP_QUARK_TYPE : DOWN_QUARK_TYPE;
+                    uint32_t qbar_type = pick_up ? ANTI_UP_TYPE : ANTI_DOWN_TYPE;
+
+                    write_spawn_genome(particles, q_slot, q_type, rng, frame_counter_);
+                    readback_positions_[q_slot] = nuc.center + q_dir * 5.0f;
+                    readback_velocities_[q_slot] = q_dir * 180.0f;
+                    readback_energies_[q_slot] = ph_energy * 0.3f;
+                    used[q_slot] = true;
+
+                    write_spawn_genome(particles, qbar_slot, qbar_type, rng, frame_counter_);
+                    readback_positions_[qbar_slot] = nuc.center - q_dir * 5.0f;
+                    readback_velocities_[qbar_slot] = -q_dir * 180.0f;
+                    readback_energies_[qbar_slot] = ph_energy * 0.3f;
+                    used[qbar_slot] = true;
+                }
+
+                // Scatter bound leptons
+                uint32_t lepton_type = nuc.is_anti ? POSITRON_TYPE_PHYS : ELECTRON_TYPE_PHYS;
+                for (uint32_t k = 0; k < n; ++k) {
+                    if (used[k] || particles.types[k] != lepton_type) continue;
+                    if (k >= particles.orbital_parent.size()) continue;
+                    if (particles.orbital_parent[k] != static_cast<int32_t>(nuc.rep)) continue;
+                    readback_velocities_[k] += rand_dir() * 50.0f;
+                    particles.orbital_parent[k] = -1;
+                    particles.genomes[k * GENOME_SIZE + 2] = 0.0f;
+                }
+
+                any_spallated = true;
+                spallation_count++;
+
+                char msg[128];
+                snprintf(msg, sizeof(msg),
+                    "VMD: \xCF\x81\xE2\x81\xB0 meson shower — %d nucleons + q\xC4\x81 pair from Z=%d",
+                    ejected, nuc.Z + ejected);
+                iface.push_notification(msg, ImVec4(0.9f, 0.3f, 0.9f, 1.0f));
+                iface.push_decay_event(msg, PhysicsInterface::DEVT_VMD, ImVec4(0.9f, 0.3f, 0.9f, 1.0f));
+                break;
+
+            } else if (ph_energy >= 0.80f && roll < 0.50f) {
+                // ═══ PHOTOPION PRODUCTION (Δ resonance) ═══
+                // γ + p → Δ⁺ → n + π⁺  (or γ + n → Δ⁰ → p + π⁻)
+                // The pion is a quark-antiquark bound state. In our sim we
+                // represent it as a u + d̄ (π⁺) or ū + d (π⁻) pair.
+
+                // Pick a target nucleon from the nucleus
+                bool target_proton = !nuc.proton_indices.empty();
+                bool target_neutron = !nuc.neutron_indices.empty();
+                if (!target_proton && !target_neutron) continue;
+
+                // Prefer proton targets (γ + p → n + π⁺ has higher cross-section)
+                uint32_t target_idx = UINT32_MAX;
+                bool used_proton = false;
+                if (target_proton && (roll < 0.35f || !target_neutron)) {
+                    target_idx = nuc.proton_indices.back();
+                    nuc.proton_indices.pop_back();
+                    nuc.Z--;
+                    used_proton = true;
+                } else if (target_neutron) {
+                    target_idx = nuc.neutron_indices.back();
+                    nuc.neutron_indices.pop_back();
+                    nuc.N--;
+                }
+                if (target_idx == UINT32_MAX) continue;
+
+                // Absorb photon
+                used[i] = true;
+                readback_energies_[i] = 0.0f;
+                readback_velocities_[i] = glm::vec2(0.0f);
+
+                // Transmute nucleon: p → n (or n → p) via isospin flip
+                uint32_t new_nucleon_type = used_proton ? NEUTRON_TYPE : PROTON_TYPE;
+                write_spawn_genome(particles, target_idx, new_nucleon_type, rng, frame_counter_);
+                glm::vec2 eject_dir = rand_dir();
+                readback_velocities_[target_idx] = eject_dir * 120.0f;
+                readback_energies_[target_idx] = 0.6f;
+                particles.orbital_parent[target_idx] = -1;
+                used[target_idx] = true;
+
+                // Spawn pion as quark-antiquark pair
+                // π⁺ = u + d̄;  π⁻ = ū + d
+                uint32_t q_slot = find_dormant_sp(0);
+                uint32_t qbar_slot = (q_slot != UINT32_MAX) ? find_dormant_sp(q_slot + 1) : UINT32_MAX;
+
+                if (q_slot != UINT32_MAX && qbar_slot != UINT32_MAX) {
+                    glm::vec2 pion_dir = ph_dir;  // pion roughly follows photon direction
+                    uint32_t q_type, qbar_type;
+                    if (used_proton) {
+                        // γ + p → n + π⁺ (u + d̄)
+                        q_type = UP_QUARK_TYPE;
+                        qbar_type = ANTI_DOWN_TYPE;
+                    } else {
+                        // γ + n → p + π⁻ (ū + d)
+                        q_type = DOWN_QUARK_TYPE;
+                        qbar_type = ANTI_UP_TYPE;
+                    }
+
+                    glm::vec2 pion_pos = nuc.center + pion_dir * 6.0f;
+                    write_spawn_genome(particles, q_slot, q_type, rng, frame_counter_);
+                    readback_positions_[q_slot] = pion_pos + glm::vec2(1.5f, 0.0f);
+                    readback_velocities_[q_slot] = pion_dir * 200.0f + rand_dir() * 20.0f;
+                    readback_energies_[q_slot] = ph_energy * 0.35f;
+                    used[q_slot] = true;
+
+                    write_spawn_genome(particles, qbar_slot, qbar_type, rng, frame_counter_);
+                    readback_positions_[qbar_slot] = pion_pos - glm::vec2(1.5f, 0.0f);
+                    readback_velocities_[qbar_slot] = pion_dir * 200.0f + rand_dir() * 20.0f;
+                    readback_energies_[qbar_slot] = ph_energy * 0.35f;
+                    used[qbar_slot] = true;
+                }
+
+                // Recoil on remaining nucleus
+                glm::vec2 recoil = -ph_dir * 20.0f;
+                for (uint32_t pi : nuc.proton_indices)
+                    if (!used[pi]) readback_velocities_[pi] += recoil;
+                for (uint32_t ni : nuc.neutron_indices)
+                    if (!used[ni]) readback_velocities_[ni] += recoil;
+
+                any_spallated = true;
+                spallation_count++;
+
+                char msg[128];
+                const char* pion_sym = used_proton ? "\xCF\x80\xE2\x81\xBA" : "\xCF\x80\xE2\x81\xBB";
+                snprintf(msg, sizeof(msg), "Photopion: \xCE\xB3 + %s \xE2\x86\x92 %s + %s",
+                         used_proton ? "p" : "n",
+                         used_proton ? "n" : "p",
+                         pion_sym);
+                iface.push_notification(msg, ImVec4(0.4f, 0.9f, 0.6f, 1.0f));
+                iface.push_decay_event(msg, PhysicsInterface::DEVT_PION_PRODUCTION, ImVec4(0.4f, 0.9f, 0.6f, 1.0f));
+                break;
+
+            } else if (ph_energy >= 0.60f && roll < 0.65f && d2 < 225.0f) {
+                // ═══ PAIR PRODUCTION ═══
+                // γ → e⁺ + e⁻  (requires nearby nucleus for momentum conservation)
+                // The photon converts into an electron-positron pair in the
+                // nuclear Coulomb field. Threshold: E_γ ≥ 2 × m_e c².
+
+                used[i] = true;
+                readback_energies_[i] = 0.0f;
+                readback_velocities_[i] = glm::vec2(0.0f);
+
+                // Create electron-positron pair
+                uint32_t e_slot = find_dormant_sp(0);
+                uint32_t p_slot = (e_slot != UINT32_MAX) ? find_dormant_sp(e_slot + 1) : UINT32_MAX;
+
+                if (e_slot != UINT32_MAX && p_slot != UINT32_MAX) {
+                    // Pair opens in directions roughly perpendicular to photon path
+                    // with slight forward boost (lab frame)
+                    glm::vec2 perp(-ph_dir.y, ph_dir.x);
+                    float pair_speed = std::min(ph_energy * 80.0f, 200.0f);
+                    float pair_energy = std::min(ph_energy * 0.45f, 0.8f);
+
+                    write_spawn_genome(particles, e_slot, ELECTRON_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[e_slot] = ph_pos + perp * 3.0f;
+                    readback_velocities_[e_slot] = (ph_dir * 0.4f + perp * 0.6f) * pair_speed;
+                    readback_energies_[e_slot] = pair_energy;
+                    used[e_slot] = true;
+
+                    write_spawn_genome(particles, p_slot, POSITRON_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[p_slot] = ph_pos - perp * 3.0f;
+                    readback_velocities_[p_slot] = (ph_dir * 0.4f - perp * 0.6f) * pair_speed;
+                    readback_energies_[p_slot] = pair_energy;
+                    used[p_slot] = true;
+
+                    // Small nuclear recoil (momentum conservation)
+                    glm::vec2 recoil = -ph_dir * 5.0f;
+                    for (uint32_t pi : nuc.proton_indices)
+                        if (!used[pi]) readback_velocities_[pi] += recoil;
+                    for (uint32_t ni : nuc.neutron_indices)
+                        if (!used[ni]) readback_velocities_[ni] += recoil;
+                }
+
+                any_spallated = true;
+                spallation_count++;
+
+                iface.push_notification(
+                    "Pair production: \xCE\xB3 \xE2\x86\x92 e\xE2\x81\xBA + e\xE2\x81\xBB",
+                    ImVec4(0.3f, 0.7f, 1.0f, 1.0f));
+                iface.push_decay_event("\xCE\xB3 \xE2\x86\x92 e\xE2\x81\xBA + e\xE2\x81\xBB", PhysicsInterface::DEVT_PAIR_PRODUCTION, ImVec4(0.3f, 0.7f, 1.0f, 1.0f));
+                break;
+
+            } else if (ph_energy >= 0.50f) {
+                // ═══ PHOTODISINTEGRATION ═══
+                // γ + A → (A-1) + nucleon
+                // Giant dipole resonance: photon absorbed by nucleus, ejects nucleon.
+                // Prefer neutron (lower Coulomb barrier).
+
+                used[i] = true;
+                readback_energies_[i] = 0.0f;
+                readback_velocities_[i] = glm::vec2(0.0f);
+
+                glm::vec2 eject_dir = rand_dir();
+                float eject_speed = std::min(ph_energy * 150.0f, 250.0f);
+
+                // At higher energies, can eject 2 nucleons (giant resonance breakup)
+                int num_eject = (ph_energy >= 0.75f && total_nucleons >= 4) ? 2 : 1;
+
+                for (int ne = 0; ne < num_eject; ++ne) {
+                    glm::vec2 dir = (ne == 0) ? eject_dir : rand_dir();
+                    if (!nuc.neutron_indices.empty()) {
+                        uint32_t ni = nuc.neutron_indices.back();
+                        nuc.neutron_indices.pop_back();
+                        readback_velocities_[ni] = dir * eject_speed;
+                        readback_energies_[ni] = std::min(ph_energy * 0.7f, 0.9f);
+                        particles.orbital_parent[ni] = -1;
+                        used[ni] = true;
+                        nuc.N--;
+                    } else if (!nuc.proton_indices.empty()) {
+                        uint32_t pi = nuc.proton_indices.back();
+                        nuc.proton_indices.pop_back();
+                        readback_velocities_[pi] = dir * eject_speed;
+                        readback_energies_[pi] = std::min(ph_energy * 0.7f, 0.9f);
+                        particles.orbital_parent[pi] = -1;
+                        used[pi] = true;
+                        nuc.Z--;
+                    }
+                }
+
+                // Recoil on remaining nucleus
+                glm::vec2 recoil = -eject_dir * eject_speed * 0.1f;
+                for (uint32_t pi : nuc.proton_indices)
+                    if (!used[pi]) readback_velocities_[pi] += recoil;
+                for (uint32_t ni : nuc.neutron_indices)
+                    if (!used[ni]) readback_velocities_[ni] += recoil;
+
+                any_spallated = true;
+                spallation_count++;
+
+                char msg[96];
+                snprintf(msg, sizeof(msg),
+                    "Photodisintegration: \xCE\xB3 ejected %d nucleon%s from Z=%d",
+                    num_eject, num_eject > 1 ? "s" : "",
+                    nuc.Z + (num_eject > 1 ? 1 : 0));
+                iface.push_notification(msg, ImVec4(0.8f, 0.6f, 1.0f, 1.0f));
+                iface.push_decay_event(msg, PhysicsInterface::DEVT_PHOTODISINTEGRATION, ImVec4(0.8f, 0.6f, 1.0f, 1.0f));
+                break;
+            }
+        }
+    }
+
+    if (any_spallated) {
         vkDeviceWaitIdle(vk.device);
         compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
         compute.upload_dynamic_data(vk, particles);
@@ -2132,6 +3116,7 @@ void PhysicsSimulation::place_force_object(glm::vec2 world_pos, ForceObjectType 
             force_objects_[i]._pad1      = 0.0f;
             recount_force_objects();
             iface.selected_force_obj_idx = static_cast<int>(i);
+            try_unlock(ACH_FIRST_FORCE_OBJ);
             return;
         }
     }
@@ -2152,6 +3137,7 @@ void PhysicsSimulation::place_mirror(glm::vec2 endpoint1, glm::vec2 endpoint2) {
             iface.selected_force_obj_idx = static_cast<int>(i);
             iface.push_notification("Mirror placed",
                                     ImVec4(0.7f, 0.7f, 0.8f, 1.0f));
+            try_unlock(ACH_FIRST_MIRROR);
             return;
         }
     }
@@ -2189,6 +3175,128 @@ void PhysicsSimulation::recount_force_objects() {
     force_object_count_ = 0;
     for (uint32_t i = 0; i < MAX_FORCE_OBJECTS; ++i)
         if (force_objects_[i].active) force_object_count_++;
+}
+
+// ── Achievement helpers ──────────────────────────────────────────────────────
+
+void PhysicsSimulation::try_unlock(AchievementID id) {
+    if (achievements.unlock(id)) {
+        const auto& def = ACHIEVEMENT_DEFS[id];
+        char buf[256];
+        snprintf(buf, sizeof(buf), "Achievement Unlocked: %s — %s", def.name, def.description);
+        iface.push_notification(buf, ImVec4(1.0f, 0.843f, 0.0f, 1.0f));
+        // Auto-save achievements on unlock
+        achievements.save("saves/achievements.ppach");
+    }
+}
+
+void PhysicsSimulation::check_achievements() {
+    // ── Temperature thresholds ──────────────────────────────────────────
+    float temp = emergent_temperature_;
+    if (temp > achievements.peak_temperature) achievements.peak_temperature = temp;
+
+    if (temp >= 1000.0f)       try_unlock(ACH_TEMP_1000K);
+    if (temp >= 1000000.0f)    try_unlock(ACH_TEMP_1MK);
+    if (temp >= 1000000000.0f) try_unlock(ACH_TEMP_1GK);
+    if (temp <= 2.0f && temp > 0.0f && frame_counter_ > 120)
+        try_unlock(ACH_ABSOLUTE_ZERO);
+
+    // ── Active particle count ───────────────────────────────────────────
+    uint32_t active = iface.active_particle_display;
+    if (active > achievements.peak_active_particles)
+        achievements.peak_active_particles = active;
+    if (active >= 1000) try_unlock(ACH_PARTICLES_1000);
+    if (active >= 5000) try_unlock(ACH_PARTICLES_5000);
+
+    // ── Entangled pairs ─────────────────────────────────────────────────
+    if (entangled_pair_count_ > 0)        try_unlock(ACH_FIRST_ENTANGLED);
+    if (entangled_pair_count_ > achievements.peak_entangled_pairs)
+        achievements.peak_entangled_pairs = entangled_pair_count_;
+    if (entangled_pair_count_ >= 10)      try_unlock(ACH_ENTANGLED_10);
+
+    // ── Fusion count thresholds ─────────────────────────────────────────
+    if (achievements.total_fusions >= 10)  try_unlock(ACH_FUSION_10);
+    if (achievements.total_fusions >= 100) try_unlock(ACH_FUSION_100);
+
+    // ── Chain reaction detection ────────────────────────────────────────
+    if (achievements.fission_recent_count >= 3) try_unlock(ACH_CHAIN_REACTION);
+
+    // ── Element discovery from detected nuclei ──────────────────────────
+    for (const auto& nuc : detected_nuclei_) {
+        if (nuc.Z <= 0 || nuc.Z >= 120) continue;
+
+        // Check if this element has bound electrons (orbital assignment)
+        bool has_electrons = false;
+        for (uint32_t pi = 0; pi < cfg.particle_count; ++pi) {
+            if (particles.orbital_parent[pi] == static_cast<int32_t>(nuc.rep)
+                && particles.types[pi] == ELECTRON_TYPE_PHYS) {
+                has_electrons = true;
+                break;
+            }
+        }
+
+        if (!achievements.elements_discovered[nuc.Z]) {
+            achievements.elements_discovered[nuc.Z] = true;
+            achievements.distinct_elements_count++;
+        }
+
+        if (has_electrons) try_unlock(ACH_FIRST_ELEMENT);
+
+        switch (nuc.Z) {
+            case 1:  try_unlock(ACH_HYDROGEN); break;
+            case 2:  try_unlock(ACH_HELIUM);   break;
+            case 6:  try_unlock(ACH_CARBON);   break;
+            case 26: try_unlock(ACH_IRON);     break;
+            case 79: try_unlock(ACH_GOLD);     break;
+            case 92: try_unlock(ACH_URANIUM);  break;
+            default: break;
+        }
+    }
+    if (achievements.distinct_elements_count >= 10) try_unlock(ACH_ELEMENTS_10);
+
+    // ── Particle zoo: check for specific types present ──────────────────
+    const uint32_t* tc = iface.type_counts_display;
+    if (tc[POSITRON_TYPE_PHYS] > 0)   try_unlock(ACH_FIRST_POSITRON);
+    if (tc[NEUTRINO_TYPE_PHYS] > 0 || tc[MU_NEUTRINO_TYPE_PHYS] > 0
+        || tc[TAU_NEUTRINO_TYPE_PHYS] > 0)
+        try_unlock(ACH_FIRST_NEUTRINO);
+    if (tc[MUON_TYPE_PHYS] > 0 || tc[ANTIMUON_TYPE_PHYS] > 0)
+        try_unlock(ACH_FIRST_MUON);
+    // Quarks (types 13-24)
+    for (uint32_t q = UP_QUARK_TYPE; q <= ANTI_BOTTOM_TYPE; ++q) {
+        if (tc[q] > 0) { try_unlock(ACH_FIRST_QUARK); break; }
+    }
+    // Bosons: W+, W-, Z, Higgs
+    if (tc[W_PLUS_TYPE_PHYS] > 0 || tc[W_MINUS_TYPE_PHYS] > 0
+        || tc[Z_BOSON_TYPE_PHYS] > 0 || tc[HIGGS_TYPE_PHYS] > 0)
+        try_unlock(ACH_FIRST_BOSON);
+    if (tc[DARK_MATTER_TYPE_PHYS] > 0) try_unlock(ACH_DARK_MATTER);
+
+    // Full particle zoo: all 33 types present at once
+    {
+        bool all_present = true;
+        for (uint32_t t = 0; t < PHYS_PARTICLE_TYPES; ++t) {
+            if (tc[t] == 0) { all_present = false; break; }
+        }
+        if (all_present) try_unlock(ACH_PARTICLE_ZOO);
+    }
+
+    // ── Environment exploration ─────────────────────────────────────────
+    uint32_t env = cfg.environment_mode;
+    if (env < 12) {
+        achievements.environments_tried[env] = true;
+        bool all_tried = true;
+        for (int e = 0; e < 12; ++e) {
+            if (!achievements.environments_tried[e]) { all_tried = false; break; }
+        }
+        if (all_tried) try_unlock(ACH_TRY_ALL_ENVIRONMENTS);
+    }
+
+    // ── Fission chain reaction window (60 frame window) ─────────────────
+    if (frame_counter_ - achievements.fission_window_start > 60) {
+        achievements.fission_recent_count = 0;
+        achievements.fission_window_start = frame_counter_;
+    }
 }
 
 // ── Per-frame tick ───────────────────────────────────────────────────────────
@@ -2297,6 +3405,9 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             update_entanglement();
         update_orbitals();
         check_nuclear_decay();
+        check_photoelectric();
+        check_spallation();
+        check_achievements();
 
         // Handle particle delete request from UI
         if (iface.request_delete_particle && iface.selected_particle_idx >= 0) {
@@ -2556,17 +3667,57 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     iface.readback_positions_ptr = readback_positions_.data();
     iface.entangled_partners_ptr = particles.entangled_partner.data();
 
-    // Populate element list for UI (skip free neutrons / Z==0)
+    // Populate element list and electron cloud data for UI
     iface.element_list.clear();
+    iface.nucleus_clouds.clear();
     for (auto& nuc : detected_nuclei_) {
         if (nuc.Z <= 0) continue;
-        int electrons = 0;
+        int bound_leptons = 0;
+        // Count bound electrons for matter nuclei, bound positrons for antinuclei
+        uint32_t lepton_type = nuc.is_anti ? POSITRON_TYPE_PHYS : ELECTRON_TYPE_PHYS;
         for (uint32_t i = 0; i < cfg.particle_count; ++i) {
-            if (particles.types[i] == ELECTRON_TYPE_PHYS &&
+            if (particles.types[i] == lepton_type &&
                 particles.orbital_parent[i] == static_cast<int32_t>(nuc.rep))
-                electrons++;
+                bound_leptons++;
         }
-        iface.element_list.push_back({nuc.Z, nuc.N, electrons, nuc.rep});
+        iface.element_list.push_back({nuc.Z, nuc.N, bound_leptons, nuc.rep, nuc.is_anti});
+
+        // Populate cloud info for electron shell visualization
+        if (iface.show_electron_cloud) {
+            PhysicsInterface::NucleusCloudInfo cloud{};
+            cloud.center = nuc.center;
+            cloud.Z = nuc.Z;
+            cloud.electrons = bound_leptons;
+            cloud.is_anti = nuc.is_anti;
+
+            // Compute Bohr-model shell radii (same constants as update_orbitals)
+            const float R_BOHR_C = 15.0f;
+            const int SHELL_CAP_C[] = {2, 8, 18};
+            int e_remaining = std::min(bound_leptons, 28);
+            int shell_fill_tmp[3] = {0, 0, 0};
+
+            // Fill shells from inner to outer
+            for (int s = 0; s < 3 && e_remaining > 0; ++s) {
+                shell_fill_tmp[s] = std::min(e_remaining, SHELL_CAP_C[s]);
+                e_remaining -= shell_fill_tmp[s];
+            }
+
+            for (int s = 0; s < 3; ++s) {
+                cloud.shell_fill[s] = shell_fill_tmp[s];
+                cloud.shell_cap[s] = SHELL_CAP_C[s];
+
+                // Compute Bohr radius with Slater screening
+                float screening = 0.0f;
+                if (s == 1) screening = static_cast<float>(SHELL_CAP_C[0]) * 0.85f;
+                else if (s == 2) screening = static_cast<float>(SHELL_CAP_C[0]) * 1.0f
+                                           + static_cast<float>(SHELL_CAP_C[1]) * 0.85f;
+                float Z_eff = std::max(1.0f, static_cast<float>(nuc.Z) - screening);
+                float n_shell = static_cast<float>(s + 1);
+                cloud.shell_radii[s] = std::max(n_shell * n_shell * R_BOHR_C / Z_eff, 8.0f);
+            }
+
+            iface.nucleus_clouds.push_back(cloud);
+        }
     }
 
     // ── Accelerator: track source particle position ─────────────────────────
@@ -2643,6 +3794,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         std::memset(iface.save_load_message, 0, sizeof(iface.save_load_message));
         strncpy(iface.save_load_message, result.message.c_str(), sizeof(iface.save_load_message) - 1);
         iface.save_load_msg_timer = 3.0f;
+        if (result.success) try_unlock(ACH_FIRST_SAVE);
     }
 
     // ── Load request ─────────────────────────────────────────────────────────
@@ -2650,6 +3802,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         iface.request_load = false;
         auto r = load_simulation(iface.save_filename);
         if (r.success) {
+            try_unlock(ACH_FIRST_LOAD);
             vkDeviceWaitIdle(vk.device);
             cfg = r.cfg;
             // Restore particle CPU data
@@ -2783,6 +3936,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             iface.push_notification(
                 result.success ? "Element exported!" : "Export failed",
                 result.success ? ImVec4(0.2f, 0.9f, 0.4f, 1.0f) : ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
+            if (result.success) try_unlock(ACH_FIRST_EXPORT);
         }
     }
 
@@ -2835,6 +3989,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             char msg[128];
             snprintf(msg, sizeof(msg), "Imported Z=%d (A=%d) — %d particles", r.Z, r.Z + r.N, placed);
             iface.push_notification(msg, ImVec4(0.2f, 0.9f, 0.4f, 1.0f));
+            try_unlock(ACH_FIRST_IMPORT);
         } else {
             iface.push_notification(
                 r.message.c_str(),

@@ -6,6 +6,7 @@
 #include "compute_pipeline.h"
 #include "renderer.h"
 #include "physics/interface.h"
+#include "physics/achievements.h"
 #include <GLFW/glfw3.h>
 #include <vector>
 
@@ -27,6 +28,7 @@ public:
     ComputePipeline compute{};
     Renderer        renderer{};
     PhysicsInterface iface{};
+    AchievementManager achievements{};
 
     // Force objects (stationary force emitters)
     ForceObject  force_objects_[MAX_FORCE_OBJECTS] = {};
@@ -50,6 +52,7 @@ private:
         glm::vec2 center;
         int Z = 0, N = 0;
         uint32_t rep = 0;
+        bool is_anti = false;       // antimatter nucleus (antiprotons)
         std::vector<uint32_t> proton_indices;
         std::vector<uint32_t> neutron_indices;
     };
@@ -75,10 +78,14 @@ private:
     void update_entanglement();
     void update_orbitals();
     void check_nuclear_decay();
+    void check_photoelectric();
+    void check_spallation();
 
     void place_force_object(glm::vec2 world_pos, ForceObjectType type);
     void place_mirror(glm::vec2 endpoint1, glm::vec2 endpoint2);
     int  hit_test_force_objects(glm::vec2 world_pos, float snap_radius);
     void recount_force_objects();
     void do_accelerator_fire(glm::vec2 aim_world_pos);
+    void check_achievements();
+    void try_unlock(AchievementID id);
 };

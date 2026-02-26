@@ -3,6 +3,7 @@
 #include "imgui.h"
 #include "types.h"
 #include "particles.h"
+#include "physics/achievements.h"
 #include <cstdint>
 #include <vector>
 #include <string>
@@ -158,11 +159,29 @@ public:
     // Element list (populated by simulation from detected_nuclei_)
     struct ElementSummary {
         int Z, N;           // proton/neutron count
-        int electrons;      // bound electron count
+        int electrons;      // bound electron count (or bound positrons for anti)
         uint32_t rep;       // nucleus representative index
+        bool is_anti;       // antimatter element
     };
     std::vector<ElementSummary> element_list;
     bool show_element_list = false;
+
+    // Electron cloud visualization
+    bool show_electron_cloud = false;
+    struct NucleusCloudInfo {
+        glm::vec2 center;       // world-space nucleus center
+        int Z;                  // proton/antiproton count
+        int electrons;          // bound electron/positron count
+        bool is_anti;
+        float shell_radii[3];   // Bohr radii for shells 1/2/3 (world units)
+        int   shell_fill[3];    // electrons in each shell
+        int   shell_cap[3];     // max electrons per shell
+    };
+    std::vector<NucleusCloudInfo> nucleus_clouds;
+
+    // Achievements
+    bool show_achievements_panel = false;
+    AchievementManager* achievements_ptr = nullptr;  // set by simulation
 
     // Camera navigation (set by info card click, consumed by simulation)
     int32_t navigate_to_particle = -1;
@@ -191,8 +210,36 @@ public:
 
     void push_notification(const char* text, ImVec4 color = ImVec4(1,1,1,1));
 
+    // Decay / interaction event log
+    enum DecayEventType : uint8_t {
+        DEVT_PARTICLE_DECAY = 0,    // SM particle decay (t→b, W→eν, etc.)
+        DEVT_NUCLEAR_DECAY,         // Nuclear decay (α, β, n/p emission)
+        DEVT_FUSION,                // Nuclear fusion
+        DEVT_FISSION,               // Nuclear fission
+        DEVT_ANNIHILATION,          // Particle-antiparticle annihilation
+        DEVT_PHOTOELECTRIC,         // Photoelectric effect / Compton
+        DEVT_SPALLATION,            // Nuclear spallation
+        DEVT_PAIR_PRODUCTION,       // γ → e⁺e⁻
+        DEVT_PION_PRODUCTION,       // Photopion (Δ resonance)
+        DEVT_VMD,                   // Vector meson dominance
+        DEVT_PHOTODISINTEGRATION,   // γ + A → (A-1) + n
+    };
+    struct DecayLogEntry {
+        std::string description;
+        DecayEventType type;
+        ImVec4 color;
+        uint32_t frame;             // frame number when event occurred
+    };
+    static constexpr int DECAY_LOG_MAX = 500;
+    std::vector<DecayLogEntry> decay_log;
+    bool show_decay_log = false;
+
+    void push_decay_event(const char* desc, DecayEventType type, ImVec4 color = ImVec4(1,0.6f,0.2f,1));
+
     void init();
     void render_imgui(SimConfig& cfg, Particles& particles, ForceObject* force_objects, bool& request_reset);
+    void save_prefs();
+    void load_prefs();
 
 private:
     void push_theme();
@@ -211,4 +258,6 @@ private:
     void draw_accelerator_panel();
     void draw_notifications();
     void draw_settings_menu();
+    void draw_achievements_panel();
+    void draw_decay_log();
 };
