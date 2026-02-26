@@ -5,6 +5,7 @@
 #include <random>
 #include <cstdio>
 #include <algorithm>
+#include <omp.h>
 
 void PhysicsInterface::init() {
     std::random_device rd;
@@ -365,60 +366,114 @@ static const ImVec4 PHYS_TYPE_UI_COLORS[PHYS_PARTICLE_TYPES] = {
 
 // ── Temperature formatting ───────────────────────────────────────────────────
 
-static void format_temperature(float kelvin, char* buf, int buf_size) {
-    if (kelvin < 1000.0f) {
-        snprintf(buf, buf_size, "%.0f K", kelvin);
+static void format_temperature(float kelvin, char* buf, int buf_size, int unit = 0) {
+    float val = kelvin;
+    const char* suffix = "K";
+    if (unit == 1) { val = kelvin - 273.15f; suffix = "\xC2\xB0""C"; }       // °C
+    else if (unit == 2) { val = kelvin * 1.8f - 459.67f; suffix = "\xC2\xB0""F"; } // °F
+
+    float abs_val = std::abs(val);
+    if (abs_val < 1000.0f) {
+        snprintf(buf, buf_size, "%.0f %s", val, suffix);
     } else {
         const char* prefix = "";
-        float display = kelvin;
-        if (kelvin >= 1e12f)      { display = kelvin / 1e12f; prefix = "T"; }
-        else if (kelvin >= 1e9f)  { display = kelvin / 1e9f;  prefix = "G"; }
-        else if (kelvin >= 1e6f)  { display = kelvin / 1e6f;  prefix = "M"; }
-        else if (kelvin >= 1e3f)  { display = kelvin / 1e3f;  prefix = "k"; }
-        snprintf(buf, buf_size, "%.1f %sK", display, prefix);
+        float display = val;
+        if (abs_val >= 1e12f)      { display = val / 1e12f; prefix = "T"; }
+        else if (abs_val >= 1e9f)  { display = val / 1e9f;  prefix = "G"; }
+        else if (abs_val >= 1e6f)  { display = val / 1e6f;  prefix = "M"; }
+        else if (abs_val >= 1e3f)  { display = val / 1e3f;  prefix = "k"; }
+        if (unit == 0)
+            snprintf(buf, buf_size, "%.1f %s%s", display, prefix, suffix);
+        else
+            snprintf(buf, buf_size, "%.1f %s%s", display, prefix, suffix);
     }
 }
 
-// ── Theme: dark navy + cyan accents ──────────────────────────────────────────
+// ── Themes ───────────────────────────────────────────────────────────────────
 
 static constexpr int THEME_COLOR_COUNT = 33;
 static constexpr int THEME_VAR_COUNT   = 10;
 
+// Theme color palettes: { bg, bg_dim, accent, accent_bright, border, frame, frame_hover, text, text_dim }
+struct ThemeColors {
+    ImVec4 bg, bg_dim, accent, accent_bright, border, frame, frame_hover, text, text_dim;
+};
+
+static const ThemeColors THEMES[] = {
+    // 0: Dark Navy + Cyan
+    { {0.059f,0.071f,0.110f,0.75f}, {0.039f,0.051f,0.090f,0.80f},
+      {0.302f,0.749f,0.953f,1.0f},  {0.400f,0.820f,1.000f,1.0f},
+      {0.180f,0.220f,0.349f,0.50f}, {0.098f,0.118f,0.180f,0.65f}, {0.137f,0.165f,0.259f,0.70f},
+      {0.820f,0.851f,0.922f,1.0f},  {0.451f,0.478f,0.580f,1.0f} },
+    // 1: Midnight + Violet
+    { {0.050f,0.040f,0.100f,0.75f}, {0.030f,0.025f,0.070f,0.80f},
+      {0.600f,0.400f,0.950f,1.0f},  {0.720f,0.520f,1.000f,1.0f},
+      {0.200f,0.150f,0.350f,0.50f}, {0.080f,0.065f,0.160f,0.65f}, {0.120f,0.100f,0.240f,0.70f},
+      {0.850f,0.830f,0.920f,1.0f},  {0.480f,0.440f,0.580f,1.0f} },
+    // 2: Slate + Teal
+    { {0.090f,0.100f,0.110f,0.75f}, {0.060f,0.070f,0.080f,0.80f},
+      {0.200f,0.800f,0.700f,1.0f},  {0.300f,0.900f,0.800f,1.0f},
+      {0.180f,0.200f,0.220f,0.50f}, {0.120f,0.135f,0.150f,0.65f}, {0.160f,0.180f,0.200f,0.70f},
+      {0.850f,0.870f,0.890f,1.0f},  {0.500f,0.520f,0.550f,1.0f} },
+    // 3: Ember + Orange
+    { {0.080f,0.060f,0.050f,0.75f}, {0.055f,0.040f,0.035f,0.80f},
+      {1.000f,0.550f,0.200f,1.0f},  {1.000f,0.700f,0.350f,1.0f},
+      {0.280f,0.180f,0.120f,0.50f}, {0.130f,0.095f,0.075f,0.65f}, {0.180f,0.130f,0.100f,0.70f},
+      {0.920f,0.880f,0.840f,1.0f},  {0.550f,0.480f,0.420f,1.0f} },
+};
+static constexpr int THEME_COUNT = 4;
+static const char* THEME_NAMES[] = { "Dark Navy", "Midnight", "Slate", "Ember" };
+
 void PhysicsInterface::push_theme() {
-    // Colors
-    ImGui::PushStyleColor(ImGuiCol_WindowBg,        ImVec4(0.059f, 0.071f, 0.110f, 0.75f));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,          ImVec4(0.059f, 0.071f, 0.110f, 0.45f));
-    ImGui::PushStyleColor(ImGuiCol_PopupBg,          ImVec4(0.059f, 0.071f, 0.110f, 0.80f));
-    ImGui::PushStyleColor(ImGuiCol_Border,           ImVec4(0.180f, 0.220f, 0.349f, 0.50f));
-    ImGui::PushStyleColor(ImGuiCol_BorderShadow,     ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBg,          ImVec4(0.098f, 0.118f, 0.180f, 0.65f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,   ImVec4(0.137f, 0.165f, 0.259f, 0.70f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgActive,    ImVec4(0.180f, 0.220f, 0.349f, 0.70f));
-    ImGui::PushStyleColor(ImGuiCol_TitleBg,          ImVec4(0.039f, 0.051f, 0.090f, 0.80f));
-    ImGui::PushStyleColor(ImGuiCol_TitleBgActive,    ImVec4(0.059f, 0.071f, 0.130f, 0.80f));
-    ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, ImVec4(0.039f, 0.051f, 0.090f, 0.55f));
-    ImGui::PushStyleColor(ImGuiCol_MenuBarBg,        ImVec4(0.059f, 0.071f, 0.110f, 0.95f));
-    ImGui::PushStyleColor(ImGuiCol_ScrollbarBg,      ImVec4(0.039f, 0.051f, 0.090f, 0.60f));
-    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab,    ImVec4(0.180f, 0.220f, 0.349f, 0.80f));
-    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered, ImVec4(0.302f, 0.749f, 0.953f, 0.60f));
-    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabActive,  ImVec4(0.302f, 0.749f, 0.953f, 0.80f));
-    ImGui::PushStyleColor(ImGuiCol_CheckMark,        ImVec4(0.302f, 0.749f, 0.953f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_SliderGrab,       ImVec4(0.302f, 0.749f, 0.953f, 0.80f));
-    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ImVec4(0.400f, 0.820f, 1.000f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_Button,           ImVec4(0.118f, 0.161f, 0.259f, 0.80f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,    ImVec4(0.180f, 0.240f, 0.380f, 0.90f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,     ImVec4(0.302f, 0.749f, 0.953f, 0.60f));
-    ImGui::PushStyleColor(ImGuiCol_Header,           ImVec4(0.118f, 0.161f, 0.259f, 0.80f));
-    ImGui::PushStyleColor(ImGuiCol_HeaderHovered,    ImVec4(0.180f, 0.240f, 0.380f, 0.90f));
-    ImGui::PushStyleColor(ImGuiCol_HeaderActive,     ImVec4(0.302f, 0.749f, 0.953f, 0.40f));
-    ImGui::PushStyleColor(ImGuiCol_Separator,        ImVec4(0.180f, 0.220f, 0.349f, 0.60f));
-    ImGui::PushStyleColor(ImGuiCol_SeparatorHovered, ImVec4(0.302f, 0.749f, 0.953f, 0.60f));
-    ImGui::PushStyleColor(ImGuiCol_SeparatorActive,  ImVec4(0.302f, 0.749f, 0.953f, 0.80f));
-    ImGui::PushStyleColor(ImGuiCol_Tab,              ImVec4(0.098f, 0.118f, 0.180f, 0.80f));
-    ImGui::PushStyleColor(ImGuiCol_TabHovered,       ImVec4(0.180f, 0.240f, 0.380f, 0.90f));
-    ImGui::PushStyleColor(ImGuiCol_TabSelected,      ImVec4(0.302f, 0.749f, 0.953f, 0.40f));
-    ImGui::PushStyleColor(ImGuiCol_Text,             ImVec4(0.820f, 0.851f, 0.922f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_TextDisabled,     ImVec4(0.451f, 0.478f, 0.580f, 1.0f));
+    int t = std::clamp(prefs.theme, 0, THEME_COUNT - 1);
+    const auto& c = THEMES[t];
+
+    // Derived colors
+    ImVec4 bg_child  = ImVec4(c.bg.x, c.bg.y, c.bg.z, 0.45f);
+    ImVec4 bg_popup  = ImVec4(c.bg.x, c.bg.y, c.bg.z, 0.80f);
+    ImVec4 bg_menu   = ImVec4(c.bg.x, c.bg.y, c.bg.z, 0.95f);
+    ImVec4 frame_act = ImVec4(c.border.x, c.border.y, c.border.z, 0.70f);
+    ImVec4 title_col = ImVec4(c.bg_dim.x, c.bg_dim.y, c.bg_dim.z, 0.55f);
+    ImVec4 btn       = ImVec4(c.frame.x * 1.2f, c.frame.y * 1.2f, c.frame.z * 1.2f, 0.80f);
+    ImVec4 btn_hov   = ImVec4(c.frame_hover.x * 1.2f, c.frame_hover.y * 1.2f, c.frame_hover.z * 1.2f, 0.90f);
+    ImVec4 accent_lo = ImVec4(c.accent.x, c.accent.y, c.accent.z, 0.40f);
+    ImVec4 accent_md = ImVec4(c.accent.x, c.accent.y, c.accent.z, 0.60f);
+    ImVec4 accent_hi = ImVec4(c.accent.x, c.accent.y, c.accent.z, 0.80f);
+    ImVec4 sep       = ImVec4(c.border.x, c.border.y, c.border.z, 0.60f);
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,             c.bg);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,              bg_child);
+    ImGui::PushStyleColor(ImGuiCol_PopupBg,              bg_popup);
+    ImGui::PushStyleColor(ImGuiCol_Border,               c.border);
+    ImGui::PushStyleColor(ImGuiCol_BorderShadow,         ImVec4(0,0,0,0));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg,              c.frame);
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,       c.frame_hover);
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive,        frame_act);
+    ImGui::PushStyleColor(ImGuiCol_TitleBg,              c.bg_dim);
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive,        ImVec4(c.bg_dim.x*1.3f, c.bg_dim.y*1.3f, c.bg_dim.z*1.3f, 0.80f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed,     title_col);
+    ImGui::PushStyleColor(ImGuiCol_MenuBarBg,            bg_menu);
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarBg,          ImVec4(c.bg_dim.x, c.bg_dim.y, c.bg_dim.z, 0.60f));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab,        ImVec4(c.border.x, c.border.y, c.border.z, 0.80f));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered, accent_md);
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabActive,  accent_hi);
+    ImGui::PushStyleColor(ImGuiCol_CheckMark,            c.accent);
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab,           accent_hi);
+    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive,     c.accent_bright);
+    ImGui::PushStyleColor(ImGuiCol_Button,               btn);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,        btn_hov);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,         accent_md);
+    ImGui::PushStyleColor(ImGuiCol_Header,               btn);
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered,        btn_hov);
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive,         accent_lo);
+    ImGui::PushStyleColor(ImGuiCol_Separator,            sep);
+    ImGui::PushStyleColor(ImGuiCol_SeparatorHovered,     accent_md);
+    ImGui::PushStyleColor(ImGuiCol_SeparatorActive,      accent_hi);
+    ImGui::PushStyleColor(ImGuiCol_Tab,                  c.frame);
+    ImGui::PushStyleColor(ImGuiCol_TabHovered,           btn_hov);
+    ImGui::PushStyleColor(ImGuiCol_TabSelected,          accent_lo);
+    ImGui::PushStyleColor(ImGuiCol_Text,                 c.text);
+    ImGui::PushStyleColor(ImGuiCol_TextDisabled,         c.text_dim);
 
     // Style vars
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,    10.0f);
@@ -500,6 +555,13 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     // Pause menu (blocks other UI when visible)
     if (show_pause_menu) {
         draw_pause_menu(cfg, request_reset);
+        pop_theme();
+        return;
+    }
+
+    // Settings menu (blocks other UI when visible)
+    if (show_settings_menu) {
+        draw_settings_menu();
         pop_theme();
         return;
     }
@@ -737,6 +799,9 @@ void PhysicsInterface::draw_splash_screen() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 
     if (ImGui::Begin("##Splash", nullptr, flags)) {
+        float cx = io.DisplaySize.x * 0.5f;
+        float cy = io.DisplaySize.y * 0.5f;
+
         // Title
         float old_scale = ImGui::GetFont()->Scale;
         ImGui::GetFont()->Scale = 2.5f;
@@ -744,19 +809,68 @@ void PhysicsInterface::draw_splash_screen() {
 
         const char* title = "Particle Playground";
         ImVec2 text_size = ImGui::CalcTextSize(title);
-        ImGui::SetCursorPos(ImVec2(
-            (io.DisplaySize.x - text_size.x) * 0.5f,
-            (io.DisplaySize.y - text_size.y) * 0.5f - 30.0f));
+        ImGui::SetCursorPos(ImVec2(cx - text_size.x * 0.5f, cy - 120.0f));
         ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "%s", title);
 
         ImGui::GetFont()->Scale = old_scale;
         ImGui::PopFont();
 
-        // Subtitle
-        const char* subtitle = "Click or press any key to begin";
+        // Tagline
+        const char* tagline = "A GPU-accelerated quantum particle physics sandbox";
+        ImVec2 tag_size = ImGui::CalcTextSize(tagline);
+        ImGui::SetCursorPosX(cx - tag_size.x * 0.5f);
+        ImGui::TextColored(ImVec4(0.6f, 0.65f, 0.75f, 0.9f), "%s", tagline);
+
+        ImGui::Dummy(ImVec2(0, 12));
+
+        // Feature list
+        const ImVec4 dim(0.451f, 0.478f, 0.580f, 0.80f);
+        const ImVec4 accent(0.302f, 0.749f, 0.953f, 0.9f);
+        float left = cx - 220.0f;
+
+        ImGui::SetCursorPosX(left);
+        ImGui::TextColored(accent, "33 particle types");
+        ImGui::SameLine(); ImGui::TextColored(dim, " - Standard Model + Beyond SM");
+
+        ImGui::SetCursorPosX(left);
+        ImGui::TextColored(accent, "7 fundamental forces");
+        ImGui::SameLine(); ImGui::TextColored(dim, " - EM, Strong, QCD, Weak, Gravity, Compton, Annihilation");
+
+        ImGui::SetCursorPosX(left);
+        ImGui::TextColored(accent, "Nuclear reactions");
+        ImGui::SameLine(); ImGui::TextColored(dim, " - Fusion, fission, isotope decay, chain reactions");
+
+        ImGui::SetCursorPosX(left);
+        ImGui::TextColored(accent, "Quantum mechanics");
+        ImGui::SameLine(); ImGui::TextColored(dim, " - Orbitals, virtual pairs, entanglement");
+
+        ImGui::SetCursorPosX(left);
+        ImGui::TextColored(accent, "Emergent physics");
+        ImGui::SameLine(); ImGui::TextColored(dim, " - Thermodynamics, magnetic fields");
+
+        ImGui::SetCursorPosX(left);
+        ImGui::TextColored(accent, "Interactive tools");
+        ImGui::SameLine(); ImGui::TextColored(dim, " - Accelerator, mirrors, force objects");
+
+        ImGui::SetCursorPosX(left);
+        ImGui::TextColored(accent, "22,500 particles");
+        ImGui::SameLine(); ImGui::TextColored(dim, " - Real-time O(n^2) Vulkan compute");
+
+        ImGui::Dummy(ImVec2(0, 16));
+
+        // Credits
+        const char* credits = "C++20 / Vulkan / Dear ImGui  -  Night-Traders-Dev 2026";
+        ImVec2 cr_size = ImGui::CalcTextSize(credits);
+        ImGui::SetCursorPosX(cx - cr_size.x * 0.5f);
+        ImGui::TextColored(ImVec4(0.35f, 0.38f, 0.48f, 0.7f), "%s", credits);
+
+        ImGui::Dummy(ImVec2(0, 20));
+
+        // Dismiss hint
+        const char* subtitle = "Click or press any key to continue";
         ImVec2 sub_size = ImGui::CalcTextSize(subtitle);
-        ImGui::SetCursorPosX((io.DisplaySize.x - sub_size.x) * 0.5f);
-        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.8f), "%s", subtitle);
+        ImGui::SetCursorPosX(cx - sub_size.x * 0.5f);
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.5f), "%s", subtitle);
     }
     ImGui::End();
     ImGui::PopStyleVar(2);
@@ -845,8 +959,15 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
             show_pause_menu = false;
         }
 
-        // Quit
+        // Settings
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 5));
+        if (ImGui::Button("Settings", ImVec2(btn_w, btn_h))) {
+            show_settings_menu = true;
+            show_pause_menu = false;
+        }
+
+        // Quit
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 6));
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.4f, 0.08f, 0.08f, 0.90f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.6f, 0.15f, 0.15f, 0.95f));
         if (ImGui::Button("Quit", ImVec2(btn_w, btn_h))) {
@@ -860,7 +981,150 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         // Hint text
         const char* hint = "Press Escape to resume";
         ImVec2 hint_size = ImGui::CalcTextSize(hint);
-        ImGui::SetCursorPos(ImVec2(cx - hint_size.x * 0.5f, btn_y + btn_spacing * 6 + 20.0f));
+        ImGui::SetCursorPos(ImVec2(cx - hint_size.x * 0.5f, btn_y + btn_spacing * 7 + 20.0f));
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.6f), "%s", hint);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Settings Menu ──────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_settings_menu() {
+    ImGuiIO& io = ImGui::GetIO();
+
+    // Fullscreen overlay
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGuiWindowFlags overlay_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
+        | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav;
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.03f, 0.06f, 0.88f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+
+    if (ImGui::Begin("##SettingsOverlay", nullptr, overlay_flags)) {
+        float cx = io.DisplaySize.x * 0.5f;
+        float cy = io.DisplaySize.y * 0.5f;
+
+        // Title
+        float old_scale = ImGui::GetFont()->Scale;
+        ImGui::GetFont()->Scale = 2.0f;
+        ImGui::PushFont(ImGui::GetFont());
+        const char* title = "SETTINGS";
+        ImVec2 title_size = ImGui::CalcTextSize(title);
+        ImGui::SetCursorPos(ImVec2(cx - title_size.x * 0.5f, cy - 260.0f));
+
+        const auto& tc = THEMES[std::clamp(prefs.theme, 0, THEME_COUNT - 1)];
+        ImGui::TextColored(tc.accent, "%s", title);
+        ImGui::GetFont()->Scale = old_scale;
+        ImGui::PopFont();
+
+        // Settings panel (centered, fixed width)
+        float panel_w = 420.0f;
+        float panel_x = cx - panel_w * 0.5f;
+        float panel_y = cy - 190.0f;
+
+        ImGui::SetCursorPos(ImVec2(panel_x, panel_y));
+        ImGui::BeginGroup();
+        ImGui::PushItemWidth(panel_w - 20.0f);
+
+        // ── Display ──────────────────────────────────────────────────────
+        ImGui::TextColored(tc.accent, "Display");
+        ImGui::Separator();
+
+        ImGui::Text("Temperature Units");
+        ImGui::RadioButton("Kelvin",     &prefs.temp_unit, 0); ImGui::SameLine();
+        ImGui::RadioButton("Celsius",    &prefs.temp_unit, 1); ImGui::SameLine();
+        ImGui::RadioButton("Fahrenheit", &prefs.temp_unit, 2);
+
+        ImGui::Checkbox("Show FPS", &prefs.show_fps);
+
+        ImGui::SliderFloat("UI Scale", &prefs.ui_scale, 0.8f, 1.5f, "%.1fx");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Scale all UI elements (requires restart)");
+
+        ImGui::Dummy(ImVec2(0, 10));
+
+        // ── Performance ──────────────────────────────────────────────────
+        ImGui::TextColored(tc.accent, "Performance");
+        ImGui::Separator();
+
+        int sys_max = omp_get_max_threads();
+        prefs.max_threads = std::clamp(prefs.max_threads, 1, sys_max);
+        ImGui::SliderInt("CPU Threads", &prefs.max_threads, 1, sys_max);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("OpenMP thread count for physics\nSystem max: %d", sys_max);
+
+        const char* fps_labels[] = { "Uncapped", "30", "60", "120", "144", "240" };
+        const int   fps_values[] = { 0, 30, 60, 120, 144, 240 };
+        int fps_idx = 0;
+        for (int i = 0; i < 6; i++) {
+            if (fps_values[i] == prefs.fps_cap) { fps_idx = i; break; }
+        }
+        if (ImGui::Combo("FPS Cap", &fps_idx, fps_labels, 6))
+            prefs.fps_cap = fps_values[fps_idx];
+
+        ImGui::Dummy(ImVec2(0, 10));
+
+        // ── Theme ────────────────────────────────────────────────────────
+        ImGui::TextColored(tc.accent, "Theme");
+        ImGui::Separator();
+
+        for (int i = 0; i < THEME_COUNT; i++) {
+            const auto& th = THEMES[i];
+            bool selected = (prefs.theme == i);
+
+            // Color swatch + name as selectable
+            ImVec2 pos = ImGui::GetCursorScreenPos();
+            float swatch_sz = 20.0f;
+
+            if (ImGui::Selectable(("##theme_" + std::to_string(i)).c_str(), selected, 0, ImVec2(panel_w - 20.0f, 28.0f))) {
+                prefs.theme = i;
+            }
+
+            // Draw color swatches over the selectable
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            float sx = pos.x + 4.0f;
+            float sy = pos.y + 4.0f;
+            dl->AddRectFilled(ImVec2(sx, sy), ImVec2(sx + swatch_sz, sy + swatch_sz),
+                ImGui::ColorConvertFloat4ToU32(th.bg));
+            dl->AddRectFilled(ImVec2(sx + swatch_sz + 3, sy), ImVec2(sx + swatch_sz * 2 + 3, sy + swatch_sz),
+                ImGui::ColorConvertFloat4ToU32(th.accent));
+            dl->AddRectFilled(ImVec2(sx + swatch_sz * 2 + 6, sy), ImVec2(sx + swatch_sz * 3 + 6, sy + swatch_sz),
+                ImGui::ColorConvertFloat4ToU32(th.frame));
+
+            // Label
+            ImGui::SameLine(swatch_sz * 3 + 20.0f);
+            ImGui::SetCursorPosY(pos.y - ImGui::GetWindowPos().y + 4.0f);
+            if (selected)
+                ImGui::TextColored(th.accent, "%s", THEME_NAMES[i]);
+            else
+                ImGui::Text("%s", THEME_NAMES[i]);
+        }
+
+        ImGui::PopItemWidth();
+        ImGui::EndGroup();
+
+        // ── Back button ──────────────────────────────────────────────────
+        float btn_w = 160.0f;
+        float btn_h = 36.0f;
+        ImGui::SetCursorPos(ImVec2(cx - btn_w * 0.5f, cy + 200.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+        if (ImGui::Button("Back", ImVec2(btn_w, btn_h))) {
+            show_settings_menu = false;
+            show_pause_menu = true;
+        }
+        ImGui::PopStyleVar();
+
+        // Hint
+        const char* hint = "Press Escape to resume";
+        ImVec2 hint_size = ImGui::CalcTextSize(hint);
+        ImGui::SetCursorPos(ImVec2(cx - hint_size.x * 0.5f, cy + 250.0f));
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.6f), "%s", hint);
     }
     ImGui::End();
@@ -908,19 +1172,33 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Simulation speed\n0 = frozen, 5 = default, 20 = fast");
 
-        // Temperature
+        // Emergent temperature
         ImGui::SameLine(0, 20);
         ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
         ImGui::SameLine(0, 10);
-        char temp_buf[64];
-        format_temperature(cfg.temperature_kelvin, temp_buf, sizeof(temp_buf));
-        ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "%s", temp_buf);
+        if (cfg.thermo_feedback_enabled && emergent_temp_display > 0.0f) {
+            char etemp_buf[64];
+            format_temperature(emergent_temp_display, etemp_buf, sizeof(etemp_buf), prefs.temp_unit);
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "T: %s", etemp_buf);
+        } else {
+            char temp_buf[64];
+            format_temperature(cfg.temperature_kelvin, temp_buf, sizeof(temp_buf), prefs.temp_unit);
+            ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "T: %s", temp_buf);
+        }
+
+        // Emergent B-field
+        if (cfg.magnetic_feedback_enabled && emergent_bfield_display > 0.001f) {
+            ImGui::SameLine(0, 12);
+            ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "B: %.3f T", emergent_bfield_display);
+        }
 
         // FPS
-        ImGui::SameLine(0, 20);
-        ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
-        ImGui::SameLine(0, 10);
-        ImGui::Text("%.0f fps", fps_display);
+        if (prefs.show_fps) {
+            ImGui::SameLine(0, 20);
+            ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
+            ImGui::SameLine(0, 10);
+            ImGui::Text("%.0f fps", fps_display);
+        }
 
         // Active / Dormant
         ImGui::SameLine(0, 20);
@@ -1307,7 +1585,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
         cfg.temperature_kelvin = std::pow(10.0f, log_temperature);
 
         char temp_buf[64];
-        format_temperature(cfg.temperature_kelvin, temp_buf, sizeof(temp_buf));
+        format_temperature(cfg.temperature_kelvin, temp_buf, sizeof(temp_buf), prefs.temp_unit);
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "%s", temp_buf);
 
@@ -1324,7 +1602,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
         // Emergent temperature readout + feedback controls
         if (cfg.thermo_feedback_enabled) {
             char etemp_buf[64];
-            format_temperature(emergent_temp_display, etemp_buf, sizeof(etemp_buf));
+            format_temperature(emergent_temp_display, etemp_buf, sizeof(etemp_buf), prefs.temp_unit);
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "  Measured: %s", etemp_buf);
         }
         ImGui::Checkbox("Thermodynamic Feedback", &cfg.thermo_feedback_enabled);

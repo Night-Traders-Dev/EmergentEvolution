@@ -8,6 +8,16 @@
 #include <string>
 #include <glm/glm.hpp>
 
+// ── User preferences (settings menu) ─────────────────────────────────────────
+struct UserPrefs {
+    int   temp_unit    = 0;     // 0=Kelvin, 1=Celsius, 2=Fahrenheit
+    int   theme        = 0;     // 0=Dark Navy, 1=Midnight, 2=Slate, 3=Ember
+    int   max_threads  = 8;     // OpenMP thread cap (1..system max)
+    int   fps_cap      = 0;     // 0=uncapped, 30/60/120/144/240
+    bool  show_fps     = true;
+    float ui_scale     = 1.0f;  // 0.8 - 1.5
+};
+
 // ── Group template for spawning composite structures ─────────────────────────
 struct SubAtomicSpec {
     float dx, dy;
@@ -31,7 +41,9 @@ class PhysicsInterface {
 public:
     bool show_splash = true;
     bool show_pause_menu = false;
+    bool show_settings_menu = false;
     bool request_quit = false;
+    UserPrefs prefs;
     bool settings_visible = true;
     bool spawn_menu_visible = true;
     bool pending_spawn = false;
@@ -178,4 +190,5 @@ private:
     void draw_element_list();
     void draw_accelerator_panel();
     void draw_notifications();
+    void draw_settings_menu();
 };

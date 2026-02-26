@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <iostream>
 #include <chrono>
+#include <thread>
 #include <cstdlib>
 #include <omp.h>
 
@@ -15,7 +16,7 @@ static void framebuffer_resize_callback(GLFWwindow*, int, int) {
 }
 
 int main() {
-    omp_set_num_threads(std::min(omp_get_max_threads(), 8));
+    omp_set_num_threads(std::min(omp_get_max_threads(), 8));  // initial default; updated by settings
 
     // Suppress GTK libdecor plugin (crashes in fontconfig on some systems).
     // Window is borderless (GLFW_DECORATED=FALSE) so decorations aren't needed.
@@ -84,6 +85,17 @@ int main() {
         } catch (const std::exception& e) {
             std::cerr << "Tick error: " << e.what() << "\n";
             break;
+        }
+
+        // FPS cap — sleep to maintain target frame time
+        int cap = sim.iface.prefs.fps_cap;
+        if (cap > 0) {
+            auto frame_end = Clock::now();
+            double frame_time = std::chrono::duration<double>(frame_end - now).count();
+            double target = 1.0 / cap;
+            if (frame_time < target) {
+                std::this_thread::sleep_for(std::chrono::duration<double>(target - frame_time));
+            }
         }
     }
 

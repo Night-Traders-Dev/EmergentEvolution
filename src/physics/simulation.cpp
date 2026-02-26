@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <iostream>
 #include <random>
+#include <omp.h>
 
 // ── Scroll callback ──────────────────────────────────────────────────────────
 
@@ -182,12 +183,17 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
     }
     f4_was_down = f4_down;
 
-    // Escape to toggle pause menu
+    // Escape to toggle pause/settings menu
     static bool esc_was = false;
     bool esc_now = glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
     if (esc_now && !esc_was) {
-        iface.show_pause_menu = !iface.show_pause_menu;
-        if (iface.show_pause_menu) is_active = false;  // pause on open
+        if (iface.show_settings_menu) {
+            iface.show_settings_menu = false;
+            iface.show_pause_menu = true;
+        } else {
+            iface.show_pause_menu = !iface.show_pause_menu;
+            if (iface.show_pause_menu) is_active = false;  // pause on open
+        }
     }
     esc_was = esc_now;
 
@@ -2187,6 +2193,9 @@ void PhysicsSimulation::recount_force_objects() {
 void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     handle_input(window, dt);
     frame_counter_++;
+
+    // Apply thread count from settings
+    omp_set_num_threads(std::clamp(iface.prefs.max_threads, 1, omp_get_max_threads()));
 
     // ── Temperature kelvin → noise amplitude (Berendsen thermostat) ─────────
     // Negative feedback: when system is hotter than target → reduce noise (cool)
