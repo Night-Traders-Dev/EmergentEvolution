@@ -423,9 +423,32 @@ static const ThemeColors THEMES[] = {
       {1.000f,0.550f,0.200f,1.0f},  {1.000f,0.700f,0.350f,1.0f},
       {0.280f,0.180f,0.120f,0.50f}, {0.130f,0.095f,0.075f,0.65f}, {0.180f,0.130f,0.100f,0.70f},
       {0.920f,0.880f,0.840f,1.0f},  {0.550f,0.480f,0.420f,1.0f} },
+    // 4: Synthwave + Hot Pink
+    { {0.080f,0.030f,0.090f,0.75f}, {0.055f,0.020f,0.065f,0.80f},
+      {1.000f,0.200f,0.600f,1.0f},  {1.000f,0.400f,0.750f,1.0f},
+      {0.250f,0.100f,0.280f,0.50f}, {0.120f,0.050f,0.130f,0.65f}, {0.170f,0.080f,0.190f,0.70f},
+      {0.920f,0.850f,0.930f,1.0f},  {0.520f,0.400f,0.550f,1.0f} },
+    // 5: Forest + Lime
+    { {0.040f,0.080f,0.050f,0.75f}, {0.025f,0.055f,0.035f,0.80f},
+      {0.400f,0.900f,0.300f,1.0f},  {0.550f,1.000f,0.450f,1.0f},
+      {0.120f,0.220f,0.130f,0.50f}, {0.065f,0.120f,0.075f,0.65f}, {0.095f,0.170f,0.105f,0.70f},
+      {0.860f,0.920f,0.860f,1.0f},  {0.450f,0.550f,0.460f,1.0f} },
+    // 6: Arctic + Ice Blue
+    { {0.070f,0.085f,0.105f,0.75f}, {0.050f,0.060f,0.080f,0.80f},
+      {0.750f,0.900f,1.000f,1.0f},  {0.850f,0.950f,1.000f,1.0f},
+      {0.160f,0.200f,0.260f,0.50f}, {0.100f,0.120f,0.155f,0.65f}, {0.140f,0.165f,0.210f,0.70f},
+      {0.880f,0.910f,0.950f,1.0f},  {0.500f,0.540f,0.600f,1.0f} },
+    // 7: Solar + Gold
+    { {0.070f,0.055f,0.030f,0.75f}, {0.050f,0.038f,0.020f,0.80f},
+      {1.000f,0.820f,0.200f,1.0f},  {1.000f,0.900f,0.400f,1.0f},
+      {0.220f,0.180f,0.100f,0.50f}, {0.110f,0.090f,0.055f,0.65f}, {0.160f,0.130f,0.080f,0.70f},
+      {0.930f,0.910f,0.860f,1.0f},  {0.560f,0.520f,0.430f,1.0f} },
 };
-static constexpr int THEME_COUNT = 4;
-static const char* THEME_NAMES[] = { "Dark Navy", "Midnight", "Slate", "Ember" };
+static constexpr int THEME_COUNT = 8;
+static const char* THEME_NAMES[] = {
+    "Dark Navy", "Midnight", "Slate", "Ember",
+    "Synthwave", "Forest", "Arctic", "Solar"
+};
 
 void PhysicsInterface::push_theme() {
     int t = std::clamp(prefs.theme, 0, THEME_COUNT - 1);
@@ -595,8 +618,8 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     if (accel_mode)
         draw_accelerator_panel();
 
-    // Save/Load dialog (drawn before cards so cards render on top)
-    if (show_save_dialog || show_load_dialog)
+    // Save/Load/Import dialog (drawn before cards so cards render on top)
+    if (show_save_dialog || show_load_dialog || show_import_dialog)
         draw_save_load_dialog();
 
     // Draw element list window (center, drawn before cards so cards overlay)
@@ -1347,6 +1370,12 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                     }
                     if (ImGui::MenuItem("Load (Ctrl+L)")) {
                         show_load_dialog = true;
+                        show_tools_popup = false;
+                        browse_needs_refresh = true;
+                    }
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Import Element (.ppel)")) {
+                        show_import_dialog = true;
                         show_tools_popup = false;
                         browse_needs_refresh = true;
                     }
@@ -2811,6 +2840,15 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
                 request_element_duplicate = true;
             }
             ImGui::PopStyleColor(2);
+
+            ImGui::SameLine();
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.30f, 0.50f, 0.80f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.40f, 0.65f, 0.90f));
+            if (ImGui::Button("Export", ImVec2(72, 26))) {
+                request_element_export = true;
+                export_element_rep = nuc_rep;
+            }
+            ImGui::PopStyleColor(2);
         }
 
         // Navigate + Close
@@ -3269,7 +3307,8 @@ void PhysicsInterface::refresh_browse_entries() {
         browse_current_dir = fs::current_path(ec).string();
     }
 
-    // Collect directories and .ppsg files
+    // Collect directories and matching files
+    std::string filter_ext = show_import_dialog ? ".ppel" : ".ppsg";
     std::vector<BrowseEntry> dirs, files;
     for (auto& entry : fs::directory_iterator(browse_current_dir, ec)) {
         std::string name = entry.path().filename().string();
@@ -3279,7 +3318,7 @@ void PhysicsInterface::refresh_browse_entries() {
             dirs.push_back({ name, true, 0 });
         } else if (entry.is_regular_file(ec)) {
             std::string ext = entry.path().extension().string();
-            if (ext == ".ppsg") {
+            if (ext == filter_ext) {
                 uintmax_t sz = entry.file_size(ec);
                 files.push_back({ name, false, sz });
             }
@@ -3319,7 +3358,9 @@ void PhysicsInterface::draw_save_load_dialog() {
     ImGui::SetNextWindowPos(ImVec2(center.x - size.x * 0.5f, center.y - size.y * 0.5f), ImGuiCond_Appearing);
     ImGui::SetNextWindowSize(size, ImGuiCond_Appearing);
 
-    const char* title = show_save_dialog ? "Save Simulation###SaveLoad" : "Load Simulation###SaveLoad";
+    const char* title = show_import_dialog ? "Import Element###SaveLoad"
+                      : show_save_dialog  ? "Save Simulation###SaveLoad"
+                                          : "Load Simulation###SaveLoad";
     bool open = true;
 
     if (ImGui::Begin(title, &open, ImGuiWindowFlags_NoCollapse)) {
@@ -3386,12 +3427,17 @@ void PhysicsInterface::draw_save_load_dialog() {
                         browse_selected_idx = i;
                         snprintf(browse_filename, sizeof(browse_filename), "%s", entry.name.c_str());
 
-                        // Double-click to load (in load mode)
+                        // Double-click to load/import
                         if (!show_save_dialog && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                             fs::path full = fs::path(browse_current_dir) / entry.name;
                             snprintf(save_filename, sizeof(save_filename), "%s", full.string().c_str());
-                            request_load = true;
-                            show_load_dialog = false;
+                            if (show_import_dialog) {
+                                request_import = true;
+                                show_import_dialog = false;
+                            } else {
+                                request_load = true;
+                                show_load_dialog = false;
+                            }
                             show_save_dialog = false;
                         }
                     }
@@ -3407,7 +3453,8 @@ void PhysicsInterface::draw_save_load_dialog() {
             }
 
             if (browse_entries.empty()) {
-                ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.7f), "  No .ppsg files in this directory");
+                const char* ext_hint = show_import_dialog ? ".ppel" : ".ppsg";
+                ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.7f), "  No %s files in this directory", ext_hint);
             }
         }
         ImGui::EndChild();
@@ -3449,6 +3496,19 @@ void PhysicsInterface::draw_save_load_dialog() {
                 show_save_dialog = false;
                 browse_needs_refresh = true;
             }
+        } else if (show_import_dialog) {
+            bool can_import = (browse_selected_idx >= 0 &&
+                               browse_selected_idx < (int)browse_entries.size() &&
+                               !browse_entries[browse_selected_idx].is_dir);
+            if (!can_import) ImGui::BeginDisabled();
+            if (ImGui::Button("Import", ImVec2(btn_w, 28))) {
+                fs::path full = fs::path(browse_current_dir) / browse_entries[browse_selected_idx].name;
+                snprintf(save_filename, sizeof(save_filename), "%s", full.string().c_str());
+                request_import = true;
+                show_import_dialog = false;
+                browse_needs_refresh = true;
+            }
+            if (!can_import) ImGui::EndDisabled();
         } else {
             bool can_load = (browse_selected_idx >= 0 &&
                              browse_selected_idx < (int)browse_entries.size() &&
@@ -3467,18 +3527,21 @@ void PhysicsInterface::draw_save_load_dialog() {
         if (ImGui::Button("Cancel", ImVec2(btn_w, 28))) {
             show_save_dialog = false;
             show_load_dialog = false;
+            show_import_dialog = false;
         }
 
         // Escape to close
         if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             show_save_dialog = false;
             show_load_dialog = false;
+            show_import_dialog = false;
         }
     }
 
     if (!open) {
         show_save_dialog = false;
         show_load_dialog = false;
+        show_import_dialog = false;
     }
 
     ImGui::End();

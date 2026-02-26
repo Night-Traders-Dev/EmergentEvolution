@@ -8,9 +8,12 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <filesystem>
 #include <iostream>
 #include <random>
 #include <omp.h>
+
+namespace fs = std::filesystem;
 
 // ── Scroll callback ──────────────────────────────────────────────────────────
 
@@ -2694,6 +2697,149 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         std::memset(iface.save_load_message, 0, sizeof(iface.save_load_message));
         strncpy(iface.save_load_message, r.message.c_str(), sizeof(iface.save_load_message) - 1);
         iface.save_load_msg_timer = 3.0f;
+    }
+
+    // ── Element export request ───────────────────────────────────────────────
+    if (iface.request_element_export) {
+        iface.request_element_export = false;
+        int32_t rep = iface.export_element_rep;
+
+        // Find nucleus in detected_nuclei_
+        const NucleusInfo* nuc = nullptr;
+        for (const auto& n : detected_nuclei_) {
+            if (n.rep == static_cast<uint32_t>(rep)) { nuc = &n; break; }
+        }
+
+        if (nuc && !readback_positions_.empty()) {
+            glm::vec2 center = nuc->center;
+            std::vector<ElementExportData> edata;
+
+            // Gather nucleons
+            for (uint32_t idx : nuc->proton_indices) {
+                if (idx >= cfg.particle_count) continue;
+                ElementExportData d{};
+                d.dx = readback_positions_[idx].x - center.x;
+                d.dy = readback_positions_[idx].y - center.y;
+                d.vx = readback_velocities_[idx].x;
+                d.vy = readback_velocities_[idx].y;
+                d.energy = readback_energies_[idx];
+                d.type = particles.types[idx];
+                for (uint32_t g = 0; g < GENOME_SIZE; g++)
+                    d.genome[g] = particles.genomes[idx * GENOME_SIZE + g];
+                edata.push_back(d);
+            }
+            for (uint32_t idx : nuc->neutron_indices) {
+                if (idx >= cfg.particle_count) continue;
+                ElementExportData d{};
+                d.dx = readback_positions_[idx].x - center.x;
+                d.dy = readback_positions_[idx].y - center.y;
+                d.vx = readback_velocities_[idx].x;
+                d.vy = readback_velocities_[idx].y;
+                d.energy = readback_energies_[idx];
+                d.type = particles.types[idx];
+                for (uint32_t g = 0; g < GENOME_SIZE; g++)
+                    d.genome[g] = particles.genomes[idx * GENOME_SIZE + g];
+                edata.push_back(d);
+            }
+
+            // Gather bound electrons
+            int electron_count = 0;
+            for (uint32_t i = 0; i < cfg.particle_count; ++i) {
+                if (particles.types[i] == ELECTRON_TYPE_PHYS &&
+                    particles.orbital_parent[i] == rep) {
+                    ElementExportData d{};
+                    d.dx = readback_positions_[i].x - center.x;
+                    d.dy = readback_positions_[i].y - center.y;
+                    d.vx = readback_velocities_[i].x;
+                    d.vy = readback_velocities_[i].y;
+                    d.energy = readback_energies_[i];
+                    d.type = particles.types[i];
+                    for (uint32_t g = 0; g < GENOME_SIZE; g++)
+                        d.genome[g] = particles.genomes[i * GENOME_SIZE + g];
+                    edata.push_back(d);
+                    electron_count++;
+                }
+            }
+
+            // Build filename: saves/Element_Symbol_A.ppel
+            std::error_code ec;
+            fs::create_directories("saves", ec);
+
+            // Element symbol lookup
+            static const char* SYM[] = {
+                "n","H","He","Li","Be","B","C","N","O","F","Ne",
+                "Na","Mg","Al","Si","P","S","Cl","Ar","K","Ca",
+                "Sc","Ti","V","Cr","Mn","Fe","Co","Ni","Cu","Zn",
+                "Ga","Ge","As","Se","Br","Kr","Rb","Sr","Y","Zr",
+                "Nb","Mo","Tc","Ru","Rh","Pd","Ag","Cd","In","Sn",
+                "Sb","Te","I","Xe","Cs","Ba","La","Ce","Pr","Nd"
+            };
+            int Z = nuc->Z, N = nuc->N, A = Z + N;
+            const char* sym = (Z >= 0 && Z <= 60) ? SYM[Z] : "X";
+            char fname[128];
+            snprintf(fname, sizeof(fname), "saves/%s-%d.ppel", sym, A);
+
+            auto result = export_element(fname, Z, N, electron_count, edata);
+            iface.push_notification(
+                result.success ? "Element exported!" : "Export failed",
+                result.success ? ImVec4(0.2f, 0.9f, 0.4f, 1.0f) : ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
+        }
+    }
+
+    // ── Element import request ───────────────────────────────────────────────
+    if (iface.request_import) {
+        iface.request_import = false;
+        auto r = import_element(iface.save_filename);
+        if (r.success && !r.particles.empty()) {
+            // Spawn at camera center
+            glm::vec2 spawn_pos = cfg.camera_origin;
+
+            // Ensure we have readback data
+            if (readback_energies_.empty() && compute.is_ready()) {
+                readback_positions_.resize(cfg.particle_count);
+                readback_velocities_.resize(cfg.particle_count);
+                readback_energies_.resize(cfg.particle_count);
+                compute.read_current_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+            }
+
+            uint32_t n = cfg.particle_count;
+            uint32_t search_start = 0;
+            int placed = 0;
+
+            for (const auto& p : r.particles) {
+                // Find dormant slot
+                uint32_t slot = UINT32_MAX;
+                for (uint32_t i = search_start; i < n; ++i) {
+                    if (readback_energies_[i] < 0.01f) { slot = i; break; }
+                }
+                if (slot == UINT32_MAX) break;
+                search_start = slot + 1;
+
+                readback_positions_[slot] = glm::vec2(spawn_pos.x + p.dx, spawn_pos.y + p.dy);
+                readback_velocities_[slot] = glm::vec2(p.vx, p.vy);
+                readback_energies_[slot] = p.energy;
+                particles.types[slot] = p.type;
+                for (uint32_t g = 0; g < GENOME_SIZE; g++)
+                    particles.genomes[slot * GENOME_SIZE + g] = p.genome[g];
+                particles.orbital_parent[slot] = -1;  // will be reassigned by update_orbitals
+                placed++;
+            }
+
+            // Upload modified data to GPU
+            if (placed > 0) {
+                vkDeviceWaitIdle(vk.device);
+                compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+                compute.upload_dynamic_data(vk, particles);
+            }
+
+            char msg[128];
+            snprintf(msg, sizeof(msg), "Imported Z=%d (A=%d) — %d particles", r.Z, r.Z + r.N, placed);
+            iface.push_notification(msg, ImVec4(0.2f, 0.9f, 0.4f, 1.0f));
+        } else {
+            iface.push_notification(
+                r.message.c_str(),
+                ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
+        }
     }
 
     ImGui::Render();

@@ -172,3 +172,98 @@ LoadResult load_simulation(const std::string& filepath) {
     r.message = "Loaded!";
     return r;
 }
+
+// ── Element export/import (.ppel) ────────────────────────────────────────────
+
+static constexpr uint32_t PPEL_MAGIC   = 0x4C455050;  // "PPEL" little-endian
+static constexpr uint32_t PPEL_VERSION = 1;
+
+SaveResult export_element(
+    const std::string& filepath,
+    int Z, int N, int electrons,
+    const std::vector<ElementExportData>& particles)
+{
+    std::ofstream f(filepath, std::ios::binary);
+    if (!f.is_open())
+        return { false, "Cannot open file for writing" };
+
+    write_val(f, PPEL_MAGIC);
+    write_val(f, PPEL_VERSION);
+    write_val(f, static_cast<int32_t>(Z));
+    write_val(f, static_cast<int32_t>(N));
+    write_val(f, static_cast<int32_t>(electrons));
+
+    uint32_t count = static_cast<uint32_t>(particles.size());
+    write_val(f, count);
+    for (const auto& p : particles) {
+        write_val(f, p.dx);
+        write_val(f, p.dy);
+        write_val(f, p.vx);
+        write_val(f, p.vy);
+        write_val(f, p.energy);
+        write_val(f, p.type);
+        f.write(reinterpret_cast<const char*>(p.genome), GENOME_SIZE * sizeof(float));
+    }
+
+    if (!f.good())
+        return { false, "Write error" };
+
+    return { true, "Exported!" };
+}
+
+ImportElementResult import_element(const std::string& filepath) {
+    ImportElementResult r;
+    std::ifstream f(filepath, std::ios::binary);
+    if (!f.is_open()) {
+        r.message = "Cannot open file";
+        return r;
+    }
+
+    uint32_t magic = 0, version = 0;
+    read_val(f, magic);
+    read_val(f, version);
+    if (magic != PPEL_MAGIC) {
+        r.message = "Not a valid .ppel file";
+        return r;
+    }
+    if (version != PPEL_VERSION) {
+        r.message = "Unsupported .ppel version";
+        return r;
+    }
+
+    int32_t z, n, e;
+    read_val(f, z);
+    read_val(f, n);
+    read_val(f, e);
+    r.Z = z;
+    r.N = n;
+    r.electrons = e;
+
+    uint32_t count = 0;
+    read_val(f, count);
+    if (count > 10000) {
+        r.message = "Element too large";
+        return r;
+    }
+
+    r.particles.resize(count);
+    for (uint32_t i = 0; i < count; i++) {
+        auto& p = r.particles[i];
+        read_val(f, p.dx);
+        read_val(f, p.dy);
+        read_val(f, p.vx);
+        read_val(f, p.vy);
+        read_val(f, p.energy);
+        read_val(f, p.type);
+        f.read(reinterpret_cast<char*>(p.genome), GENOME_SIZE * sizeof(float));
+    }
+
+    if (!f.good()) {
+        r.message = "Truncated file";
+        return r;
+    }
+
+    r.success = true;
+    r.message = "Imported!";
+    return r;
+}

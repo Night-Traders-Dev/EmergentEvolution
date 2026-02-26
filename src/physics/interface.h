@@ -99,7 +99,13 @@ public:
     int32_t element_card_nucleus_rep = -1;  // nucleus rep index for element card (-1=hidden)
     bool request_element_delete    = false;
     bool request_element_duplicate = false;
+    bool request_element_export    = false;
+    int32_t export_element_rep     = -1;    // nucleus rep to export
     bool element_move_mode         = false;
+
+    // Element import
+    bool show_import_dialog = false;
+    bool request_import     = false;
 
     // Force object interaction
     bool force_obj_placement_mode = false;

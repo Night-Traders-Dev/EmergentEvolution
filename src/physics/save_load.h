@@ -50,3 +50,28 @@ struct LoadResult {
 };
 
 LoadResult load_simulation(const std::string& filepath);
+
+// ── Element export/import (.ppel files) ──────────────────────────────────────
+
+struct ElementExportData {
+    float dx, dy;               // position offset from nucleus center
+    float vx, vy;               // velocity
+    float energy;
+    uint32_t type;              // particle type index
+    float genome[GENOME_SIZE];  // per-particle genome
+};
+
+SaveResult export_element(
+    const std::string& filepath,
+    int Z, int N, int electrons,
+    const std::vector<ElementExportData>& particles
+);
+
+struct ImportElementResult {
+    bool success = false;
+    std::string message;
+    int Z = 0, N = 0, electrons = 0;
+    std::vector<ElementExportData> particles;
+};
+
+ImportElementResult import_element(const std::string& filepath);
