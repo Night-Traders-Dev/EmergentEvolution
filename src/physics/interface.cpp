@@ -11,6 +11,14 @@
 
 namespace fs = std::filesystem;
 
+// ── World-unit ↔ real-unit scale ────────────────────────────────────────────
+// Bohr radius = 15 world units (R_BOHR_PE in simulation.cpp)
+// Real Bohr radius = 0.0529 nm → 1 world unit ≈ 0.00353 nm
+static constexpr float R_BOHR_WORLD    = 15.0f;             // Bohr radius in world units
+static constexpr float BOHR_RADIUS_NM  = 0.0529f;           // Bohr radius in nanometers
+static constexpr float WORLD_TO_NM     = BOHR_RADIUS_NM / R_BOHR_WORLD;  // ~0.00353 nm/wu
+static constexpr float H_ATOM_DIAMETER = 2.0f * R_BOHR_WORLD;            // 30 world units
+
 void PhysicsInterface::init() {
     std::random_device rd;
     seed_value = static_cast<int>(rd() % 100000);
@@ -998,6 +1006,7 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     if (show_velocity_field)    draw_velocity_field(cfg);
     if (show_trajectory_tracer) draw_trajectory_traces(cfg);
     if (show_force_vectors)     draw_force_vectors_overlay(cfg);
+    if (show_atom_grid)         draw_atom_grid(cfg);
 
     // ── Measurement overlays ─────────────────────────────────────────────────
     if (!thermo_probes.empty() || !velocity_meters.empty() ||
@@ -1901,6 +1910,10 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                     ImGui::MenuItem("Force Vectors", nullptr, &show_force_vectors);
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Show force breakdown on selected particle\nCoulomb (red), Yukawa (green), Gravity (blue)");
+
+                    ImGui::MenuItem("Atom Grid", nullptr, &show_atom_grid);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Overlay grid where each cell = hydrogen atom diameter\n(2 Bohr radii = 0.106 nm)");
 
                     ImGui::TreePop();
                 }
@@ -4352,9 +4365,15 @@ void PhysicsInterface::draw_measurement_overlays(const SimConfig& cfg) {
                         IM_COL32(230, 230, 80, 200), 1.5f);
         }
 
-        // Midpoint label
+        // Midpoint label (display in nanometers)
+        float nm = ruler.distance * WORLD_TO_NM;
         char buf[32];
-        snprintf(buf, sizeof(buf), "d=%.1f", ruler.distance);
+        if (nm < 0.01f)
+            snprintf(buf, sizeof(buf), "%.2f pm", nm * 1000.0f);
+        else if (nm < 1.0f)
+            snprintf(buf, sizeof(buf), "%.3f nm", nm);
+        else
+            snprintf(buf, sizeof(buf), "%.2f nm", nm);
         ImVec2 mid((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
         ImVec2 ts = ImGui::CalcTextSize(buf);
         fg->AddRectFilled(ImVec2(mid.x - ts.x * 0.5f - 4, mid.y - ts.y * 0.5f - 2),
@@ -4695,7 +4714,13 @@ void PhysicsInterface::draw_measurement_panel() {
             ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.3f, 1.0f), "Ruler %d", i + 1);
             ImGui::SameLine(200);
             if (ImGui::SmallButton("X")) remove_idx = i;
-            ImGui::Text("  Distance: %.1f", r.distance);
+            float nm = r.distance * WORLD_TO_NM;
+            if (nm < 0.01f)
+                ImGui::Text("  Distance: %.2f pm", nm * 1000.0f);
+            else if (nm < 1.0f)
+                ImGui::Text("  Distance: %.3f nm", nm);
+            else
+                ImGui::Text("  Distance: %.2f nm", nm);
             ImGui::PopID();
             ImGui::Separator();
         }
@@ -4731,4 +4756,81 @@ void PhysicsInterface::draw_measurement_panel() {
     }
 
     ImGui::End();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Atom Grid Overlay ──────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_atom_grid(const SimConfig& cfg) {
+    ImGuiIO& io = ImGui::GetIO();
+    ImDrawList* fg = ImGui::GetForegroundDrawList();
+    float ww = io.DisplaySize.x, wh = io.DisplaySize.y;
+    float zoom = cfg.current_camera_zoom;
+
+    // Cell size in screen pixels
+    float cell_px = H_ATOM_DIAMETER * zoom;
+
+    // Don't draw if cells are too small to see
+    if (cell_px < 4.0f) return;
+
+    uint8_t alpha = static_cast<uint8_t>(std::clamp(atom_grid_opacity * 255.0f, 0.0f, 255.0f));
+    if (alpha == 0) return;
+
+    // Brighter lines every 10 cells for readability
+    uint8_t alpha_major = static_cast<uint8_t>(std::min(255, static_cast<int>(alpha) * 2));
+    ImU32 col_minor = IM_COL32(100, 180, 255, alpha);
+    ImU32 col_major = IM_COL32(100, 180, 255, alpha_major);
+
+    // Camera offset: top-left of screen in world coords
+    glm::vec2 screen_tl_world = cfg.camera_origin - glm::vec2(ww, wh) * 0.5f / zoom;
+
+    // First grid line positions (snap to grid)
+    float x_start = std::floor(screen_tl_world.x / H_ATOM_DIAMETER) * H_ATOM_DIAMETER;
+    float y_start = std::floor(screen_tl_world.y / H_ATOM_DIAMETER) * H_ATOM_DIAMETER;
+
+    // Grid index offset for major-line calculation
+    int ix_off = static_cast<int>(std::floor(screen_tl_world.x / H_ATOM_DIAMETER));
+    int iy_off = static_cast<int>(std::floor(screen_tl_world.y / H_ATOM_DIAMETER));
+
+    auto w2s_x = [&](float wx) -> float {
+        return ww * 0.5f + (wx - cfg.camera_origin.x) * zoom;
+    };
+    auto w2s_y = [&](float wy) -> float {
+        return wh * 0.5f + (wy - cfg.camera_origin.y) * zoom;
+    };
+
+    // Vertical lines
+    int line_idx = 0;
+    for (float wx = x_start; ; wx += H_ATOM_DIAMETER, ++line_idx) {
+        float sx = w2s_x(wx);
+        if (sx < -1.0f) continue;
+        if (sx > ww + 1.0f) break;
+        int grid_ix = ix_off + line_idx;
+        ImU32 col = (grid_ix % 10 == 0) ? col_major : col_minor;
+        float thick = (grid_ix % 10 == 0) ? 1.0f : 0.5f;
+        fg->AddLine(ImVec2(sx, 0), ImVec2(sx, wh), col, thick);
+    }
+
+    // Horizontal lines
+    line_idx = 0;
+    for (float wy = y_start; ; wy += H_ATOM_DIAMETER, ++line_idx) {
+        float sy = w2s_y(wy);
+        if (sy < -1.0f) continue;
+        if (sy > wh + 1.0f) break;
+        int grid_iy = iy_off + line_idx;
+        ImU32 col = (grid_iy % 10 == 0) ? col_major : col_minor;
+        float thick = (grid_iy % 10 == 0) ? 1.0f : 0.5f;
+        fg->AddLine(ImVec2(0, sy), ImVec2(ww, sy), col, thick);
+    }
+
+    // Scale label at bottom-left
+    float nm_per_cell = H_ATOM_DIAMETER * WORLD_TO_NM;
+    char label[64];
+    snprintf(label, sizeof(label), "1 cell = 1 H atom (%.3f nm)", nm_per_cell);
+    ImVec2 ts = ImGui::CalcTextSize(label);
+    float lx = 12.0f, ly = wh - 40.0f;
+    fg->AddRectFilled(ImVec2(lx - 4, ly - 2), ImVec2(lx + ts.x + 4, ly + ts.y + 2),
+                      IM_COL32(0, 0, 0, 180), 3.0f);
+    fg->AddText(ImVec2(lx, ly), IM_COL32(100, 180, 255, 220), label);
 }

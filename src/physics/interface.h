@@ -197,6 +197,9 @@ public:
 
     bool  show_force_vectors   = false;
 
+    bool  show_atom_grid       = false;
+    float atom_grid_opacity    = 0.25f;
+
     // ── Visualization Data (populated by simulation each tick) ───────────────
     VisGrid vis_grid;
     std::vector<std::vector<glm::vec2>> trajectory_history;
@@ -347,5 +350,6 @@ private:
     void draw_velocity_field(const SimConfig& cfg);
     void draw_trajectory_traces(const SimConfig& cfg);
     void draw_force_vectors_overlay(const SimConfig& cfg);
+    void draw_atom_grid(const SimConfig& cfg);
     void draw_measurement_panel();
 };
