@@ -75,3 +75,32 @@ struct ImportElementResult {
 };
 
 ImportElementResult import_element(const std::string& filepath);
+
+// ── Molecule export/import (.ppmol files) ──────────────────────────────────
+
+struct MoleculeAtomData {
+    int32_t Z, N, electrons;
+    float cx_offset, cy_offset;                 // center offset from molecule COM
+    std::vector<ElementExportData> particles;   // nucleons + electrons
+};
+
+struct MoleculeBondData {
+    int32_t atom_a, atom_b;                     // indices into atom array
+};
+
+SaveResult export_molecule(
+    const std::string& filepath,
+    const std::string& formula,
+    const std::vector<MoleculeAtomData>& atoms,
+    const std::vector<MoleculeBondData>& bonds
+);
+
+struct ImportMoleculeResult {
+    bool success = false;
+    std::string message;
+    std::string formula;
+    std::vector<MoleculeAtomData> atoms;
+    std::vector<MoleculeBondData> bonds;
+};
+
+ImportMoleculeResult import_molecule(const std::string& filepath);

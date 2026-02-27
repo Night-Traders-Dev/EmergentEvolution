@@ -474,9 +474,9 @@ void apply_physics(uint i) {
                 float yukawa_F = params.yukawa_strength * YUKAWA_COUPLING * exp(-dist / YUKAWA_RANGE)
                                  * (inv_r + 1.0 / YUKAWA_RANGE) * inv_r;
 
-                // Smooth window: full strength within 5px, fades to 0 at 8px
+                // Smooth window: full strength within 4px, fades to 0 by 7px
                 // Tight cutoff prevents nucleons from separate atoms merging
-                float window = 1.0 - smoothstep(YUKAWA_RANGE * 0.625, YUKAWA_RANGE, dist);
+                float window = 1.0 - smoothstep(YUKAWA_RANGE * 0.5, YUKAWA_RANGE * 0.875, dist);
                 total_force += normal * yukawa_F * window;
 
                 if (dist < PAULI_CORE) {

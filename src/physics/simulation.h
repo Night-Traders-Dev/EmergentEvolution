@@ -135,6 +135,7 @@ private:
     void check_virtual_pairs();
     void update_entanglement();
     void update_orbitals();
+    void repel_distinct_nuclei();
     void update_bonds();
     void check_nuclear_decay();
     void check_photoelectric();

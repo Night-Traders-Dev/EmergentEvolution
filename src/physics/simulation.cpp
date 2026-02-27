@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <iostream>
 #include <random>
+#include <map>
 #include <unordered_map>
 #ifdef HAS_OPENMP
 #include <omp.h>
@@ -1128,9 +1129,20 @@ void PhysicsSimulation::check_annihilation() {
             };
             const char* name_i = (type_i < PHYS_PARTICLE_TYPES) ? SM_LABELS[type_i] : "?";
             const char* name_j = (target_type < PHYS_PARTICLE_TYPES) ? SM_LABELS[target_type] : "?";
-            char amsg[128];
+            char amsg[128], adetail[384];
             snprintf(amsg, sizeof(amsg), "%s + %s \xe2\x86\x92 \xce\xb3\xce\xb3", name_i, name_j);
-            iface.push_decay_event(amsg, PhysicsInterface::DEVT_ANNIHILATION, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+            float spd_i = glm::length(readback_velocities_[i]);
+            float spd_j = glm::length(readback_velocities_[best_j]);
+            snprintf(adetail, sizeof(adetail),
+                     "%s #%u  E=%.3f MeV  v=%.4fc\n"
+                     "%s #%u  E=%.3f MeV  v=%.4fc\n"
+                     "Total rest mass: %.3f MeV",
+                     name_i, i, readback_energies_[i], spd_i / C_SIM,
+                     name_j, best_j, readback_energies_[best_j], spd_j / C_SIM,
+                     (type_i < PHYS_PARTICLE_TYPES ? PHYS_REST_MASS_MEV[type_i] : 0.0f) +
+                     (target_type < PHYS_PARTICLE_TYPES ? PHYS_REST_MASS_MEV[target_type] : 0.0f));
+            iface.push_decay_event(amsg, PhysicsInterface::DEVT_ANNIHILATION,
+                ImVec4(1.0f, 0.3f, 0.3f, 1.0f), std::string(adetail));
         }
 
         glm::vec2 mid = (readback_positions_[i] + readback_positions_[best_j]) * 0.5f;
@@ -1213,6 +1225,19 @@ void PhysicsSimulation::check_fusion() {
         return glm::vec2(std::cos(a), std::sin(a));
     };
 
+    // Check if a particle's nucleus is covalently bonded (part of a molecule)
+    auto is_bonded = [&](uint32_t idx) -> bool {
+        if (bond_data_.empty()) return false;
+        int32_t par = particles.orbital_parent[idx];
+        uint32_t rep = (par >= 0) ? static_cast<uint32_t>(par) : idx;
+        uint32_t base = rep * MAX_BONDS_PER_PARTICLE;
+        for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+            if (base + s >= bond_data_.size()) break;
+            if (bond_data_[base + s] != 0xFFFFFFFFu) return true;
+        }
+        return false;
+    };
+
     auto find_dormant = [&](uint32_t start) -> uint32_t {
         for (uint32_t k = start; k < n; ++k) {
             if (readback_energies_[k] < 0.01f && !used[k]) return k;
@@ -1251,6 +1276,7 @@ void PhysicsSimulation::check_fusion() {
         if (used[i]) continue;
         if (readback_energies_[i] < 0.1f) continue;
         if (particles.types[i] != PROTON_TYPE) continue;
+        if (is_bonded(i)) continue;  // atoms in molecules don't fuse
 
         uint32_t best_pp = UINT32_MAX;
         float best_KE_cm = 0.0f;
@@ -1259,6 +1285,7 @@ void PhysicsSimulation::check_fusion() {
             if (j <= i || used[j]) return;
             if (readback_energies_[j] < 0.1f) return;
             if (particles.types[j] != PROTON_TYPE) return;
+            if (is_bonded(j)) return;  // atoms in molecules don't fuse
             // Skip nucleons already bound in the same nucleus
             if (particles.orbital_parent[i] >= 0 &&
                 particles.orbital_parent[i] == particles.orbital_parent[j]) return;
@@ -1323,8 +1350,20 @@ void PhysicsSimulation::check_fusion() {
             char msg[64];
             snprintf(msg, sizeof(msg), "Fusion: p+p (%.1f keV)", best_KE_cm * 1000.0f);
             iface.push_notification(msg, ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
-            iface.push_decay_event("p + p \xe2\x86\x92 d + e\xe2\x81\xba + \xce\xbd",
-                                    PhysicsInterface::DEVT_FUSION, ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
+            {
+                char fd[256];
+                snprintf(fd, sizeof(fd),
+                         "Proton #%u + Proton #%u\n"
+                         "CM kinetic energy: %.1f keV\n"
+                         "Products: deuteron + e+ (#%u) + ve (#%u)\n"
+                         "Q (binding): 2.22 MeV  Q (leptonic): 0.42 MeV",
+                         i, j,
+                         best_KE_cm * 1000.0f,
+                         e_slot != UINT32_MAX ? e_slot : 0,
+                         nu_slot != UINT32_MAX ? nu_slot : 0);
+                iface.push_decay_event("p + p \xe2\x86\x92 d + e\xe2\x81\xba + \xce\xbd",
+                    PhysicsInterface::DEVT_FUSION, ImVec4(0.4f, 0.9f, 1.0f, 1.0f), std::string(fd));
+            }
             achievements.total_fusions++;
             try_unlock(ACH_FIRST_FUSION);
         }
@@ -1338,6 +1377,7 @@ void PhysicsSimulation::check_fusion() {
         if (used[i]) continue;
         if (readback_energies_[i] < 0.1f) continue;
         if (particles.types[i] != PROTON_TYPE) continue;
+        if (is_bonded(i)) continue;  // atoms in molecules don't fuse
 
         uint32_t best_pn = UINT32_MAX;
         glm::vec2 best_pn_delta{};
@@ -1346,6 +1386,7 @@ void PhysicsSimulation::check_fusion() {
             if (j == i || used[j]) return;
             if (readback_energies_[j] < 0.1f) return;
             if (particles.types[j] != NEUTRON_TYPE) return;
+            if (is_bonded(j)) return;  // atoms in molecules don't fuse
             // Skip nucleons already bound in the same nucleus
             if (particles.orbital_parent[i] >= 0 &&
                 particles.orbital_parent[i] == particles.orbital_parent[j]) return;
@@ -1392,8 +1433,18 @@ void PhysicsSimulation::check_fusion() {
             readback_energies_[j] = std::min(readback_energies_[j] + mev_to_ebuf(E_bind * 0.5f), 1.0f);
             iface.push_notification("Fusion: p + n \xe2\x86\x92 deuteron",
                                     ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
-            iface.push_decay_event("p + n \xe2\x86\x92 deuteron",
-                                    PhysicsInterface::DEVT_FUSION, ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
+            {
+                glm::vec2 rv = readback_velocities_[j] - readback_velocities_[i];
+                float ke_cm = cm_kinetic_energy(m_proton, m_neutron, glm::dot(rv, rv));
+                char fd[256];
+                snprintf(fd, sizeof(fd),
+                         "Proton #%u + Neutron #%u\n"
+                         "CM kinetic energy: %.2f keV\n"
+                         "Binding energy: 2.22 MeV",
+                         i, j, ke_cm * 1000.0f);
+                iface.push_decay_event("p + n \xe2\x86\x92 deuteron",
+                    PhysicsInterface::DEVT_FUSION, ImVec4(0.4f, 0.9f, 1.0f, 1.0f), std::string(fd));
+            }
             achievements.total_fusions++;
             try_unlock(ACH_FIRST_FUSION);
             break;
@@ -1448,9 +1499,14 @@ void PhysicsSimulation::check_fission() {
         if (readback_energies_[i] < NEUTRON_ENERGY_THRESHOLD) continue;
         if (particles.types[i] != NEUTRON_TYPE) continue;
 
-        // Require fast-moving neutron (not just high stored energy)
+        // Compute neutron relativistic kinetic energy (MeV)
+        // Must exceed fission barrier: ~6 MeV for heavy nuclei (U-235),
+        // ~1 MeV for fast fission threshold. We use 1 MeV as minimum.
         float neutron_speed = glm::length(readback_velocities_[i]);
-        if (neutron_speed < 50.0f) continue;
+        float beta_n = std::min(neutron_speed / C_SIM, 0.9999f);
+        float gamma_n = 1.0f / std::sqrt(1.0f - beta_n * beta_n);
+        float neutron_KE_MeV = (gamma_n - 1.0f) * PHYS_REST_MASS_MEV[NEUTRON_TYPE];
+        if (neutron_KE_MeV < 1.0f) continue;  // below fission barrier (~1 MeV fast fission threshold)
 
         // Count nucleons near this fast neutron
         std::vector<uint32_t> cluster;
@@ -1523,7 +1579,14 @@ void PhysicsSimulation::check_fission() {
             snprintf(msg, sizeof(msg), "Fission: %d-nucleon cluster split + %dn",
                      static_cast<int>(cluster.size()), free_neutrons);
             iface.push_notification(msg, ImVec4(1.0f, 0.6f, 0.2f, 1.0f));
-            iface.push_decay_event(msg, PhysicsInterface::DEVT_FISSION, ImVec4(1.0f, 0.6f, 0.2f, 1.0f));
+            char detail[512];
+            snprintf(detail, sizeof(detail),
+                "Neutron #%u KE: %.2f MeV\nCluster size: %d nucleons (p=%d)\nFragments: 2 x %d nucleons\nFree neutrons ejected: %d (%.2f MeV each)\nE_fission total: %.2f MeV",
+                i, neutron_KE_MeV,
+                static_cast<int>(cluster.size()), proton_count,
+                static_cast<int>(half), free_neutrons,
+                neutron_KE, E_fission_MeV);
+            iface.push_decay_event(msg, PhysicsInterface::DEVT_FISSION, ImVec4(1.0f, 0.6f, 0.2f, 1.0f), std::string(detail));
             achievements.total_fissions++;
             achievements.fission_recent_count++;
             try_unlock(ACH_FIRST_FISSION);
@@ -1874,6 +1937,116 @@ void PhysicsSimulation::update_orbitals() {
     }
 }
 
+// ── Inter-nucleus Coulomb repulsion ──────────────────────────────────────────
+// Prevents distinct UNBONDED atoms from drifting close enough for their
+// nucleons to overlap and be merged by the BFS clustering in update_orbitals().
+// Applies both position correction and velocity impulse proportional to Z₁·Z₂.
+// Bonded atom pairs are skipped — they're held at bond length by the spring.
+
+void PhysicsSimulation::repel_distinct_nuclei() {
+    if (detected_nuclei_.size() < 2) return;
+
+    const float REPEL_RADIUS    = 30.0f;   // start repelling when centers this close
+    const float REPEL_RADIUS_SQ = REPEL_RADIUS * REPEL_RADIUS;
+    const float DANGER_DIST     = 14.0f;   // below this, hard position push (> cluster radius 10)
+    const float MIN_DIST        = 3.0f;    // softening floor
+    const float VEL_K           = 1.5f;    // velocity impulse strength
+    const float POS_K           = 0.4f;    // position correction strength (for close nuclei)
+    const uint32_t n = cfg.particle_count;
+    bool any_modified = false;
+
+    // Helper: check if two nuclei are covalently bonded
+    auto nuclei_bonded = [&](uint32_t rep_a, uint32_t rep_b) -> bool {
+        if (bond_data_.empty()) return false;
+        size_t required = static_cast<size_t>(n) * MAX_BONDS_PER_PARTICLE;
+        if (bond_data_.size() < required) return false;
+        uint32_t base = rep_a * MAX_BONDS_PER_PARTICLE;
+        for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+            if (base + s >= bond_data_.size()) break;
+            if (bond_data_[base + s] == rep_b) return true;
+        }
+        return false;
+    };
+
+    for (size_t a = 0; a < detected_nuclei_.size(); ++a) {
+        auto& na = detected_nuclei_[a];
+        if (na.Z <= 0) continue;
+
+        for (size_t b = a + 1; b < detected_nuclei_.size(); ++b) {
+            auto& nb = detected_nuclei_[b];
+            if (nb.Z <= 0) continue;
+
+            // Skip bonded atom pairs — spring force handles them
+            if (nuclei_bonded(na.rep, nb.rep) || nuclei_bonded(nb.rep, na.rep))
+                continue;
+
+            glm::vec2 delta = nb.center - na.center;
+            float d2 = glm::dot(delta, delta);
+            if (d2 > REPEL_RADIUS_SQ || d2 < 0.001f) continue;
+
+            float dist = std::sqrt(d2);
+            float eff_dist = std::max(dist, MIN_DIST);
+            glm::vec2 dir = delta / dist;
+
+            // Mass-weighted fractions (lighter nucleus moves more)
+            float mass_a = static_cast<float>(na.Z + static_cast<int>(na.neutron_indices.size()));
+            float mass_b = static_cast<float>(nb.Z + static_cast<int>(nb.neutron_indices.size()));
+            float total_mass = mass_a + mass_b;
+            float frac_a = mass_b / total_mass;
+            float frac_b = mass_a / total_mass;
+
+            // ── Velocity impulse: Z₁·Z₂ / r², smooth fade at edge ──────
+            float t = dist / REPEL_RADIUS;  // 0..1
+            float fade = (1.0f - t) * (1.0f - t);  // quadratic fade to zero at edge
+            float zz = static_cast<float>(na.Z * nb.Z);
+            float impulse = VEL_K * zz * fade / (eff_dist * eff_dist);
+            impulse = std::min(impulse, 4.0f);
+
+            glm::vec2 vel_a = -dir * impulse * frac_a;
+            glm::vec2 vel_b =  dir * impulse * frac_b;
+
+            // ── Position correction: hard push when dangerously close ───
+            glm::vec2 pos_a(0.0f), pos_b(0.0f);
+            if (dist < DANGER_DIST) {
+                float penetration = DANGER_DIST - dist;
+                float pos_push = POS_K * penetration * std::min(zz, 10.0f);
+                pos_push = std::min(pos_push, 3.0f);  // cap per-frame correction
+                pos_a = -dir * pos_push * frac_a;
+                pos_b =  dir * pos_push * frac_b;
+            }
+
+            // Apply to all nucleons in each nucleus
+            for (uint32_t idx : na.proton_indices) {
+                if (idx < n) {
+                    readback_velocities_[idx] += vel_a;
+                    readback_positions_[idx] += pos_a;
+                }
+            }
+            for (uint32_t idx : na.neutron_indices) {
+                if (idx < n) {
+                    readback_velocities_[idx] += vel_a;
+                    readback_positions_[idx] += pos_a;
+                }
+            }
+            for (uint32_t idx : nb.proton_indices) {
+                if (idx < n) {
+                    readback_velocities_[idx] += vel_b;
+                    readback_positions_[idx] += pos_b;
+                }
+            }
+            for (uint32_t idx : nb.neutron_indices) {
+                if (idx < n) {
+                    readback_velocities_[idx] += vel_b;
+                    readback_positions_[idx] += pos_b;
+                }
+            }
+            any_modified = true;
+        }
+    }
+
+    if (any_modified) cpu_particles_dirty_ = true;
+}
+
 // ── CPU-side covalent bond formation / breaking ─────────────────────────────
 // Detects atoms (from detected_nuclei_) with unfilled valence shells and forms
 // bonds between nearby atoms.  Bond data is uploaded to GPU for spring forces.
@@ -1945,6 +2118,20 @@ void PhysicsSimulation::update_bonds() {
 
     bool any_changed = false;
 
+    // Element symbols for event logging
+    static const char* BSYM[] = {
+        "n","H","He","Li","Be","B","C","N","O","F","Ne",
+        "Na","Mg","Al","Si","P","S","Cl","Ar","K","Ca",
+        "Sc","Ti","V","Cr","Mn","Fe","Co","Ni","Cu","Zn",
+        "Ga","Ge","As","Se","Br","Kr","Rb","Sr","Y","Zr",
+        "Nb","Mo","Tc","Ru","Rh","Pd","Ag","Cd","In","Sn",
+        "Sb","Te","I","Xe","Cs","Ba","La","Ce","Pr","Nd"
+    };
+    static const int BSYM_COUNT = static_cast<int>(sizeof(BSYM) / sizeof(BSYM[0]));
+    auto bsym = [&](int Z) -> const char* {
+        return (Z >= 0 && Z < BSYM_COUNT) ? BSYM[Z] : "?";
+    };
+
     // ── Break pass: remove bonds where atoms are too far apart ───────────
     for (uint32_t ni = 0; ni < detected_nuclei_.size(); ++ni) {
         const auto& nuc = detected_nuclei_[ni];
@@ -1963,6 +2150,19 @@ void PhysicsSimulation::update_bonds() {
                 bond_data_[base + s] = 0xFFFFFFFFu;
                 remove_bond_slot(partner, rep);
                 any_changed = true;
+                {
+                    char desc[128], detail[256];
+                    int A_a = nuc.Z + nuc.N;
+                    snprintf(desc, sizeof(desc), "Bond broken: %s-%d — ? (partner lost)",
+                             bsym(nuc.Z), A_a);
+                    snprintf(detail, sizeof(detail),
+                             "Atom A: %s-%d (rep #%u, Z=%d N=%d)\n"
+                             "Partner rep #%u no longer exists\n"
+                             "Cause: partner nucleus destroyed",
+                             bsym(nuc.Z), A_a, rep, nuc.Z, nuc.N, partner);
+                    iface.push_decay_event(desc, PhysicsInterface::DEVT_BOND_BROKEN,
+                        ImVec4(0.9f, 0.45f, 0.3f, 1.0f), std::string(detail));
+                }
                 continue;
             }
 
@@ -1972,6 +2172,23 @@ void PhysicsSimulation::update_bonds() {
                 bond_data_[base + s] = 0xFFFFFFFFu;
                 remove_bond_slot(partner, rep);
                 any_changed = true;
+                {
+                    auto& nuc_b = detected_nuclei_[rep_to_nuc[partner]];
+                    char desc[128], detail[256];
+                    int A_a = nuc.Z + nuc.N, A_b = nuc_b.Z + nuc_b.N;
+                    float dist = std::sqrt(d2);
+                    snprintf(desc, sizeof(desc), "Bond broken: %s-%d — %s-%d",
+                             bsym(nuc.Z), A_a, bsym(nuc_b.Z), A_b);
+                    snprintf(detail, sizeof(detail),
+                             "Atom A: %s-%d (rep #%u, Z=%d N=%d)\n"
+                             "Atom B: %s-%d (rep #%u, Z=%d N=%d)\n"
+                             "Separation: %.1f px (threshold: %.1f px)",
+                             bsym(nuc.Z), A_a, rep, nuc.Z, nuc.N,
+                             bsym(nuc_b.Z), A_b, partner, nuc_b.Z, nuc_b.N,
+                             dist, std::sqrt(BREAK_DIST_SQ));
+                    iface.push_decay_event(desc, PhysicsInterface::DEVT_BOND_BROKEN,
+                        ImVec4(0.9f, 0.45f, 0.3f, 1.0f), std::string(detail));
+                }
             }
         }
     }
@@ -2033,6 +2250,24 @@ void PhysicsSimulation::update_bonds() {
                 current_bonds_a++;
                 new_bonds++;
                 any_changed = true;
+                {
+                    char desc[128], detail[384];
+                    int A_a = nuc.Z + nuc.N, A_b = nuc_b.Z + nuc_b.N;
+                    float dist = std::sqrt(d2);
+                    snprintf(desc, sizeof(desc), "Bond formed: %s-%d — %s-%d",
+                             bsym(nuc.Z), A_a, bsym(nuc_b.Z), A_b);
+                    snprintf(detail, sizeof(detail),
+                             "Atom A: %s-%d (rep #%u, Z=%d N=%d, valence %d, bonds %d)\n"
+                             "Atom B: %s-%d (rep #%u, Z=%d N=%d, valence %d, bonds %d)\n"
+                             "Distance: %.1f px",
+                             bsym(nuc.Z), A_a, rep_a, nuc.Z, nuc.N,
+                             valence, current_bonds_a,
+                             bsym(nuc_b.Z), A_b, nuc_b.rep, nuc_b.Z, nuc_b.N,
+                             valence_b, bond_count(nuc_b.rep),
+                             dist);
+                    iface.push_decay_event(desc, PhysicsInterface::DEVT_BOND_FORMED,
+                        ImVec4(0.3f, 0.85f, 0.5f, 1.0f), std::string(detail));
+                }
             }
         };
 
@@ -2112,7 +2347,14 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[w_slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[W_PLUS_TYPE_PHYS] + KE_w);
                 }
                 iface.push_notification("Decay: t \xe2\x86\x92 b + W\xe2\x81\xba", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                iface.push_decay_event("t \xe2\x86\x92 b + W\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                {
+                    char detail[512];
+                    snprintf(detail, sizeof(detail),
+                        "Parent: top quark #%u\nParent energy: %.4f\nDecay momentum: %.2f MeV/c\nProduct b #%u KE: %.2f MeV\nProduct W+ #%u KE: %.2f MeV",
+                        i, readback_energies_[i],
+                        p_dec, i, KE_b, w_slot, KE_w);
+                    iface.push_decay_event("t \xe2\x86\x92 b + W\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                }
                 break;
             }
             case ANTI_TOP_TYPE: {
@@ -2131,7 +2373,14 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[w_slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[W_MINUS_TYPE_PHYS] + KE_w);
                 }
                 iface.push_notification("Decay: \xc4\xab \xe2\x86\x92 b\xcc\x84 + W\xe2\x81\xbb", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                iface.push_decay_event("\xc4\xab \xe2\x86\x92 b\xcc\x84 + W\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                {
+                    char detail[512];
+                    snprintf(detail, sizeof(detail),
+                        "Parent: anti-top #%u\nParent energy: %.4f\nDecay momentum: %.2f MeV/c\nProduct b-bar #%u KE: %.2f MeV\nProduct W- #%u KE: %.2f MeV",
+                        i, readback_energies_[i],
+                        p_dec, i, KE_b, w_slot, KE_w);
+                    iface.push_decay_event("\xc4\xab \xe2\x86\x92 b\xcc\x84 + W\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                }
                 break;
             }
 
@@ -2152,7 +2401,14 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[nu_slot] = mev_to_ebuf(p_dec);  // massless: E=p
                 }
                 iface.push_notification("Decay: W\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                iface.push_decay_event("W\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                {
+                    char detail[512];
+                    snprintf(detail, sizeof(detail),
+                        "Parent: W+ #%u (M=%.0f MeV)\nDecay momentum: %.2f MeV/c\nProduct e+ #%u KE: %.2f MeV\nProduct nu #%u E: %.2f MeV",
+                        i, PHYS_REST_MASS_MEV[W_PLUS_TYPE_PHYS],
+                        p_dec, i, KE_e, nu_slot, p_dec);
+                    iface.push_decay_event("W\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                }
                 break;
             }
 
@@ -2172,7 +2428,14 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[nu_slot] = mev_to_ebuf(p_dec);
                 }
                 iface.push_notification("Decay: W\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xcc\x84", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                iface.push_decay_event("W\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xcc\x84", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                {
+                    char detail[512];
+                    snprintf(detail, sizeof(detail),
+                        "Parent: W- #%u (M=%.0f MeV)\nDecay momentum: %.2f MeV/c\nProduct e- #%u KE: %.2f MeV\nProduct nu-bar #%u E: %.2f MeV",
+                        i, PHYS_REST_MASS_MEV[W_MINUS_TYPE_PHYS],
+                        p_dec, i, KE_e, nu_slot, p_dec);
+                    iface.push_decay_event("W\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xcc\x84", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                }
                 break;
             }
 
@@ -2228,7 +2491,16 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[p2_slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[type2] + KE_2);
                 }
                 iface.push_notification(notif_msg, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                iface.push_decay_event(event_msg, PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                {
+                    char detail[512];
+                    snprintf(detail, sizeof(detail),
+                        "Parent: Z0 #%u (M=%.0f MeV)\nBranch roll: %.3f\nDecay momentum: %.2f MeV/c\nProduct1 type=%u #%u KE: %.2f MeV\nProduct2 type=%u #%u KE: %.2f MeV",
+                        i, PHYS_REST_MASS_MEV[Z_BOSON_TYPE_PHYS],
+                        roll, p_dec,
+                        type1, i, KE_1,
+                        type2, p2_slot, KE_2);
+                    iface.push_decay_event(event_msg, PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                }
                 break;
             }
 
@@ -2253,7 +2525,13 @@ void PhysicsSimulation::check_decay() {
                         readback_energies_[p2_slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[ANTI_BOTTOM_TYPE] + KE_b);
                     }
                     iface.push_notification("Decay: H \xe2\x86\x92 b + b\xcc\x84", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                    iface.push_decay_event("H \xe2\x86\x92 bb\xcc\x84", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                    {
+                        char detail[512];
+                        snprintf(detail, sizeof(detail),
+                            "Parent: Higgs #%u (M=%.0f MeV)\nChannel: H->bb-bar (BR~40%%)\nDecay momentum: %.2f MeV/c\nb #%u KE: %.2f MeV\nb-bar #%u KE: %.2f MeV",
+                            i, M_H, p_dec, i, KE_b, p2_slot, KE_b);
+                        iface.push_decay_event("H \xe2\x86\x92 bb\xcc\x84", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                    }
                 } else if (roll < 0.65f) {
                     // H → W⁺W⁻* (off-shell, M_H < 2*M_W; split energy evenly)
                     float E_each = M_H * 0.5f;
@@ -2267,7 +2545,13 @@ void PhysicsSimulation::check_decay() {
                         readback_energies_[p2_slot] = mev_to_ebuf(E_each);
                     }
                     iface.push_notification("Decay: H \xe2\x86\x92 W\xe2\x81\xba + W\xe2\x81\xbb", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                    iface.push_decay_event("H \xe2\x86\x92 W\xe2\x81\xbaW\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                    {
+                        char detail[512];
+                        snprintf(detail, sizeof(detail),
+                            "Parent: Higgs #%u (M=%.0f MeV)\nChannel: H->WW* off-shell (BR~25%%)\nE_each: %.2f MeV\nW+ #%u, W- #%u",
+                            i, M_H, E_each, i, p2_slot);
+                        iface.push_decay_event("H \xe2\x86\x92 W\xe2\x81\xbaW\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                    }
                 } else if (roll < 0.80f) {
                     // H → τ⁺τ⁻
                     float p_dec = two_body_decay_momentum(M_H, PHYS_REST_MASS_MEV[TAU_TYPE_PHYS], PHYS_REST_MASS_MEV[ANTITAU_TYPE_PHYS]);
@@ -2282,7 +2566,13 @@ void PhysicsSimulation::check_decay() {
                         readback_energies_[p2_slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[ANTITAU_TYPE_PHYS] + KE_t);
                     }
                     iface.push_notification("Decay: H \xe2\x86\x92 \xcf\x84\xe2\x81\xbb + \xcf\x84\xe2\x81\xba", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                    iface.push_decay_event("H \xe2\x86\x92 \xcf\x84\xcf\x84\xcc\x84", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                    {
+                        char detail[512];
+                        snprintf(detail, sizeof(detail),
+                            "Parent: Higgs #%u (M=%.0f MeV)\nChannel: H->tau+tau- (BR~15%%)\nDecay momentum: %.2f MeV/c\ntau- #%u KE: %.2f MeV\ntau+ #%u KE: %.2f MeV",
+                            i, M_H, p_dec, i, KE_t, p2_slot, KE_t);
+                        iface.push_decay_event("H \xe2\x86\x92 \xcf\x84\xcf\x84\xcc\x84", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                    }
                 } else if (roll < 0.90f) {
                     // H → ZZ* (off-shell, M_H < 2*M_Z; split energy evenly)
                     float E_each = M_H * 0.5f;
@@ -2296,7 +2586,13 @@ void PhysicsSimulation::check_decay() {
                         readback_energies_[p2_slot] = mev_to_ebuf(E_each);
                     }
                     iface.push_notification("Decay: H \xe2\x86\x92 Z + Z", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                    iface.push_decay_event("H \xe2\x86\x92 ZZ", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                    {
+                        char detail[512];
+                        snprintf(detail, sizeof(detail),
+                            "Parent: Higgs #%u (M=%.0f MeV)\nChannel: H->ZZ* off-shell (BR~10%%)\nE_each: %.2f MeV\nZ1 #%u, Z2 #%u",
+                            i, M_H, E_each, i, p2_slot);
+                        iface.push_decay_event("H \xe2\x86\x92 ZZ", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                    }
                 } else {
                     // H → γγ (rare but iconic, BR 0.23% real, ~10% sim)
                     float E_photon = M_H * 0.5f;
@@ -2310,7 +2606,13 @@ void PhysicsSimulation::check_decay() {
                         readback_energies_[p2_slot] = mev_to_ebuf(E_photon);
                     }
                     iface.push_notification("Decay: H \xe2\x86\x92 \xce\xb3 + \xce\xb3", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                    iface.push_decay_event("H \xe2\x86\x92 \xce\xb3\xce\xb3", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                    {
+                        char detail[512];
+                        snprintf(detail, sizeof(detail),
+                            "Parent: Higgs #%u (M=%.0f MeV)\nChannel: H->gamma+gamma (BR~10%%, rare)\nE_photon each: %.2f MeV\ngamma1 #%u, gamma2 #%u",
+                            i, M_H, E_photon, i, p2_slot);
+                        iface.push_decay_event("H \xe2\x86\x92 \xce\xb3\xce\xb3", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                    }
                 }
                 break;
             }
@@ -2346,10 +2648,24 @@ void PhysicsSimulation::check_decay() {
                 }
                 if (muonic) {
                     iface.push_notification("Decay: \xcf\x84\xe2\x81\xbb \xe2\x86\x92 \xce\xbc\xe2\x81\xbb + \xce\xbd\xcf\x84 + \xce\xbd\xcc\x84\xce\xbc", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                    iface.push_decay_event("\xcf\x84\xe2\x81\xbb \xe2\x86\x92 \xce\xbc\xe2\x81\xbb + \xce\xbd\xcf\x84 + \xce\xbd\xcc\x84\xce\xbc", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                    {
+                        char detail[512];
+                        snprintf(detail, sizeof(detail),
+                            "Parent: tau- #%u (M=%.2f MeV)\nChannel: muonic (BR~50%%)\nQ=%.2f MeV\nmu- #%u KE: %.2f MeV\nnu_tau #%u E: %.2f MeV\nnu-bar_mu #%u E: %.2f MeV",
+                            i, PHYS_REST_MASS_MEV[TAU_TYPE_PHYS], Q,
+                            i, KE_l, nu1, KE_nu1, nu2, KE_nu2);
+                        iface.push_decay_event("\xcf\x84\xe2\x81\xbb \xe2\x86\x92 \xce\xbc\xe2\x81\xbb + \xce\xbd\xcf\x84 + \xce\xbd\xcc\x84\xce\xbc", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                    }
                 } else {
                     iface.push_notification("Decay: \xcf\x84\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xcf\x84 + \xce\xbd\xcc\x84" "e", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                    iface.push_decay_event("\xcf\x84\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xcf\x84 + \xce\xbd\xcc\x84" "e", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                    {
+                        char detail[512];
+                        snprintf(detail, sizeof(detail),
+                            "Parent: tau- #%u (M=%.2f MeV)\nChannel: electronic (BR~50%%)\nQ=%.2f MeV\ne- #%u KE: %.2f MeV\nnu_tau #%u E: %.2f MeV\nnu-bar_e #%u E: %.2f MeV",
+                            i, PHYS_REST_MASS_MEV[TAU_TYPE_PHYS], Q,
+                            i, KE_l, nu1, KE_nu1, nu2, KE_nu2);
+                        iface.push_decay_event("\xcf\x84\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xcf\x84 + \xce\xbd\xcc\x84" "e", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                    }
                 }
                 break;
             }
@@ -2381,10 +2697,24 @@ void PhysicsSimulation::check_decay() {
                 }
                 if (muonic) {
                     iface.push_notification("Decay: \xcf\x84\xcc\x84 \xe2\x86\x92 \xce\xbc\xe2\x81\xba + \xce\xbd\xcf\x84 + \xce\xbd\xce\xbc", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                    iface.push_decay_event("\xcf\x84\xcc\x84 \xe2\x86\x92 \xce\xbc\xe2\x81\xba + \xce\xbd\xcf\x84 + \xce\xbd\xce\xbc", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                    {
+                        char detail[512];
+                        snprintf(detail, sizeof(detail),
+                            "Parent: tau+ #%u (M=%.2f MeV)\nChannel: muonic (BR~50%%)\nQ=%.2f MeV\nmu+ #%u KE: %.2f MeV\nnu_tau #%u E: %.2f MeV\nnu_mu #%u E: %.2f MeV",
+                            i, PHYS_REST_MASS_MEV[ANTITAU_TYPE_PHYS], Q,
+                            i, KE_l, nu1, KE_nu1, nu2, KE_nu2);
+                        iface.push_decay_event("\xcf\x84\xcc\x84 \xe2\x86\x92 \xce\xbc\xe2\x81\xba + \xce\xbd\xcf\x84 + \xce\xbd\xce\xbc", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                    }
                 } else {
                     iface.push_notification("Decay: \xcf\x84\xcc\x84 \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xcf\x84 + \xce\xbd" "e", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                    iface.push_decay_event("\xcf\x84\xcc\x84 \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xcf\x84 + \xce\xbd" "e", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                    {
+                        char detail[512];
+                        snprintf(detail, sizeof(detail),
+                            "Parent: tau+ #%u (M=%.2f MeV)\nChannel: electronic (BR~50%%)\nQ=%.2f MeV\ne+ #%u KE: %.2f MeV\nnu_tau #%u E: %.2f MeV\nnu_e #%u E: %.2f MeV",
+                            i, PHYS_REST_MASS_MEV[ANTITAU_TYPE_PHYS], Q,
+                            i, KE_l, nu1, KE_nu1, nu2, KE_nu2);
+                        iface.push_decay_event("\xcf\x84\xcc\x84 \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xcf\x84 + \xce\xbd" "e", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                    }
                 }
                 break;
             }
@@ -2406,7 +2736,13 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[w_slot] = mev_to_ebuf(available_KE * 0.7f);
                 }
                 iface.push_notification("Decay: b \xe2\x86\x92 c + W\xe2\x81\xbb", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                iface.push_decay_event("b \xe2\x86\x92 c + W\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                {
+                    char detail[512];
+                    snprintf(detail, sizeof(detail),
+                        "Parent: b quark #%u (M=%.0f MeV)\nAvailable KE: %.2f MeV\nc #%u KE: %.2f MeV\nW-* #%u KE: %.2f MeV (virtual/off-shell)",
+                        i, M_b, available_KE, i, available_KE * 0.3f, w_slot, available_KE * 0.7f);
+                    iface.push_decay_event("b \xe2\x86\x92 c + W\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                }
                 break;
             }
             case ANTI_BOTTOM_TYPE: {
@@ -2423,7 +2759,13 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[w_slot] = mev_to_ebuf(available_KE * 0.7f);
                 }
                 iface.push_notification("Decay: b\xcc\x84 \xe2\x86\x92 c\xcc\x84 + W\xe2\x81\xba", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                iface.push_decay_event("b\xcc\x84 \xe2\x86\x92 c\xcc\x84 + W\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                {
+                    char detail[512];
+                    snprintf(detail, sizeof(detail),
+                        "Parent: b-bar #%u (M=%.0f MeV)\nAvailable KE: %.2f MeV\nc-bar #%u KE: %.2f MeV\nW+* #%u KE: %.2f MeV (virtual/off-shell)",
+                        i, M_b, available_KE, i, available_KE * 0.3f, w_slot, available_KE * 0.7f);
+                    iface.push_decay_event("b\xcc\x84 \xe2\x86\x92 c\xcc\x84 + W\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                }
                 break;
             }
 
@@ -2442,7 +2784,13 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[w_slot] = mev_to_ebuf(available_KE * 0.7f);
                 }
                 iface.push_notification("Decay: c \xe2\x86\x92 s + W\xe2\x81\xba", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                iface.push_decay_event("c \xe2\x86\x92 s + W\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                {
+                    char detail[512];
+                    snprintf(detail, sizeof(detail),
+                        "Parent: charm quark #%u (M=%.0f MeV)\nAvailable KE: %.2f MeV\ns #%u KE: %.2f MeV\nW+* #%u KE: %.2f MeV (virtual/off-shell)",
+                        i, M_c, available_KE, i, available_KE * 0.3f, w_slot, available_KE * 0.7f);
+                    iface.push_decay_event("c \xe2\x86\x92 s + W\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                }
                 break;
             }
             case ANTI_CHARM_TYPE: {
@@ -2459,7 +2807,13 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[w_slot] = mev_to_ebuf(available_KE * 0.7f);
                 }
                 iface.push_notification("Decay: c\xcc\x84 \xe2\x86\x92 s\xcc\x84 + W\xe2\x81\xbb", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                iface.push_decay_event("c\xcc\x84 \xe2\x86\x92 s\xcc\x84 + W\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                {
+                    char detail[512];
+                    snprintf(detail, sizeof(detail),
+                        "Parent: anti-charm #%u (M=%.0f MeV)\nAvailable KE: %.2f MeV\ns-bar #%u KE: %.2f MeV\nW-* #%u KE: %.2f MeV (virtual/off-shell)",
+                        i, M_c, available_KE, i, available_KE * 0.3f, w_slot, available_KE * 0.7f);
+                    iface.push_decay_event("c\xcc\x84 \xe2\x86\x92 s\xcc\x84 + W\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                }
                 break;
             }
 
@@ -2478,7 +2832,13 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[w_slot] = mev_to_ebuf(available_KE * 0.7f);
                 }
                 iface.push_notification("Decay: s \xe2\x86\x92 u + W\xe2\x81\xbb", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                iface.push_decay_event("s \xe2\x86\x92 u + W\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                {
+                    char detail[512];
+                    snprintf(detail, sizeof(detail),
+                        "Parent: strange quark #%u (M=%.0f MeV)\nAvailable KE: %.2f MeV\nu #%u KE: %.2f MeV\nW-* #%u KE: %.2f MeV (virtual/off-shell)",
+                        i, M_s, available_KE, i, available_KE * 0.3f, w_slot, available_KE * 0.7f);
+                    iface.push_decay_event("s \xe2\x86\x92 u + W\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                }
                 break;
             }
             case ANTI_STRANGE_TYPE: {
@@ -2495,7 +2855,13 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[w_slot] = mev_to_ebuf(available_KE * 0.7f);
                 }
                 iface.push_notification("Decay: s\xcc\x84 \xe2\x86\x92 u\xcc\x84 + W\xe2\x81\xba", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                iface.push_decay_event("s\xcc\x84 \xe2\x86\x92 u\xcc\x84 + W\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                {
+                    char detail[512];
+                    snprintf(detail, sizeof(detail),
+                        "Parent: anti-strange #%u (M=%.0f MeV)\nAvailable KE: %.2f MeV\nu-bar #%u KE: %.2f MeV\nW+* #%u KE: %.2f MeV (virtual/off-shell)",
+                        i, M_s, available_KE, i, available_KE * 0.3f, w_slot, available_KE * 0.7f);
+                    iface.push_decay_event("s\xcc\x84 \xe2\x86\x92 u\xcc\x84 + W\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                }
                 break;
             }
 
@@ -2525,7 +2891,14 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[nu2] = mev_to_ebuf(KE_nu2);
                 }
                 iface.push_notification("Decay: \xce\xbc\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xce\xbc + \xce\xbd\xcc\x84" "e", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                iface.push_decay_event("\xce\xbc\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xce\xbc + \xce\xbd\xcc\x84" "e", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                {
+                    char detail[512];
+                    snprintf(detail, sizeof(detail),
+                        "Parent: muon- #%u (M=%.3f MeV)\nQ=%.3f MeV\ne- #%u KE: %.3f MeV\nnu_mu #%u E: %.3f MeV\nnu-bar_e #%u E: %.3f MeV",
+                        i, PHYS_REST_MASS_MEV[MUON_TYPE_PHYS], Q_mu,
+                        i, KE_e, nu1, KE_nu1, nu2, KE_nu2);
+                    iface.push_decay_event("\xce\xbc\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xce\xbc + \xce\xbd\xcc\x84" "e", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                }
                 break;
             }
             case ANTIMUON_TYPE_PHYS: {
@@ -2551,7 +2924,14 @@ void PhysicsSimulation::check_decay() {
                     readback_energies_[nu2] = mev_to_ebuf(KE_nu2);
                 }
                 iface.push_notification("Decay: \xce\xbc\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xce\xbc + \xce\xbd" "e", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                iface.push_decay_event("\xce\xbc\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xce\xbc + \xce\xbd" "e", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                {
+                    char detail[512];
+                    snprintf(detail, sizeof(detail),
+                        "Parent: muon+ #%u (M=%.3f MeV)\nQ=%.3f MeV\ne+ #%u KE: %.3f MeV\nnu_mu #%u E: %.3f MeV\nnu_e #%u E: %.3f MeV",
+                        i, PHYS_REST_MASS_MEV[ANTIMUON_TYPE_PHYS], Q_mu,
+                        i, KE_e, nu1, KE_nu1, nu2, KE_nu2);
+                    iface.push_decay_event("\xce\xbc\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xce\xbc + \xce\xbd" "e", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                }
                 break;
             }
 
@@ -2668,7 +3048,13 @@ void PhysicsSimulation::check_nuclear_decay() {
                              element_symbol(nuc.Z + 2), A_parent,
                              element_symbol(nuc.Z), nuc.Z + nuc.N);
                     iface.push_notification(msg, ImVec4(1.0f, 0.5f, 0.3f, 1.0f));
-                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(1.0f, 0.5f, 0.3f, 1.0f));
+                    char alpha_detail[512];
+                    snprintf(alpha_detail, sizeof(alpha_detail),
+                        "Nucleus: rep #%u, Z=%d N=%d\nDaughter: Z=%d N=%d\nAlpha KE: %.2f MeV (~%.2f MeV/nucleon)\nRecoil speed: %.4f",
+                        nuc.rep, nuc.Z + 2, nuc.N + 2,
+                        nuc.Z, nuc.N,
+                        ALPHA_KE, ALPHA_KE / 4.0f, recoil_speed);
+                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(1.0f, 0.5f, 0.3f, 1.0f), std::string(alpha_detail));
                 }
                 break;
             }
@@ -2717,7 +3103,12 @@ void PhysicsSimulation::check_nuclear_decay() {
                              element_symbol(nuc.Z - 1), A,
                              element_symbol(nuc.Z), A);
                     iface.push_notification(msg, ImVec4(0.5f, 0.8f, 1.0f, 1.0f));
-                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(0.5f, 0.8f, 1.0f, 1.0f));
+                    char bminus_detail[512];
+                    snprintf(bminus_detail, sizeof(bminus_detail),
+                        "Nucleus: rep #%u, Z=%d->%d N=%d->%d\nn->p transmutation\nQ=%.3f MeV\ne- slot %u KE: %.3f MeV\nnu-bar slot %u E: %.3f MeV",
+                        nuc.rep, nuc.Z - 1, nuc.Z, nuc.N + 1, nuc.N,
+                        Q_beta, e_slot, Q_beta * 0.33f, nu_slot, Q_beta * 0.67f);
+                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(0.5f, 0.8f, 1.0f, 1.0f), std::string(bminus_detail));
                 }
                 break;
             }
@@ -2766,7 +3157,12 @@ void PhysicsSimulation::check_nuclear_decay() {
                              element_symbol(nuc.Z + 1), A,
                              element_symbol(nuc.Z), A);
                     iface.push_notification(msg, ImVec4(0.5f, 0.8f, 1.0f, 1.0f));
-                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(0.5f, 0.8f, 1.0f, 1.0f));
+                    char bplus_detail[512];
+                    snprintf(bplus_detail, sizeof(bplus_detail),
+                        "Nucleus: rep #%u, Z=%d->%d N=%d->%d\np->n transmutation\nQ=%.3f MeV\ne+ slot %u KE: %.3f MeV\nnu slot %u E: %.3f MeV",
+                        nuc.rep, nuc.Z + 1, nuc.Z, nuc.N - 1, nuc.N,
+                        Q_beta_plus, pos_slot, Q_beta_plus * 0.33f, nu_slot, Q_beta_plus * 0.67f);
+                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(0.5f, 0.8f, 1.0f, 1.0f), std::string(bplus_detail));
                 }
                 break;
             }
@@ -2790,7 +3186,12 @@ void PhysicsSimulation::check_nuclear_decay() {
                              element_symbol(nuc.Z), A_parent,
                              element_symbol(nuc.Z), nuc.Z + nuc.N);
                     iface.push_notification(msg, ImVec4(0.7f, 0.7f, 1.0f, 1.0f));
-                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(0.7f, 0.7f, 1.0f, 1.0f));
+                    char nemit_detail[512];
+                    snprintf(nemit_detail, sizeof(nemit_detail),
+                        "Nucleus: rep #%u, Z=%d N=%d->%d\nNeutron #%u ejected\nNeutron KE: %.2f MeV\nDaughter A=%d",
+                        nuc.rep, nuc.Z, nuc.N + 1, nuc.N,
+                        ni, NUCLEON_EMIT_KE, nuc.Z + nuc.N);
+                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(0.7f, 0.7f, 1.0f, 1.0f), std::string(nemit_detail));
                 }
                 break;
             }
@@ -2814,7 +3215,12 @@ void PhysicsSimulation::check_nuclear_decay() {
                              element_symbol(nuc.Z + 1), A_parent,
                              element_symbol(nuc.Z), nuc.Z + nuc.N);
                     iface.push_notification(msg, ImVec4(0.7f, 0.7f, 1.0f, 1.0f));
-                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(0.7f, 0.7f, 1.0f, 1.0f));
+                    char pemit_detail[512];
+                    snprintf(pemit_detail, sizeof(pemit_detail),
+                        "Nucleus: rep #%u, Z=%d->%d N=%d\nProton #%u ejected\nProton KE: %.2f MeV\nDaughter A=%d",
+                        nuc.rep, nuc.Z + 1, nuc.Z, nuc.N,
+                        pi, NUCLEON_EMIT_KE, nuc.Z + nuc.N);
+                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(0.7f, 0.7f, 1.0f, 1.0f), std::string(pemit_detail));
                 }
                 break;
             }
@@ -2842,7 +3248,12 @@ void PhysicsSimulation::check_nuclear_decay() {
                              element_symbol(nuc.Z), A,
                              element_symbol(nuc.Z), A);
                     iface.push_notification(msg, ImVec4(1.0f, 1.0f, 0.4f, 1.0f));
-                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(1.0f, 1.0f, 0.4f, 1.0f));
+                    char gamma_detail[512];
+                    snprintf(gamma_detail, sizeof(gamma_detail),
+                        "Nucleus: rep #%u, Z=%d N=%d (A=%d)\nGamma E: %.3f MeV\nPhoton slot: %u\nNuclear recoil: negligible",
+                        nuc.rep, nuc.Z, nuc.N, A,
+                        E_gamma, g_slot);
+                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(1.0f, 1.0f, 0.4f, 1.0f), std::string(gamma_detail));
                 }
                 break;
             }
@@ -2899,7 +3310,13 @@ void PhysicsSimulation::check_nuclear_decay() {
                              element_symbol(nuc.Z + 1), A,
                              element_symbol(nuc.Z), A);
                     iface.push_notification(msg, ImVec4(0.6f, 1.0f, 0.8f, 1.0f));
-                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(0.6f, 1.0f, 0.8f, 1.0f));
+                    char ec_detail[512];
+                    snprintf(ec_detail, sizeof(ec_detail),
+                        "Nucleus: rep #%u, Z=%d->%d N=%d->%d\nCaptured e- #%u\nDist^2: %.1f px^2\nQ_EC: %.3f MeV\nNeutrino slot %u E: %.3f MeV",
+                        nuc.rep, nuc.Z + 1, nuc.Z, nuc.N - 1, nuc.N,
+                        best_e, best_dist_sq,
+                        Q_ec, nu_slot, Q_ec);
+                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(0.6f, 1.0f, 0.8f, 1.0f), std::string(ec_detail));
                 }
                 break;
             }
@@ -2980,7 +3397,14 @@ void PhysicsSimulation::check_nuclear_decay() {
                              element_symbol(Z2), Z2 + N2,
                              free_neutrons);
                     iface.push_notification(msg, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
-                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+                    char spfiss_detail[512];
+                    snprintf(spfiss_detail, sizeof(spfiss_detail),
+                        "Nucleus: rep #%u, A=%d (Z=%d+Z=%d)\nFragment1: Z=%d N=%d\nFragment2: Z=%d N=%d\nFree neutrons: %d\nTotal KE: %.0f MeV (frags) + %.1f MeV (neutrons)",
+                        nuc.rep, A_parent, Z1, Z2,
+                        Z1, N1, Z2, N2,
+                        free_neutrons,
+                        fission_KE * 0.85f, fission_KE * 0.15f);
+                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(1.0f, 0.4f, 0.4f, 1.0f), std::string(spfiss_detail));
                 }
                 break;
             }
@@ -3148,7 +3572,14 @@ void PhysicsSimulation::check_photoelectric() {
                 any_changed = true;
                 interaction_count++;
                 try_unlock(ACH_FIRST_PHOTOELECTRIC);
-                iface.push_decay_event("Photoelectric: \xce\xb3 absorbed, e\xe2\x81\xbb ionized", PhysicsInterface::DEVT_PHOTOELECTRIC, ImVec4(0.3f, 0.7f, 1.0f, 1.0f));
+                {
+                    char detail[512];
+                    snprintf(detail, sizeof(detail),
+                        "Photon #%u E: %.4f\nTarget e- #%u (shell %d, Z_nuc=%d)\nBinding E: %.4f\nKick E: %.4f\nEject speed: %.2f",
+                        i, ph_energy, best_e, shell, Z_nucleus,
+                        binding, kick_energy, glm::length(readback_velocities_[best_e]));
+                    iface.push_decay_event("Photoelectric: \xce\xb3 absorbed, e\xe2\x81\xbb ionized", PhysicsInterface::DEVT_PHOTOELECTRIC, ImVec4(0.3f, 0.7f, 1.0f, 1.0f), std::string(detail));
+                }
 
             } else if (ph_energy >= binding * 0.6f) {
                 // ── COMPTON SCATTERING: partial energy transfer ──
@@ -3191,7 +3622,16 @@ void PhysicsSimulation::check_photoelectric() {
                 used[best_e] = true;
                 any_changed = true;
                 interaction_count++;
-                iface.push_decay_event("Compton: \xce\xb3 scattered off bound e\xe2\x81\xbb", PhysicsInterface::DEVT_PHOTOELECTRIC, ImVec4(0.4f, 0.7f, 0.9f, 1.0f));
+                {
+                    char detail[512];
+                    snprintf(detail, sizeof(detail),
+                        "Photon #%u E: %.4f -> %.4f\nTarget e- #%u (shell %d, Z_nuc=%d)\nEnergy transfer: %.4f\nBinding E: %.4f\nScattered photon speed: %.2f",
+                        i, ph_energy, readback_energies_[i],
+                        best_e, shell, Z_nucleus,
+                        ph_energy * 0.4f, binding,
+                        glm::length(readback_velocities_[i]));
+                    iface.push_decay_event("Compton: \xce\xb3 scattered off bound e\xe2\x81\xbb", PhysicsInterface::DEVT_PHOTOELECTRIC, ImVec4(0.4f, 0.7f, 0.9f, 1.0f), std::string(detail));
+                }
             }
             // else: photon too weak, passes through (handled by shader deflection)
 
@@ -3214,7 +3654,14 @@ void PhysicsSimulation::check_photoelectric() {
                 used[best_e] = true;
                 any_changed = true;
                 interaction_count++;
-                iface.push_decay_event("Free e\xe2\x81\xbb Compton scatter", PhysicsInterface::DEVT_PHOTOELECTRIC, ImVec4(0.5f, 0.6f, 0.8f, 1.0f));
+                {
+                    char detail[512];
+                    snprintf(detail, sizeof(detail),
+                        "Photon #%u E: %.4f -> %.4f\nFree e- #%u (unbound)\nEnergy transfer: %.4f\ne- energy after: %.4f",
+                        i, ph_energy, readback_energies_[i],
+                        best_e, transfer, readback_energies_[best_e]);
+                    iface.push_decay_event("Free e\xe2\x81\xbb Compton scatter", PhysicsInterface::DEVT_PHOTOELECTRIC, ImVec4(0.5f, 0.6f, 0.8f, 1.0f), std::string(detail));
+                }
             }
         }
     }
@@ -3270,7 +3717,15 @@ void PhysicsSimulation::check_photoelectric() {
         used[best_nuc] = true;
         any_changed = true;
         interaction_count++;
-        iface.push_decay_event("Nuclear Compton: \xce\xb3 + N scatter", PhysicsInterface::DEVT_PHOTOELECTRIC, ImVec4(0.6f, 0.5f, 0.9f, 1.0f));
+        {
+            char detail[512];
+            snprintf(detail, sizeof(detail),
+                "Photon #%u E: %.4f -> %.4f\nNucleon #%u type=%u\nEnergy transfer: %.4f (8%% of photon)\nNucleon recoil energy: %.4f",
+                i, ph_energy, readback_energies_[i],
+                best_nuc, particles.types[best_nuc],
+                transfer, readback_energies_[best_nuc]);
+            iface.push_decay_event("Nuclear Compton: \xce\xb3 + N scatter", PhysicsInterface::DEVT_PHOTOELECTRIC, ImVec4(0.6f, 0.5f, 0.9f, 1.0f), std::string(detail));
+        }
     }
 
     if (any_changed) {
@@ -3353,15 +3808,27 @@ void PhysicsSimulation::check_spallation() {
             if (is_constituent) continue;
 
             // ── SPALLATION: shatter the nucleus ──
+            // Compute projectile relativistic kinetic energy (MeV)
+            float beta_proj = std::min(speed / C_SIM, 0.9999f);
+            float gamma_proj = 1.0f / std::sqrt(1.0f - beta_proj * beta_proj);
+            float proj_mass_MeV = (ptype < PHYS_PARTICLE_TYPES) ? PHYS_REST_MASS_MEV[ptype] : 938.0f;
+            float proj_KE_MeV = (gamma_proj - 1.0f) * proj_mass_MeV;
+
+            // Minimum KE required: must exceed nuclear binding energy per nucleon
+            // Average binding energy ~8 MeV/nucleon (empirical semi-empirical mass formula)
+            constexpr float BINDING_PER_NUCLEON_MEV = 8.0f;
+            if (proj_KE_MeV < BINDING_PER_NUCLEON_MEV) continue;  // not enough to eject even 1 nucleon
+
             // Scale damage by projectile kinetic energy
             // Higher energy → more nucleons ejected
-            float kinetic = 0.5f * speed * speed * 0.001f;  // normalized KE
-            float damage_frac = std::min(kinetic / 10.0f, 1.0f);  // 0..1
+            float damage_frac = std::min(proj_KE_MeV / (BINDING_PER_NUCLEON_MEV * total_nucleons), 1.0f);
 
-            // Number of nucleons ejected: proportional to damage and nucleus size
+            // Number of nucleons ejected: proportional to damage and nucleus size,
+            // capped by what the projectile can energetically afford
             int max_eject = total_nucleons;
             int num_eject = std::max(1, static_cast<int>(damage_frac * max_eject));
-            num_eject = std::min(num_eject, max_eject);
+            int max_affordable = std::max(1, static_cast<int>(proj_KE_MeV / BINDING_PER_NUCLEON_MEV));
+            num_eject = std::min(num_eject, std::min(max_eject, max_affordable));
 
             // If we're ejecting less than half, it's partial spallation (knock-out)
             // If we're ejecting all, it's total disintegration
@@ -3447,7 +3914,14 @@ void PhysicsSimulation::check_spallation() {
                     snprintf(msg, sizeof(msg), "Spallation: %d nucleons ejected from Z=%d nucleus",
                              ejected, nuc.Z + ejected);
                 iface.push_notification(msg, ImVec4(1.0f, 0.5f, 0.3f, 1.0f));
-                iface.push_decay_event(msg, PhysicsInterface::DEVT_SPALLATION, ImVec4(1.0f, 0.5f, 0.3f, 1.0f));
+                char spall_detail[512];
+                snprintf(spall_detail, sizeof(spall_detail),
+                    "Projectile #%u type=%u KE: %.2f MeV\nTarget nucleus: rep #%u Z=%d N=%d\nDamage fraction: %.3f\nNucleons ejected: %d / %d\nTotal disintegration: %s",
+                    i, ptype, proj_KE_MeV,
+                    nuc.rep, nuc.Z + ejected, total_nucleons - nuc.Z,
+                    damage_frac, ejected, total_nucleons,
+                    total_disintegration ? "yes" : "no");
+                iface.push_decay_event(msg, PhysicsInterface::DEVT_SPALLATION, ImVec4(1.0f, 0.5f, 0.3f, 1.0f), std::string(spall_detail));
             }
 
             break;  // one spallation per projectile
@@ -3508,7 +3982,8 @@ void PhysicsSimulation::check_spallation() {
                 // γ fluctuates into a virtual ρ⁰ meson (uū–dd̄ superposition)
                 // which interacts hadronically → multiple nucleon ejections +
                 // quark-antiquark debris (hadronic shower).
-                // This is the dominant process at very high energies for heavy nuclei.
+                // Physical threshold: E_γ ≥ m_ρ = 775 MeV (ρ⁰ rest mass)
+                // Sim-scaled: 0.85 (85% of max energy buffer)
 
                 used[i] = true;
                 readback_energies_[i] = 0.0f;
@@ -3582,12 +4057,22 @@ void PhysicsSimulation::check_spallation() {
                     "VMD: \xCF\x81\xE2\x81\xB0 meson shower — %d nucleons + q\xC4\x81 pair from Z=%d",
                     ejected, nuc.Z + ejected);
                 iface.push_notification(msg, ImVec4(0.9f, 0.3f, 0.9f, 1.0f));
-                iface.push_decay_event(msg, PhysicsInterface::DEVT_VMD, ImVec4(0.9f, 0.3f, 0.9f, 1.0f));
+                {
+                    char vmd_detail[512];
+                    snprintf(vmd_detail, sizeof(vmd_detail),
+                        "Photon #%u E: %.4f (>=0.85 threshold)\nTarget nucleus: rep #%u Z=%d N=%d\nNucleons ejected: %d\nqqbar pair: slots %u, %u\nSim: gamma->rho0->hadronic shower",
+                        i, ph_energy,
+                        nuc.rep, nuc.Z + ejected, total_nucleons - ejected,
+                        ejected, q_slot, qbar_slot);
+                    iface.push_decay_event(msg, PhysicsInterface::DEVT_VMD, ImVec4(0.9f, 0.3f, 0.9f, 1.0f), std::string(vmd_detail));
+                }
                 break;
 
             } else if (ph_energy >= 0.80f && roll < 0.50f) {
                 // ═══ PHOTOPION PRODUCTION (Δ resonance) ═══
                 // γ + p → Δ⁺ → n + π⁺  (or γ + n → Δ⁰ → p + π⁻)
+                // Physical threshold: E_γ ≥ m_π + m_π²/(2m_N) ≈ 145 MeV
+                // Sim-scaled: 0.80 (80% of max energy buffer)
                 // The pion is a quark-antiquark bound state. In our sim we
                 // represent it as a u + d̄ (π⁺) or ū + d (π⁻) pair.
 
@@ -3674,14 +4159,25 @@ void PhysicsSimulation::check_spallation() {
                          used_proton ? "n" : "p",
                          pion_sym);
                 iface.push_notification(msg, ImVec4(0.4f, 0.9f, 0.6f, 1.0f));
-                iface.push_decay_event(msg, PhysicsInterface::DEVT_PION_PRODUCTION, ImVec4(0.4f, 0.9f, 0.6f, 1.0f));
+                {
+                    char pion_detail[512];
+                    snprintf(pion_detail, sizeof(pion_detail),
+                        "Photon #%u E: %.4f (>=0.80 threshold)\nTarget nucleus: rep #%u Z=%d\nTarget nucleon #%u (%s)\nIsospin flip: %s->%s\nPion (%s): q=%u qbar=%u",
+                        i, ph_energy,
+                        nuc.rep, nuc.Z,
+                        target_idx, used_proton ? "proton" : "neutron",
+                        used_proton ? "p" : "n", used_proton ? "n" : "p",
+                        used_proton ? "pi+" : "pi-", q_slot, qbar_slot);
+                    iface.push_decay_event(msg, PhysicsInterface::DEVT_PION_PRODUCTION, ImVec4(0.4f, 0.9f, 0.6f, 1.0f), std::string(pion_detail));
+                }
                 break;
 
-            } else if (ph_energy >= 0.60f && roll < 0.65f && d2 < 225.0f) {
+            } else if (ph_energy >= 0.75f && roll < 0.65f && d2 < 225.0f) {
                 // ═══ PAIR PRODUCTION ═══
                 // γ → e⁺ + e⁻  (requires nearby nucleus for momentum conservation)
-                // The photon converts into an electron-positron pair in the
-                // nuclear Coulomb field. Threshold: E_γ ≥ 2 × m_e c².
+                // Physical threshold: E_γ ≥ 2 × m_e c² = 1.022 MeV
+                // Sim-scaled: 0.75 (energy buffer max = 1.0 MeV, so 75% of max)
+                // Requires high-energy photon in nuclear Coulomb field.
 
                 used[i] = true;
                 readback_energies_[i] = 0.0f;
@@ -3724,13 +4220,25 @@ void PhysicsSimulation::check_spallation() {
                 iface.push_notification(
                     "Pair production: \xCE\xB3 \xE2\x86\x92 e\xE2\x81\xBA + e\xE2\x81\xBB",
                     ImVec4(0.3f, 0.7f, 1.0f, 1.0f));
-                iface.push_decay_event("\xCE\xB3 \xE2\x86\x92 e\xE2\x81\xBA + e\xE2\x81\xBB", PhysicsInterface::DEVT_PAIR_PRODUCTION, ImVec4(0.3f, 0.7f, 1.0f, 1.0f));
+                {
+                    float pp_energy = std::min(ph_energy * 0.45f, 0.8f);
+                    float pp_speed  = std::min(ph_energy * 80.0f, 200.0f);
+                    char pp_detail[512];
+                    snprintf(pp_detail, sizeof(pp_detail),
+                        "Photon #%u E: %.4f (>=0.75, in nuclear field)\nTarget nucleus: rep #%u Z=%d\ne- #%u E: %.4f\ne+ #%u E: %.4f\nPair speed: %.2f",
+                        i, ph_energy,
+                        nuc.rep, nuc.Z,
+                        e_slot, pp_energy, p_slot, pp_energy, pp_speed);
+                    iface.push_decay_event("\xCE\xB3 \xE2\x86\x92 e\xE2\x81\xBA + e\xE2\x81\xBB", PhysicsInterface::DEVT_PAIR_PRODUCTION, ImVec4(0.3f, 0.7f, 1.0f, 1.0f), std::string(pp_detail));
+                }
                 try_unlock(ACH_FIRST_PAIR_PRODUCTION);
                 break;
 
             } else if (ph_energy >= 0.50f) {
                 // ═══ PHOTODISINTEGRATION ═══
                 // γ + A → (A-1) + nucleon
+                // Physical threshold: E_γ ≥ S_n ≈ 6-8 MeV (neutron separation energy)
+                // Sim-scaled: 0.50 (50% of max energy buffer)
                 // Giant dipole resonance: photon absorbed by nucleus, ejects nucleon.
                 // Prefer neutron (lower Coulomb barrier).
 
@@ -3781,7 +4289,15 @@ void PhysicsSimulation::check_spallation() {
                     num_eject, num_eject > 1 ? "s" : "",
                     nuc.Z + (num_eject > 1 ? 1 : 0));
                 iface.push_notification(msg, ImVec4(0.8f, 0.6f, 1.0f, 1.0f));
-                iface.push_decay_event(msg, PhysicsInterface::DEVT_PHOTODISINTEGRATION, ImVec4(0.8f, 0.6f, 1.0f, 1.0f));
+                {
+                    char pdis_detail[512];
+                    snprintf(pdis_detail, sizeof(pdis_detail),
+                        "Photon #%u E: %.4f (>=0.50 threshold)\nTarget nucleus: rep #%u Z=%d N=%d\nNucleons ejected: %d\nEject speed: %.2f\nGDR: giant dipole resonance absorption",
+                        i, ph_energy,
+                        nuc.rep, nuc.Z, total_nucleons - nuc.Z,
+                        num_eject, eject_speed);
+                    iface.push_decay_event(msg, PhysicsInterface::DEVT_PHOTODISINTEGRATION, ImVec4(0.8f, 0.6f, 1.0f, 1.0f), std::string(pdis_detail));
+                }
                 break;
             }
         }
@@ -3868,26 +4384,42 @@ void PhysicsSimulation::check_virtual_pairs() {
 
         if (combined_e > 1.5f && unit(rng) < 0.3f) {
             // Schwinger effect: virtual e+/e- pair
+            // Minimum: 2 × m_e = 2 × 0.511 = 1.022 MeV (threshold check: 1.5 MeV)
             vtype_a = ELECTRON_TYPE_PHYS;
             vtype_b = POSITRON_TYPE_PHYS;
         } else if (both_quarks && unit(rng) < 0.5f) {
-            // QCD: virtual gluon pair
+            // QCD: virtual gluon pair (massless — no rest mass threshold)
             vtype_a = GLUON_TYPE_PHYS;
             vtype_b = GLUON_TYPE_PHYS;
         } else if (has_weak && unit(rng) < 0.3f) {
             // Weak: virtual W+/W- pair
+            // Physical threshold: 2 × m_W = 2 × 80.379 GeV = 160.758 GeV
+            // Sim-scaled: near-max energy required (both particles ~0.95 energy)
             vtype_a = W_PLUS_TYPE_PHYS;
             vtype_b = W_MINUS_TYPE_PHYS;
         } else if (cfg.gravity_strength > 0.001f && unit(rng) < 0.2f) {
-            // Gravitational: virtual graviton pair
+            // Gravitational: virtual graviton pair (massless — no rest mass threshold)
             vtype_a = GRAVITON_TYPE_PHYS;
             vtype_b = GRAVITON_TYPE_PHYS;
         } else if (has_charge) {
-            // QED: virtual photon pair (most common)
+            // QED: virtual photon pair (massless — no rest mass threshold)
             vtype_a = PHOTON_TYPE_PHYS;
             vtype_b = PHOTON_TYPE_PHYS;
         } else {
             continue;  // no suitable virtual pair for this interaction
+        }
+
+        // ── Enforce minimum energy: E_combined ≥ 2mc² for the pair ──────
+        // Real pair creation requires energy exceeding rest mass of products.
+        // For massive pairs, compute threshold from PDG rest masses.
+        // Cap at 1.9 (near-max) so extremely heavy pairs are rare but not
+        // impossible in extreme conditions (Heisenberg uncertainty allows it).
+        {
+            float m_a_rest = (vtype_a < PHYS_PARTICLE_TYPES) ? PHYS_REST_MASS_MEV[vtype_a] : 0.0f;
+            float m_b_rest = (vtype_b < PHYS_PARTICLE_TYPES) ? PHYS_REST_MASS_MEV[vtype_b] : 0.0f;
+            float pair_rest_MeV = m_a_rest + m_b_rest;
+            float min_combined = std::min(pair_rest_MeV / E_SCALE_MEV, 1.9f);
+            if (combined_e < min_combined) continue;
         }
 
         // Find two dormant slots
@@ -3939,6 +4471,20 @@ void PhysicsSimulation::check_virtual_pairs() {
 
         pairs_created++;
         any_spawned = true;
+        {
+            char virt_detail[512];
+            float m_a = (vtype_a < PHYS_PARTICLE_TYPES) ? PHYS_REST_MASS_MEV[vtype_a] : 0.0f;
+            float m_b = (vtype_b < PHYS_PARTICLE_TYPES) ? PHYS_REST_MASS_MEV[vtype_b] : 0.0f;
+            snprintf(virt_detail, sizeof(virt_detail),
+                "Sources: #%u (E=%.4f) + #%u (E=%.4f)\nCombined E: %.4f (threshold %.4f)\nPair type_a=%u (M=%.3f MeV) slot %u\nPair type_b=%u (M=%.3f MeV) slot %u\nVirt decay rate: %.4f",
+                i, e_i, best_j, e_j_best,
+                combined_e, threshold,
+                vtype_a, m_a, slot_a,
+                vtype_b, m_b, slot_b,
+                virt_decay);
+            iface.push_decay_event("Virtual pair", PhysicsInterface::DEVT_PAIR_PRODUCTION,
+                                   ImVec4(0.5f, 0.8f, 0.5f, 1.0f), std::string(virt_detail));
+        }
     }
 
     if (any_spawned) {
@@ -4176,8 +4722,16 @@ void PhysicsSimulation::check_hadronization() {
             char msg[64];
             snprintf(msg, sizeof(msg), "Hadronization \xe2\x86\x92 %s", baryon_name);
             iface.push_notification(msg, ImVec4(0.2f, 0.8f, 1.0f, 1.0f));
-            iface.push_decay_event(msg, PhysicsInterface::DEVT_FUSION,
-                                   ImVec4(0.2f, 0.8f, 1.0f, 1.0f));
+            {
+                char hadr_detail[512];
+                snprintf(hadr_detail, sizeof(hadr_detail),
+                    "Quarks: #%u (type=%u) + #%u (type=%u) + #%u (type=%u)\nDown-type count: %d\nBaryon: %s (type=%u)\nCombined E: %.4f\nCentroid: (%.1f, %.1f)",
+                    i, ti, best_j, particles.types[best_j], best_k, particles.types[best_k],
+                    down_count, baryon_name, baryon_type,
+                    total_energy, centroid.x, centroid.y);
+                iface.push_decay_event(msg, PhysicsInterface::DEVT_FUSION,
+                                       ImVec4(0.2f, 0.8f, 1.0f, 1.0f), std::string(hadr_detail));
+            }
         }
     }
 
@@ -4233,8 +4787,18 @@ void PhysicsSimulation::check_hadronization() {
         ++vacuum_events;
 
         iface.push_notification("Vacuum: q\xc4\x81 pair", ImVec4(0.3f, 0.9f, 0.4f, 1.0f));
-        iface.push_decay_event("Vacuum pair", PhysicsInterface::DEVT_PAIR_PRODUCTION,
-                               ImVec4(0.3f, 0.9f, 0.4f, 1.0f));
+        {
+            char vac_detail[512];
+            snprintf(vac_detail, sizeof(vac_detail),
+                "Source quark #%u type=%u E=%.4f\nSpawned antiquark type=%u slot %u\nColor: %.3f -> complement %.3f\nQuark E after: %.4f",
+                i, ti, readback_energies_[i],
+                spawn_type, slot,
+                particles.genomes[i * GENOME_SIZE + 2],
+                particles.genomes[slot * GENOME_SIZE + 2],
+                readback_energies_[i]);
+            iface.push_decay_event("Vacuum pair", PhysicsInterface::DEVT_PAIR_PRODUCTION,
+                                   ImVec4(0.3f, 0.9f, 0.4f, 1.0f), std::string(vac_detail));
+        }
     }
 
     // ── Phase 4: string breaking — bound pairs stretched beyond threshold ────
@@ -4309,8 +4873,17 @@ void PhysicsSimulation::check_hadronization() {
         ++breaks;
 
         iface.push_notification("String break \xe2\x86\x92 2 mesons", ImVec4(0.3f, 0.9f, 0.4f, 1.0f));
-        iface.push_decay_event("String break", PhysicsInterface::DEVT_PAIR_PRODUCTION,
-                               ImVec4(0.3f, 0.9f, 0.4f, 1.0f));
+        {
+            char str_detail[512];
+            snprintf(str_detail, sizeof(str_detail),
+                "Quark #%u (type=%u, color=%.3f) - antiquark #%u (type=%u)\nString length: %.2f px (threshold %.2f)\nNew q slot %u (type=%u) + qbar slot %u (type=%u)\nMeson E: %.4f each",
+                i, ti, color_i, best_j, particles.types[best_j],
+                dist, STRING_BREAK_DIST,
+                slot_q, new_q_type, slot_qbar, new_qbar_type,
+                MESON_ENERGY);
+            iface.push_decay_event("String break", PhysicsInterface::DEVT_PAIR_PRODUCTION,
+                                   ImVec4(0.3f, 0.9f, 0.4f, 1.0f), std::string(str_detail));
+        }
     }
 
     // ── Phase 5: gluon interactions ─────────────────────────────────────────
@@ -4424,8 +4997,17 @@ void PhysicsSimulation::check_hadronization() {
             ++gluon_events;
 
             iface.push_notification("g \xe2\x86\x92 qq\xcc\x84 split", ImVec4(0.3f, 0.9f, 0.3f, 1.0f));
-            iface.push_decay_event("Gluon split", PhysicsInterface::DEVT_PAIR_PRODUCTION,
-                                   ImVec4(0.3f, 0.9f, 0.3f, 1.0f));
+            {
+                char gluon_detail[512];
+                snprintf(gluon_detail, sizeof(gluon_detail),
+                    "Gluon #%u E=%.4f color=%.3f\nSplit: q type=%u color=%.3f slot %u\nAnti-q type=%u color=%.3f slot %u\nHalf energy: %.4f each",
+                    i, readback_energies_[i] + half_energy, gluon_color,
+                    q_type, q_color, i,
+                    qbar_type, qb_color, slot,
+                    half_energy);
+                iface.push_decay_event("Gluon split", PhysicsInterface::DEVT_PAIR_PRODUCTION,
+                                       ImVec4(0.3f, 0.9f, 0.3f, 1.0f), std::string(gluon_detail));
+            }
         }
     }
 
@@ -4844,8 +5426,10 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             }
 
             // Orbital update (always needed for element detection)
-            if (quality >= 2 || (quality == 1 && frame2) || (quality == 0 && frame4))
+            if (quality >= 2 || (quality == 1 && frame2) || (quality == 0 && frame4)) {
                 update_orbitals();
+                repel_distinct_nuclei();
+            }
 
             // Covalent bond formation/breaking (after orbitals detect nuclei)
             if (cfg.bonds_enabled && (frame_counter_ % cfg.bond_update_interval == 0))
@@ -5740,6 +6324,169 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         }
     }
 
+    // ── Molecule export request ─────────────────────────────────────────────
+    if (iface.request_molecule_export) {
+        iface.request_molecule_export = false;
+        int32_t atom_rep = iface.export_molecule_atom_rep;
+
+        // Resolve atom rep → molecule_list index
+        int32_t mol_idx = -1;
+        for (size_t mi = 0; mi < iface.molecule_list.size(); ++mi) {
+            for (uint32_t ei : iface.molecule_list[mi].atom_indices) {
+                if (ei < iface.element_list.size() &&
+                    static_cast<int32_t>(iface.element_list[ei].rep) == atom_rep) {
+                    mol_idx = static_cast<int32_t>(mi);
+                    break;
+                }
+            }
+            if (mol_idx >= 0) break;
+        }
+
+        if (mol_idx >= 0 && !readback_positions_.empty()) {
+            auto& mol = iface.molecule_list[static_cast<size_t>(mol_idx)];
+
+            // Element symbol table (shared with element export)
+            static const char* SYM[] = {
+                "n","H","He","Li","Be","B","C","N","O","F","Ne",
+                "Na","Mg","Al","Si","P","S","Cl","Ar","K","Ca",
+                "Sc","Ti","V","Cr","Mn","Fe","Co","Ni","Cu","Zn",
+                "Ga","Ge","As","Se","Br","Kr","Rb","Sr","Y","Zr",
+                "Nb","Mo","Tc","Ru","Rh","Pd","Ag","Cd","In","Sn",
+                "Sb","Te","I","Xe","Cs","Ba","La","Ce","Pr","Nd"
+            };
+
+            // Compute molecule center-of-mass
+            glm::vec2 mol_com(0.0f);
+            int atom_n = 0;
+            for (uint32_t ei : mol.atom_indices) {
+                if (ei >= iface.element_list.size()) continue;
+                auto& elem = iface.element_list[ei];
+                // Find nucleus center from detected_nuclei_
+                for (const auto& nuc : detected_nuclei_) {
+                    if (nuc.rep == elem.rep) {
+                        mol_com += nuc.center;
+                        atom_n++;
+                        break;
+                    }
+                }
+            }
+            if (atom_n > 0) mol_com /= static_cast<float>(atom_n);
+
+            // Build per-atom data and formula
+            std::vector<MoleculeAtomData> atom_data;
+            std::map<std::string, int> formula_counts;  // sorted by symbol
+
+            for (uint32_t ei : mol.atom_indices) {
+                if (ei >= iface.element_list.size()) continue;
+                auto& elem = iface.element_list[ei];
+
+                const NucleusInfo* nuc = nullptr;
+                for (const auto& n : detected_nuclei_) {
+                    if (n.rep == elem.rep) { nuc = &n; break; }
+                }
+                if (!nuc) continue;
+
+                MoleculeAtomData ad{};
+                ad.Z = elem.Z;
+                ad.N = elem.N;
+                ad.electrons = elem.electrons;
+                ad.cx_offset = nuc->center.x - mol_com.x;
+                ad.cy_offset = nuc->center.y - mol_com.y;
+
+                // Gather nucleons
+                for (uint32_t idx : nuc->proton_indices) {
+                    if (idx >= cfg.particle_count) continue;
+                    ElementExportData d{};
+                    d.dx = readback_positions_[idx].x - nuc->center.x;
+                    d.dy = readback_positions_[idx].y - nuc->center.y;
+                    d.vx = readback_velocities_[idx].x;
+                    d.vy = readback_velocities_[idx].y;
+                    d.energy = readback_energies_[idx];
+                    d.type = particles.types[idx];
+                    for (uint32_t g = 0; g < GENOME_SIZE; g++)
+                        d.genome[g] = particles.genomes[idx * GENOME_SIZE + g];
+                    ad.particles.push_back(d);
+                }
+                for (uint32_t idx : nuc->neutron_indices) {
+                    if (idx >= cfg.particle_count) continue;
+                    ElementExportData d{};
+                    d.dx = readback_positions_[idx].x - nuc->center.x;
+                    d.dy = readback_positions_[idx].y - nuc->center.y;
+                    d.vx = readback_velocities_[idx].x;
+                    d.vy = readback_velocities_[idx].y;
+                    d.energy = readback_energies_[idx];
+                    d.type = particles.types[idx];
+                    for (uint32_t g = 0; g < GENOME_SIZE; g++)
+                        d.genome[g] = particles.genomes[idx * GENOME_SIZE + g];
+                    ad.particles.push_back(d);
+                }
+
+                // Gather bound electrons
+                for (uint32_t i = 0; i < cfg.particle_count; ++i) {
+                    if (particles.types[i] == ELECTRON_TYPE_PHYS &&
+                        particles.orbital_parent[i] == static_cast<int32_t>(elem.rep)) {
+                        ElementExportData d{};
+                        d.dx = readback_positions_[i].x - nuc->center.x;
+                        d.dy = readback_positions_[i].y - nuc->center.y;
+                        d.vx = readback_velocities_[i].x;
+                        d.vy = readback_velocities_[i].y;
+                        d.energy = readback_energies_[i];
+                        d.type = particles.types[i];
+                        for (uint32_t g = 0; g < GENOME_SIZE; g++)
+                            d.genome[g] = particles.genomes[i * GENOME_SIZE + g];
+                        ad.particles.push_back(d);
+                    }
+                }
+
+                const char* sym = (elem.Z >= 1 && elem.Z <= 60) ? SYM[elem.Z] : "X";
+                formula_counts[sym]++;
+                atom_data.push_back(std::move(ad));
+            }
+
+            // Build formula string (e.g. "H2O")
+            std::string formula;
+            for (auto& [sym, cnt] : formula_counts) {
+                formula += sym;
+                if (cnt > 1) formula += std::to_string(cnt);
+            }
+
+            // Scan bonds between atoms (by nucleus rep)
+            std::vector<MoleculeBondData> bond_list;
+            for (size_t ai = 0; ai < mol.atom_indices.size(); ++ai) {
+                uint32_t ei_a = mol.atom_indices[ai];
+                if (ei_a >= iface.element_list.size()) continue;
+                uint32_t rep_a = iface.element_list[ei_a].rep;
+                if (rep_a >= cfg.particle_count) continue;
+                uint32_t base = rep_a * MAX_BONDS_PER_PARTICLE;
+                for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+                    if (base + s >= bond_data_.size()) break;
+                    uint32_t partner = bond_data_[base + s];
+                    if (partner == 0xFFFFFFFFu) continue;
+                    // Find partner atom index
+                    for (size_t bi = ai + 1; bi < mol.atom_indices.size(); ++bi) {
+                        uint32_t ei_b = mol.atom_indices[bi];
+                        if (ei_b >= iface.element_list.size()) continue;
+                        if (iface.element_list[ei_b].rep == partner) {
+                            bond_list.push_back({static_cast<int32_t>(ai), static_cast<int32_t>(bi)});
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Save file
+            std::error_code ec;
+            fs::create_directories("saves", ec);
+            char fname[128];
+            snprintf(fname, sizeof(fname), "saves/%s.ppmol", formula.c_str());
+
+            auto result = export_molecule(fname, formula, atom_data, bond_list);
+            iface.push_notification(
+                result.success ? "Molecule exported!" : "Export failed",
+                result.success ? ImVec4(0.2f, 0.9f, 0.4f, 1.0f) : ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
+        }
+    }
+
     // ── Element import request ───────────────────────────────────────────────
     if (iface.request_import) {
         iface.request_import = false;
@@ -5790,6 +6537,115 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             snprintf(msg, sizeof(msg), "Imported Z=%d (A=%d) — %d particles", r.Z, r.Z + r.N, placed);
             iface.push_notification(msg, ImVec4(0.2f, 0.9f, 0.4f, 1.0f));
             try_unlock(ACH_FIRST_IMPORT);
+        } else {
+            iface.push_notification(
+                r.message.c_str(),
+                ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
+        }
+    }
+
+    // ── Molecule import request ──────────────────────────────────────────────
+    if (iface.request_molecule_import) {
+        iface.request_molecule_import = false;
+        auto r = import_molecule(iface.save_filename);
+        if (r.success && !r.atoms.empty()) {
+            glm::vec2 spawn_pos = cfg.camera_origin;
+
+            // Ensure we have readback data
+            if (readback_energies_.empty() && compute.is_ready()) {
+                readback_positions_.resize(cfg.particle_count);
+                readback_velocities_.resize(cfg.particle_count);
+                readback_energies_.resize(cfg.particle_count);
+                compute.read_current_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+            }
+
+            uint32_t n = cfg.particle_count;
+            uint32_t search_start = 0;
+            int placed = 0;
+
+            // Track the first proton slot per atom (for bond reconstruction)
+            std::vector<uint32_t> atom_reps(r.atoms.size(), UINT32_MAX);
+
+            for (size_t ai = 0; ai < r.atoms.size(); ++ai) {
+                auto& atom = r.atoms[ai];
+                glm::vec2 atom_center(spawn_pos.x + atom.cx_offset, spawn_pos.y + atom.cy_offset);
+                uint32_t first_proton_slot = UINT32_MAX;
+
+                for (const auto& p : atom.particles) {
+                    // Find dormant slot
+                    uint32_t slot = UINT32_MAX;
+                    for (uint32_t i = search_start; i < n; ++i) {
+                        if (readback_energies_[i] < 0.01f) { slot = i; break; }
+                    }
+                    if (slot == UINT32_MAX) break;
+                    search_start = slot + 1;
+
+                    readback_positions_[slot] = glm::vec2(atom_center.x + p.dx, atom_center.y + p.dy);
+                    readback_velocities_[slot] = glm::vec2(p.vx, p.vy);
+                    readback_energies_[slot] = p.energy;
+                    particles.types[slot] = p.type;
+                    for (uint32_t g = 0; g < GENOME_SIZE; g++)
+                        particles.genomes[slot * GENOME_SIZE + g] = p.genome[g];
+
+                    // Track first proton as nucleus rep
+                    if (p.type == PROTON_TYPE && first_proton_slot == UINT32_MAX)
+                        first_proton_slot = slot;
+
+                    // Set orbital_parent for electrons to nucleus rep
+                    if (p.type == ELECTRON_TYPE_PHYS && first_proton_slot != UINT32_MAX)
+                        particles.orbital_parent[slot] = static_cast<int32_t>(first_proton_slot);
+                    else
+                        particles.orbital_parent[slot] = -1;
+
+                    placed++;
+                }
+
+                atom_reps[ai] = first_proton_slot;
+            }
+
+            // Reconstruct bonds between atoms
+            if (!bond_data_.empty()) {
+                for (const auto& b : r.bonds) {
+                    if (b.atom_a < 0 || b.atom_b < 0) continue;
+                    size_t a = static_cast<size_t>(b.atom_a);
+                    size_t bx = static_cast<size_t>(b.atom_b);
+                    if (a >= atom_reps.size() || bx >= atom_reps.size()) continue;
+                    uint32_t rep_a = atom_reps[a];
+                    uint32_t rep_b = atom_reps[bx];
+                    if (rep_a == UINT32_MAX || rep_b == UINT32_MAX) continue;
+
+                    // Add bond A→B
+                    uint32_t base_a = rep_a * MAX_BONDS_PER_PARTICLE;
+                    for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+                        if (base_a + s >= bond_data_.size()) break;
+                        if (bond_data_[base_a + s] == 0xFFFFFFFFu) {
+                            bond_data_[base_a + s] = rep_b;
+                            break;
+                        }
+                    }
+                    // Add bond B→A
+                    uint32_t base_b = rep_b * MAX_BONDS_PER_PARTICLE;
+                    for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+                        if (base_b + s >= bond_data_.size()) break;
+                        if (bond_data_[base_b + s] == 0xFFFFFFFFu) {
+                            bond_data_[base_b + s] = rep_a;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Upload modified data to GPU
+            if (placed > 0) {
+                vkDeviceWaitIdle(vk.device);
+                compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+                compute.upload_dynamic_data(vk, particles);
+            }
+
+            char msg[128];
+            snprintf(msg, sizeof(msg), "Imported %s (%d atoms, %d particles)",
+                     r.formula.c_str(), static_cast<int>(r.atoms.size()), placed);
+            iface.push_notification(msg, ImVec4(0.2f, 0.9f, 0.4f, 1.0f));
         } else {
             iface.push_notification(
                 r.message.c_str(),

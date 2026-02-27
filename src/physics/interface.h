@@ -153,7 +153,13 @@ public:
     bool element_move_mode         = false;
 
     // Molecule detail card
-    int32_t molecule_card_index    = -1;    // index into molecule_list (-1=hidden)
+    int32_t molecule_card_atom_rep = -1;    // rep of any atom in molecule (-1=hidden)
+
+    // Molecule export/import
+    bool request_molecule_export       = false;
+    int32_t export_molecule_atom_rep   = -1;    // rep of atom in molecule to export
+    bool show_molecule_import_dialog   = false;
+    bool request_molecule_import       = false;
 
     // Element import
     bool show_import_dialog = false;
@@ -352,9 +358,13 @@ public:
         DEVT_PION_PRODUCTION,       // Photopion (Δ resonance)
         DEVT_VMD,                   // Vector meson dominance
         DEVT_PHOTODISINTEGRATION,   // γ + A → (A-1) + n
+        DEVT_BOND_FORMED,           // Covalent bond created
+        DEVT_BOND_BROKEN,           // Covalent bond broken
     };
+    static constexpr int DEVT_COUNT = 13;
     struct DecayLogEntry {
         std::string description;
+        std::string details;        // multi-line detail shown on click
         DecayEventType type;
         ImVec4 color;
         uint32_t frame;             // frame number when event occurred
@@ -364,8 +374,10 @@ public:
     std::vector<DecayLogEntry> decay_log;
     bool show_decay_log = false;
     bool show_nuclear_debug = false;
+    int32_t expanded_event_idx = -1;  // which event is expanded in log
 
     void push_decay_event(const char* desc, DecayEventType type, ImVec4 color = ImVec4(1,0.6f,0.2f,1));
+    void push_decay_event(const char* desc, DecayEventType type, ImVec4 color, const std::string& details);
 
     void init();
     void render_imgui(SimConfig& cfg, Particles& particles, ForceObject* force_objects, bool& request_reset);

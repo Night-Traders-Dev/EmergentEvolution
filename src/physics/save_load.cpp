@@ -267,3 +267,140 @@ ImportElementResult import_element(const std::string& filepath) {
     r.message = "Imported!";
     return r;
 }
+
+// ── Molecule export/import (.ppmol) ──────────────────────────────────────────
+
+static constexpr uint32_t PPMOL_MAGIC   = 0x4D4F4C50;  // "PLOM" little-endian
+static constexpr uint32_t PPMOL_VERSION = 1;
+
+SaveResult export_molecule(
+    const std::string& filepath,
+    const std::string& formula,
+    const std::vector<MoleculeAtomData>& atoms,
+    const std::vector<MoleculeBondData>& bonds)
+{
+    std::ofstream f(filepath, std::ios::binary);
+    if (!f.is_open())
+        return { false, "Cannot open file for writing" };
+
+    write_val(f, PPMOL_MAGIC);
+    write_val(f, PPMOL_VERSION);
+
+    // Formula string (length-prefixed)
+    uint32_t flen = static_cast<uint32_t>(formula.size());
+    write_val(f, flen);
+    f.write(formula.data(), flen);
+
+    // Atom count + bond count
+    uint32_t atom_count = static_cast<uint32_t>(atoms.size());
+    uint32_t bond_count = static_cast<uint32_t>(bonds.size());
+    write_val(f, atom_count);
+    write_val(f, bond_count);
+
+    // Per-atom data
+    for (const auto& a : atoms) {
+        write_val(f, a.Z);
+        write_val(f, a.N);
+        write_val(f, a.electrons);
+        write_val(f, a.cx_offset);
+        write_val(f, a.cy_offset);
+        uint32_t pcount = static_cast<uint32_t>(a.particles.size());
+        write_val(f, pcount);
+        for (const auto& p : a.particles) {
+            write_val(f, p.dx);
+            write_val(f, p.dy);
+            write_val(f, p.vx);
+            write_val(f, p.vy);
+            write_val(f, p.energy);
+            write_val(f, p.type);
+            f.write(reinterpret_cast<const char*>(p.genome), GENOME_SIZE * sizeof(float));
+        }
+    }
+
+    // Bond data
+    for (const auto& b : bonds) {
+        write_val(f, b.atom_a);
+        write_val(f, b.atom_b);
+    }
+
+    if (!f.good())
+        return { false, "Write error" };
+
+    return { true, "Molecule exported!" };
+}
+
+ImportMoleculeResult import_molecule(const std::string& filepath) {
+    ImportMoleculeResult r;
+    std::ifstream f(filepath, std::ios::binary);
+    if (!f.is_open()) {
+        r.message = "Cannot open file";
+        return r;
+    }
+
+    uint32_t magic = 0, version = 0;
+    read_val(f, magic);
+    read_val(f, version);
+    if (magic != PPMOL_MAGIC) {
+        r.message = "Not a valid .ppmol file";
+        return r;
+    }
+    if (version != PPMOL_VERSION) {
+        r.message = "Unsupported .ppmol version";
+        return r;
+    }
+
+    // Formula
+    uint32_t flen = 0;
+    read_val(f, flen);
+    if (flen > 256) { r.message = "Formula too long"; return r; }
+    r.formula.resize(flen);
+    f.read(r.formula.data(), flen);
+
+    // Counts
+    uint32_t atom_count = 0, bond_count = 0;
+    read_val(f, atom_count);
+    read_val(f, bond_count);
+    if (atom_count > 1000) { r.message = "Too many atoms"; return r; }
+    if (bond_count > 10000) { r.message = "Too many bonds"; return r; }
+
+    // Per-atom data
+    r.atoms.resize(atom_count);
+    for (uint32_t ai = 0; ai < atom_count; ++ai) {
+        auto& a = r.atoms[ai];
+        read_val(f, a.Z);
+        read_val(f, a.N);
+        read_val(f, a.electrons);
+        read_val(f, a.cx_offset);
+        read_val(f, a.cy_offset);
+        uint32_t pcount = 0;
+        read_val(f, pcount);
+        if (pcount > 10000) { r.message = "Atom too large"; return r; }
+        a.particles.resize(pcount);
+        for (uint32_t pi = 0; pi < pcount; ++pi) {
+            auto& p = a.particles[pi];
+            read_val(f, p.dx);
+            read_val(f, p.dy);
+            read_val(f, p.vx);
+            read_val(f, p.vy);
+            read_val(f, p.energy);
+            read_val(f, p.type);
+            f.read(reinterpret_cast<char*>(p.genome), GENOME_SIZE * sizeof(float));
+        }
+    }
+
+    // Bond data
+    r.bonds.resize(bond_count);
+    for (uint32_t bi = 0; bi < bond_count; ++bi) {
+        read_val(f, r.bonds[bi].atom_a);
+        read_val(f, r.bonds[bi].atom_b);
+    }
+
+    if (!f.good()) {
+        r.message = "Truncated file";
+        return r;
+    }
+
+    r.success = true;
+    r.message = "Molecule imported!";
+    return r;
+}

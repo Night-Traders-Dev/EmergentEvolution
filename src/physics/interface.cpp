@@ -782,7 +782,7 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         draw_accelerator_panel();
 
     // Save/Load/Import dialog (drawn before cards so cards render on top)
-    if (show_save_dialog || show_load_dialog || show_import_dialog)
+    if (show_save_dialog || show_load_dialog || show_import_dialog || show_molecule_import_dialog)
         draw_save_load_dialog();
 
     // Draw element list window (center, drawn before cards so cards overlay)
@@ -805,7 +805,7 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         draw_element_card(particles);
 
     // Draw molecule detail card
-    if (molecule_card_index >= 0)
+    if (molecule_card_atom_rep >= 0)
         draw_molecule_card(particles);
 
     // Fade save/load status message
@@ -2257,6 +2257,11 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                         show_tools_popup = false;
                         browse_needs_refresh = true;
                     }
+                    if (ImGui::MenuItem("Import Molecule (.ppmol)")) {
+                        show_molecule_import_dialog = true;
+                        show_tools_popup = false;
+                        browse_needs_refresh = true;
+                    }
                     ImGui::TreePop();
                 }
 
@@ -2732,37 +2737,6 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                 "Free quarks form mesons (q+qbar) or spawn vacuum pairs\n"
                 "String breaking creates new pairs when quarks separate\n"
                 "Disabled above QGP temperature (2 trillion K)");
-
-        ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.4f, 0.9f, 1.0f, 1.0f), "Nuclear Reactions");
-        ImGui::Checkbox("Fusion", &cfg.fusion_enabled);
-        ImGui::SameLine();
-        ImGui::Checkbox("Fission", &cfg.fission_enabled);
-        ImGui::Checkbox("Spallation", &cfg.spallation_enabled);
-        ImGui::SameLine();
-        ImGui::Checkbox("Compton", &cfg.compton_enabled);
-        ImGui::Checkbox("Annihilation", &cfg.annihilation_enabled);
-        ImGui::SameLine();
-        ImGui::Checkbox("Decay", &cfg.decay_enabled);
-        ImGui::Checkbox("Nuclear Decay", &cfg.nuclear_decay_enabled);
-        if (cfg.fusion_enabled) {
-            char barrier_label[32];
-            float barrier_keV = cfg.fusion_threshold_keV;
-            if (barrier_keV < 1.0f)
-                snprintf(barrier_label, sizeof(barrier_label), "%.0f eV", barrier_keV * 1000.0f);
-            else if (barrier_keV < 1000.0f)
-                snprintf(barrier_label, sizeof(barrier_label), "%.1f keV", barrier_keV);
-            else
-                snprintf(barrier_label, sizeof(barrier_label), "%.1f MeV", barrier_keV / 1000.0f);
-            ImGui::SliderFloat("Coulomb Barrier", &cfg.fusion_threshold_keV, 0.0f, 2000.0f, barrier_label,
-                               ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Energy required to overcome Coulomb repulsion\n"
-                    "for proton-proton fusion (Gamow tunneling)\n"
-                    "Realistic: ~550 keV\n"
-                    "0 = instant fusion (no barrier)\n"
-                    "Higher = harder to fuse (need more energy)");
-        }
 
         ImGui::Spacing();
 
@@ -3803,6 +3777,39 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
                     ImGui::PopStyleColor();
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Click for %selement details", prefix);
+
+                    // ── Molecule membership ───────────────────────────────
+                    // Check if this atom's nucleus belongs to a molecule
+                    for (size_t mi = 0; mi < molecule_list.size(); ++mi) {
+                        auto& mol = molecule_list[mi];
+                        if (mol.atom_indices.size() < 2) continue;  // single atoms aren't molecules
+                        bool found = false;
+                        for (uint32_t ei : mol.atom_indices) {
+                            if (ei < element_list.size() &&
+                                static_cast<int32_t>(element_list[ei].rep) == nuc_rep) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) continue;
+
+                        std::string mol_formula = build_molecular_formula(element_list, mol.atom_indices);
+                        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Molecule");
+                        ImGui::SameLine(col_w);
+
+                        char mol_label[128];
+                        snprintf(mol_label, sizeof(mol_label), "%s (%d atoms)",
+                                 mol_formula.c_str(), static_cast<int>(mol.atom_indices.size()));
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.65f, 1.0f, 1.0f));
+                        if (ImGui::SmallButton(mol_label)) {
+                            uint32_t first_rep = element_list[mol.atom_indices[0]].rep;
+                            molecule_card_atom_rep = static_cast<int32_t>(first_rep);
+                        }
+                        ImGui::PopStyleColor();
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Click for molecule details");
+                        break;  // only one molecule per atom
+                    }
                 }
             }
         }
@@ -4201,14 +4208,24 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 void PhysicsInterface::draw_molecule_card(const Particles& particles) {
-    if (molecule_card_index < 0 ||
-        static_cast<size_t>(molecule_card_index) >= molecule_list.size()) {
-        molecule_card_index = -1;
-        return;
-    }
+    if (molecule_card_atom_rep < 0) return;
 
-    auto& mol = molecule_list[static_cast<size_t>(molecule_card_index)];
-    if (mol.atom_indices.empty()) { molecule_card_index = -1; return; }
+    // Resolve stable atom rep → current molecule_list index
+    int32_t mol_idx = -1;
+    for (size_t mi = 0; mi < molecule_list.size(); ++mi) {
+        for (uint32_t ei : molecule_list[mi].atom_indices) {
+            if (ei < element_list.size() &&
+                static_cast<int32_t>(element_list[ei].rep) == molecule_card_atom_rep) {
+                mol_idx = static_cast<int32_t>(mi);
+                break;
+            }
+        }
+        if (mol_idx >= 0) break;
+    }
+    if (mol_idx < 0) { molecule_card_atom_rep = -1; return; }
+
+    auto& mol = molecule_list[static_cast<size_t>(mol_idx)];
+    if (mol.atom_indices.empty()) { molecule_card_atom_rep = -1; return; }
 
     // Build formula for title
     std::string formula = build_molecular_formula(element_list, mol.atom_indices);
@@ -4419,19 +4436,27 @@ void PhysicsInterface::draw_molecule_card(const Particles& particles) {
         ImGui::Spacing();
         ImGui::Separator();
 
-        if (ImGui::Button("Navigate", ImVec2(100, 26))) {
+        if (ImGui::Button("Navigate", ImVec2(72, 26))) {
             uint32_t first_rep = element_list[mol.atom_indices[0]].rep;
             navigate_to_particle = static_cast<int32_t>(first_rep);
         }
         ImGui::SameLine();
-        if (ImGui::Button("Close", ImVec2(100, 26))) {
-            molecule_card_index = -1;
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.30f, 0.50f, 0.80f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.40f, 0.65f, 0.90f));
+        if (ImGui::Button("Export", ImVec2(72, 26))) {
+            request_molecule_export = true;
+            export_molecule_atom_rep = molecule_card_atom_rep;
+        }
+        ImGui::PopStyleColor(2);
+        ImGui::SameLine();
+        if (ImGui::Button("Close", ImVec2(72, 26))) {
+            molecule_card_atom_rep = -1;
         }
     }
     ImGui::End();
     ImGui::PopStyleColor(2);
 
-    if (!open) molecule_card_index = -1;
+    if (!open) molecule_card_atom_rep = -1;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -4474,10 +4499,11 @@ void PhysicsInterface::draw_decay_log() {
         return;
     }
 
-    // Event type filter labels
+    // Event type labels and colors
     static const char* TYPE_LABELS[] = {
         "Decay", "Nuclear", "Fusion", "Fission", "Annihil.",
-        "Photo-e", "Spall.", "Pair", "Pion", "VMD", "Photodis."
+        "Photo-e", "Spall.", "Pair", "Pion", "VMD", "Photodis.",
+        "Bond+", "Bond-"
     };
     static const ImVec4 TYPE_COLORS[] = {
         ImVec4(1.0f, 0.8f, 0.5f, 1.0f),   // PARTICLE_DECAY — warm yellow
@@ -4491,18 +4517,22 @@ void PhysicsInterface::draw_decay_log() {
         ImVec4(0.4f, 0.9f, 0.6f, 1.0f),   // PION_PRODUCTION — green
         ImVec4(0.9f, 0.3f, 0.9f, 1.0f),   // VMD — magenta
         ImVec4(0.8f, 0.6f, 1.0f, 1.0f),   // PHOTODISINTEGRATION — purple
+        ImVec4(0.3f, 0.85f, 0.5f, 1.0f),  // BOND_FORMED — teal-green
+        ImVec4(0.9f, 0.45f, 0.3f, 1.0f),  // BOND_BROKEN — warm red
     };
 
     // Summary counts by type
-    int type_counts[11] = {};
+    int type_counts[DEVT_COUNT] = {};
     for (const auto& e : decay_log) {
-        if (e.type < 11) type_counts[e.type]++;
+        if (e.type < DEVT_COUNT) type_counts[e.type]++;
     }
 
     // Summary bar
-    for (int t = 0; t < 11; ++t) {
+    bool first_tag = true;
+    for (int t = 0; t < DEVT_COUNT; ++t) {
         if (type_counts[t] == 0) continue;
-        ImGui::SameLine(0, t == 0 ? 0 : 6);
+        if (!first_tag) ImGui::SameLine(0, 6);
+        first_tag = false;
         ImGui::TextColored(TYPE_COLORS[t], "%s:%d", TYPE_LABELS[t], type_counts[t]);
     }
     if (decay_log.empty()) {
@@ -4517,6 +4547,7 @@ void PhysicsInterface::draw_decay_log() {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.1f, 0.1f, 0.5f));
         if (ImGui::SmallButton("Clear")) {
             decay_log.clear();
+            expanded_event_idx = -1;
         }
         ImGui::PopStyleColor();
     }
@@ -4528,27 +4559,49 @@ void PhysicsInterface::draw_decay_log() {
 
     for (int idx = static_cast<int>(decay_log.size()) - 1; idx >= 0; --idx) {
         const auto& entry = decay_log[idx];
+        bool is_expanded = (expanded_event_idx == idx);
+        bool has_details = !entry.details.empty();
 
-        // Wall-clock timestamp
+        ImGui::PushID(idx);
+
+        // Clickable row
+        char row_label[384];
         {
             struct tm tm_buf;
             localtime_r(&entry.timestamp, &tm_buf);
-            char ts_str[16];
-            snprintf(ts_str, sizeof(ts_str), "%02d:%02d:%02d",
-                     tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
-            ImGui::TextColored(ImVec4(0.35f, 0.38f, 0.48f, 1.0f), "%s", ts_str);
+            const char* tag = (entry.type < DEVT_COUNT) ? TYPE_LABELS[entry.type] : "?";
+            const char* arrow = has_details ? (is_expanded ? "v " : "> ") : "  ";
+            snprintf(row_label, sizeof(row_label), "%s%02d:%02d:%02d  [%-8s]  %s",
+                     arrow,
+                     tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec,
+                     tag, entry.description.c_str());
         }
 
-        // Type tag
-        ImGui::SameLine(65.0f);
-        const char* tag = (entry.type < 11) ? TYPE_LABELS[entry.type] : "?";
-        ImVec4 tag_color = (entry.type < 11) ? TYPE_COLORS[entry.type] : ImVec4(1,1,1,1);
-        ImGui::TextColored(ImVec4(tag_color.x * 0.7f, tag_color.y * 0.7f,
-                                   tag_color.z * 0.7f, 0.8f), "[%s]", tag);
+        ImVec4 tag_color = (entry.type < DEVT_COUNT) ? TYPE_COLORS[entry.type] : ImVec4(1,1,1,1);
+        ImGui::PushStyleColor(ImGuiCol_Text, entry.color);
+        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(tag_color.x * 0.15f, tag_color.y * 0.15f,
+                                                       tag_color.z * 0.15f, 0.5f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(tag_color.x * 0.25f, tag_color.y * 0.25f,
+                                                              tag_color.z * 0.25f, 0.6f));
+        if (ImGui::Selectable(row_label, is_expanded, ImGuiSelectableFlags_None, ImVec2(0, 0))) {
+            if (has_details)
+                expanded_event_idx = is_expanded ? -1 : idx;
+        }
+        ImGui::PopStyleColor(3);
 
-        // Description
-        ImGui::SameLine(135.0f);
-        ImGui::TextColored(entry.color, "%s", entry.description.c_str());
+        // Show detail text when expanded
+        if (is_expanded && has_details) {
+            ImGui::Indent(20.0f);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.65f, 0.68f, 0.75f, 1.0f));
+            ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x + ImGui::GetCursorPosX() - 10.0f);
+            ImGui::TextWrapped("%s", entry.details.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::PopStyleColor();
+            ImGui::Unindent(20.0f);
+            ImGui::Spacing();
+        }
+
+        ImGui::PopID();
     }
 
     // Auto-scroll to top (newest) when new events arrive
@@ -5097,24 +5150,23 @@ void PhysicsInterface::draw_element_list() {
             ImGui::GetWindowDrawList()->AddCircleFilled(
                 ImVec2(cursor.x + 5.0f, cursor.y + 10.0f), 4.0f,
                 ImGui::ColorConvertFloat4ToU32(dot_col));
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.0f);
 
-            // Selectable row
+            // Selectable row (no cursor shift — Selectable spans full width)
             uint32_t first_rep = element_list[mol.atom_indices[0]].rep;
-            bool is_selected_mol = (molecule_card_index == static_cast<int32_t>(mi));
+            bool is_selected_mol = (molecule_card_atom_rep == static_cast<int32_t>(first_rep));
             bool is_selected_elem = !is_molecule && (element_card_nucleus_rep == static_cast<int32_t>(first_rep));
             char row_text[192];
-            snprintf(row_text, sizeof(row_text), "%-14s %4s %10s %6s",
+            snprintf(row_text, sizeof(row_text), "  %-14s %4s %10s %6s",
                      formula.c_str(), charge_str, energy_str, age_str);
 
             if (ImGui::Selectable(row_text, is_selected_mol || is_selected_elem,
                                   ImGuiSelectableFlags_None, ImVec2(0, 22))) {
                 if (is_molecule) {
-                    molecule_card_index = static_cast<int32_t>(mi);
+                    molecule_card_atom_rep = static_cast<int32_t>(first_rep);
                     element_card_nucleus_rep = -1;  // close atom card
                 } else {
                     element_card_nucleus_rep = static_cast<int32_t>(first_rep);
-                    molecule_card_index = -1;  // close molecule card
+                    molecule_card_atom_rep = -1;  // close molecule card
                 }
                 navigate_to_particle = static_cast<int32_t>(first_rep);
             }
@@ -5200,14 +5252,13 @@ void PhysicsInterface::draw_element_list() {
             ImGui::GetWindowDrawList()->AddCircleFilled(
                 ImVec2(cursor.x + 5.0f, cursor.y + 10.0f), 4.0f,
                 ImGui::ColorConvertFloat4ToU32(stab_col));
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.0f);
 
             char energy_str[32], age_str[16];
             format_energy_str(energy_str, sizeof(energy_str), elem.energy_MeV);
             format_age_str(age_str, sizeof(age_str), elem.oldest_birth, frame_counter_display);
 
             char row_text[192];
-            snprintf(row_text, sizeof(row_text), "%-4s %-4s-%-3d  %-10s %3s %10s %6s",
+            snprintf(row_text, sizeof(row_text), "  %-4s %-4s-%-3d  %-10s %3s %10s %6s",
                      sym, sym, A, name, charge_str, energy_str, age_str);
 
             if (ImGui::Selectable(row_text, is_selected, ImGuiSelectableFlags_None, ImVec2(0, 22))) {
@@ -5341,7 +5392,6 @@ void PhysicsInterface::draw_particle_list(const Particles& particles) {
                 ImGui::GetWindowDrawList()->AddCircleFilled(
                     ImVec2(cursor.x + 5.0f, cursor.y + 10.0f), 3.0f,
                     ImGui::ColorConvertFloat4ToU32(tcol));
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.0f);
 
                 // Format age
                 char age_str[16];
@@ -5356,7 +5406,7 @@ void PhysicsInterface::draw_particle_list(const Particles& particles) {
                 }
 
                 char row[200];
-                snprintf(row, sizeof(row), "#%-5u %-10s %12s  %10s %6s",
+                snprintf(row, sizeof(row), "  #%-5u %-10s %12s  %10s %6s",
                          i, tname, speed_str, energy_str, age_str);
 
                 if (ImGui::Selectable(row, is_selected, ImGuiSelectableFlags_None, ImVec2(0, 20))) {
@@ -5391,9 +5441,16 @@ void PhysicsInterface::push_notification(const char* text, ImVec4 color) {
 }
 
 void PhysicsInterface::push_decay_event(const char* desc, DecayEventType type, ImVec4 color) {
-    if (static_cast<int>(decay_log.size()) >= DECAY_LOG_MAX)
-        decay_log.erase(decay_log.begin());  // drop oldest
-    decay_log.push_back({std::string(desc), type, color, frame_counter_display, std::time(nullptr)});
+    push_decay_event(desc, type, color, std::string());
+}
+
+void PhysicsInterface::push_decay_event(const char* desc, DecayEventType type, ImVec4 color, const std::string& details) {
+    if (static_cast<int>(decay_log.size()) >= DECAY_LOG_MAX) {
+        decay_log.erase(decay_log.begin());
+        if (expanded_event_idx > 0) expanded_event_idx--;
+        else if (expanded_event_idx == 0) expanded_event_idx = -1;
+    }
+    decay_log.push_back({std::string(desc), details, type, color, frame_counter_display, std::time(nullptr)});
 }
 
 void PhysicsInterface::draw_notifications() {
@@ -5587,7 +5644,8 @@ void PhysicsInterface::refresh_browse_entries() {
     }
 
     // Collect directories and matching files
-    std::string filter_ext = show_import_dialog ? ".ppel" : ".ppsg";
+    std::string filter_ext = show_molecule_import_dialog ? ".ppmol"
+                           : show_import_dialog ? ".ppel" : ".ppsg";
     std::vector<BrowseEntry> dirs, files;
     for (auto& entry : fs::directory_iterator(browse_current_dir, ec)) {
         std::string name = entry.path().filename().string();
@@ -5637,7 +5695,8 @@ void PhysicsInterface::draw_save_load_dialog() {
     ImGui::SetNextWindowPos(ImVec2(center.x - size.x * 0.5f, center.y - size.y * 0.5f), ImGuiCond_Appearing);
     ImGui::SetNextWindowSize(size, ImGuiCond_Appearing);
 
-    const char* title = show_import_dialog ? "Import Element###SaveLoad"
+    const char* title = show_molecule_import_dialog ? "Import Molecule###SaveLoad"
+                      : show_import_dialog ? "Import Element###SaveLoad"
                       : show_save_dialog  ? "Save Simulation###SaveLoad"
                                           : "Load Simulation###SaveLoad";
     bool open = true;
@@ -5710,7 +5769,10 @@ void PhysicsInterface::draw_save_load_dialog() {
                         if (!show_save_dialog && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                             fs::path full = fs::path(browse_current_dir) / entry.name;
                             snprintf(save_filename, sizeof(save_filename), "%s", full.string().c_str());
-                            if (show_import_dialog) {
+                            if (show_molecule_import_dialog) {
+                                request_molecule_import = true;
+                                show_molecule_import_dialog = false;
+                            } else if (show_import_dialog) {
                                 request_import = true;
                                 show_import_dialog = false;
                             } else {
@@ -5732,7 +5794,8 @@ void PhysicsInterface::draw_save_load_dialog() {
             }
 
             if (browse_entries.empty()) {
-                const char* ext_hint = show_import_dialog ? ".ppel" : ".ppsg";
+                const char* ext_hint = show_molecule_import_dialog ? ".ppmol"
+                                     : show_import_dialog ? ".ppel" : ".ppsg";
                 ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.7f), "  No %s files in this directory", ext_hint);
             }
         }
@@ -5775,6 +5838,19 @@ void PhysicsInterface::draw_save_load_dialog() {
                 show_save_dialog = false;
                 browse_needs_refresh = true;
             }
+        } else if (show_molecule_import_dialog) {
+            bool can_import = (browse_selected_idx >= 0 &&
+                               browse_selected_idx < (int)browse_entries.size() &&
+                               !browse_entries[browse_selected_idx].is_dir);
+            if (!can_import) ImGui::BeginDisabled();
+            if (ImGui::Button("Import", ImVec2(btn_w, 28))) {
+                fs::path full = fs::path(browse_current_dir) / browse_entries[browse_selected_idx].name;
+                snprintf(save_filename, sizeof(save_filename), "%s", full.string().c_str());
+                request_molecule_import = true;
+                show_molecule_import_dialog = false;
+                browse_needs_refresh = true;
+            }
+            if (!can_import) ImGui::EndDisabled();
         } else if (show_import_dialog) {
             bool can_import = (browse_selected_idx >= 0 &&
                                browse_selected_idx < (int)browse_entries.size() &&
@@ -5807,6 +5883,7 @@ void PhysicsInterface::draw_save_load_dialog() {
             show_save_dialog = false;
             show_load_dialog = false;
             show_import_dialog = false;
+            show_molecule_import_dialog = false;
         }
 
         // Escape to close
@@ -5814,6 +5891,7 @@ void PhysicsInterface::draw_save_load_dialog() {
             show_save_dialog = false;
             show_load_dialog = false;
             show_import_dialog = false;
+            show_molecule_import_dialog = false;
         }
     }
 
@@ -5821,6 +5899,7 @@ void PhysicsInterface::draw_save_load_dialog() {
         show_save_dialog = false;
         show_load_dialog = false;
         show_import_dialog = false;
+        show_molecule_import_dialog = false;
     }
 
     ImGui::End();
