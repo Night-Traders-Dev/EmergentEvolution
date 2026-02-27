@@ -1017,10 +1017,11 @@ void apply_physics(uint i) {
         if (params.vacuum_energy > 0.001)
             delta_e += params.vacuum_energy * 0.003 * params.dt;
 
-        // Decay drain from genome[3]
+        // Decay drain from genome[3] (virtual particles use negative sign as marker)
         float decay_rate = get_decay(i);
-        if (decay_rate > 0.001) {
-            delta_e -= decay_rate * params.dt;
+        float abs_decay = abs(decay_rate);
+        if (abs_decay > 0.001) {
+            delta_e -= abs_decay * params.dt;
         }
 
         // Third Law: enforce per-type zero-point energy floor
@@ -1433,8 +1434,8 @@ void render_particle(uint i) {
 
     if (energy < 0.01) return;
 
-    // Hide virtual particle trails: skip rendering if decay > 0.05 (virtual) and bit 7 set
-    if ((params.field_flags & (1u << 7)) != 0u && get_decay(i) > 0.05) return;
+    // Hide virtual particles: negative decay marks virtual (sign convention from CPU)
+    if ((params.field_flags & (1u << 7)) != 0u && get_decay(i) < -0.001) return;
 
     // Particle classification
     bool is_photon_p    = (flags & BEHAVIOR_PHOTON) != 0u;
@@ -1449,7 +1450,7 @@ void render_particle(uint i) {
     bool is_boson_heavy = (flags & (BEHAVIOR_WEAK_BOSON | BEHAVIOR_HIGGS_FLAG)) != 0u;
     bool is_dark_matter = (flags & BEHAVIOR_DARK_MATTER) != 0u;
     bool is_dark_energy = (flags & BEHAVIOR_DARK_ENERGY) != 0u;
-    bool is_virtual     = get_decay(i) > 0.05;  // per-particle: high decay = virtual
+    bool is_virtual     = get_decay(i) < -0.001;  // negative decay = virtual particle
 
     // Size by particle type
     float base_radius = params.radius * params.camera_zoom;

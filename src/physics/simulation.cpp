@@ -4961,8 +4961,9 @@ void PhysicsSimulation::check_virtual_pairs() {
         // γγ (0 MeV) → 0.01 (~120 frames), e⁺e⁻ (1 MeV) → 0.08 (~15 frames)
         // W⁺W⁻ (161 GeV) → 0.5 (~2 frames, nearly instant)
         float virt_decay = (pair_mass < 0.01f) ? 0.01f : std::min(pair_mass * 0.08f, 0.5f);
-        particles.genomes[slot_a * GENOME_SIZE + 3] = virt_decay;
-        particles.genomes[slot_b * GENOME_SIZE + 3] = virt_decay;
+        // Negative sign marks virtual particles (shader uses abs for drain, sign for classification)
+        particles.genomes[slot_a * GENOME_SIZE + 3] = -virt_decay;
+        particles.genomes[slot_b * GENOME_SIZE + 3] = -virt_decay;
 
         // Entangle the pair
         if (cfg.entanglement_enabled) {

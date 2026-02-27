@@ -31,14 +31,14 @@ detection, electron cloud visualization, a persistent event log, an achievement 
 measurement tools (thermometer, velocity meter, ruler with nanometer scale, density counter),
 visualization overlays (energy heatmap, velocity field, magnetic field, trajectory tracer,
 force vectors, atom grid, wave-particle duality mode), interactive tools
-(particle accelerator, mirrors), 12 UI themes, 13 environment presets, element export/import, six
+(particle accelerator, mirrors), 8 UI themes, 13 environment presets, element export/import, six
 per-force multiplier knobs, relativistic energy readouts in electronvolts (PDG rest masses,
 E = γm₀c²), a browsable particle list and element list with live molecular formula grouping
 and energy/age tracking, and an animated particle splash screen.
 
-Simulates up to **100,000 particles** in real time on a toroidal 2560 x 1440 world. GPU compute
-shaders handle O(n^2) pairwise forces; CPU-side physics uses a **spatial acceleration grid** for
-O(n) neighbor queries with **OpenMP** parallelization across all available cores.
+Simulates up to **100,000 particles** in real time in an open infinite world with no boundaries.
+GPU compute shaders handle O(n^2) pairwise forces; CPU-side physics uses a **spatial acceleration
+grid** for O(n) neighbor queries with **OpenMP** parallelization across all available cores.
 
 ---
 
@@ -92,7 +92,7 @@ The Vulkan compute pipeline is dispatched each frame.
 | CPU physics | O(n) via **spatial acceleration grid** (30px cells, 86x49 = 4,214 cells) |
 | Parallelism | **OpenMP** across all cores for statistics, measurement probes, and visualization grid |
 | GPU sync | Batched — single `vkDeviceWaitIdle` per frame (was 8-10 before) |
-| World | Toroidal 2560 x 1440 (seamless wrap) |
+| World | Open infinite space (no boundaries) |
 | Buffers | Double-buffered ping-pong (position, velocity, angle, angular velocity, energy, genome) |
 | Genome | 4 floats per particle: charge, spin, color charge / orbital L, decay rate |
 | Push Constants | 128 bytes (Vulkan guaranteed minimum) — all simulation parameters per frame |
@@ -138,7 +138,7 @@ The Vulkan compute pipeline is dispatched each frame.
 <tr><td>23</td><td><b>Anti-top</b> t&#773;</td><td>0.000003</td><td>-2/3</td><td>-0.5</td><td>Annihilates with t</td></tr>
 <tr><td>24</td><td><b>Anti-bottom</b> b&#773;</td><td>0.0005</td><td>+1/3</td><td>+0.5</td><td>Annihilates with b</td></tr>
 <tr><td rowspan="5"><b>Gauge Bosons</b></td>
-  <td>25</td><td><b>Gluon</b> g</td><td>100.0</td><td>0</td><td>+1</td><td>Color confinement mediator</td></tr>
+  <td>25</td><td><b>Gluon</b> g</td><td>100.0</td><td>0</td><td>+1</td><td>SU(3) color-anticolor (8 octet states), QCD self-coupling</td></tr>
 <tr><td>26</td><td><b>W+</b></td><td>0.00012</td><td>+1</td><td>+1</td><td>Instant decay to lepton + &nu;</td></tr>
 <tr><td>27</td><td><b>W-</b></td><td>0.00012</td><td>-1</td><td>-1</td><td>Instant decay to lepton + &nu;</td></tr>
 <tr><td>28</td><td><b>Z0</b></td><td>0.00011</td><td>0</td><td>0</td><td>Instant decay to e&#8315; + e&#8314;</td></tr>
@@ -731,6 +731,7 @@ massless pairs (~120 frames), e&#8314;e&#8315; (~15 frames), W&#8314;W&#8315; (~
 | Casimir Radius (px) | 5 - 60 | 30 | Detection range for Casimir force |
 | Casimir Strength | 0.0 - 2.0 | 0.5 | Casimir attractive force scaling |
 | Pair Scatter (px) | 1 - 10 | 3.0 | Spawn separation of the two particles |
+| Hide Virtual Trails | on/off | off | Hide virtual particle rendering while keeping physics active |
 
 ---
 
@@ -757,16 +758,38 @@ and 3 string breaks per frame to prevent chain reactions.
 
 ## Gluon Interactions
 
-CPU-side gluon interaction physics complementing the GPU-side Cornell potential. Three interaction
-types enforced per tick:
+Gluons carry SU(3) color-anticolor pairs (8 octet states) and interact through both GPU-side
+QCD forces and CPU-side hadronization processes.
+
+### GPU-Side (Gluon QCD Fast-Path)
+
+Gluons propagate at c with dedicated QCD force computation in the compute shader:
+
+| Property | Detail |
+|---|---|
+| **Color encoding** | `floor(val)` = carried color (1=R, 2=G, 3=B), `fract(val)*10` = anticolor index — 8 SU(3) octet states |
+| **Force scan** | Strided scan of up to 1024 colored neighbors within 60px radius |
+| **Cornell potential** | Running coupling &alpha;_s(r)/r&sup2; + linear confinement (&sigma;) |
+| **Casimir enhancement** | Gluon-gluon pairs receive &times;2.25 force enhancement (C_A/C_F ratio) |
+| **Trilinear vertex** | Gluon-gluon attraction when anticolor of one matches color of other (&minus;1.5) |
+| **Quark coupling** | Absorption vertex (&minus;1.2) when gluon anticolor matches quark color; emission vertex (&minus;0.8) when gluon color matches |
+| **Effective mass** | E/c&sup2; relativistic inertia — high-energy gluons resist deflection (asymptotic freedom) |
+| **Momentum** | p = (E/c) &middot; v&#770;, deflected by QCD forces, speed enforced at c |
+
+### CPU-Side (Hadronization Phase 5)
 
 | Interaction | Description | Condition |
 |---|---|---|
-| **Quark absorption** | Gluon absorbed by nearby quark — 50% energy transfer + 30% momentum kick | Gluon within 12px of quark |
-| **Self-coupling** (g+g -> g) | Two gluons merge into one — non-abelian trilinear vertex | Two gluons within 12px |
-| **Confinement splitting** (g -> q+q-bar) | Isolated gluon splits into light quark-antiquark pair | Gluon with energy >= 0.2, no nearby colored particle within 40px |
+| **Color-aware absorption** | Gluon absorbed by quark only if anticolor matches quark color — quark's color rotates to gluon's carried color | Gluon within 12px of quark with matching color vertex |
+| **Color-conserving merge** (g+g &rarr; g) | g(a,b&#773;) + g(b,c&#773;) &rarr; g(a,c&#773;) — SU(3) trilinear vertex | Two gluons within 12px with compatible colors |
+| **Confinement splitting** (g &rarr; q+q&#773;) | Quark gets carried color, antiquark gets anticolor | Gluon with energy &ge; 0.2, no nearby colored particle within 40px |
 
 Max 6 gluon events per frame. The killed gluon's energy is transferred to the products.
+
+### Rendering
+
+Gluons render as small (0.3x radius) green-tinted radial glows with an RGB accent derived from
+their carried color charge.
 
 ---
 
@@ -1192,17 +1215,19 @@ EmergentEvolution/
 ├── src/physics/
 │   ├── phys_particles.h/.cpp    # 33 particle types, masses, charges, decay rates, isotope table, environments
 │   ├── interface.h/.cpp         # ImGui: animated splash screen, spawn picker, molecule spawn UI, force multipliers, element cards, molecule cards, bond overlay, tools, event log, achievements
-│   ├── simulation.h/.cpp        # Main loop: fusion, fission, decay, orbitals, covalent bonds, molecule detection, molecule spawn, entanglement, photoelectric, spallation, hadronization, spatial grid
+│   ├── simulation.h/.cpp        # Main loop: fusion, fission, decay, orbitals, covalent bonds, molecule detection, molecule spawn, entanglement, photoelectric, spallation, hadronization, gluon interactions, spatial grid
 │   ├── molecules.h              # ~50 molecule templates with 2D geometry, formula parser, database lookup
-│   ├── achievements.h/.cpp      # 36 achievements across 5 categories with persistence
+│   ├── achievements.h/.cpp      # 52 achievements across 5 categories with persistence
+│   ├── audio.h                  # Background music playback via miniaudio (MP3 looping)
 │   ├── save_load.h/.cpp         # Binary .ppsg/.ppel save/load/export/import serialization
 │   └── main.cpp                 # Entry point (borderless maximized, window icon from assets/)
 ├── assets/
 │   ├── banner.html              # Animated splash screen reference (HTML5 canvas)
+│   ├── sound.mp3                # Background music (looped via miniaudio)
 │   ├── icon_32/64/128/256/512.png  # Window icons (multiple sizes)
 │   └── particle_playground.ico  # Windows ICO format
 ├── shaders/
-│   ├── physics.comp             # GPU: 7 forces, covalent bond springs, centrifugal barrier, hard-sphere, mirror reflection, bond line rendering, 5 field viz, wave packet rendering
+│   ├── physics.comp             # GPU: 7 forces, gluon QCD fast-path, covalent bond springs, centrifugal barrier, hard-sphere, mirror reflection, bond line rendering, 5 field viz, wave packet rendering
 │   ├── fullscreen.vert          # Fullscreen triangle vertex shader
 │   └── fullscreen.frag          # Particle texture blit
 └── CMakeLists.txt
@@ -1248,7 +1273,7 @@ A/B buffers ping-pong each tick. All buffers are HOST_VISIBLE + HOST_COHERENT fo
 | 72-75 | gravity_strength | Gravity multiplier |
 | 76-79 | lorentz_strength | Effective magnetic field |
 | 80-83 | vacuum_energy | ZPE floor |
-| 84-87 | field_flags | Field visualization bitmask (bits 0-4: field types, bit 5: wave mode) |
+| 84-87 | field_flags | Field visualization bitmask (bits 0-4: field types, bit 5: wave mode, bit 6: collision radii, bit 7: hide virtual trails) |
 | 88-91 | weak_coupling | Weak force strength |
 | 92-95 | string_tension | QCD confinement |
 | 96-99 | higgs_vev | Higgs VEV |
