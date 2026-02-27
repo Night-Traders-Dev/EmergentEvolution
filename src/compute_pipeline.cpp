@@ -763,8 +763,10 @@ void ComputePipeline::record(VkCommandBuffer cmd,
 
     // ── Step 2: quantum field visualization (optional) ─────────────────────────
     // field_flags bitfield: bit0=EM, 1=strong, 2=weak, 3=gravity, 4=Higgs
+    // Bits 5+ (wave_mode, collision_radii, etc.) don't need field rendering
     // Also support legacy density_limit mode for chemistry sim
-    if (pc.field_flags != 0u || (pc.density_limit >= 0.5f && pc.density_limit <= 3.5f)) {
+    uint32_t field_vis_bits = pc.field_flags & 0x1Fu;  // only bits 0-4
+    if (field_vis_bits != 0u || (pc.density_limit >= 0.5f && pc.density_limit <= 3.5f)) {
         pc.step = 2;
         dispatch(cmd, active_set, pc, particle_count);
 

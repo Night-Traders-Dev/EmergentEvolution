@@ -132,6 +132,10 @@ int main() {
             if (frame_time < target) {
                 std::this_thread::sleep_for(std::chrono::duration<double>(target - frame_time));
             }
+        } else if (!sim.is_active) {
+            // When paused with no FPS cap, yield to avoid busy-spinning
+            // (prevents CPU saturation and compositor contention on Linux)
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
     }
 

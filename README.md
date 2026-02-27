@@ -8,7 +8,7 @@ Standard Model + Beyond + 34 Hypothetical Particles · Nuclear fusion & fission 
 
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
 [![Vulkan](https://img.shields.io/badge/Vulkan-1.3-red.svg)](https://www.vulkan.org/)
-[![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)]()
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey.svg)]()
 [![License](https://img.shields.io/badge/license-NTD--2026-green.svg)]()
 
 </div>
@@ -1213,6 +1213,27 @@ Compiled SPIR-V shaders are written to both `build/shaders/` and `shaders/` (sou
 ```bash
 ./build/particle_physics
 ```
+
+### Windows Cross-Build (from Linux)
+
+A MinGW-w64 cross-compilation script produces a portable Windows `.exe` with embedded shaders
+and icons (`PORTABLE_BUILD`). No MSVC or Windows SDK required.
+
+```bash
+# Prerequisites
+sudo apt install mingw-w64 g++-mingw-w64-x86-64
+source ~/vulkan/1.4.341.1/setup-env.sh
+
+# Build
+./cross-build-windows.sh
+
+# Build + create distributable zip (exe + assets)
+./cross-build-windows.sh package
+```
+
+The portable exe bundles all SPIR-V shaders and window icons. Users only need Vulkan GPU drivers
+installed (`vulkan-1.dll` ships with NVIDIA/AMD/Intel drivers). Place `assets/sound.mp3` next to
+the exe for background music.
 
 ---
 

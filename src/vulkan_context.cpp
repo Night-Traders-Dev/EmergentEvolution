@@ -526,8 +526,8 @@ void VulkanContext::end_single_command(VkCommandBuffer cmd) {
     submit.commandBufferCount = 1;
     submit.pCommandBuffers    = &cmd;
 
-    vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE);
-    vkQueueWaitIdle(queue);
+    VK_CHECK(vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE));
+    VK_CHECK(vkQueueWaitIdle(queue));
 
     vkFreeCommandBuffers(device, cmd_pool, 1, &cmd);
 }

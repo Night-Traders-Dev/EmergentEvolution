@@ -6131,11 +6131,17 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     handle_input(window, dt);
     frame_counter_++;
 
-    // Apply thread count from settings
+    // Apply thread count from settings (only when changed to avoid runtime overhead)
 #ifdef HAS_OPENMP
-    int sys_max = omp_get_max_threads();
-    int threads = (iface.prefs.max_threads <= 0) ? sys_max : std::clamp(iface.prefs.max_threads, 1, sys_max);
-    omp_set_num_threads(threads);
+    {
+        static int last_threads = -1;
+        int sys_max = omp_get_max_threads();
+        int threads = (iface.prefs.max_threads <= 0) ? sys_max : std::clamp(iface.prefs.max_threads, 1, sys_max);
+        if (threads != last_threads) {
+            omp_set_num_threads(threads);
+            last_threads = threads;
+        }
+    }
 #endif
 
     // ── Temperature kelvin → noise amplitude (Berendsen thermostat) ─────────
@@ -6188,10 +6194,11 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         vk.end_single_command(compute_cmd);
     }
 
-    // Hover detection
+    // Hover detection (skip when fullscreen UI overlays are active)
     {
         iface.hover_particle_idx = -1;
-        if (!readback_positions_.empty() && !ImGui::GetIO().WantCaptureMouse) {
+        if (!readback_positions_.empty() && !ImGui::GetIO().WantCaptureMouse
+            && !iface.show_pause_menu && !iface.show_splash && !iface.show_settings_menu) {
             double mx, my;
             glfwGetCursorPos(window, &mx, &my);
             int win_w, win_h;

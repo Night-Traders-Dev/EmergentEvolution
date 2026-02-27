@@ -1321,6 +1321,7 @@ void render_wave_packet(uint i) {
     // Visual scaling: heavier/faster → shorter wavelength, lighter/slower → longer
     float momentum = mass * max(speed, 0.5);
     float lambda   = clamp(60.0 / momentum, 3.0, 50.0) * params.camera_zoom;
+    lambda = min(lambda, 60.0);  // Cap screen-space wavelength to prevent GPU timeout
 
     // Wave packet parameters
     float packet_half  = lambda * 2.0;           // ±2λ extent along velocity
@@ -1343,10 +1344,10 @@ void render_wave_packet(uint i) {
     vec2 screen_center = params.region_size * 0.5;
     vec2 center = screen_center + (pos - params.camera_origin) * params.camera_zoom;
 
-    // Bounding box (elongated along velocity)
+    // Bounding box (elongated along velocity), capped for GPU safety
     int range_long  = int(ceil(packet_half));
     int range_trans = int(ceil(sigma_trans * 3.0));
-    int range       = max(range_long, range_trans);
+    int range       = min(max(range_long, range_trans), 128);
 
     // Cull offscreen
     if (center.x + range < 0.0 || center.x - range > params.region_size.x) return;
