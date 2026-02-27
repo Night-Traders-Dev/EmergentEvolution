@@ -459,6 +459,7 @@ private:
     };
     std::vector<ThumbnailEntry> thumbnail_entries_;
     bool thumbnails_dirty_ = true;
+    bool pending_free_thumbnails_ = false;  // deferred cleanup (safe across ImGui frames)
 
     VulkanContext* vk_ctx_ = nullptr;    // set by simulation during init
     VkSampler thumb_sampler_ = VK_NULL_HANDLE;

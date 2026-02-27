@@ -783,6 +783,13 @@ static bool spawn_button(int type_idx, const char* label, ImVec4 color,
 // ══════════════════════════════════════════════════════════════════════════════
 
 void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceObject* force_objects, bool& request_reset) {
+    // Deferred thumbnail cleanup — must happen before any ImGui::Image() calls
+    // to avoid destroying descriptor sets referenced by the current frame's draw list
+    if (pending_free_thumbnails_) {
+        free_thumbnails();
+        pending_free_thumbnails_ = false;
+    }
+
     // Ctrl+S / Ctrl+L hotkeys
     if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) {
         show_save_dialog = true;
@@ -6509,7 +6516,7 @@ void PhysicsInterface::draw_save_load_dialog() {
                                 snprintf(save_filename, sizeof(save_filename), "%s", te.filepath.c_str());
                                 request_load = true;
                                 show_load_dialog = false;
-                                free_thumbnails();
+                                pending_free_thumbnails_ = true;
                             }
                         }
 
@@ -6625,7 +6632,7 @@ void PhysicsInterface::draw_save_load_dialog() {
                 request_save = true;
                 show_save_dialog = false;
                 browse_needs_refresh = true;
-                free_thumbnails();
+                pending_free_thumbnails_ = true;
             }
         } else if (show_molecule_import_dialog) {
             bool can_import = (browse_selected_idx >= 0 &&
@@ -6676,7 +6683,7 @@ void PhysicsInterface::draw_save_load_dialog() {
                 request_load = true;
                 show_load_dialog = false;
                 browse_needs_refresh = true;
-                free_thumbnails();
+                pending_free_thumbnails_ = true;
             }
             if (!can_load) ImGui::EndDisabled();
         }
@@ -6686,7 +6693,7 @@ void PhysicsInterface::draw_save_load_dialog() {
             show_load_dialog = false;
             show_import_dialog = false;
             show_molecule_import_dialog = false;
-            free_thumbnails();
+            pending_free_thumbnails_ = true;
         }
 
         // Escape to close
@@ -6695,7 +6702,7 @@ void PhysicsInterface::draw_save_load_dialog() {
             show_load_dialog = false;
             show_import_dialog = false;
             show_molecule_import_dialog = false;
-            free_thumbnails();
+            pending_free_thumbnails_ = true;
         }
     }
 
@@ -6704,7 +6711,7 @@ void PhysicsInterface::draw_save_load_dialog() {
         show_load_dialog = false;
         show_import_dialog = false;
         show_molecule_import_dialog = false;
-        free_thumbnails();
+        pending_free_thumbnails_ = true;
     }
 
     ImGui::End();
