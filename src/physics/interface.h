@@ -78,6 +78,7 @@ struct VisGrid {
     float    energy[VIS_GRID_CELLS] = {};
     float    vel_x[VIS_GRID_CELLS]  = {};
     float    vel_y[VIS_GRID_CELLS]  = {};
+    float    bfield_z[VIS_GRID_CELLS] = {};  // magnetic field Bz at cell center
     uint32_t count[VIS_GRID_CELLS]  = {};
 };
 
@@ -216,6 +217,9 @@ public:
 
     bool  show_atom_grid       = false;
     float atom_grid_opacity    = 0.25f;
+
+    bool  show_magnetic_field  = false;
+    float magnetic_field_opacity = 0.35f;
 
     // ── Visualization Data (populated by simulation each tick) ───────────────
     VisGrid vis_grid;
@@ -411,6 +415,7 @@ private:
     void draw_measurement_overlays(const SimConfig& cfg);
     void draw_energy_heatmap(const SimConfig& cfg);
     void draw_velocity_field(const SimConfig& cfg);
+    void draw_magnetic_field(const SimConfig& cfg);
     void draw_trajectory_traces(const SimConfig& cfg);
     void draw_force_vectors_overlay(const SimConfig& cfg);
     void draw_atom_grid(const SimConfig& cfg);

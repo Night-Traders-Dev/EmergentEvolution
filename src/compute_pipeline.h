@@ -96,8 +96,15 @@ private:
     // Force objects (binding 17, readonly, CPU-managed, not double-buffered)
     Buffer force_obj_buffer_{};
 
+    // Per-type mass inverse + ZPE lookup (binding 18, readonly, static per reset)
+    // Layout: [type*2+0] = mass_inv, [type*2+1] = zpe
+    Buffer mass_zpe_buffer_{};
+
     // Actual particle count the buffers were allocated for (safe dispatch cap)
     uint32_t live_particle_count_ = 0;
+
+    // Reusable scratch buffer for scaled forces (avoids 18.5KB stack alloc per frame)
+    std::vector<float> effective_forces_;
 
     // Descriptor sets: set_a uses (a→in, b→out), set_b uses (b→in, a→out)
     VkDescriptorSet desc_set_a_ = VK_NULL_HANDLE;

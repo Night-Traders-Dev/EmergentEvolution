@@ -4,7 +4,7 @@
 
 **A GPU-accelerated quantum particle physics sandbox**
 
-Standard Model + Beyond + 34 Hypothetical Particles · Nuclear fusion & fission · Covalent Bonds & Molecules · Molecule Spawn by Formula · Hadronization & Color Confinement · Gluon Interactions · Photon-matter interactions · Orbital mechanics · Emergent thermodynamics · Quantum entanglement · Wave-particle duality · Achievements · Tools · Save/Load
+Standard Model + Beyond + 34 Hypothetical Particles · Nuclear fusion & fission · Covalent Bonds & Molecules · Molecule Spawn by Formula · Hadronization & Color Confinement · Gluon Interactions · Photon-matter interactions · Orbital mechanics · Emergent thermodynamics · Vacuum fluctuations & Casimir effect · Quantum entanglement · Wave-particle duality · Magnetic field visualization · Achievements · Tools · Save/Load
 
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
 [![Vulkan](https://img.shields.io/badge/Vulkan-1.3-red.svg)](https://www.vulkan.org/)
@@ -24,11 +24,13 @@ hard-sphere collisions, covalent bonds with spring forces and molecular detectio
 formulas, molecule detail cards), molecule spawn by formula (type "H2O" or "CH4" and click to
 place complete molecules with correct geometry — bonds auto-form), hadronization & color confinement (meson formation, baryon
 condensation, vacuum instability, string breaking), gluon interactions (quark absorption,
-self-coupling, confinement splitting), emergent thermodynamics, virtual particle pair creation,
-quantum entanglement, antimatter element detection, electron cloud visualization, a persistent
-event log, an achievement system, measurement tools (thermometer, velocity meter, ruler with
-nanometer scale, density counter), visualization overlays (energy heatmap, velocity field,
-trajectory tracer, force vectors, atom grid, wave-particle duality mode), interactive tools
+self-coupling, confinement splitting), emergent thermodynamics, quantum vacuum fluctuations
+with emergent Casimir effect, quantum entanglement, intrinsic magnetic moments (nucleon
+anomalous moments, Dirac g=2 leptons) with real-time B-field visualization, antimatter element
+detection, electron cloud visualization, a persistent event log, an achievement system,
+measurement tools (thermometer, velocity meter, ruler with nanometer scale, density counter),
+visualization overlays (energy heatmap, velocity field, magnetic field, trajectory tracer,
+force vectors, atom grid, wave-particle duality mode), interactive tools
 (particle accelerator, mirrors), 12 UI themes, 13 environment presets, element export/import, six
 per-force multiplier knobs, relativistic energy readouts in electronvolts (PDG rest masses,
 E = γm₀c²), a browsable particle list and element list with live molecular formula grouping
@@ -56,8 +58,9 @@ O(n) neighbor queries with **OpenMP** parallelization across all available cores
 - [Element Detection & Info Cards](#element-detection--info-cards)
 - [Particle List, Element List & Event Log](#particle-list-element-list--event-log)
 - [Electron Cloud Visualization](#electron-cloud-visualization)
+- [Magnetic Field Visualization](#magnetic-field-visualization)
 - [Hard-Sphere Collisions](#hard-sphere-collisions)
-- [Virtual Particle Pairs](#virtual-particle-pairs)
+- [Virtual Particle Pairs & Casimir Effect](#virtual-particle-pairs--casimir-effect)
 - [Hadronization & Color Confinement](#hadronization--color-confinement)
 - [Gluon Interactions](#gluon-interactions)
 - [Quantum Entanglement](#quantum-entanglement)
@@ -97,6 +100,9 @@ The Vulkan compute pipeline is dispatched each frame.
 ---
 
 ## Standard Model + Beyond — 67 Particle Types
+
+<details>
+<summary><b>Full particle table</b> (click to expand — 67 types across 14 families)</summary>
 
 <table>
 <thead><tr><th>Family</th><th>#</th><th>Particle</th><th>Mass (inv)</th><th>Charge</th><th>Spin</th><th>Notes</th></tr></thead>
@@ -182,6 +188,8 @@ The Vulkan compute pipeline is dispatched each frame.
 <tr><td>66</td><td><b>Dyn. Axion QP</b></td><td>100.0</td><td>0</td><td>0</td><td>Condensed-matter analog of axion, stable</td></tr>
 </tbody>
 </table>
+
+</details>
 
 ---
 
@@ -308,28 +316,65 @@ covers diatomics through glucose (C₆H₁₂O₆):
 ## Nuclear Fusion
 
 CPU-side fusion reactions trigger when particles have sufficient kinetic energy to overcome the
-Coulomb barrier. Max 5 fusions per frame to prevent chain reactions.
+Coulomb barrier (Gamow tunneling probability). All parameters are exposed in the UI.
 
 | Reaction | Threshold | Products |
 |---|---|---|
-| **Proton-proton chain** (p + p) | Energy > 0.8, relative speed > 60 px/frame | p + n + e&#8314; + &nu;e (one proton converts to neutron) |
-| **Deuteron formation** (p + n) | Energy > 0.6, relative speed > 30 px/frame | Bound p-n pair (matched velocities, 3px separation) |
+| **Proton-proton chain** (p + p) | CM kinetic energy overcomes Coulomb barrier (configurable, default 550 keV) | p + n + e&#8314; + &nu;e (one proton converts to neutron) |
+| **Deuteron formation** (p + n) | Min CM KE (default 1.0 keV), no Coulomb barrier | Bound p-n pair (matched velocities, configurable separation) |
 | **He-4 formation** | Implicit | Two bound p-n pairs form helium-4 nucleus |
+
+**Configurable parameters** (Nuclear Reactions panel > Fusion):
+
+| Parameter | Default | Effect |
+|---|---|---|
+| Coulomb Barrier (keV) | 550 | Gamow peak barrier energy |
+| Radius (px) | 8 | Collision distance for fusion check |
+| Max/frame | 5 | Maximum fusion events per tick |
+| Min Energy | 0.1 | Minimum particle energy to participate |
+| p+n Min KE (keV) | 1.0 | Minimum CM kinetic energy for p+n capture |
+| Binding Energy (MeV) | 2.22 | Deuteron binding Q-value |
+| Leptonic Q (MeV) | 0.42 | p+p chain e&#8314; + &nu; energy release |
+| Product Separation (px) | 3.0 | Nucleon pair separation distance |
 
 ---
 
 ## Nuclear Fission
 
-Fast neutrons striking heavy nuclei trigger fission. Max 2 fissions per frame.
+Fast neutrons striking heavy nuclei trigger fission. The **Bohr-Wheeler fissility parameter**
+(Z&sup2;/A) gates which nuclei can fission — only heavy nuclei are unstable against fission,
+matching real physics. All parameters are exposed in the UI.
 
 | Condition | Detail |
 |---|---|
-| **Trigger** | Neutron with energy > 0.6 and speed > 50 px/frame |
-| **Target** | Cluster of 6+ nucleons within 12px |
-| **Products** | Cluster splits in half (80 px/s separation impulse) + 2-3 free neutrons spawned at 0.7 energy |
+| **Trigger** | Neutron with KE above fission barrier (default 5.0 MeV) |
+| **Fissility gate** | Nucleus Z&sup2;/A must exceed threshold (default 35.0) — prevents light elements from fissioning |
+| **Target** | Cluster of nucleons (default 20+ within 12px) with minimum protons (default 8) for Coulomb instability |
+| **Products** | Cluster splits in half with energy kick + free neutrons spawned (chain reaction fuel) |
+
+**Fissility examples**: U-235 (Z&sup2;/A = 36.0) fissions; Carbon-12 (Z&sup2;/A = 3.0),
+Oxygen-16 (Z&sup2;/A = 4.0), and Iron-56 (Z&sup2;/A = 12.1) do not. This prevents molecules
+like glucose from undergoing runaway fission.
 
 Emitted neutrons can trigger further fissions, producing visible chain reactions in sufficiently
 dense nuclear matter.
+
+**Configurable parameters** (Nuclear Reactions panel > Fission):
+
+| Parameter | Default | Effect |
+|---|---|---|
+| Neutron Threshold | 0.6 | Minimum neutron energy to trigger |
+| Min Cluster Size | 20 | Minimum nucleons in target nucleus |
+| Max/frame | 2 | Maximum fission events per tick |
+| Cluster Radius (px) | 12.0 | Search radius for nucleons |
+| Barrier (MeV) | 5.0 | Minimum neutron KE for fission |
+| Min Protons | 8 | Minimum protons for Coulomb instability |
+| Fissility (Z&sup2;/A) | 35.0 | Bohr-Wheeler threshold — only nuclei above this value can fission |
+| Energy/Nucleon (MeV) | 1.0 | MeV released per nucleon in fragments |
+| Fragment Energy (MeV) | 1.0 | Energy boost per fragment |
+| Free Neutrons Min/Max | 2 / 3 | Chain-reaction neutrons spawned |
+| Neutron KE (MeV) | 2.0 | KE of ejected chain-reaction neutrons |
+| Spawn Radius (px) | 5.0 | Neutron spawn distance from cluster center |
 
 ---
 
@@ -337,6 +382,9 @@ dense nuclear matter.
 
 A decay engine runs CPU-side each frame. Particles that drop below 0.08 energy undergo
 probabilistic decay based on per-type decay rates.
+
+<details>
+<summary><b>Decay channels</b> (click to expand)</summary>
 
 | Parent | Decay Rate | Products |
 |---|---|---|
@@ -349,6 +397,8 @@ probabilistic decay based on per-type decay rates.
 | **Bottom** b | 0.10 | Charm + W- |
 | **Strange** s | 0.02 | Up + W- |
 | **Muon** &mu; | 0.01 | e&#8315; + &nu;&mu; + &nu;e |
+
+</details>
 
 **Matter-antimatter annihilation** runs every frame at 5px contact radius:
 e&#8315;+e&#8314;, p+p&#773;, &mu;&#8315;+&mu;&#8314;, &tau;&#8315;+&tau;&#8314;, and quark-antiquark pairs all
@@ -363,6 +413,9 @@ producing showers of lighter particles from a single heavy parent.
 
 A nuclear isotope decay system identifies nuclei dynamically via BFS clustering of
 protons and neutrons, then applies realistic half-life decay based on (Z, N) composition.
+
+<details>
+<summary><b>Decay modes &amp; isotope table</b> (click to expand)</summary>
 
 ### Decay Modes
 
@@ -399,6 +452,8 @@ Full table includes ~50 isotopes. Nuclei not in the explicit table fall through 
 
 Decay probability per frame: P = 1 &minus; exp(&minus;ln(2) / t&frac12;)
 
+</details>
+
 ---
 
 ## Photon-Matter Interactions
@@ -406,21 +461,24 @@ Decay probability per frame: P = 1 &minus; exp(&minus;ln(2) / t&frac12;)
 High-energy photons interact with matter through multiple CPU-side physics channels, in addition
 to GPU-side Compton radiation pressure. Max 8 interactions per frame.
 
+<details>
+<summary><b>Interaction channels</b> (click to expand)</summary>
+
 ### GPU-Side (Compton Scattering)
 
 - Scans nearby charged particles (strided sampling, 30px radius)
 - Photon deflects toward closest charged particle, losing energy proportional to proximity
 - Radiation pressure pushes charged matter along photon travel direction
 - Photon's oscillating B-field exerts Lorentz force: `F = q * Bz * (vy, -vx)`
-- Both scale with photon energy / r^2
+- Both scale with photon energy / r&sup2;
 
 ### CPU-Side Processes
 
 | Process | Threshold | Effect |
 |---|---|---|
-| **Photoelectric Effect** | E&gamma; &ge; 1.5 &times; binding energy | Photon fully absorbed, electron ionized (ejected from orbit) |
+| **Photoelectric Effect** | E&gamma; &ge; 1.5 &times; binding energy | Photon fully absorbed, electron ionized |
 | **Compton Scattering** (bound) | E&gamma; &ge; 0.6 &times; binding energy | 40% energy transfer; electron kicked to higher shell or ionized |
-| **Free Electron Scattering** | E&gamma; &ge; 0.3 | 30% energy transfer, momentum along original photon direction |
+| **Free Electron Scattering** | E&gamma; &ge; 0.3 | 30% energy transfer, momentum along photon direction |
 | **Nuclear Compton** | E&gamma; &ge; 0.25 | Photon scatters off free nucleon; 8% energy transfer + momentum kick |
 
 **Shell-dependent binding energy**: Binding scales with &radic;Z (heavier atoms bind tighter).
@@ -430,12 +488,17 @@ Inner shells (1s) require more energy to ionize than outer shells (3s3p3d).
 promoted to a higher shell by boosting its orbital angular momentum (L) and applying a radial
 kick outward from the nucleus.
 
+</details>
+
 ---
 
 ## Nuclear Spallation & Photonuclear Processes
 
 High-energy particles and photons can shatter or transform nuclei through several distinct
 processes. Max 3 events per frame.
+
+<details>
+<summary><b>Spallation &amp; photonuclear channels</b> (click to expand)</summary>
 
 ### Massive Particle Spallation
 
@@ -454,10 +517,10 @@ probabilistically (higher energy unlocks more channels):
 
 | Process | E&gamma; Threshold | Products | Color |
 |---|---|---|---|
-| **Photodisintegration** | &ge; 0.50 | &gamma; + A &rarr; (A&minus;1) + nucleon (giant dipole resonance); ejects 1&ndash;2 nucleons | Purple |
-| **Pair Production** | &ge; 0.60 | &gamma; &rarr; e&#8314; + e&#8315; in nuclear Coulomb field (15px interaction radius) | Blue |
-| **Photopion Production** | &ge; 0.80 | &gamma; + N &rarr; N' + &pi; via &Delta; resonance; pion as quark-antiquark pair (u+d&#773; or u&#773;+d) | Green |
-| **Vector Meson Dominance** | &ge; 0.85 | &gamma; &rarr; &rho;&#8304; meson &rarr; hadronic shower: multiple nucleon ejections + quark-antiquark debris | Magenta |
+| **Photodisintegration** | &ge; 0.50 | &gamma; + A &rarr; (A&minus;1) + nucleon | Purple |
+| **Pair Production** | &ge; 0.60 | &gamma; &rarr; e&#8314; + e&#8315; near nucleus | Blue |
+| **Photopion Production** | &ge; 0.80 | &gamma; + N &rarr; N' + &pi; via &Delta; resonance | Green |
+| **Vector Meson Dominance** | &ge; 0.85 | &gamma; &rarr; &rho;&#8304; &rarr; hadronic shower | Magenta |
 
 **Pair production** requires a nearby nucleus for momentum conservation. The electron and positron
 open in directions roughly perpendicular to the photon path with a slight forward boost.
@@ -468,6 +531,8 @@ open in directions roughly perpendicular to the photon path with a slight forwar
 **Vector meson dominance** is the highest-energy channel: the photon fluctuates into a virtual
 &rho;&#8304; meson that interacts hadronically, producing a shower of nucleon fragments and
 quark-antiquark debris.
+
+</details>
 
 ---
 
@@ -482,7 +547,9 @@ clouds) are detected and displayed with distinct cyan-tinted UI styling.
 - Shows particle type, charge, spin, mass, age, momentum
 - **Relativistic energy** displayed in electronvolts (eV/keV/MeV/GeV/TeV) computed from
   real PDG rest masses and E = γm₀c² with β = v/c_sim
-- Temperature, magnetic moment
+- Temperature
+- **Intrinsic magnetic moment**: proton ±2.793 μN, neutron ∓1.913 μN (anomalous moments),
+  antiproton ∓2.793 μN (CPT conjugate), charged leptons use Dirac g=2 in Bohr magnetons
 - If the particle belongs to a nucleus: shows element name, composition, and a clickable
   link to the **Element Detail Card**
 - Antimatter elements display as "Anti-Hydrogen", "Anti-Helium", etc. with cyan accent
@@ -491,6 +558,8 @@ clouds) are detected and displayed with distinct cyan-tinted UI styling.
 - Full element name and symbol (all 118 elements + antimatter variants)
 - Composition: Z, N, A, electron count, shell configuration
 - Net charge, total mass, momentum, age
+- **Total magnetic moment** in nuclear magnetons (μN) — sum of proton (2.793×spin),
+  neutron (−1.913×spin), and electron (charge×spin×1836.15) contributions
 - **Total relativistic energy** in eV — sum of γm₀c² for all constituent particles
 - **Stability indicator** with isotope half-life lookup (color-coded)
 - Clickable nucleon/electron particle list for navigation
@@ -503,6 +572,7 @@ clouds) are detected and displayed with distinct cyan-tinted UI styling.
 - **Molecular formula** in Hill system notation (C first, H second, rest alphabetical)
 - Composition: total protons, neutrons, electrons, covalent bond count
 - Net ionic charge, total mass, particle count
+- **Total magnetic moment** in nuclear magnetons (μN)
 - Center-of-mass speed, total momentum, total relativistic energy
 - Age (from oldest constituent particle)
 - **Clickable atom buttons** — each constituent atom opens its Element Detail Card
@@ -545,7 +615,10 @@ timeout and fade-out (max 8 visible).
 
 **Decay / Event Log** — Click the **"Events: N"** counter in the bottom bar to open a
 persistent, scrollable log of all physics events. The log tracks up to **10,000** entries
-across 11 event categories, each stamped with a wall-clock timestamp (`HH:MM:SS`):
+across 11 event categories, each stamped with a wall-clock timestamp (`HH:MM:SS`).
+
+<details>
+<summary><b>Event categories</b> (click to expand)</summary>
 
 | Category | Examples | Color |
 |---|---|---|
@@ -560,6 +633,8 @@ across 11 event categories, each stamped with a wall-clock timestamp (`HH:MM:SS`
 | **Pion Production** | &gamma; + p &rarr; n + &pi;&#8314; | Green |
 | **Vector Meson Dominance** | &rho;&#8304; meson shower | Magenta |
 | **Photodisintegration** | &gamma; ejected nucleon from nucleus | Purple |
+
+</details>
 
 The log window displays a summary bar with per-category counts and supports a **Clear** button
 to reset the log. Events are listed newest-first with wall-clock timestamps and color-coded type
@@ -584,6 +659,32 @@ around all detected nuclei.
 
 ---
 
+## Magnetic Field Visualization
+
+Toggle via **Menu > Visualization > Magnetic Field** to overlay a real-time B-field heatmap
+computed from all particle contributions using Biot-Savart electrodynamics and nucleon
+intrinsic magnetic dipoles.
+
+**Sources of magnetic field**:
+
+| Source | Formula | Notes |
+|---|---|---|
+| **Moving charges** | Biot-Savart: B&lowbar;z = q &middot; (v &times; r&#770;) / (r&sup2; + 1) | All charged particles — electrons, protons, positrons, quarks |
+| **Proton dipole** | B&lowbar;z = 2.793 &middot; spin / (r&sup3; + 1) | Anomalous magnetic moment (nuclear magnetons) |
+| **Neutron dipole** | B&lowbar;z = &minus;1.913 &middot; spin / (r&sup3; + 1) | Non-zero despite zero charge (quark substructure) |
+| **Antiproton dipole** | B&lowbar;z = &minus;2.793 &middot; spin / (r&sup3; + 1) | CPT conjugate of proton |
+
+| Property | Detail |
+|---|---|
+| **Grid** | 32 &times; 18 cells, computed per-frame from all particles within 200px cutoff |
+| **Parallelism** | OpenMP parallelized across grid cells |
+| **Color map** | Diverging: blue/cyan (B < 0) to red/yellow (B > 0) |
+| **Alpha** | Scales with |B&lowbar;z| magnitude — transparent where field is weak |
+| **Legend** | Bottom-left legend shows color mapping |
+| **Opacity** | Adjustable (default 0.35) |
+
+---
+
 ## Hard-Sphere Collisions
 
 Massive particles undergo elastic hard-sphere collisions in addition to force-based physics:
@@ -596,21 +697,40 @@ Massive particles undergo elastic hard-sphere collisions in addition to force-ba
 
 ---
 
-## Virtual Particle Pairs
+## Virtual Particle Pairs & Casimir Effect
 
-QFT vacuum fluctuations modeled as spontaneous particle-antiparticle pair creation:
+Virtual particle-antiparticle pairs spontaneously appear from the quantum vacuum — no source
+particles needed. This is the mechanism responsible for the **Casimir effect**: between
+closely-spaced particles, certain vacuum modes are excluded (fewer virtual pairs fit),
+creating a measurable attractive force.
 
-| Interaction Type | Virtual Pair | Condition |
-|---|---|---|
-| Charged particles | e&#8315; + e&#8314; (Schwinger) | Combined energy > 1.5 |
-| Quark-quark | Gluon + gluon | QCD interaction |
-| Weak bosons present | W+ + W- | Weak sector |
-| Gravity active | Graviton + graviton | Gravity > 0 |
-| Default (charged) | &gamma; + &gamma; | QED vacuum |
+**Vacuum pair types** (weighted random selection — all eligible types compete each spawn):
 
-Virtual particles have high decay rate (genome[3] = 0.08) giving ~15 frame lifetime. They
-render with a flickering translucent effect. Configurable: energy threshold (0.8-5.0),
-max pairs per tick (1-16).
+| Virtual Pair | Weight | Condition | Notes |
+|---|---|---|---|
+| &gamma; + &gamma; (photon pair) | 1.0 | Always (ve > 0) | QED vacuum — most common, massless |
+| Gluon + gluon | 2.0 | Always (ve > 0) | QCD vacuum — &alpha;s&sup2; >> &alpha;&sup2;, massless |
+| Graviton + graviton | 0.15 | Gravity on | Quantum gravity fluctuations |
+| e&#8315; + e&#8314; | 0&ndash;0.4 | ve > 0.3 (ramps) | Schwinger-like, requires 2m&#8341;c&sup2; |
+| W&#8314; + W&#8315; | 0.08 &times; weak | ve > 0.9 | Extremely rare, nearly instant decay |
+
+**Casimir effect**: When a virtual pair spawn point falls near two or more real particles,
+the mode is suppressed (probability scales with local density). Each suppressed spawn applies
+a 1/d&sup3; attractive impulse to nearby particles — the missing radiation pressure IS the
+Casimir force, emerging naturally from virtual pair exclusion.
+
+Virtual particles have short lifetimes governed by Heisenberg uncertainty (&Delta;E&middot;&Delta;t &ge; &hbar;/2):
+massless pairs (~120 frames), e&#8314;e&#8315; (~15 frames), W&#8314;W&#8315; (~2 frames).
+
+**Configurable parameters** (Virtual Particles panel):
+
+| Parameter | Range | Default | Effect |
+|---|---|---|---|
+| Vacuum Energy | 0.0 - 2.0 | 0.5 | Vacuum fluctuation rate — higher = more pairs, 0 = off |
+| Max Pairs/Tick | 1 - 16 | 2 | Maximum virtual pairs spawned per frame |
+| Casimir Radius (px) | 5 - 60 | 30 | Detection range for Casimir force |
+| Casimir Strength | 0.0 - 2.0 | 0.5 | Casimir attractive force scaling |
+| Pair Scatter (px) | 1 - 10 | 3.0 | Spawn separation of the two particles |
 
 ---
 
@@ -717,21 +837,26 @@ Five independent quantum field overlays, each toggled separately.
 
 Thirteen presets spanning vacuum to SUSY sector. Select from the **Environment** dropdown.
 
+<details>
+<summary><b>All 13 environment presets</b> (click to expand)</summary>
+
 | # | Environment | Temperature | Key Features |
 |---|---|---|---|
 | 0 | **Lab Mode** | 1 K | Empty vacuum — manual spawning only, hadronization enabled |
-| 1 | **Hydrogen Plasma** | 1.5 x 10^7 K | Hot ionized hydrogen, fusion conditions |
-| 2 | **Neutron Star** | 10^9 K | Ultra-dense neutron matter |
-| 3 | **Solar Core** | 1.5 x 10^7 K | Hydrogen + gravity — stellar fusion |
-| 4 | **Particle Soup** | 5 x 10^3 K | Mixed light particles at moderate energy |
+| 1 | **Hydrogen Plasma** | 1.5 &times; 10&#8311; K | Hot ionized hydrogen, fusion conditions |
+| 2 | **Neutron Star** | 10&#8313; K | Ultra-dense neutron matter |
+| 3 | **Solar Core** | 1.5 &times; 10&#8311; K | Hydrogen + gravity — stellar fusion |
+| 4 | **Particle Soup** | 5 &times; 10&sup3; K | Mixed light particles at moderate energy |
 | 5 | **Alpha Emitter** | 300 K | Heavy nuclei, room temperature |
 | 6 | **Heavy Nucleus** | 100 K | Cold dense nuclear matter |
-| 7 | **Quark-Gluon Plasma** | 2 x 10^12 K | Deconfined quarks and gluons, hadronization disabled |
-| 8 | **Electroweak Era** | 10^15 K | W/Z/Higgs bosons above symmetry breaking |
-| 9 | **Meson Factory** | 5 x 10^11 K | Quark-antiquark pairs forming mesons |
-| 10 | **Particle Accelerator** | 10^8 K | High-energy protons + synchrotron radiation |
-| 11 | **Dark Sector** | 10^3 K | 40% DM, 30% p, 15% e, 10% DE, 5% gravitons |
-| 12 | **SUSY Sector** | 10^3 K | 30% neutralino, 20% selectron, 15% smuon, 10% squark, 10% gluino, 10% photon, 5% electron |
+| 7 | **Quark-Gluon Plasma** | 2 &times; 10&sup1;&sup2; K | Deconfined quarks and gluons, hadronization disabled |
+| 8 | **Electroweak Era** | 10&sup1;&#8309; K | W/Z/Higgs bosons above symmetry breaking |
+| 9 | **Meson Factory** | 5 &times; 10&sup1;&sup1; K | Quark-antiquark pairs forming mesons |
+| 10 | **Particle Accelerator** | 10&#8312; K | High-energy protons + synchrotron radiation |
+| 11 | **Dark Sector** | 10&sup3; K | 40% DM, 30% p, 15% e, 10% DE, 5% gravitons |
+| 12 | **SUSY Sector** | 10&sup3; K | 30% neutralino, 20% selectron, 15% smuon, 10% squark, 10% gluino, 10% photon, 5% electron |
+
+</details>
 
 ---
 
@@ -739,134 +864,90 @@ Thirteen presets spanning vacuum to SUSY sector. Select from the **Environment**
 
 Press **F3** to open the spawn menu with categorized sections:
 
-### Leptons
-Gen-1: e&#8315;, e&#8314;, &nu;e | Gen-2: &mu;&#8315;, &mu;&#8314;, &nu;&mu; | Gen-3: &tau;&#8315;, &tau;&#8314;, &nu;&tau; | Composites: p, n, p&#773;
+<details>
+<summary><b>Spawn categories</b> (click to expand)</summary>
 
-### Quarks
-Matter: u, d, s, c, t, b | Antimatter: u&#773;, d&#773;, s&#773;, c&#773;, t&#773;, b&#773;
+**Leptons** — Gen-1: e&#8315;, e&#8314;, &nu;e | Gen-2: &mu;&#8315;, &mu;&#8314;, &nu;&mu; | Gen-3: &tau;&#8315;, &tau;&#8314;, &nu;&tau; | Composites: p, n, p&#773;
 
-### Bosons
-Gauge: &gamma; (photon), g (gluon) | Weak: W+, W-, Z0 | Scalar: H0 (Higgs)
+**Quarks** — Matter: u, d, s, c, t, b | Antimatter: u&#773;, d&#773;, s&#773;, c&#773;, t&#773;, b&#773;
 
-### Hypothetical
-G (Graviton), DM (Dark Matter), DE (Dark Energy)
+**Bosons** — Gauge: &gamma; (photon), g (gluon) | Weak: W+, W-, Z0 | Scalar: H0 (Higgs)
 
-**Dark Matter Candidates**: Axino, WIMPzilla, SIMP, Sterile Neutrino, Dark Photon, Q-Ball
+**Hypothetical** — G (Graviton), DM (Dark Matter), DE (Dark Energy)
+- Dark Matter Candidates: Axino, WIMPzilla, SIMP, Sterile Neutrino, Dark Photon, Q-Ball
+- SUSY Sparticles: Selectron, Smuon, Stau, Squark, Gluino, Photino, Wino, Zino, Higgsino, Neutralino, Sneutrino
+- Force Carriers: Gravitino, X Boson, Y Boson, Magnetic Monopole, Radion, Dilaton
+- Theoretical Extremes: Tachyon, Preon, Inflaton, Majoron, Odderon, Glueball, Skyrmion, X17, Chameleon
+- New Class: Paraparticle, Dynamical Axion QP
 
-**SUSY Sparticles**: Selectron, Smuon, Stau, Squark, Gluino, Photino, Wino, Zino, Higgsino, Neutralino, Sneutrino
+**Atoms** — 12 composite templates with correct proton/neutron/electron counts and orbital velocities:
 
-**Force Carriers & Gravity**: Gravitino, X Boson, Y Boson, Magnetic Monopole, Radion, Dilaton
-
-**Theoretical Extremes**: Tachyon, Preon, Inflaton, Majoron, Odderon, Glueball, Skyrmion, X17, Chameleon
-
-**New Class**: Paraparticle, Dynamical Axion QP
-
-### Atoms (Group Templates)
-
-12 composite templates that spawn complete atomic structures with correct proton/neutron/electron
-counts and orbital velocities:
-
-| Template | Composition | Particles |
+| Template | Composition | # |
 |---|---|---|
-| **Hydrogen** H | 1p + 1e | 2 |
-| **Deuterium** D | 1p + 1n + 1e | 3 |
-| **Helium-4** He | 2p + 2n + 2e | 6 |
-| **Lithium-7** Li | 3p + 4n + 3e | 10 |
-| **Carbon-12** C | 6p + 6n + 6e | 18 |
-| **Oxygen-16** O | 8p + 8n + 8e | 24 |
-| **Positronium** | e&#8315; + e&#8314; | 2 |
-| **Anti-Hydrogen** | p&#773; + e&#8314; | 2 |
-| **Anti-Helium-4** | 2p&#773; + 2n + 2e&#8314; | 6 |
-| **Pion+** &pi;+ | u + d&#773; | 2 |
-| **Pion-** &pi;- | d + u&#773; | 2 |
-| **Kaon+** K+ | u + s&#773; | 2 |
+| Hydrogen H | 1p + 1e | 2 |
+| Deuterium D | 1p + 1n + 1e | 3 |
+| Helium-4 He | 2p + 2n + 2e | 6 |
+| Lithium-7 Li | 3p + 4n + 3e | 10 |
+| Carbon-12 C | 6p + 6n + 6e | 18 |
+| Oxygen-16 O | 8p + 8n + 8e | 24 |
+| Positronium | e&#8315; + e&#8314; | 2 |
+| Anti-Hydrogen | p&#773; + e&#8314; | 2 |
+| Anti-Helium-4 | 2p&#773; + 2n + 2e&#8314; | 6 |
+| Pion+ &pi;+ | u + d&#773; | 2 |
+| Pion- &pi;- | d + u&#773; | 2 |
+| Kaon+ K+ | u + s&#773; | 2 |
 
-### Molecules
+**Molecules** — Type a molecular formula to spawn complete molecules with correct 2D geometry.
+~50 templates from H₂ through C₆H₁₂O₆ (glucose). Quick-access buttons: H₂O, CO₂, NH₃, CH₄,
+NaCl, EtOH, C₆H₆, Glucose.
 
-Type a molecular formula to spawn a complete molecule with correct 2D geometry. A database of
-~50 templates covers common molecules from H₂ through C₆H₁₂O₆ (glucose). Live autocomplete
-matches by formula prefix and name substring. Quick-access buttons provide one-click spawn for
-H₂O, CO₂, NH₃, CH₄, NaCl, EtOH, C₆H₆, and Glucose. Atoms are placed at bond-rest-length
-spacing (22px) and auto-bond within a few frames.
+**Periodic Table** — 26 elements (H through Fe) as complete atoms with hexagonal close-packed
+nuclei and Bohr-model electron shells.
 
-### Periodic Table
-
-26 elements (H through Fe) can be spawned as complete atoms with hexagonal close-packed nuclei
-and Bohr-model electron shells. Select an element, then click in the world to place.
+</details>
 
 Each section has configurable count (1-100), energy (0.1-1.0), and scatter radius (1-100px).
 The **energy slider** directly affects spawn velocity: electron orbital speeds and single
-particle thermal velocities scale as √E, so low-energy spawns produce visibly slower particles.
+particle thermal velocities scale as &radic;E, so low-energy spawns produce visibly slower particles.
 
 ---
 
 ## Measurement Tools
 
-Four measurement instruments accessible from **Menu > Measurement**. Each is a click-to-place
-tool; only one placement mode can be active at a time. Placed instruments persist until removed
-and update in real time. A right-side **Measurements** panel shows readings and controls for all
-placed instruments.
+Four measurement instruments accessible from **Menu > Measurement**: thermometer probe,
+velocity meter, distance ruler, and density counter. Each is click-to-place with real-time
+readings in a right-side panel.
+
+<details>
+<summary><b>Instrument details</b> (click to expand)</summary>
 
 ### Thermometer Probe
-
-Click to place a local temperature probe. Shows average kinetic energy of particles within an
-adjustable radius, displayed as Kelvin alongside the particle count.
-
-| Property | Detail |
-|---|---|
-| **Placement** | Single click to place (max 8 probes) |
-| **Display** | Orange circle overlay + "T: NNN K (count)" label |
-| **Radius** | Adjustable 20-300 px via Measurements panel slider |
-| **Computation** | `T = avg(0.5 * |v|^2) * 0.1` for particles within radius |
+Click to place a local temperature probe (max 8). Shows average KE of particles within
+adjustable radius (20-300px), displayed as Kelvin.
 
 ### Velocity Meter
-
-Click a particle to track its velocity in real time. Shows a directional arrow, speed value,
-and kinetic energy. Automatically removed when the tracked particle dies.
-
-| Property | Detail |
-|---|---|
-| **Placement** | Click on a particle to attach |
-| **Display** | Green arrow from particle + "v=NNN KE=N.NNN" label |
-| **Tracking** | Follows particle position each frame; auto-removes on death |
+Click a particle to track its velocity in real time. Shows directional arrow, speed, and
+kinetic energy. Auto-removes when the tracked particle dies.
 
 ### Distance Ruler
-
-Two-click placement: set start point, then end point. Displays distance in real-world
-nanometer scale as a labeled line with tick marks at each endpoint.
-
-| Property | Detail |
-|---|---|
-| **Placement** | Two clicks to define endpoints |
-| **Display** | Yellow line with perpendicular tick marks + distance label in nanometers |
-| **Measurement** | Euclidean distance converted to nanometers (1 Bohr radius = 0.0529 nm) |
-| **Units** | Smart formatting: picometers for < 0.01 nm, 3 decimals for < 1 nm, 2 decimals for larger |
+Two-click placement: set start and end points. Displays distance in nanometers
+(1 Bohr radius = 0.0529 nm) with smart unit formatting.
 
 ### Density Counter
-
-Click to place a circular counting region. Shows the number of active particles within the
-radius and the area density (count / pi*r^2).
-
-| Property | Detail |
-|---|---|
-| **Placement** | Single click to place (max 8 counters) |
-| **Display** | Purple dashed circle + "n=NNN rho=N.NNNN" label |
-| **Radius** | Adjustable 20-300 px via Measurements panel slider |
-| **Computation** | Count active particles within radius; density = count / (pi * r^2) |
+Click to place a circular counting region (max 8). Shows particle count and area density
+(count / &pi;r&sup2;) within adjustable radius (20-300px).
 
 ### Measurements Panel
+When instruments are placed, a right-side panel shows per-instrument readings, radius
+sliders, individual remove buttons, and a **Clear All** button.
 
-When any measurement instruments are placed, a right-side panel appears showing:
-- Per-instrument readings with color-coded headers
-- Radius sliders for thermometer probes and density counters
-- Individual remove buttons (X) for each instrument
-- **Clear All** button to remove everything
+</details>
 
 ---
 
 ## Visualization Tools
 
-Eight visualization overlays accessible from **Menu > Visualization**. Toggle each independently
+Nine visualization overlays accessible from **Menu > Visualization**. Toggle each independently
 via checkbox menu items. Overlays render on the foreground draw list above particles but below
 UI windows.
 
@@ -874,6 +955,7 @@ UI windows.
 |---|---|
 | **Show Trails** | GPU-side particle path fade effect |
 | **Electron Cloud** | Bohr-model orbital shell rings around nuclei (see [Electron Cloud](#electron-cloud-visualization)) |
+| **Magnetic Field** | Real-time B-field heatmap from Biot-Savart + nucleon dipoles (see [Magnetic Field](#magnetic-field-visualization)) |
 | **Wave Mode** | Renders all particles as de Broglie wave packets instead of point particles. Wavelength inversely proportional to momentum (lambda = h/p). Gaussian-enveloped oscillating waves with time-animated phase, additive blending |
 | **Atom Grid** | Overlay grid where each cell equals one hydrogen atom diameter (2 x Bohr radius = 0.106 nm). Camera-aware with auto-hide when cells < 4px. Every 10th line highlighted. Scale label at bottom-left |
 | **Trajectory Tracer** | Records last 120 positions per particle, draws fading polylines. Useful for tracking individual particle paths through interactions |
@@ -885,64 +967,34 @@ UI windows.
 
 ## Tools
 
-Interactive tools accessible from **Menu > Tools** in the top menu bar. Only one placement tool
-can be active at a time; activating a tool disables select mode and spawn mode.
+Interactive tools accessible from **Menu > Tools**. Only one placement tool active at a time.
+
+<details>
+<summary><b>Tool details</b> (click to expand)</summary>
 
 ### Particle Accelerator
 
-Fire high-energy projectiles at a target particle.
-
-1. Activate via **Menu > Tools > Accelerator**
-2. **Click a particle** to set it as the target (gold crosshair indicator)
-3. **Click anywhere** to fire projectiles from that position toward the target
-
-The target particle is tracked across frames with a persistent gold crosshair. If the target
-dies or is lost, a notification appears and you can select a new target.
-
-| Setting | Range | Default | Effect |
-|---|---|---|---|
-| Projectile Type | Any particle type | Proton | Type of fired projectile |
-| Speed | 50 - 500 px/frame | 200 | Launch velocity toward target |
-| Fire Mode | Single / Triple / Stream | Single | Projectiles per shot |
-
-- **Single**: one projectile per click
-- **Triple**: three projectiles in a narrow spread pattern
-- **Stream**: continuous fire while holding left mouse button (configurable interval)
-
-A dashed aim line is drawn from the mouse position toward the target, with an arrowhead
-indicating the fire direction.
+Fire high-energy projectiles at a target particle. Click a particle to set target (gold
+crosshair), then click anywhere to fire toward it. Fire modes: Single, Triple (spread), or
+Stream (continuous). Configurable projectile type, speed (50-500 px/frame).
 
 ### Mirror
 
-Place reflective line segments that particles bounce off with specular reflection.
-
-1. Activate via **Menu > Tools > Mirror**
-2. **Click** to place the first endpoint
-3. **Click again** to place the second endpoint — the mirror appears immediately
-
-Mirrors are force objects and persist until deleted. They render as silver-blue glowing lines
-with a shimmer animation. Particles reflect with configurable elasticity (coefficient of
-restitution). Mirrors can be moved and deleted from the **Force Objects** panel like any other
-force object.
-
-| Property | Detail |
-|---|---|
-| **Reflection** | Specular — velocity component normal to mirror surface is reversed |
-| **Elasticity** | Configurable coefficient of restitution (default 0.9) |
-| **Rendering** | Silver-blue core with glow falloff and animated shimmer |
-| **GPU-side** | Post-integration reflection in compute shader (not a force — particles bounce) |
+Place reflective line segments (two-click placement). Particles bounce via specular reflection
+with configurable elasticity (default 0.9). Renders as silver-blue glowing lines with shimmer.
+GPU-side post-integration reflection in compute shader.
 
 ### Utility Tools
 
-Additional tools available in the **Menu > Tools** popup:
-
 | Tool | Effect |
 |---|---|
-| **Halt Velocities** | Instantly zeroes all particle velocities (freeze-frame) |
-| **Remove Massless** | Deletes all photons, gluons, gravitons, and neutrinos |
+| **Halt Velocities** | Instantly zeroes all particle velocities |
+| **Remove Massless** | Deletes all photons, gluons, gravitons, neutrinos |
 | **Remove Massive** | Deletes all massive particles |
 
-Element import is available from **Menu > File > Import Element**.
+Element import available from **Menu > File > Import Element**.
+
+</details>
 
 ---
 
@@ -951,15 +1003,18 @@ Element import is available from **Menu > File > Import Element**.
 An achievement system tracks **52 milestones** across 5 categories. Achievements persist across
 sessions via a `.ppach` save file. Open the achievements panel from **Menu > Achievements**.
 
-### Categories
+<details>
+<summary><b>Achievement categories</b> (click to expand)</summary>
 
-| Category | Achievements | Examples |
+| Category | # | Examples |
 |---|---|---|
 | **Nuclear Physics** | 11 | First Fusion, First Fission, First Annihilation, Chain Reaction, 100 Fusions, Nuclear Demolition (spallation), Einstein's Nobel (photoelectric), Something from Nothing (pair production) |
 | **Element Creation** | 11 | Create Hydrogen, Helium, Lithium, Carbon, Oxygen, Iron (peak binding energy), Gold, Uranium; 10/25 distinct elements |
 | **Particle Zoo** | 9 | First Positron, First Neutrino, First Muon, First Tau, First Antiproton, First Quark, First Boson, Dark Matter, All 33 types simultaneously |
 | **Thermodynamics** | 5 | Reach 1,000 K, 1 MK, 1 GK, 10 GK (Quark Epoch); Cool below 2 K |
 | **Milestones** | 16 | 1000/5000/10000 particles, Entangled Pairs, First Force Object, First Mirror, CERN at Home (accelerator), First Save/Load, Element Export/Import, 100 Annihilations, 50 Nuclear Decays, Antimatter Atom, Try All 12 Environments |
+
+</details>
 
 When an achievement unlocks, a toast notification appears. The achievements panel shows progress
 with unlocked/locked status and descriptions for each achievement.
@@ -976,7 +1031,7 @@ Simulation state can be saved and loaded in two binary formats.
 |---|---|
 | **Hotkeys** | `Ctrl+S` save, `Ctrl+L` load |
 | **UI** | Save/Load buttons in bottom bar, pause menu, and Tools popup |
-| **Format** | Binary `.ppsg` (magic `0x47535050`, version 2, backward-compatible with v1) |
+| **Format** | Binary `.ppsg` (magic `0x47535050`, version 5, backward-compatible with v1-v4) |
 | **Contents** | Full SimConfig, particle positions/velocities/energies/types/angles/genomes, per-type data (forces, colors, behavior flags), force objects, UI field state |
 | **File browser** | Built-in file browser with directory navigation, file size display, and path editing |
 
@@ -997,45 +1052,37 @@ Simulation state can be saved and loaded in two binary formats.
 The CPU-side physics engine uses several optimization strategies to maintain real-time performance
 at high particle counts.
 
+<details>
+<summary><b>Optimization details</b> (click to expand)</summary>
+
 ### Spatial Acceleration Grid
 
-A uniform 2D grid (30px cells, 86 x 49 = 4,214 cells) accelerates all neighbor queries from
-O(n^2) to O(n * k) where k is the average number of particles per cell.
-
-| Property | Detail |
-|---|---|
-| **Cell size** | 30px (covers largest search radius used by any physics check) |
-| **Build** | Single O(n) pass per frame: count, prefix sum, scatter |
-| **Functions accelerated** | `check_annihilation` (5px), `check_fusion` (8px), `check_fission` (12px), `check_photoelectric` (25px), `update_orbitals` BFS (10px), `update_bonds` (28px form radius), `check_virtual_pairs` (15px), `check_hadronization` (45px confinement, 15px baryon, 12px gluon) |
-| **Fallback** | Brute-force O(n^2) when spatial grid is disabled in settings |
+A uniform 2D grid (30px cells, 86 &times; 49 = 4,214 cells) accelerates all neighbor queries from
+O(n&sup2;) to O(n &middot; k) where k is the average particles per cell. Single O(n) build pass
+per frame. Accelerates annihilation, fusion, fission, photoelectric, orbitals, bonds, virtual
+pairs, and hadronization. Brute-force O(n&sup2;) fallback when disabled.
 
 ### Batched GPU Synchronization
 
-All CPU-side physics modifications (annihilation, fusion, fission, decay, nuclear decay,
-photoelectric, spallation, virtual pairs, hadronization) set a `cpu_particles_dirty_` flag instead of
-individually syncing with the GPU. A single `vkDeviceWaitIdle` + buffer write occurs at the
-end of each frame, reducing GPU stalls from 8-10 per frame to at most 1.
+All CPU-side physics modifications set a `cpu_particles_dirty_` flag instead of individually
+syncing with the GPU. A single `vkDeviceWaitIdle` + buffer write occurs at end of each frame,
+reducing GPU stalls from 8-10 per frame to at most 1.
 
 ### OpenMP Parallelization
 
-| Loop | Strategy |
-|---|---|
-| **Statistics** (type counts, energy totals) | `parallel for` with array reduction |
-| **Thermometer probes** (per-probe O(n) scan) | `parallel for` with `reduction(+:total_ke,cnt)` |
-| **Density counters** (per-counter O(n) scan) | `parallel for` with `reduction(+:cnt)` |
-| **Visualization grid** (32x18 binning) | Thread-local grids merged via `critical` section |
-
-All parallel loops use `if(n > 2000)` guards to avoid overhead on small particle counts.
+Statistics, thermometer probes, density counters, visualization grid, and magnetic field grid
+are all parallelized with OpenMP. All loops use `if(n > 2000)` guards to avoid overhead on
+small particle counts.
 
 ### Performance Settings
 
-Three tuning knobs in **Settings > Performance**:
-
 | Setting | Range | Default | Effect |
 |---|---|---|---|
-| **Physics Quality** | Low / Medium / High | High | Controls which CPU physics checks run and at what frequency. Low skips expensive checks (photoelectric, virtual pairs, spallation); Medium runs them at reduced frequency |
-| **Physics Skip** | 0 - 4 | 0 | Skip CPU physics every N frames. 0 = every frame (best quality), higher = better FPS |
-| **Spatial Grid** | on / off | on | Enable spatial acceleration grid for neighbor queries. Disable only for debugging |
+| **Physics Quality** | Low / Medium / High | High | Controls which CPU physics checks run |
+| **Physics Skip** | 0 - 4 | 0 | Skip CPU physics every N frames |
+| **Spatial Grid** | on / off | on | Enable spatial acceleration grid |
+
+</details>
 
 ---
 
@@ -1063,18 +1110,20 @@ physics skip, spatial grid) are persisted across sessions.
 
 | Key / Input | Action |
 |---|---|
-| `Escape` | Pause menu (Resume / New / Save / Load / About / Quit). About re-shows animated splash |
-| `F1` | Toggle settings panel |
+| `Escape` | Pause menu |
+| `F1` | Settings panel |
 | `F2` | Reset simulation |
-| `F3` | Open / close Spawn Picker |
-| `F4` | Toggle Select mode (click to inspect particles) |
+| `F3` | Spawn Picker |
+| `F4` | Select mode |
 | `Space` | Pause / unpause |
-| `Ctrl+S` | Save simulation |
-| `Ctrl+L` | Load simulation |
+| `Ctrl+S` / `Ctrl+L` | Save / Load |
 | `W A S D` | Pan camera |
 | Left drag | Pan camera (mouse) |
 | Scroll wheel | Zoom in / out |
-| Left click | Place particle (spawn mode) / Select particle (select mode) / Fire accelerator / Place mirror endpoint |
+| Left click | Context-dependent (spawn / select / fire / place) |
+
+<details>
+<summary><b>Detailed control reference</b> (click to expand)</summary>
 
 > **Tools** — Open **Menu > Tools** to access the Particle Accelerator, Mirror, Electron Cloud,
 > Halt Velocities, trail visualization, and particle removal utilities.
@@ -1093,6 +1142,8 @@ physics skip, spatial grid) are persisted across sessions.
 > **Event Log** — Click the **"Events: N"** counter in the bottom bar to open the decay/event
 > log showing all physics events (decays, fusions, fissions, annihilations, photoelectric,
 > spallation, pair production, and more) with frame timestamps and color-coded type tags.
+
+</details>
 
 ---
 
@@ -1157,6 +1208,9 @@ EmergentEvolution/
 └── CMakeLists.txt
 ```
 
+<details>
+<summary><b>Compute shader bindings &amp; push constants</b> (click to expand)</summary>
+
 ### Compute Shader Bindings
 
 | Binding | Buffer | R/W |
@@ -1200,6 +1254,8 @@ A/B buffers ping-pong each tick. All buffers are HOST_VISIBLE + HOST_COHERENT fo
 | 96-99 | higgs_vev | Higgs VEV |
 | 100-103 | force_object_count | Active force emitters |
 | 104-127 | force multipliers | coulomb, yukawa, pauli, alpha_s, compton, annihilation (6 x float) |
+
+</details>
 
 ---
 

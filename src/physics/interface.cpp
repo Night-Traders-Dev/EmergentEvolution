@@ -674,6 +674,10 @@ void PhysicsInterface::push_theme() {
     int t = std::clamp(prefs.theme, 0, THEME_COUNT - 1);
     const auto& c = THEMES[t];
 
+    // Direct style assignment — avoids per-frame push/pop stack overhead
+    ImGuiStyle& s = ImGui::GetStyle();
+    auto* col = s.Colors;
+
     // Derived colors
     ImVec4 bg_child  = ImVec4(c.bg.x, c.bg.y, c.bg.z, 0.45f);
     ImVec4 bg_popup  = ImVec4(c.bg.x, c.bg.y, c.bg.z, 0.80f);
@@ -687,56 +691,55 @@ void PhysicsInterface::push_theme() {
     ImVec4 accent_hi = ImVec4(c.accent.x, c.accent.y, c.accent.z, 0.80f);
     ImVec4 sep       = ImVec4(c.border.x, c.border.y, c.border.z, 0.60f);
 
-    ImGui::PushStyleColor(ImGuiCol_WindowBg,             c.bg);
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,              bg_child);
-    ImGui::PushStyleColor(ImGuiCol_PopupBg,              bg_popup);
-    ImGui::PushStyleColor(ImGuiCol_Border,               c.border);
-    ImGui::PushStyleColor(ImGuiCol_BorderShadow,         ImVec4(0,0,0,0));
-    ImGui::PushStyleColor(ImGuiCol_FrameBg,              c.frame);
-    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,       c.frame_hover);
-    ImGui::PushStyleColor(ImGuiCol_FrameBgActive,        frame_act);
-    ImGui::PushStyleColor(ImGuiCol_TitleBg,              c.bg_dim);
-    ImGui::PushStyleColor(ImGuiCol_TitleBgActive,        ImVec4(c.bg_dim.x*1.3f, c.bg_dim.y*1.3f, c.bg_dim.z*1.3f, 0.80f));
-    ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed,     title_col);
-    ImGui::PushStyleColor(ImGuiCol_MenuBarBg,            bg_menu);
-    ImGui::PushStyleColor(ImGuiCol_ScrollbarBg,          ImVec4(c.bg_dim.x, c.bg_dim.y, c.bg_dim.z, 0.60f));
-    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab,        ImVec4(c.border.x, c.border.y, c.border.z, 0.80f));
-    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered, accent_md);
-    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabActive,  accent_hi);
-    ImGui::PushStyleColor(ImGuiCol_CheckMark,            c.accent);
-    ImGui::PushStyleColor(ImGuiCol_SliderGrab,           accent_hi);
-    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive,     c.accent_bright);
-    ImGui::PushStyleColor(ImGuiCol_Button,               btn);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,        btn_hov);
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,         accent_md);
-    ImGui::PushStyleColor(ImGuiCol_Header,               btn);
-    ImGui::PushStyleColor(ImGuiCol_HeaderHovered,        btn_hov);
-    ImGui::PushStyleColor(ImGuiCol_HeaderActive,         accent_lo);
-    ImGui::PushStyleColor(ImGuiCol_Separator,            sep);
-    ImGui::PushStyleColor(ImGuiCol_SeparatorHovered,     accent_md);
-    ImGui::PushStyleColor(ImGuiCol_SeparatorActive,      accent_hi);
-    ImGui::PushStyleColor(ImGuiCol_Tab,                  c.frame);
-    ImGui::PushStyleColor(ImGuiCol_TabHovered,           btn_hov);
-    ImGui::PushStyleColor(ImGuiCol_TabSelected,          accent_lo);
-    ImGui::PushStyleColor(ImGuiCol_Text,                 c.text);
-    ImGui::PushStyleColor(ImGuiCol_TextDisabled,         c.text_dim);
+    col[ImGuiCol_WindowBg]             = c.bg;
+    col[ImGuiCol_ChildBg]              = bg_child;
+    col[ImGuiCol_PopupBg]              = bg_popup;
+    col[ImGuiCol_Border]               = c.border;
+    col[ImGuiCol_BorderShadow]         = ImVec4(0,0,0,0);
+    col[ImGuiCol_FrameBg]              = c.frame;
+    col[ImGuiCol_FrameBgHovered]       = c.frame_hover;
+    col[ImGuiCol_FrameBgActive]        = frame_act;
+    col[ImGuiCol_TitleBg]              = c.bg_dim;
+    col[ImGuiCol_TitleBgActive]        = ImVec4(c.bg_dim.x*1.3f, c.bg_dim.y*1.3f, c.bg_dim.z*1.3f, 0.80f);
+    col[ImGuiCol_TitleBgCollapsed]     = title_col;
+    col[ImGuiCol_MenuBarBg]            = bg_menu;
+    col[ImGuiCol_ScrollbarBg]          = ImVec4(c.bg_dim.x, c.bg_dim.y, c.bg_dim.z, 0.60f);
+    col[ImGuiCol_ScrollbarGrab]        = ImVec4(c.border.x, c.border.y, c.border.z, 0.80f);
+    col[ImGuiCol_ScrollbarGrabHovered] = accent_md;
+    col[ImGuiCol_ScrollbarGrabActive]  = accent_hi;
+    col[ImGuiCol_CheckMark]            = c.accent;
+    col[ImGuiCol_SliderGrab]           = accent_hi;
+    col[ImGuiCol_SliderGrabActive]     = c.accent_bright;
+    col[ImGuiCol_Button]               = btn;
+    col[ImGuiCol_ButtonHovered]        = btn_hov;
+    col[ImGuiCol_ButtonActive]         = accent_md;
+    col[ImGuiCol_Header]               = btn;
+    col[ImGuiCol_HeaderHovered]        = btn_hov;
+    col[ImGuiCol_HeaderActive]         = accent_lo;
+    col[ImGuiCol_Separator]            = sep;
+    col[ImGuiCol_SeparatorHovered]     = accent_md;
+    col[ImGuiCol_SeparatorActive]      = accent_hi;
+    col[ImGuiCol_Tab]                  = c.frame;
+    col[ImGuiCol_TabHovered]           = btn_hov;
+    col[ImGuiCol_TabSelected]          = accent_lo;
+    col[ImGuiCol_Text]                 = c.text;
+    col[ImGuiCol_TextDisabled]         = c.text_dim;
 
     // Style vars
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,    10.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,      6.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_GrabRounding,       6.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 5.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,  ImVec2(8.0f, 6.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarRounding,  8.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize,   1.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,    0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize,     12.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
+    s.WindowRounding    = 10.0f;
+    s.FrameRounding     =  6.0f;
+    s.GrabRounding      =  6.0f;
+    s.FramePadding      = ImVec2(8.0f, 5.0f);
+    s.ItemSpacing       = ImVec2(8.0f, 6.0f);
+    s.ScrollbarRounding =  8.0f;
+    s.WindowBorderSize  =  1.0f;
+    s.FrameBorderSize   =  0.0f;
+    s.ScrollbarSize     = 12.0f;
+    s.WindowPadding     = ImVec2(12.0f, 10.0f);
 }
 
 void PhysicsInterface::pop_theme() {
-    ImGui::PopStyleVar(THEME_VAR_COUNT);
-    ImGui::PopStyleColor(THEME_COLOR_COUNT);
+    // No-op: theme is applied via direct style assignment, not push/pop stack
 }
 
 // ── Helper: draw a particle spawn button ─────────────────────────────────────
@@ -1224,6 +1227,7 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     // ── Visualization overlays ───────────────────────────────────────────────
     if (show_energy_heatmap)    draw_energy_heatmap(cfg);
     if (show_velocity_field)    draw_velocity_field(cfg);
+    if (show_magnetic_field)    draw_magnetic_field(cfg);
     if (show_trajectory_tracer) draw_trajectory_traces(cfg);
     if (show_force_vectors)     draw_force_vectors_overlay(cfg);
     if (show_atom_grid)         draw_atom_grid(cfg);
@@ -2421,6 +2425,10 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Overlay arrow grid showing average\nvelocity direction and magnitude");
 
+                    ImGui::MenuItem("Magnetic Field", nullptr, &show_magnetic_field);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Overlay grid showing magnetic field Bz\nBlue = B<0, Red = B>0\nIncludes Biot-Savart + nucleon dipoles");
+
                     ImGui::MenuItem("Force Vectors", nullptr, &show_force_vectors);
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Show force breakdown on selected particle\nCoulomb (red), Yukawa (green), Gravity (blue)");
@@ -2906,22 +2914,34 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
         }
     }
 
-    // ── Virtual Particles ─────────────────────────────────────────────────────
+    // ── Virtual Particles / Casimir ─────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Virtual Particles")) {
         ImGui::Checkbox("Enable Virtual Pairs", &cfg.virtual_pairs_enabled);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Spontaneous particle-antiparticle pairs\nfrom high-energy close encounters\n(QFT vacuum fluctuations)");
+            ImGui::SetTooltip("Spontaneous particle-antiparticle pairs\nfrom quantum vacuum fluctuations\n(Casimir effect source)");
 
         if (cfg.virtual_pairs_enabled) {
-            ImGui::SliderFloat("Energy Threshold", &cfg.virtual_pair_threshold, 0.8f, 5.0f, "%.2f");
+            ImGui::SliderFloat("Vacuum Energy", &cfg.vacuum_energy, 0.0f, 2.0f, "%.2f");
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Min combined energy for pair creation\nLower = more pairs, higher = rarer");
+                ImGui::SetTooltip("Vacuum fluctuation rate.\nHigher = more spontaneous pairs.\n0 = vacuum off. Default: 0.5");
 
             int max_pairs = static_cast<int>(cfg.virtual_pair_max_per_tick);
             ImGui::SliderInt("Max Pairs/Tick", &max_pairs, 1, 16);
             cfg.virtual_pair_max_per_tick = static_cast<uint32_t>(max_pairs);
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Maximum virtual pairs spawned per frame\nHigher = more quantum foam activity");
+
+            ImGui::SliderFloat("Casimir Radius (px)", &cfg.casimir_radius, 5.0f, 60.0f, "%.0f px");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Detection range for Casimir force.\nDefault: 30 px");
+
+            ImGui::SliderFloat("Casimir Strength", &cfg.casimir_strength, 0.0f, 2.0f, "%.2f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Casimir attractive force scaling.\n0 = no Casimir effect.\nDefault: 0.5");
+
+            ImGui::SliderFloat("Pair Scatter (px)", &cfg.virtual_pair_scatter, 1.0f, 10.0f, "%.1f px");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Spawn separation of virtual pair.\nDefault: 3.0 px");
         }
     }
 
@@ -3852,12 +3872,39 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
                     ImGui::Text("%.1fk K", particle_temp / 1000.0f);
             }
 
-            // Magnetic moment: |charge| * speed * coupling
-            float mag_moment = std::abs(charge) * speed * 0.5f;
-            if (mag_moment > 0.001f) {
-                ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "B Moment");
-                ImGui::SameLine(col_w);
-                ImGui::Text("%.3f", mag_moment);
+            // ── Magnetic moment (intrinsic) ──────────────────────────────
+            // Nucleons: anomalous moments from quark substructure
+            // Leptons: Dirac g≈2 (accurate to 0.1%)
+            {
+                float mu_val = 0.0f;
+                const char* mu_unit = "";
+                if (ptype == PROTON_TYPE) {
+                    mu_val = 2.793f * spin;
+                    mu_unit = "\xCE\xBC\x4E";  // μN
+                } else if (ptype == ANTIPROTON_TYPE_PHYS) {
+                    mu_val = -2.793f * spin;
+                    mu_unit = "\xCE\xBC\x4E";
+                } else if (ptype == NEUTRON_TYPE) {
+                    mu_val = -1.913f * spin;
+                    mu_unit = "\xCE\xBC\x4E";
+                } else if (std::abs(charge) > 0.01f && std::abs(spin) > 0.01f) {
+                    // Dirac g=2: μ = q·S (in Bohr magnetons for leptons, μN for quarks)
+                    bool is_lepton = (ptype == ELECTRON_TYPE_PHYS || ptype == POSITRON_TYPE_PHYS ||
+                                      ptype == MUON_TYPE_PHYS || ptype == ANTIMUON_TYPE_PHYS ||
+                                      ptype == TAU_TYPE_PHYS || ptype == ANTITAU_TYPE_PHYS);
+                    if (is_lepton) {
+                        mu_val = charge * spin;  // in Bohr magnetons
+                        mu_unit = "\xCE\xBC\x42";  // μB
+                    } else {
+                        mu_val = charge * spin;  // in natural units
+                        mu_unit = "\xCE\xBC";
+                    }
+                }
+                if (std::abs(mu_val) > 0.001f) {
+                    ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Mag.Moment");
+                    ImGui::SameLine(col_w);
+                    ImGui::Text("%+.3f %s", mu_val, mu_unit);
+                }
             }
         }
 
@@ -4094,6 +4141,7 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
     glm::vec2 com_vel(0.0f);          // center-of-mass velocity (sim units)
     float total_sim_mass = 0.0f;
     uint32_t oldest_birth = UINT32_MAX;
+    float total_mu_N = 0.0f;  // net magnetic moment in nuclear magnetons
 
     for (uint32_t pi = 0; pi < n_total; ++pi) {
         if (pi >= particles.orbital_parent.size()) break;
@@ -4112,6 +4160,17 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
             else if (pt == ELECTRON_TYPE_PHYS) { lepton_count++; lepton_indices.push_back(pi); counted = true; }
         }
         if (!counted) continue;
+
+        // Accumulate magnetic moment (in nuclear magnetons)
+        if (pi * GENOME_SIZE + 1 < particles.genomes.size()) {
+            float sp = particles.genomes[pi * GENOME_SIZE + 1];
+            float ch = particles.genomes[pi * GENOME_SIZE + 0];
+            if (pt == PROTON_TYPE)              total_mu_N += 2.793f * sp;
+            else if (pt == ANTIPROTON_TYPE_PHYS) total_mu_N += -2.793f * sp;
+            else if (pt == NEUTRON_TYPE)        total_mu_N += -1.913f * sp;
+            else if (pt == ELECTRON_TYPE_PHYS)  total_mu_N += ch * sp * 1836.15f;  // μ_B → μ_N
+            else if (pt == POSITRON_TYPE_PHYS)  total_mu_N += ch * sp * 1836.15f;
+        }
 
         sum_pos += particles.positions[pi];
 
@@ -4285,6 +4344,13 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
             else ImGui::Text("%.1f min", age_sec / 60.0f);
         }
 
+        // Magnetic moment — net of all constituents (in nuclear magnetons)
+        if (std::abs(total_mu_N) > 0.001f) {
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Mag.Moment");
+            ImGui::SameLine(col_w);
+            ImGui::Text("%+.2f \xCE\xBC\x4E", total_mu_N);
+        }
+
         // Stability — look up isotope decay table
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Stability");
         ImGui::SameLine(col_w);
@@ -4455,6 +4521,7 @@ void PhysicsInterface::draw_molecule_card(const Particles& particles) {
     glm::vec2 com_vel(0.0f);
     float total_sim_mass = 0.0f;
     uint32_t oldest_birth = UINT32_MAX;
+    float total_mu_N = 0.0f;  // net magnetic moment in nuclear magnetons
     uint32_t n_total = static_cast<uint32_t>(particles.types.size());
 
     // Collect per-atom data
@@ -4489,6 +4556,15 @@ void PhysicsInterface::draw_molecule_card(const Particles& particles) {
             bool is_lepton = (pt == ELECTRON_TYPE_PHYS);
             if (!is_nucleon && !is_lepton) continue;
             total_particles++;
+
+            // Accumulate magnetic moment
+            if (pi * GENOME_SIZE + 1 < particles.genomes.size()) {
+                float sp = particles.genomes[pi * GENOME_SIZE + 1];
+                float ch = particles.genomes[pi * GENOME_SIZE + 0];
+                if (pt == PROTON_TYPE)              total_mu_N += 2.793f * sp;
+                else if (pt == NEUTRON_TYPE)        total_mu_N += -1.913f * sp;
+                else if (pt == ELECTRON_TYPE_PHYS)  total_mu_N += ch * sp * 1836.15f;
+            }
 
             if (readback_velocities && pi < readback_count) {
                 float sim_mass = (pt <= 1) ? 40.0f : 1.0f;
@@ -4626,6 +4702,13 @@ void PhysicsInterface::draw_molecule_card(const Particles& particles) {
             ImGui::SameLine(col_w);
             if (age_sec < 60.0f) ImGui::Text("%.1f s", age_sec);
             else ImGui::Text("%.1f min", age_sec / 60.0f);
+        }
+
+        // Magnetic moment — net of all constituent particles
+        if (std::abs(total_mu_N) > 0.001f) {
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Mag.Moment");
+            ImGui::SameLine(col_w);
+            ImGui::Text("%+.2f \xCE\xBC\x4E", total_mu_N);
         }
 
         ImGui::Spacing();
@@ -4910,6 +4993,31 @@ void PhysicsInterface::draw_nuclear_debug(SimConfig& cfg) {
         ImGui::SliderInt("Max/frame##fus", &cfg.max_fusions_per_frame, 1, 20);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Maximum fusion events per tick.\nDefault: 5");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Min Energy##fus", &cfg.fusion_min_energy, 0.01f, 1.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Min particle energy to participate.\nDefault: 0.1");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("p+n Min KE (keV)##fus", &cfg.fusion_pn_min_ke_keV, 0.1f, 100.0f, "%.1f keV");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Min CM kinetic energy for p+n capture.\nDefault: 1.0 keV");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Binding Energy (MeV)##fus", &cfg.fusion_binding_mev, 0.5f, 10.0f, "%.2f MeV");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Deuteron binding Q-value.\nDefault: 2.22 MeV");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Leptonic Q (MeV)##fus", &cfg.fusion_leptonic_q_mev, 0.0f, 5.0f, "%.2f MeV");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("p+p chain e+ + v energy.\nDefault: 0.42 MeV");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Product Separation##fus", &cfg.fusion_product_separation, 1.0f, 10.0f, "%.1f px");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Nucleon pair separation distance.\nDefault: 3.0 px");
     }
 
     // ── Fission ──────────────────────────────────────────────────────────
@@ -4920,14 +5028,64 @@ void PhysicsInterface::draw_nuclear_debug(SimConfig& cfg) {
             ImGui::SetTooltip("Minimum neutron energy to trigger fission.\nDefault: 0.6");
 
         ImGui::SetNextItemWidth(-1);
-        ImGui::SliderInt("Min Cluster Size##fis", &cfg.min_fission_cluster, 2, 20);
+        ImGui::SliderInt("Min Cluster Size##fis", &cfg.min_fission_cluster, 2, 100);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Minimum nucleons in target nucleus.\nDefault: 6");
+            ImGui::SetTooltip("Minimum nucleons in target nucleus.\nDefault: 20");
 
         ImGui::SetNextItemWidth(-1);
         ImGui::SliderInt("Max/frame##fis", &cfg.max_fissions_per_frame, 1, 10);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Maximum fission events per tick.\nDefault: 2");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Cluster Radius (px)##fis", &cfg.fission_cluster_radius, 4.0f, 30.0f, "%.1f px");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Search radius for nucleons.\nDefault: 12.0 px");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Barrier (MeV)##fis", &cfg.fission_barrier_mev, 0.1f, 20.0f, "%.2f MeV");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Min neutron KE to trigger fission.\nU-235 barrier: ~5.75 MeV\nDefault: 5.0 MeV");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderInt("Min Protons##fis", &cfg.fission_min_protons, 1, 40);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Min protons for Coulomb instability.\nDefault: 8");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Fissility (Z\xC2\xB2/A)##fis", &cfg.fission_fissility_threshold, 1.0f, 50.0f, "%.1f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Bohr-Wheeler fissility threshold.\nZ\xC2\xB2/A must exceed this for fission.\nU-235: 36.0, C-12: 3.0, Fe-56: 12.1\nDefault: 35.0 (real physics)");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Energy/Nucleon (MeV)##fis", &cfg.fission_energy_per_nucleon, 0.1f, 5.0f, "%.2f MeV");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("MeV released per nucleon.\nDefault: 1.0");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Fragment Energy (MeV)##fis", &cfg.fission_fragment_energy_mev, 0.1f, 5.0f, "%.2f MeV");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Energy boost per fragment.\nDefault: 1.0 MeV");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderInt("Free Neutrons Min##fis", &cfg.fission_free_neutrons_min, 0, 5);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Min chain-reaction neutrons.\nDefault: 2");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderInt("Free Neutrons Max##fis", &cfg.fission_free_neutrons_max, 1, 8);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Max chain-reaction neutrons.\nDefault: 3");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Neutron KE (MeV)##fis", &cfg.fission_neutron_ke_mev, 0.5f, 10.0f, "%.1f MeV");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("KE of ejected neutrons.\nDefault: 2.0 MeV");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Spawn Radius (px)##fis", &cfg.fission_spawn_radius, 1.0f, 20.0f, "%.1f px");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Neutron spawn distance.\nDefault: 5.0 px");
     }
 
     // ── Particle Decay ───────────────────────────────────────────────────
@@ -4996,12 +5154,12 @@ void PhysicsInterface::draw_nuclear_debug(SimConfig& cfg) {
             ImGui::SetTooltip("Matter-antimatter annihilation distance.\nDefault: 5.0 px");
     }
 
-    // ── Virtual Pairs ────────────────────────────────────────────────────
+    // ── Virtual Pairs / Casimir ─────────────────────────────────────────
     if (ImGui::CollapsingHeader("Virtual Pairs")) {
         ImGui::SetNextItemWidth(-1);
-        ImGui::SliderFloat("Threshold##vpair", &cfg.virtual_pair_threshold, 0.5f, 5.0f, "%.2f");
+        ImGui::SliderFloat("Vacuum Energy##vpair", &cfg.vacuum_energy, 0.0f, 2.0f, "%.2f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Minimum combined energy for pair creation.\nDefault: 2.1");
+            ImGui::SetTooltip("Vacuum fluctuation rate.\nHigher = more spontaneous pairs.\n0 = off. Default: 0.5");
 
         ImGui::SetNextItemWidth(-1);
         int vp_max = static_cast<int>(cfg.virtual_pair_max_per_tick);
@@ -5009,6 +5167,21 @@ void PhysicsInterface::draw_nuclear_debug(SimConfig& cfg) {
             cfg.virtual_pair_max_per_tick = static_cast<uint32_t>(vp_max);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Maximum virtual pairs spawned per tick.\nDefault: 2");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Casimir Radius##vpair", &cfg.casimir_radius, 5.0f, 60.0f, "%.0f px");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Detection range for Casimir force.\nDefault: 30 px");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Casimir Strength##vpair", &cfg.casimir_strength, 0.0f, 2.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Casimir attractive force scaling.\n0 = no Casimir effect.\nDefault: 0.5");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Pair Scatter##vpair", &cfg.virtual_pair_scatter, 1.0f, 10.0f, "%.1f px");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Spawn separation of virtual pair.\nDefault: 3.0 px");
     }
 
     // ── Covalent Bonds ─────────────────────────────────────────────────
@@ -5065,8 +5238,11 @@ void PhysicsInterface::draw_nuclear_debug(SimConfig& cfg) {
         cfg.fusion_radius             = 8.0f;
         cfg.max_fusions_per_frame     = 5;
         cfg.fission_neutron_threshold = 0.6f;
-        cfg.min_fission_cluster       = 6;
+        cfg.min_fission_cluster       = 20;
         cfg.max_fissions_per_frame    = 2;
+        cfg.fission_barrier_mev       = 5.0f;
+        cfg.fission_min_protons       = 8;
+        cfg.fission_fissility_threshold = 35.0f;
         cfg.decay_threshold           = 0.08f;
         cfg.alpha_ke_mev              = 5.0f;
         cfg.nucleon_emit_ke_mev       = 2.0f;
@@ -6421,6 +6597,95 @@ void PhysicsInterface::draw_velocity_field(const SimConfig& cfg) {
                 IM_COL32(200, 200, 255, a));
         }
     }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Magnetic Field Visualization ─────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_magnetic_field(const SimConfig& cfg) {
+    ImGuiIO& io = ImGui::GetIO();
+    ImDrawList* fg = ImGui::GetForegroundDrawList();
+    float ww = io.DisplaySize.x, wh = io.DisplaySize.y;
+    float scx = ww / static_cast<float>(REGION_W);
+    float scy = wh / static_cast<float>(REGION_H);
+
+    float cell_w = static_cast<float>(REGION_W) / VIS_GRID_W;
+    float cell_h = static_cast<float>(REGION_H) / VIS_GRID_H;
+
+    // Find max |Bz| for normalization
+    float max_bz = 0.0f;
+    for (uint32_t i = 0; i < VIS_GRID_CELLS; ++i) {
+        float abz = std::abs(vis_grid.bfield_z[i]);
+        if (abz > max_bz) max_bz = abz;
+    }
+    if (max_bz < 0.0001f) return;
+
+    auto w2s = [&](glm::vec2 w) -> ImVec2 {
+        glm::vec2 s = glm::vec2(ww, wh) * 0.5f
+                    + (w - cfg.camera_origin) * cfg.current_camera_zoom * glm::vec2(scx, scy);
+        return ImVec2(s.x, s.y);
+    };
+
+    uint8_t alpha = static_cast<uint8_t>(magnetic_field_opacity * 255);
+
+    for (uint32_t gy = 0; gy < VIS_GRID_H; ++gy) {
+        for (uint32_t gx = 0; gx < VIS_GRID_W; ++gx) {
+            uint32_t idx = gy * VIS_GRID_W + gx;
+            float bz = vis_grid.bfield_z[idx];
+            if (std::abs(bz) < max_bz * 0.01f) continue;
+
+            float t = bz / max_bz;  // -1 to +1
+            t = std::clamp(t, -1.0f, 1.0f);
+
+            // Diverging color map: Blue (B<0) → Black (B=0) → Red (B>0)
+            uint8_t r, g, b;
+            if (t > 0.0f) {
+                // Positive Bz: black → red → yellow
+                if (t < 0.5f) {
+                    float s = t / 0.5f;
+                    r = static_cast<uint8_t>(s * 255);
+                    g = 0;
+                    b = 0;
+                } else {
+                    float s = (t - 0.5f) / 0.5f;
+                    r = 255;
+                    g = static_cast<uint8_t>(s * 200);
+                    b = 0;
+                }
+            } else {
+                // Negative Bz: black → blue → cyan
+                float at = -t;
+                if (at < 0.5f) {
+                    float s = at / 0.5f;
+                    r = 0;
+                    g = 0;
+                    b = static_cast<uint8_t>(s * 255);
+                } else {
+                    float s = (at - 0.5f) / 0.5f;
+                    r = 0;
+                    g = static_cast<uint8_t>(s * 200);
+                    b = 255;
+                }
+            }
+
+            // Scale alpha by magnitude
+            uint8_t cell_alpha = static_cast<uint8_t>(alpha * std::abs(t));
+            if (cell_alpha < 4) continue;
+
+            glm::vec2 tl(gx * cell_w, gy * cell_h);
+            glm::vec2 br((gx + 1) * cell_w, (gy + 1) * cell_h);
+            ImVec2 stl = w2s(tl), sbr = w2s(br);
+
+            fg->AddRectFilled(stl, sbr, IM_COL32(r, g, b, cell_alpha));
+        }
+    }
+
+    // Legend — bottom-left corner
+    ImVec2 legend_pos(10, wh - 30);
+    fg->AddText(legend_pos, IM_COL32(100, 100, 255, 200), "B<0");
+    fg->AddText(ImVec2(legend_pos.x + 40, legend_pos.y), IM_COL32(180, 180, 180, 200), "|");
+    fg->AddText(ImVec2(legend_pos.x + 52, legend_pos.y), IM_COL32(255, 100, 100, 200), "B>0");
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

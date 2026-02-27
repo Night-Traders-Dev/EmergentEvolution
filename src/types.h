@@ -184,7 +184,7 @@ struct SimConfig {
     // Fundamental forces
     float    gravity_strength         = 1.0f;   // Newton's law at 1.0
     float    lorentz_strength         = 1.0f;   // scaled Lorentz / magnetic deflection
-    float    vacuum_energy            = 0.0f;   // vacuum fluctuation rate + ZPE floor (0=off)
+    float    vacuum_energy            = 0.5f;   // vacuum fluctuation rate + ZPE floor (0=off)
 
     // Standard Model forces
     uint32_t field_flags              = 0;      // bitfield for field visualization toggles
@@ -223,10 +223,9 @@ struct SimConfig {
     float    fusion_threshold_keV      = 550.0f;  // Coulomb barrier for p+p (keV), Gamow peak
     float    fusion_radius             = 8.0f;    // collision distance (px)
     int      max_fusions_per_frame     = 5;
-
     // Fission parameters
     float    fission_neutron_threshold = 0.6f;    // min neutron energy to trigger fission
-    int      min_fission_cluster       = 6;       // min nucleons for fissile nucleus
+    int      min_fission_cluster       = 20;      // min nucleons for fissile nucleus
     int      max_fissions_per_frame    = 2;
 
     // Particle decay
@@ -286,6 +285,32 @@ struct SimConfig {
     glm::vec2 camera_origin      = { REGION_W / 2.0f, REGION_H / 2.0f };
     float     camera_zoom        = 1.0f;
     float     current_camera_zoom = 1.0f;
+
+    // ── Extended fusion parameters (v3+) ──────────────────────────────────
+    float    fusion_min_energy         = 0.1f;    // min particle energy to participate
+    float    fusion_pn_min_ke_keV      = 1.0f;    // min CM KE for p+n deuteron formation (keV)
+    float    fusion_binding_mev        = 2.22f;   // deuteron binding energy Q-value (MeV)
+    float    fusion_leptonic_q_mev     = 0.42f;   // p+p chain leptonic Q-value (MeV)
+    float    fusion_product_separation = 3.0f;    // separation distance for bound pair (px)
+
+    // ── Extended fission parameters (v3+) ─────────────────────────────────
+    float    fission_cluster_radius    = 12.0f;   // nucleon clustering search radius (px)
+    float    fission_barrier_mev       = 5.0f;    // min neutron KE to trigger fission (MeV)
+    int      fission_min_protons       = 8;       // min protons for Coulomb instability
+    float    fission_energy_per_nucleon = 1.0f;   // MeV released per nucleon in fragments
+    int      fission_free_neutrons_min = 2;       // min chain-reaction neutrons spawned
+    int      fission_free_neutrons_max = 3;       // max chain-reaction neutrons spawned
+    float    fission_neutron_ke_mev    = 2.0f;    // KE of ejected chain-reaction neutrons (MeV)
+    float    fission_spawn_radius      = 5.0f;    // spawn distance from cluster center (px)
+    float    fission_fragment_energy_mev = 1.0f;  // energy boost per fragment (MeV)
+
+    // ── Vacuum / Casimir parameters (v4+) ─────────────────────────────────
+    float    casimir_radius       = 30.0f;   // detection range for Casimir force (px)
+    float    casimir_strength     = 0.5f;    // Casimir attractive force scaling
+    float    virtual_pair_scatter = 3.0f;    // spawn separation of particle pair (px)
+
+    // ── Fission physics (v5+) ───────────────────────────────────────────
+    float    fission_fissility_threshold = 35.0f;  // Bohr-Wheeler Z²/A threshold for fission
 };
 
 // ── Valence electrons from atomic number (periods 1-3) ───────────────────────

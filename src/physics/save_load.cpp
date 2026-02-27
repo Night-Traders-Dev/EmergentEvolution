@@ -3,7 +3,7 @@
 #include <cstring>
 
 static constexpr uint32_t PPSG_MAGIC   = 0x47535050;  // "PPSG" little-endian
-static constexpr uint32_t PPSG_VERSION = 2;
+static constexpr uint32_t PPSG_VERSION = 5;
 static constexpr uint32_t PPSG_V1_MAX_TYPES = 36;  // MAX_PARTICLE_TYPES in version 1
 
 // Helper: write raw bytes
@@ -61,7 +61,9 @@ SaveResult save_simulation(
     uint32_t saved_max_types = MAX_PARTICLE_TYPES;
     write_val(f, saved_max_types);
 
-    // SimConfig (POD)
+    // SimConfig (POD) — size-prefixed for forward compatibility
+    uint32_t cfg_size = static_cast<uint32_t>(sizeof(SimConfig));
+    write_val(f, cfg_size);
     write_val(f, cfg);
 
     // Particle data (GPU-authoritative positions/velocities/energies, CPU-side types/genomes/angles)
@@ -131,10 +133,34 @@ LoadResult load_simulation(const std::string& filepath) {
         if (saved_max_types > MAX_PARTICLE_TYPES) saved_max_types = MAX_PARTICLE_TYPES;
     }
 
-    // SimConfig
-    if (!read_val(f, r.cfg)) {
-        r.message = "Failed to read config";
-        return r;
+    // SimConfig — size-prefixed in v3+, raw in v1-v2
+    if (version >= 3) {
+        uint32_t saved_cfg_size = 0;
+        read_val(f, saved_cfg_size);
+        r.cfg = SimConfig{};  // default-initialize (new fields get defaults)
+        uint32_t read_size = std::min(saved_cfg_size, static_cast<uint32_t>(sizeof(SimConfig)));
+        f.read(reinterpret_cast<char*>(&r.cfg), read_size);
+        // Skip any extra bytes if saved config was larger (future version)
+        if (saved_cfg_size > sizeof(SimConfig))
+            f.seekg(saved_cfg_size - sizeof(SimConfig), std::ios::cur);
+        if (!f.good()) {
+            r.message = "Failed to read config";
+            return r;
+        }
+    } else {
+        // v1-v2: SimConfig was written without size prefix.
+        // New fields are appended at the end, so old layout is a prefix.
+        // Read only the bytes the old save wrote (= sizeof(SimConfig) minus new fields).
+        // New fields appended at end: 56 bytes (fusion/fission v3) + 12 bytes (Casimir v4)
+        //   + 4 bytes (fissility v5) = 72
+        // Old v1-v2 size = current size - 72.
+        r.cfg = SimConfig{};  // defaults for new fields
+        uint32_t old_cfg_size = static_cast<uint32_t>(sizeof(SimConfig)) - 72u;
+        f.read(reinterpret_cast<char*>(&r.cfg), old_cfg_size);
+        if (!f.good()) {
+            r.message = "Failed to read config";
+            return r;
+        }
     }
 
     // Particle data
@@ -150,18 +176,18 @@ LoadResult load_simulation(const std::string& filepath) {
     }
 
     // Per-type data — read with backward compatibility
-    // Zero-fill first, then read saved portion
-    std::memset(r.forces, 0, sizeof(r.forces));
-    std::memset(r.colors, 0, sizeof(r.colors));
-    std::memset(r.behavior_flags, 0, sizeof(r.behavior_flags));
+    // Allocate and zero-fill, then read saved portion
+    r.forces.resize(MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES, 0.0f);
+    r.colors.resize(MAX_PARTICLE_TYPES, glm::vec4(0.0f));
+    r.behavior_flags.resize(MAX_PARTICLE_TYPES, 0);
 
     if (saved_max_types == MAX_PARTICLE_TYPES) {
         // Same size — direct read
-        f.read(reinterpret_cast<char*>(r.forces),
+        f.read(reinterpret_cast<char*>(r.forces.data()),
                MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES * sizeof(float));
-        f.read(reinterpret_cast<char*>(r.colors),
+        f.read(reinterpret_cast<char*>(r.colors.data()),
                MAX_PARTICLE_TYPES * sizeof(glm::vec4));
-        f.read(reinterpret_cast<char*>(r.behavior_flags),
+        f.read(reinterpret_cast<char*>(r.behavior_flags.data()),
                MAX_PARTICLE_TYPES * sizeof(uint32_t));
     } else {
         // Smaller saved size — read row-by-row for force matrix, then colors/flags
@@ -171,16 +197,17 @@ LoadResult load_simulation(const std::string& filepath) {
                    saved_max_types * sizeof(float));
         }
         // Colors
-        f.read(reinterpret_cast<char*>(r.colors),
+        f.read(reinterpret_cast<char*>(r.colors.data()),
                saved_max_types * sizeof(glm::vec4));
         // Behavior flags
-        f.read(reinterpret_cast<char*>(r.behavior_flags),
+        f.read(reinterpret_cast<char*>(r.behavior_flags.data()),
                saved_max_types * sizeof(uint32_t));
     }
 
     // Force objects
     read_val(f, r.force_object_count);
-    f.read(reinterpret_cast<char*>(r.force_objects),
+    r.force_objects.resize(MAX_FORCE_OBJECTS);
+    f.read(reinterpret_cast<char*>(r.force_objects.data()),
            MAX_FORCE_OBJECTS * sizeof(ForceObject));
 
     // UI state

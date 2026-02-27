@@ -39,11 +39,11 @@ struct LoadResult {
     std::vector<float> angles;
     std::vector<float> angular_velocities;
     std::vector<float> genomes;
-    float forces[MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES];
-    glm::vec4 colors[MAX_PARTICLE_TYPES];
-    uint32_t behavior_flags[MAX_PARTICLE_TYPES];
-    ForceObject force_objects[MAX_FORCE_OBJECTS];
-    uint32_t force_object_count;
+    std::vector<float> forces;           // MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES
+    std::vector<glm::vec4> colors;       // MAX_PARTICLE_TYPES
+    std::vector<uint32_t> behavior_flags;// MAX_PARTICLE_TYPES
+    std::vector<ForceObject> force_objects; // MAX_FORCE_OBJECTS
+    uint32_t force_object_count = 0;
     // UI state
     bool field_em, field_strong, field_weak, field_gravity, field_higgs;
     float field_intensity, log_temperature;

@@ -52,16 +52,16 @@ void ComputePipeline::destroy(VulkanContext& ctx) {
 // Bindings 9-12: polar angle/angular-velocity (double-buffered)
 
 void ComputePipeline::create_descriptor_set_layout(VkDevice device) {
-    std::array<VkDescriptorSetLayoutBinding, 18> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 19> bindings{};
 
-    // Bindings 0-6 and 8-17: storage buffers
+    // Bindings 0-6 and 8-18: storage buffers
     for (uint32_t i = 0; i < 7; ++i) {
         bindings[i].binding         = i;
         bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[i].descriptorCount = 1;
         bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
     }
-    for (uint32_t i = 8; i < 18; ++i) {
+    for (uint32_t i = 8; i < 19; ++i) {
         bindings[i].binding         = i;
         bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[i].descriptorCount = 1;
@@ -131,7 +131,7 @@ void ComputePipeline::create_descriptor_pool(VkDevice device) {
     // 2 sets × 16 storage buffers (7 orig + 1 behavior + 4 angle/avel + 2 energy + 1 genome + 1 bond) = 32
     // 2 sets × 1 storage image = 2
     std::array<VkDescriptorPoolSize, 2> pool_sizes{};
-    pool_sizes[0] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 36 };
+    pool_sizes[0] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 38 };
     pool_sizes[1] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,   2 };
 
     VkDescriptorPoolCreateInfo ci{};
@@ -215,6 +215,107 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
         ctx.update_buffer(force_obj_buffer_, empty_objs, force_obj_size);
     }
 
+    // Per-type mass_inv + ZPE lookup table (binding 18)
+    // Layout: [type*2+0] = mass_inv, [type*2+1] = zpe
+    {
+        std::vector<float> mass_zpe(MAX_PARTICLE_TYPES * 2, 1.0f);
+        // Mass inverse values (matching shader get_mass_inv)
+        auto set = [&](uint32_t t, float mi, float zpe) {
+            mass_zpe[t * 2 + 0] = mi;
+            mass_zpe[t * 2 + 1] = zpe;
+        };
+        auto zpe_from_mass = [](float mi) -> float {
+            if (mi >= 50.0f) return 0.0f; // massless
+            float mass = (mi > 0.001f) ? 1.0f / mi : 1000.0f;
+            float z = mass * 0.0001f;
+            return (z > 0.05f) ? 0.05f : (z < 0.0f ? 0.0f : z);
+        };
+        // SM particles
+        set(0,  0.025f,    zpe_from_mass(0.025f));    // Proton
+        set(1,  0.025f,    zpe_from_mass(0.025f));    // Neutron
+        set(2,  1.0f,      zpe_from_mass(1.0f));      // Electron
+        set(3,  100.0f,    0.0f);                      // Photon (massless)
+        set(4,  1.0f,      zpe_from_mass(1.0f));      // Positron
+        set(5,  0.025f,    zpe_from_mass(0.025f));    // Antiproton
+        set(6,  100.0f,    0.0f);                      // Neutrino_e
+        set(7,  100.0f,    0.0f);                      // Neutrino_mu
+        set(8,  100.0f,    0.0f);                      // Neutrino_tau
+        set(9,  0.005f,    zpe_from_mass(0.005f));    // Muon
+        set(10, 0.005f,    zpe_from_mass(0.005f));    // Antimuon
+        set(11, 0.0003f,   zpe_from_mass(0.0003f));   // Tau
+        set(12, 0.0003f,   zpe_from_mass(0.0003f));   // Antitau
+        // Quarks
+        set(13, 0.2f,      zpe_from_mass(0.2f));      // Up
+        set(14, 0.15f,     zpe_from_mass(0.15f));     // Down
+        set(15, 0.005f,    zpe_from_mass(0.005f));    // Strange
+        set(16, 0.0004f,   zpe_from_mass(0.0004f));   // Charm
+        set(17, 0.00012f,  zpe_from_mass(0.00012f));  // Bottom
+        set(18, 0.000003f, zpe_from_mass(0.000003f)); // Top
+        // Antiquarks
+        set(19, 0.2f,      zpe_from_mass(0.2f));      // Anti-up
+        set(20, 0.15f,     zpe_from_mass(0.15f));     // Anti-down
+        set(21, 0.005f,    zpe_from_mass(0.005f));    // Anti-strange
+        set(22, 0.0004f,   zpe_from_mass(0.0004f));   // Anti-charm
+        set(23, 0.00012f,  zpe_from_mass(0.00012f));  // Anti-bottom
+        set(24, 0.000003f, zpe_from_mass(0.000003f)); // Anti-top
+        // Bosons
+        set(25, 100.0f,    0.0f);                      // Gluon (massless)
+        set(26, 0.00006f,  zpe_from_mass(0.00006f));  // W+
+        set(27, 0.00006f,  zpe_from_mass(0.00006f));  // W-
+        set(28, 0.00005f,  zpe_from_mass(0.00005f));  // Z0
+        set(29, 0.00004f,  zpe_from_mass(0.00004f));  // Higgs
+        // BSM
+        set(30, 100.0f,    0.0f);                      // Graviton (massless)
+        set(31, 0.001f,    zpe_from_mass(0.001f));    // Dark Matter
+        set(32, 100.0f,    0.0f);                      // Dark Energy (massless)
+        // Hypothetical: Dark Matter Candidates
+        set(33, 5.0f,            zpe_from_mass(5.0f));             // Axino
+        set(34, 0.0000001f,      zpe_from_mass(0.0000001f));      // WIMPzilla
+        set(35, 0.001f,          zpe_from_mass(0.001f));           // SIMP
+        set(36, 100.0f,          0.0f);                             // Sterile Neutrino
+        set(37, 100.0f,          0.0f);                             // Dark Photon
+        set(38, 0.000005f,       zpe_from_mass(0.000005f));        // Q-Ball
+        // Hypothetical: SUSY
+        set(39, 0.000025f,       zpe_from_mass(0.000025f));        // Selectron
+        set(40, 0.000017f,       zpe_from_mass(0.000017f));        // Smuon
+        set(41, 0.000033f,       zpe_from_mass(0.000033f));        // Stau
+        set(42, 0.0000033f,      zpe_from_mass(0.0000033f));       // Squark
+        set(43, 0.0000025f,      zpe_from_mass(0.0000025f));       // Gluino
+        set(44, 0.00005f,        zpe_from_mass(0.00005f));         // Photino
+        set(45, 0.000017f,       zpe_from_mass(0.000017f));        // Wino
+        set(46, 0.000017f,       zpe_from_mass(0.000017f));        // Zino
+        set(47, 0.000025f,       zpe_from_mass(0.000025f));        // Higgsino
+        set(48, 0.00005f,        zpe_from_mass(0.00005f));         // Neutralino
+        set(49, 0.000025f,       zpe_from_mass(0.000025f));        // Sneutrino
+        // Hypothetical: Force Carriers & Gravity
+        set(50, 100.0f,          0.0f);                             // Gravitino
+        set(51, 0.0000000005f,   zpe_from_mass(0.0000000005f));    // X Boson
+        set(52, 0.0000000005f,   zpe_from_mass(0.0000000005f));    // Y Boson
+        set(53, 0.0000000003f,   zpe_from_mass(0.0000000003f));    // Monopole
+        set(54, 0.000005f,       zpe_from_mass(0.000005f));        // Radion
+        set(55, 0.0005f,         zpe_from_mass(0.0005f));          // Dilaton
+        // Hypothetical: Theoretical Extremes
+        set(56, 50.0f,           0.0f);                             // Tachyon
+        set(57, 0.00000000005f,  zpe_from_mass(0.00000000005f));   // Preon
+        set(58, 0.0000000004f,   zpe_from_mass(0.0000000004f));    // Inflaton
+        set(59, 100.0f,          0.0f);                             // Majoron
+        set(60, 0.002f,          zpe_from_mass(0.002f));           // Odderon
+        set(61, 0.003f,          zpe_from_mass(0.003f));           // Glueball
+        set(62, 0.005f,          zpe_from_mass(0.005f));           // Skyrmion
+        set(63, 100.0f,          0.0f);                             // X17
+        set(64, 100.0f,          0.0f);                             // Chameleon
+        // Hypothetical: New Class
+        set(65, 0.00001f,        zpe_from_mass(0.00001f));         // Paraparticle
+        set(66, 100.0f,          0.0f);                             // Dyn. Axion QP
+
+        VkDeviceSize mzpe_size = mass_zpe.size() * sizeof(float);
+        mass_zpe_buffer_ = ctx.create_buffer(mzpe_size, BUF_USAGE, MEM_PROPS);
+        ctx.update_buffer(mass_zpe_buffer_, mass_zpe.data(), mzpe_size);
+    }
+
+    // Pre-size reusable scratch buffer for per-frame force scaling
+    effective_forces_.resize(MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES);
+
     allocate_and_write_descriptor_sets(ctx);
 
     tick = 0;
@@ -247,6 +348,7 @@ void ComputePipeline::clear_buffers(VulkanContext& ctx) {
     ctx.destroy_buffer(genome_buffer_);
     ctx.destroy_buffer(bond_buffer_);
     ctx.destroy_buffer(force_obj_buffer_);
+    ctx.destroy_buffer(mass_zpe_buffer_);
 }
 
 // ── Write descriptor sets ─────────────────────────────────────────────────────
@@ -301,8 +403,8 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     std::vector<VkWriteDescriptorSet>    writes;
     std::vector<VkDescriptorBufferInfo>  buf_infos;
     std::vector<VkDescriptorImageInfo>   img_infos;
-    writes.reserve(38);
-    buf_infos.reserve(36);
+    writes.reserve(40);
+    buf_infos.reserve(38);
     img_infos.reserve(2);
 
     auto pos_sz  = pos_buffer_a_.size;
@@ -316,6 +418,7 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     auto gnm_sz  = genome_buffer_.size;
     auto bnd_sz  = bond_buffer_.size;
     auto fo_sz   = force_obj_buffer_.size;
+    auto mzpe_sz = mass_zpe_buffer_.size;
 
     // ── Set A: in=a, out=b ────────────────────────────────────────────────────
     write_storage_buffer(writes, buf_infos, desc_set_a_,  0, pos_buffer_a_.handle,         pos_sz);
@@ -336,6 +439,7 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     write_storage_buffer(writes, buf_infos, desc_set_a_, 15, genome_buffer_.handle,        gnm_sz);
     write_storage_buffer(writes, buf_infos, desc_set_a_, 16, bond_buffer_.handle,          bnd_sz);
     write_storage_buffer(writes, buf_infos, desc_set_a_, 17, force_obj_buffer_.handle,    fo_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_, 18, mass_zpe_buffer_.handle,    mzpe_sz);
 
     // ── Set B: in=b, out=a ────────────────────────────────────────────────────
     write_storage_buffer(writes, buf_infos, desc_set_b_,  0, pos_buffer_b_.handle,         pos_sz);
@@ -356,6 +460,7 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     write_storage_buffer(writes, buf_infos, desc_set_b_, 15, genome_buffer_.handle,        gnm_sz);
     write_storage_buffer(writes, buf_infos, desc_set_b_, 16, bond_buffer_.handle,          bnd_sz);
     write_storage_buffer(writes, buf_infos, desc_set_b_, 17, force_obj_buffer_.handle,    fo_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_, 18, mass_zpe_buffer_.handle,    mzpe_sz);
 
     vkUpdateDescriptorSets(ctx.device,
                            static_cast<uint32_t>(writes.size()),
@@ -369,11 +474,10 @@ void ComputePipeline::upload_dynamic_data(VulkanContext& ctx, const Particles& p
 
     // Apply per-type trait scales before uploading forces.
     // The UI edits particles.forces (base values); GPU receives the scaled version.
-    float effective_forces[MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES];
     for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b)
         for (uint32_t a = 0; a < MAX_PARTICLE_TYPES; ++a) {
             uint32_t fi = a + b * MAX_PARTICLE_TYPES;
-            effective_forces[fi] = particles.forces[fi] * particles.trait_scales[a];
+            effective_forces_[fi] = particles.forces[fi] * particles.trait_scales[a];
         }
 
     VkDeviceSize force_size    = particles.forces.size()     * sizeof(float);
@@ -381,7 +485,7 @@ void ComputePipeline::upload_dynamic_data(VulkanContext& ctx, const Particles& p
     VkDeviceSize type_size     = particles.types.size()      * sizeof(uint32_t);
     VkDeviceSize behavior_size = MAX_PARTICLE_TYPES           * sizeof(uint32_t);
 
-    ctx.update_buffer(force_buffer_,    effective_forces,              force_size);
+    ctx.update_buffer(force_buffer_,    effective_forces_.data(),      force_size);
     ctx.update_buffer(color_buffer_,    particles.colors.data(),       color_size);
     ctx.update_buffer(type_buffer_,     particles.types.data(),        type_size);
     ctx.update_buffer(behavior_buffer_, particles.behavior_flags,      behavior_size);

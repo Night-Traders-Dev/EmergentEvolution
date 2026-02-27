@@ -9,6 +9,7 @@
 #include "physics/achievements.h"
 #include <GLFW/glfw3.h>
 #include <vector>
+#include <random>
 #include <cstring>
 #include <cmath>
 
@@ -82,6 +83,7 @@ private:
 
     SpatialGrid grid_;
     bool cpu_particles_dirty_ = false;
+    std::uniform_real_distribution<float> angle_dist_{0.0f, 6.2831853f};
 
     float emergent_temperature_ = 1.0f;   // EMA of kinetic temperature (Kelvin)
     float emergent_bfield_      = 0.0f;   // EMA of emergent B-field magnitude
@@ -108,6 +110,7 @@ private:
         int Z = 0, N = 0;
         uint32_t rep = 0;
         bool is_anti = false;       // antimatter nucleus (antiprotons)
+        int shell_fill[3] = {0, 0, 0};  // pre-computed electron shell occupancy
         std::vector<uint32_t> proton_indices;
         std::vector<uint32_t> neutron_indices;
     };

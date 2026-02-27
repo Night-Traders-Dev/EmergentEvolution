@@ -35,6 +35,12 @@ layout(set = 0, binding = 17, std430) readonly buffer ForceObjectBuffer {
     ForceObj data[];
 } force_objects;
 
+// Per-type mass_inv + ZPE lookup (CPU-populated, replaces branching if-chains)
+// Layout: [type*2+0] = mass_inv, [type*2+1] = zpe
+layout(set = 0, binding = 18, std430) readonly buffer MassZpeBuffer {
+    float data[];
+} mass_zpe_buffer;
+
 // ── Push Constants (expanded to 100 bytes) ──────────────────────────────────
 layout(push_constant, std430) uniform Params {
     vec2  region_size;
@@ -173,6 +179,9 @@ const float L_MIN              = 120.0;  // minimum angular momentum (ground sta
 const float K_SPIN_ORBIT       = 0.3;   // spin-orbit coupling strength (fine structure)
 const float CENTRIFUGAL_SOFTEN = 1.0;   // softening for r→0 stability
 const float K_MAGNETIC         = 1.0;   // intrinsic Biot-Savart coupling (scaled for 1/r²)
+const float MU_PROTON_ANOM   = 2.793;  // proton magnetic moment (nuclear magnetons, g ≈ 5.586)
+const float MU_NEUTRON       = -1.913; // neutron magnetic moment (anomalous — nonzero despite q=0)
+const float K_DIPOLE         = 2.0;    // nucleon spin-dipole B-field coupling (1/r³ falloff)
 const float ANNIHIL_RADIUS   = 6.0;
 const float ANNIHIL_ATTRACTION = 200.0;
 const float ANNIHIL_DRAIN    = 0.4;
@@ -217,81 +226,9 @@ bool is_annihilation_pair(uint a, uint b) {
         || (a >= ANTI_UP && a <= ANTI_BOTTOM && b == a - 6u);
 }
 
-// Per-type inverse mass (for force scaling)
+// Per-type inverse mass — CPU-populated lookup table (binding 18)
 float get_mass_inv(uint type) {
-    // Composites (nucleons)
-    if (type <= NEUTRON_TYPE || type == ANTIPROTON_TYPE) return 0.025;
-    // Gen1 leptons
-    if (type == ELECTRON_TYPE || type == POSITRON_TYPE) return 1.0;
-    // Gen2 leptons (muon ~207 me)
-    if (type == MUON_TYPE || type == ANTIMUON_TYPE) return 0.005;
-    // Gen3 leptons (tau ~3477 me)
-    if (type == TAU_TYPE || type == ANTITAU_TYPE) return 0.0003;
-    // Neutrinos
-    if (type == NEUTRINO_E_TYPE || type == NEUTRINO_MU_TYPE || type == NEUTRINO_TAU_TYPE) return 100.0;
-    // Light quarks (u ~2.2 MeV, d ~4.7 MeV — very light bare mass)
-    if (type == UP_QUARK || type == ANTI_UP) return 0.2;
-    if (type == DOWN_QUARK || type == ANTI_DOWN) return 0.15;
-    // Strange ~95 MeV
-    if (type == STRANGE_QUARK || type == ANTI_STRANGE) return 0.005;
-    // Charm ~1.27 GeV
-    if (type == CHARM_QUARK || type == ANTI_CHARM) return 0.0004;
-    // Bottom ~4.18 GeV
-    if (type == BOTTOM_QUARK || type == ANTI_BOTTOM) return 0.00012;
-    // Top ~173 GeV
-    if (type == TOP_QUARK || type == ANTI_TOP) return 0.000003;
-    // Massless bosons
-    if (type == PHOTON_TYPE || type == GLUON_TYPE) return 100.0;
-    // W ~80 GeV
-    if (type == W_PLUS_TYPE || type == W_MINUS_TYPE) return 0.00006;
-    // Z ~91 GeV
-    if (type == Z_BOSON_TYPE) return 0.00005;
-    // Higgs ~125 GeV
-    if (type == HIGGS_TYPE) return 0.00004;
-    // BSM particles
-    if (type == GRAVITON_TYPE) return 100.0;   // massless
-    if (type == DARK_MATTER_TYPE) return 0.001; // ~1 TeV WIMP
-    if (type == DARK_ENERGY_TYPE) return 100.0; // massless field quantum
-    // ── Hypothetical: Dark Matter Candidates ──
-    if (type == AXINO_TYPE) return 5.0;            // 0.1 MeV — very light
-    if (type == WIMPZILLA_TYPE) return 0.0000001;  // 1e12 MeV — ultra-heavy
-    if (type == SIMP_TYPE) return 0.001;           // 500 MeV — proton-scale
-    if (type == STERILE_NEUTRINO_TYPE) return 100.0; // 0.001 MeV — near-massless
-    if (type == DARK_PHOTON_TYPE) return 100.0;    // 17 MeV — massless-like boson
-    if (type == QBALL_TYPE) return 0.000005;       // 1e6 MeV — ultra-heavy
-    // ── Hypothetical: Supersymmetric Sparticles ──
-    if (type == SELECTRON_TYPE) return 0.000025;   // 200 GeV
-    if (type == SMUON_TYPE) return 0.000017;       // 300 GeV
-    if (type == STAU_TYPE) return 0.000033;        // 150 GeV
-    if (type == SQUARK_TYPE) return 0.0000033;     // 1.5 TeV
-    if (type == GLUINO_TYPE) return 0.0000025;     // 2 TeV
-    if (type == PHOTINO_TYPE) return 0.00005;      // 100 GeV
-    if (type == WINO_TYPE) return 0.000017;        // 300 GeV
-    if (type == ZINO_TYPE) return 0.000017;        // 300 GeV
-    if (type == HIGGSINO_TYPE) return 0.000025;    // 200 GeV
-    if (type == NEUTRALINO_TYPE) return 0.00005;   // 100 GeV (stable LSP)
-    if (type == SNEUTRINO_TYPE) return 0.000025;   // 200 GeV
-    // ── Hypothetical: Force Carriers & Gravity ──
-    if (type == GRAVITINO_TYPE) return 100.0;      // 0.001 MeV — near-massless
-    if (type == X_BOSON_TYPE) return 0.0000000005; // 1e15 MeV — GUT scale
-    if (type == Y_BOSON_TYPE) return 0.0000000005; // 1e15 MeV — GUT scale
-    if (type == MONOPOLE_TYPE) return 0.0000000003;// 1e16 MeV — heaviest
-    if (type == RADION_TYPE) return 0.000005;      // 1e6 MeV
-    if (type == DILATON_TYPE) return 0.0005;       // 10 GeV
-    // ── Hypothetical: Theoretical Extremes ──
-    if (type == TACHYON_TYPE) return 50.0;         // ~1 MeV imaginary mass
-    if (type == PREON_TYPE) return 0.00000000005;  // 1e17 MeV — sub-quark
-    if (type == INFLATON_TYPE) return 0.0000000004;// 1e13 MeV
-    if (type == MAJORON_TYPE) return 100.0;        // 0.0001 MeV — near-massless
-    if (type == ODDERON_TYPE) return 0.002;        // 2500 MeV
-    if (type == GLUEBALL_TYPE) return 0.003;       // 1700 MeV
-    if (type == SKYRMION_TYPE) return 0.005;       // 939 MeV — nucleon mass
-    if (type == X17_TYPE) return 100.0;            // 17 MeV — boson
-    if (type == CHAMELEON_TYPE) return 100.0;      // 0.01 MeV — DE-like
-    // ── Hypothetical: New Class ──
-    if (type == PARAPARTICLE_TYPE) return 0.00001; // 500 GeV
-    if (type == DYN_AXION_QP_TYPE) return 100.0;   // 0.001 MeV — near-massless
-    return 1.0;
+    return mass_zpe_buffer.data[type * 2u];
 }
 
 // Get mass (inverse of get_mass_inv, clamped)
@@ -300,21 +237,9 @@ float get_mass(uint type) {
     return (inv > 0.001) ? 1.0 / inv : 1000.0;
 }
 
-// Zero-point energy floor per particle type (Third Law of Thermodynamics)
-// Massive particles retain a minimum energy proportional to rest mass.
-// Massless particles (photon, gluon, graviton, neutrino, DE) can drain to zero.
+// Zero-point energy floor per particle type — CPU-populated lookup table (binding 18)
 float get_zpe(uint type) {
-    if (type == PHOTON_TYPE || type == GLUON_TYPE || type == GRAVITON_TYPE
-        || type == DARK_ENERGY_TYPE) return 0.0;
-    if (type == NEUTRINO_E_TYPE || type == NEUTRINO_MU_TYPE
-        || type == NEUTRINO_TAU_TYPE) return 0.0;
-    // Hypothetical massless/near-massless types
-    if (type == STERILE_NEUTRINO_TYPE || type == DARK_PHOTON_TYPE
-        || type == GRAVITINO_TYPE || type == TACHYON_TYPE
-        || type == MAJORON_TYPE || type == X17_TYPE
-        || type == CHAMELEON_TYPE || type == DYN_AXION_QP_TYPE) return 0.0;
-    float mass = get_mass(type);
-    return clamp(mass * 0.0001, 0.0, 0.05);
+    return mass_zpe_buffer.data[type * 2u + 1u];
 }
 
 // Color interaction factor between two colored particles
@@ -486,6 +411,12 @@ void apply_physics(uint i) {
     float MAX_RADIUS    = params.interaction_radius;
     float MAX_RADIUS_SQ = MAX_RADIUS * MAX_RADIUS;
 
+    // ── Pre-loop cached values (avoid per-pair recalculation) ──────────
+    float mass                 = 1.0 / max(mass_inv_a, 0.00001);
+    float inv_repulsion_radius = 1.0 / max(params.repulsion_radius, 0.001);
+    float inv_yukawa_range     = 1.0 / YUKAWA_RANGE;
+    float inv_c_sim            = 1.0 / C_SIM;
+
     for (int j = 0; j < int(params.particle_count); j++) {
         if (i == uint(j)) continue;
 
@@ -543,6 +474,10 @@ void apply_physics(uint i) {
             continue;  // dark energy doesn't participate in other forces
         }
 
+        // ── Per-pair cached lookups (avoid redundant buffer reads) ───────────
+        float charge_b   = get_charge(uint(j));
+        float mass_inv_b = get_mass_inv(type_b);
+
         local_density += exp(-dist / (MAX_RADIUS * 0.5));
 
         // ── 0. Zeroth Law: Thermal conduction (velocity exchange) ────────────
@@ -552,13 +487,13 @@ void apply_physics(uint i) {
             vec2 vel_b = in_vel_buffer.data[j];
             vec2 dv = vel_b - vel_a;
             float cond_coupling = 0.0005 / (dist + 1.0);
-            float mass_factor = sqrt(mass_inv_a * get_mass_inv(type_b));
+            float mass_factor = sqrt(mass_inv_a * mass_inv_b);
             total_force += dv * cond_coupling * mass_factor;
         }
 
         // ── 1. Soft-body repulsion (universal, skip for DM-normal interactions) ─
         if (dist < params.repulsion_radius && !dm_interaction) {
-            float overlap = 1.0 - (dist / params.repulsion_radius);
+            float overlap = 1.0 - dist * inv_repulsion_radius;
             total_force -= normal * overlap * params.pressure_resistance;
         }
 
@@ -569,8 +504,8 @@ void apply_physics(uint i) {
         if (is_baryon(type_a) && is_baryon(type_b) && !dm_interaction) {
             if (dist < YUKAWA_RANGE) {
                 float inv_r = 1.0 / max(dist, 0.5);
-                float yukawa_F = params.yukawa_strength * YUKAWA_COUPLING * exp(-dist / YUKAWA_RANGE)
-                                 * (inv_r + 1.0 / YUKAWA_RANGE) * inv_r;
+                float yukawa_F = params.yukawa_strength * YUKAWA_COUPLING * exp(-dist * inv_yukawa_range)
+                                 * (inv_r + inv_yukawa_range) * inv_r;
 
                 // Smooth window: full strength within 4px, fades to 0 by 7px
                 // Tight cutoff prevents nucleons from separate atoms merging
@@ -591,7 +526,6 @@ void apply_physics(uint i) {
 
         // ── 3. Coulomb electrostatic force (skip for DM) ──────────────────
         if (!dm_interaction) {
-            float charge_b = get_charge(uint(j));
             float q_prod = charge_a * charge_b;
             if (abs(q_prod) > 0.001) {
                 float soften_sq = max(SOFTEN_MIN * SOFTEN_MIN,
@@ -616,7 +550,6 @@ void apply_physics(uint i) {
         // ── 3b. Track nearest nucleon for centrifugal barrier ─────────
         // (Applied ONCE after loop to avoid N× force from multi-nucleon nuclei)
         if (is_light_particle) {
-            float mass_inv_b = get_mass_inv(type_b);
             if (mass_inv_b < 0.05) {  // partner is nucleon-scale
                 if (dist < closest_nuc_dist) {
                     closest_nuc_dist = dist;
@@ -665,62 +598,91 @@ void apply_physics(uint i) {
 
         // ── 5. Gravity (optional) ───────────────────────────────────────────
         {
-            float mass_a = get_mass(type_a);
-            float mass_b = get_mass(type_b);
+            float mass_b = (mass_inv_b > 0.001) ? 1.0 / mass_inv_b : 1000.0;
+            float mass_prod = mass * mass_b;
             // DM self-gravity: always on, enhanced (forms halos)
             if (dm_a && dm_b) {
-                float f_grav = 20.0 * mass_a * mass_b / (dist_sq + 25.0);
+                float f_grav = 20.0 * mass_prod / (dist_sq + 25.0);
                 total_force += normal * f_grav;
             }
             // SIMP self-interaction: 30x self-gravity between SIMP pairs
             if (type_a == SIMP_TYPE && type_b == SIMP_TYPE) {
-                float f_simp = 30.0 * mass_a * mass_b / (dist_sq + 25.0);
+                float f_simp = 30.0 * mass_prod / (dist_sq + 25.0);
                 total_force += normal * f_simp;
             }
             // DM-normal gravity: always on but weaker
             else if (dm_interaction) {
-                float f_grav = 5.0 * mass_a * mass_b / (dist_sq + 25.0);
+                float f_grav = 5.0 * mass_prod / (dist_sq + 25.0);
                 total_force += normal * f_grav;
             }
             // Normal gravity (slider-controlled)
             // F = G·m1·m2 / r²  (Newton's law, slider 1.0 = vanilla)
             else if (params.gravity_strength > 0.001) {
-                float f_grav = params.gravity_strength * mass_a * mass_b
+                float f_grav = params.gravity_strength * mass_prod
                                / (dist_sq + 25.0);
                 total_force += normal * f_grav;
             }
         }
 
-        // ── 6. Magnetic force (Biot-Savart, skip for DM) ─────────────────────
-        // Each moving charge generates a B field; other charges feel Lorentz force.
-        // F = q·(v × B), B = μ₀·q·(v × r̂)/(4π·r²)
-        // Slider 1.0 = standard Biot-Savart + Lorentz
+        // ── 6. Magnetic force (Biot-Savart + nucleon dipoles, skip DM) ────
+        // 6a. Moving charges → Biot-Savart B-field (1/r² falloff)
+        //     All particles accumulate B for spin-moment coupling (section 9).
+        //     Only charged particles feel direct Lorentz force: F = q·(v × B).
+        // 6b. Nucleon intrinsic magnetic dipoles (1/r³ falloff)
+        //     Proton:  μ_p = +2.793 μ_N (anomalous, quark substructure)
+        //     Neutron: μ_n = −1.913 μ_N (nonzero despite q=0 — key evidence for quarks)
         if (!dm_interaction) {
-            float charge_b = get_charge(uint(j));
-            if (abs(charge_a) > 0.01 && abs(charge_b) > 0.01) {
-                nearby_charge_sum += abs(charge_b);
+            // 6a. Biot-Savart: B from moving charges
+            if (abs(charge_b) > 0.01) {
                 vec2  vel_b   = in_vel_buffer.data[j];
                 float cross_j = vel_b.x * (-normal.y) - vel_b.y * (-normal.x);
                 float coupling = params.lorentz_strength * K_MAGNETIC;
                 float B_z     = coupling * charge_b * cross_j / (dist_sq + 1.0);
-                total_force  += charge_a * B_z * vec2(vel_a.y, -vel_a.x);
-                accumulated_Bz += B_z;
+                accumulated_Bz += B_z;  // ALL particles accumulate B (neutrons too)
+                // Charged particles feel direct Lorentz force: F = q(v×B)
+                if (abs(charge_a) > 0.01) {
+                    nearby_charge_sum += abs(charge_b);
+                    total_force += charge_a * B_z * vec2(vel_a.y, -vel_a.x);
+                }
             }
-            // Magnetic monopole: static radial B = g/r² (no velocity cross product)
-            // Lorentz force on nearby charged particles: F = q * v × B_radial
+
+            // 6b. Nucleon intrinsic magnetic dipole
+            // Static spin dipole B ∝ μ·spin/r³ — dominant at nuclear distances,
+            // negligible at long range.  Separate from velocity-dependent Biot-Savart.
+            {
+                float mu_intrinsic = 0.0;
+                if (type_b == PROTON_TYPE)
+                    mu_intrinsic = MU_PROTON_ANOM;
+                else if (type_b == ANTIPROTON_TYPE)
+                    mu_intrinsic = -MU_PROTON_ANOM;  // CPT symmetry
+                else if (type_b == NEUTRON_TYPE)
+                    mu_intrinsic = MU_NEUTRON;
+
+                if (abs(mu_intrinsic) > 0.01) {
+                    float spin_b = get_spin(uint(j));
+                    float r3     = dist * dist_sq + 1.0;  // r³ + softening
+                    float B_dip  = params.lorentz_strength * K_DIPOLE
+                                 * mu_intrinsic * spin_b / r3;
+                    accumulated_Bz += B_dip;
+
+                    // Charged particles also feel direct Lorentz from dipole B
+                    if (abs(charge_a) > 0.01) {
+                        total_force += charge_a * B_dip * vec2(vel_a.y, -vel_a.x);
+                    }
+                }
+            }
+
+            // 6c. Magnetic monopole: static radial B = g/r²
             if (type_b == MONOPOLE_TYPE && abs(charge_a) > 0.01) {
-                float g_mono = 200.0;  // magnetic charge strength
-                float B_mono = g_mono / (dist_sq + 4.0);
-                // Radial B-field → Lorentz force perpendicular to velocity
-                total_force += charge_a * B_mono * vec2(vel_a.y, -vel_a.x);
-            }
-            if (type_a == MONOPOLE_TYPE && abs(get_charge(uint(j))) > 0.01) {
                 float g_mono = 200.0;
                 float B_mono = g_mono / (dist_sq + 4.0);
-                float charge_b_val = get_charge(uint(j));
+                total_force += charge_a * B_mono * vec2(vel_a.y, -vel_a.x);
+            }
+            if (type_a == MONOPOLE_TYPE && abs(charge_b) > 0.01) {
+                float g_mono = 200.0;
+                float B_mono = g_mono / (dist_sq + 4.0);
                 vec2 vel_b = in_vel_buffer.data[j];
-                // Reaction: monopole feels force from charged particle's motion
-                total_force -= charge_b_val * B_mono * vec2(vel_b.y, -vel_b.x) * mass_inv_a;
+                total_force -= charge_b * B_mono * vec2(vel_b.y, -vel_b.x) * mass_inv_a;
             }
         }
 
@@ -751,8 +713,7 @@ void apply_physics(uint i) {
         bool both_baryons = is_baryon(type_a) && is_baryon(type_b);
         bool both_colored = is_colored(flags_a) && is_colored(flags_b);
         if (!dm_interaction && !both_colored) {
-            float mi_b = get_mass_inv(type_b);
-            if (is_massive_a && mi_b < 10.0) {
+            if (is_massive_a && mass_inv_b < 10.0) {
                 // Baryons: tight safety net (1.5px) — Pauli force handles smooth repulsion
                 float MIN_SEP = both_baryons ? PAULI_CORE * 0.25 : params.radius * 2.0;
                 float penetration = MIN_SEP - dist;
@@ -765,7 +726,7 @@ void apply_physics(uint i) {
                     if (vn > max_vn) {
                         max_vn = vn;
                         max_vn_normal = normal;
-                        max_vn_mass_b = get_mass(type_b);
+                        max_vn_mass_b = (mass_inv_b > 0.001) ? 1.0 / mass_inv_b : 1000.0;
                     }
                 }
             }
@@ -804,12 +765,25 @@ void apply_physics(uint i) {
     }
 
     // ── 9. Spin magnetic moment: μ·∇B (force in external B-field) ─────
-    // Magnetic dipole feels F = ∇(μ·B) — only in external field, not self-force
-    // μ = g·q·S/(2m), Dirac g-factor = 2 → μ = q·S/m
-    if (abs(spin_a * charge_a) > 0.01 && abs(accumulated_Bz) > 0.001) {
-        float mu = spin_a * charge_a * mass_inv_a;  // μ = q·S/m (g=2)
-        float grad_scale = 0.05;  // phenomenological B-gradient length scale
-        total_force += mu * accumulated_Bz * grad_scale * vec2(vel_a.y, -vel_a.x);
+    // Magnetic dipoles feel F = ∇(μ·B) in external B-field gradients.
+    // Proton:   μ_p = +2.793 μ_N (anomalous g ≈ 5.586, from quark substructure)
+    // Neutron:  μ_n = −1.913 μ_N (nonzero despite zero charge!)
+    // Electron: μ_e ≈ q·S/m (Dirac g ≈ 2, accurate to 0.1%)
+    if (abs(accumulated_Bz) > 0.001) {
+        float mu_eff = 0.0;
+        if (type_a == PROTON_TYPE)
+            mu_eff = MU_PROTON_ANOM * spin_a * mass_inv_a;
+        else if (type_a == ANTIPROTON_TYPE)
+            mu_eff = -MU_PROTON_ANOM * spin_a * mass_inv_a;
+        else if (type_a == NEUTRON_TYPE)
+            mu_eff = MU_NEUTRON * spin_a * mass_inv_a;
+        else if (abs(charge_a * spin_a) > 0.01)
+            mu_eff = charge_a * spin_a * mass_inv_a;  // Dirac g=2
+
+        if (abs(mu_eff) > 0.0001) {
+            float grad_scale = 0.05;  // phenomenological B-gradient length scale
+            total_force += mu_eff * accumulated_Bz * grad_scale * vec2(vel_a.y, -vel_a.x);
+        }
     }
 
     // ── Force Object effects (stationary emitters, max 8) ──────────────────
@@ -826,12 +800,14 @@ void apply_physics(uint i) {
         float fo_dist   = length(fo_delta);
         if (fo_dist < 1.0 || fo_dist > fo_radius) continue;
 
-        vec2  fo_normal = fo_delta / fo_dist;
+        float inv_fo_dist    = 1.0 / fo_dist;
+        float fo_dist_sq     = fo_dist * fo_dist;
+        vec2  fo_normal      = fo_delta * inv_fo_dist;
 
         if (fo_type == 0u) {
             // EM FIELD: Coulomb-like radial force on charged particles
             if (abs(charge_a) > 0.01) {
-                float coulomb = fo_str * 800.0 * charge_a / (fo_dist * fo_dist + 25.0);
+                float coulomb = fo_str * 800.0 * charge_a / (fo_dist_sq + 25.0);
                 coulomb = clamp(coulomb, -100.0, 100.0);
                 total_force += fo_normal * coulomb;
             }
@@ -841,7 +817,7 @@ void apply_physics(uint i) {
             if (is_baryon(type_a)) {
                 float yukawa = fo_str * YUKAWA_COUPLING * 0.5
                              * exp(-fo_dist / (YUKAWA_RANGE * 3.0))
-                             / max(fo_dist, 0.5);
+                             * max(inv_fo_dist, 2.0);
                 total_force += fo_normal * yukawa;
             }
         }
@@ -849,14 +825,13 @@ void apply_physics(uint i) {
             // WEAK FORCE: short-range boost on all particles
             float weak_range = min(fo_radius, 30.0);
             if (fo_dist < weak_range) {
-                float weak_F = fo_str * 100.0 * exp(-fo_dist / 5.0) / max(fo_dist * fo_dist, 0.1);
+                float weak_F = fo_str * 100.0 * exp(-fo_dist / 5.0) / max(fo_dist_sq, 0.1);
                 total_force += fo_normal * weak_F;
             }
         }
         else if (fo_type == 3u) {
             // GRAVITY WELL: gravitational attraction on all massive particles
-            float mass_a_val = get_mass(type_a);
-            float f_grav = fo_str * mass_a_val * 200.0 / (fo_dist * fo_dist + 25.0);
+            float f_grav = fo_str * mass * 200.0 / (fo_dist_sq + 25.0);
             total_force += fo_normal * f_grav;
         }
         else if (fo_type == 4u) {
@@ -871,18 +846,19 @@ void apply_physics(uint i) {
             float heat_angle = float(heat_seed) * (6.28318 / 4294967296.0);
             vec2  heat_dir = vec2(cos(heat_angle), sin(heat_angle));
             // Apply as force (will be integrated via relativistic momentum update)
-            float heat_mass = 1.0 / max(mass_inv_a, 0.00001);
-            total_force += heat_dir * fo_str * 3.0 * falloff * heat_mass;
+            total_force += heat_dir * fo_str * 3.0 * falloff * mass;
         }
     }
 
+    // ── Pre-integration cached values ──────────────────────────────────────
+    float spd = length(vel_a);
+
     // ── Energy metabolism ────────────────────────────────────────────────────
     {
-        float spd = length(vel_a);
         float delta_e = 0.0;
 
         // Relativistic synchrotron radiation: scales as γ²v² (strong near c)
-        float beta_e = min(spd / C_SIM, 0.9999);
+        float beta_e = min(spd * inv_c_sim, 0.9999);
         float gamma_e = inversesqrt(max(1.0 - beta_e * beta_e, 0.0001));
         delta_e -= gamma_e * gamma_e * spd * spd * 0.0000001 * params.dt;
 
@@ -929,11 +905,8 @@ void apply_physics(uint i) {
     // Special Relativity: momentum p = γmv, velocity derived from momentum
     // v = pc / √(m²c² + p²) — naturally limits |v| < c
     {
-        float mass = 1.0 / max(mass_inv_a, 0.00001);
-
         // Current Lorentz factor from velocity
-        float spd = length(vel_a);
-        float beta = min(spd / C_SIM, 0.9999);
+        float beta = min(spd * inv_c_sim, 0.9999);
         float gamma = inversesqrt(max(1.0 - beta * beta, 0.0001));
 
         // Current relativistic momentum: p = γmv
@@ -959,7 +932,7 @@ void apply_physics(uint i) {
         // Derive velocity from momentum: v = pc / √(m²c² + p²)
         float p_sq = dot(momentum, momentum);
         float mc = mass * C_SIM;
-        vel_a = momentum * C_SIM / sqrt(mc * mc + p_sq);
+        vel_a = momentum * C_SIM * inversesqrt(mc * mc + p_sq);
     }
 
     pos_a += vel_a * params.dt;
@@ -967,15 +940,14 @@ void apply_physics(uint i) {
     // ── Hard-sphere collision: absolute position + elastic velocity ─────
     // Both particles independently push → each applies half correction → net = full.
     // Momentum-conserving elastic collision with slight inelasticity for stability.
-    if (length(collision_push) > 0.001) {
+    if (dot(collision_push, collision_push) > 0.000001) {
         // Position: gentle correction (smooths out over several frames)
         pos_a += collision_push * 0.15;
 
         // Velocity: elastic collision impulse along strongest collision normal
         if (max_vn > 0.0) {
-            float mass_a = get_mass(type_a);
             float e = 0.95;  // coefficient of restitution (slightly inelastic)
-            float impulse = (1.0 + e) * max_vn * max_vn_mass_b / (mass_a + max_vn_mass_b);
+            float impulse = (1.0 + e) * max_vn * max_vn_mass_b / (mass + max_vn_mass_b);
             vel_a -= max_vn_normal * impulse;
         }
     }
