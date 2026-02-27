@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <iostream>
 #include <random>
+#include <unordered_map>
 #ifdef HAS_OPENMP
 #include <omp.h>
 #endif
@@ -188,7 +189,8 @@ void PhysicsSimulation::reset() {
         recount_force_objects();
     }
 
-    // No bonds in physics sim
+    // Reset bond data
+    bond_data_.clear();
     particles.bond_partners_ptr = nullptr;
     particles.bond_partners_count = 0;
 
@@ -1228,6 +1230,9 @@ void PhysicsSimulation::check_fusion() {
             if (j <= i || used[j]) return;
             if (readback_energies_[j] < 0.1f) return;
             if (particles.types[j] != PROTON_TYPE) return;
+            // Skip nucleons already bound in the same nucleus
+            if (particles.orbital_parent[i] >= 0 &&
+                particles.orbital_parent[i] == particles.orbital_parent[j]) return;
             glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
             float d2 = delta.x * delta.x + delta.y * delta.y;
             if (d2 > FUSION_RADIUS_SQ) return;
@@ -1312,6 +1317,9 @@ void PhysicsSimulation::check_fusion() {
             if (j == i || used[j]) return;
             if (readback_energies_[j] < 0.1f) return;
             if (particles.types[j] != NEUTRON_TYPE) return;
+            // Skip nucleons already bound in the same nucleus
+            if (particles.orbital_parent[i] >= 0 &&
+                particles.orbital_parent[i] == particles.orbital_parent[j]) return;
             glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
             float d2 = delta.x * delta.x + delta.y * delta.y;
             if (d2 > FUSION_RADIUS_SQ) return;
@@ -1834,6 +1842,180 @@ void PhysicsSimulation::update_orbitals() {
 
             particles.genomes[b.idx * GENOME_SIZE + 2] = L_ground;
         }
+    }
+}
+
+// ── CPU-side covalent bond formation / breaking ─────────────────────────────
+// Detects atoms (from detected_nuclei_) with unfilled valence shells and forms
+// bonds between nearby atoms.  Bond data is uploaded to GPU for spring forces.
+
+void PhysicsSimulation::update_bonds() {
+    if (readback_positions_.empty() || detected_nuclei_.empty()) return;
+
+    const uint32_t n = cfg.particle_count;
+    const float FORM_RADIUS    = cfg.bond_form_radius;
+    const float BREAK_DIST     = cfg.bond_rest_length * cfg.bond_break_factor;
+    const float BREAK_DIST_SQ  = BREAK_DIST * BREAK_DIST;
+    const float ACTIVATION_E   = cfg.bond_activation_energy;
+    const int   MAX_NEW_BONDS  = 10;
+
+    // Ensure bond_data_ is sized correctly
+    size_t required = static_cast<size_t>(n) * MAX_BONDS_PER_PARTICLE;
+    if (bond_data_.size() != required) {
+        bond_data_.assign(required, 0xFFFFFFFFu);
+    }
+
+    // Build rep → nucleus index map for quick lookup
+    std::unordered_map<uint32_t, uint32_t> rep_to_nuc;
+    rep_to_nuc.reserve(detected_nuclei_.size());
+    for (uint32_t ni = 0; ni < detected_nuclei_.size(); ++ni) {
+        rep_to_nuc[detected_nuclei_[ni].rep] = ni;
+    }
+
+    // Helper: count current bonds for a particle
+    auto bond_count = [&](uint32_t rep) -> int {
+        int cnt = 0;
+        uint32_t base = rep * MAX_BONDS_PER_PARTICLE;
+        for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+            if (bond_data_[base + s] != 0xFFFFFFFFu) ++cnt;
+        }
+        return cnt;
+    };
+
+    // Helper: check if a already bonded to b
+    auto has_bond = [&](uint32_t rep_a, uint32_t rep_b) -> bool {
+        uint32_t base = rep_a * MAX_BONDS_PER_PARTICLE;
+        for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+            if (bond_data_[base + s] == rep_b) return true;
+        }
+        return false;
+    };
+
+    // Helper: add bond slot (returns true if added)
+    auto add_bond_slot = [&](uint32_t rep, uint32_t partner) -> bool {
+        uint32_t base = rep * MAX_BONDS_PER_PARTICLE;
+        for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+            if (bond_data_[base + s] == 0xFFFFFFFFu) {
+                bond_data_[base + s] = partner;
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // Helper: remove bond slot
+    auto remove_bond_slot = [&](uint32_t rep, uint32_t partner) {
+        uint32_t base = rep * MAX_BONDS_PER_PARTICLE;
+        for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+            if (bond_data_[base + s] == partner) {
+                bond_data_[base + s] = 0xFFFFFFFFu;
+                return;
+            }
+        }
+    };
+
+    bool any_changed = false;
+
+    // ── Break pass: remove bonds where atoms are too far apart ───────────
+    for (uint32_t ni = 0; ni < detected_nuclei_.size(); ++ni) {
+        const auto& nuc = detected_nuclei_[ni];
+        if (nuc.is_anti || nuc.Z == 0) continue;
+        uint32_t rep = nuc.rep;
+        if (rep >= n) continue;
+
+        uint32_t base = rep * MAX_BONDS_PER_PARTICLE;
+        for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+            uint32_t partner = bond_data_[base + s];
+            if (partner == 0xFFFFFFFFu || partner >= n) continue;
+
+            // Check if partner is still a valid nucleus rep
+            if (rep_to_nuc.find(partner) == rep_to_nuc.end()) {
+                // Partner nucleus no longer exists — break bond
+                bond_data_[base + s] = 0xFFFFFFFFu;
+                remove_bond_slot(partner, rep);
+                any_changed = true;
+                continue;
+            }
+
+            glm::vec2 delta = readback_positions_[partner] - readback_positions_[rep];
+            float d2 = delta.x * delta.x + delta.y * delta.y;
+            if (d2 > BREAK_DIST_SQ) {
+                bond_data_[base + s] = 0xFFFFFFFFu;
+                remove_bond_slot(partner, rep);
+                any_changed = true;
+            }
+        }
+    }
+
+    // ── Form pass: create new bonds between nearby atoms with unfilled valence ─
+    int new_bonds = 0;
+    for (uint32_t ni = 0; ni < detected_nuclei_.size() && new_bonds < MAX_NEW_BONDS; ++ni) {
+        const auto& nuc = detected_nuclei_[ni];
+        if (nuc.is_anti || nuc.Z == 0) continue;
+
+        int valence = valence_from_Z(nuc.Z);
+        if (valence <= 0) continue;
+
+        uint32_t rep_a = nuc.rep;
+        if (rep_a >= n) continue;
+
+        int current_bonds_a = bond_count(rep_a);
+        if (current_bonds_a >= valence) continue;
+
+        // Search for nearby atoms
+        glm::vec2 center_a = nuc.center;
+
+        auto bond_search = [&](uint32_t j) {
+            if (new_bonds >= MAX_NEW_BONDS) return;
+            if (current_bonds_a >= valence) return;
+
+            // j must be a nucleus rep
+            auto it = rep_to_nuc.find(j);
+            if (it == rep_to_nuc.end()) return;
+
+            uint32_t nj = it->second;
+            const auto& nuc_b = detected_nuclei_[nj];
+            if (nuc_b.is_anti || nuc_b.Z == 0) return;
+            if (nuc_b.rep == rep_a) return;  // same nucleus
+
+            // Already bonded?
+            if (has_bond(rep_a, nuc_b.rep)) return;
+
+            // Partner has room?
+            int valence_b = valence_from_Z(nuc_b.Z);
+            if (valence_b <= 0) return;
+            if (bond_count(nuc_b.rep) >= valence_b) return;
+
+            // Distance check (use nucleus centers)
+            glm::vec2 delta = nuc_b.center - center_a;
+            float d2 = delta.x * delta.x + delta.y * delta.y;
+            if (d2 > FORM_RADIUS * FORM_RADIUS) return;
+
+            // Activation energy: relative KE between nucleus centers
+            glm::vec2 vel_a = readback_velocities_[rep_a];
+            glm::vec2 vel_b = readback_velocities_[nuc_b.rep];
+            glm::vec2 rel_v = vel_b - vel_a;
+            float v_rel_sq = glm::dot(rel_v, rel_v);
+            if (v_rel_sq > ACTIVATION_E * 100.0f) return;  // too fast = scattering, not bonding
+            // (no minimum check — thermal capture is fine)
+
+            // Form the bond
+            if (add_bond_slot(rep_a, nuc_b.rep) && add_bond_slot(nuc_b.rep, rep_a)) {
+                current_bonds_a++;
+                new_bonds++;
+                any_changed = true;
+            }
+        };
+
+        grid_.query(center_a.x, center_a.y, FORM_RADIUS, bond_search);
+    }
+
+    // Update particle bond pointers for GPU upload
+    particles.bond_partners_ptr = bond_data_.data();
+    particles.bond_partners_count = static_cast<uint32_t>(bond_data_.size());
+
+    if (any_changed) {
+        cpu_particles_dirty_ = true;
     }
 }
 
@@ -4634,6 +4816,10 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             if (quality >= 2 || (quality == 1 && frame2) || (quality == 0 && frame4))
                 update_orbitals();
 
+            // Covalent bond formation/breaking (after orbitals detect nuclei)
+            if (cfg.bonds_enabled && (frame_counter_ % cfg.bond_update_interval == 0))
+                update_bonds();
+
             check_nuclear_decay();
             check_achievements();
 
@@ -4924,6 +5110,8 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     iface.readback_positions_ptr = readback_positions_.data();
     iface.entangled_partners_ptr = particles.entangled_partner.data();
     iface.readback_energies_ptr = readback_energies_.data();
+    iface.bond_data_ptr = bond_data_.empty() ? nullptr : bond_data_.data();
+    iface.bond_data_count = static_cast<uint32_t>(bond_data_.size());
 
     // ── Measurement tool updates ─────────────────────────────────────────────
     // Thermometer probes (OpenMP parallelized inner loop)
@@ -5150,6 +5338,75 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
 
             iface.nucleus_clouds.push_back(cloud);
         }
+    }
+
+    // ── Build molecule list from covalent bonds ────────────────────────────
+    iface.molecule_list.clear();
+    if (cfg.bonds_enabled && !bond_data_.empty() && !iface.element_list.empty()) {
+        // Map nucleus rep → element_list index
+        std::unordered_map<uint32_t, uint32_t> rep_to_elem;
+        rep_to_elem.reserve(iface.element_list.size());
+        for (uint32_t ei = 0; ei < iface.element_list.size(); ++ei) {
+            rep_to_elem[iface.element_list[ei].rep] = ei;
+        }
+
+        // Union-Find to group bonded atoms
+        std::vector<uint32_t> parent(iface.element_list.size());
+        for (uint32_t i = 0; i < parent.size(); ++i) parent[i] = i;
+
+        auto find = [&parent](uint32_t x) -> uint32_t {
+            while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+            return x;
+        };
+        auto unite = [&](uint32_t a, uint32_t b) {
+            a = find(a); b = find(b);
+            if (a != b) parent[a] = b;
+        };
+
+        // Merge atoms connected by bonds
+        for (uint32_t ei = 0; ei < iface.element_list.size(); ++ei) {
+            uint32_t rep = iface.element_list[ei].rep;
+            if (rep >= cfg.particle_count) continue;
+            uint32_t base = rep * MAX_BONDS_PER_PARTICLE;
+            for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+                if (base + s >= bond_data_.size()) break;
+                uint32_t partner_rep = bond_data_[base + s];
+                if (partner_rep == 0xFFFFFFFFu) continue;
+                auto it = rep_to_elem.find(partner_rep);
+                if (it == rep_to_elem.end()) continue;
+                unite(ei, it->second);
+            }
+        }
+
+        // Group elements by root
+        std::unordered_map<uint32_t, std::vector<uint32_t>> groups;
+        for (uint32_t ei = 0; ei < iface.element_list.size(); ++ei) {
+            groups[find(ei)].push_back(ei);
+        }
+
+        // Build molecule entries (formula string built in UI where ELEMENT_SYMBOLS is available)
+        for (auto& [root, members] : groups) {
+            PhysicsInterface::MoleculeSummary mol;
+            mol.atom_indices = members;
+
+            // Aggregate energy, age, charge
+            for (uint32_t ei : members) {
+                auto& elem = iface.element_list[ei];
+                mol.total_energy_MeV += elem.energy_MeV;
+                if (elem.oldest_birth < mol.oldest_birth)
+                    mol.oldest_birth = elem.oldest_birth;
+                mol.total_charge += elem.Z - elem.electrons;
+            }
+
+            iface.molecule_list.push_back(std::move(mol));
+        }
+
+        // Sort: molecules (>1 atom) first, then single atoms
+        std::sort(iface.molecule_list.begin(), iface.molecule_list.end(),
+                  [](const PhysicsInterface::MoleculeSummary& a,
+                     const PhysicsInterface::MoleculeSummary& b) {
+            return a.atom_indices.size() > b.atom_indices.size();
+        });
     }
 
     // ── Accelerator: track source particle position ─────────────────────────

@@ -758,6 +758,29 @@ void apply_physics(uint i) {
     }
     out_energy_buffer.data[i] = energy;
 
+    // ── Covalent bond spring forces ─────────────────────────────────────────
+    {
+        const float BOND_K    = 80.0;   // spring constant
+        const float BOND_REST = 22.0;   // rest length (px)
+        const float BOND_DAMP = 0.3;    // velocity damping along bond axis
+        for (uint s = 0u; s < 6u; s++) {
+            uint partner = bond_buffer.data[i * 6u + s];
+            if (partner == 0xFFFFFFFFu || partner >= params.particle_count) continue;
+            vec2 p_pos = in_pos_buffer.data[partner];
+            vec2 delta = p_pos - pos_a;
+            float dist = length(delta);
+            if (dist < 0.001) continue;
+            vec2 dir = delta / dist;
+            // Hooke's law: F = k * (x - x0)
+            float displacement = dist - BOND_REST;
+            total_force += dir * BOND_K * displacement;
+            // Dashpot damping along bond axis
+            vec2 p_vel = in_vel_buffer.data[partner];
+            float rel_v = dot(p_vel - vel_a, dir);
+            total_force += dir * BOND_DAMP * rel_v;
+        }
+    }
+
     // ── Relativistic Integration (dp/dt = F) ────────────────────────────────
     // Special Relativity: momentum p = γmv, velocity derived from momentum
     // v = pc / √(m²c² + p²) — naturally limits |v| < c
@@ -1301,6 +1324,58 @@ void render_particle(uint i) {
                 vec4 existing = imageLoad(out_render_texture, pixel_pos);
                 imageStore(out_render_texture, pixel_pos,
                            vec4(min(existing.rgb + col.rgb * glow, vec3(1.0)), 1.0));
+            }
+        }
+    }
+
+    // ── Bond line rendering (only lower-index draws to avoid double-draw) ────
+    for (uint s = 0u; s < 6u; s++) {
+        uint partner = bond_buffer.data[i * 6u + s];
+        if (partner == 0xFFFFFFFFu || partner >= params.particle_count) continue;
+        if (i > partner) continue;  // lower index renders the line
+
+        vec2 screen_ctr = params.region_size * 0.5;
+        vec2 sa = screen_ctr + (pos - params.camera_origin) * params.camera_zoom;
+        vec2 sb = screen_ctr + (in_pos_buffer.data[partner] - params.camera_origin) * params.camera_zoom;
+
+        float glow_w = max(2.5, 1.2 * params.camera_zoom);
+        vec2 lo = min(sa, sb) - glow_w;
+        vec2 hi = max(sa, sb) + glow_w;
+        lo = max(lo, vec2(0.0));
+        hi = min(hi, params.region_size - 1.0);
+        if (lo.x > hi.x || lo.y > hi.y) continue;
+
+        vec2 seg = sb - sa;
+        float seg_len2 = dot(seg, seg);
+        if (seg_len2 < 1.0) continue;
+
+        // Bond color: pale blue with energy-based brightness
+        float e_avg = (energy + in_energy_buffer.data[partner]) * 0.5;
+        vec3 bond_col = mix(vec3(0.3, 0.5, 0.8), vec3(0.6, 0.85, 1.0), clamp(e_avg * 2.0, 0.0, 1.0));
+        float core_w = max(0.8, 0.4 * params.camera_zoom);
+
+        for (int px = int(floor(lo.x)); px <= int(ceil(hi.x)); px++) {
+            for (int py = int(floor(lo.y)); py <= int(ceil(hi.y)); py++) {
+                vec2 p = vec2(float(px) + 0.5, float(py) + 0.5);
+                float t = clamp(dot(p - sa, seg) / seg_len2, 0.0, 1.0);
+                vec2 closest = sa + t * seg;
+                float d = length(p - closest);
+                if (d > glow_w) continue;
+
+                ivec2 pixel = ivec2(px, py);
+                if (pixel.x < 0 || pixel.x >= int(params.region_size.x)) continue;
+                if (pixel.y < 0 || pixel.y >= int(params.region_size.y)) continue;
+
+                vec4 existing = imageLoad(out_render_texture, pixel);
+                float alpha;
+                if (d < core_w) {
+                    alpha = 0.7;
+                } else {
+                    float gt = (d - core_w) / (glow_w - core_w);
+                    alpha = (1.0 - gt) * (1.0 - gt) * 0.35;
+                }
+                imageStore(out_render_texture, pixel,
+                    vec4(min(existing.rgb + bond_col * alpha, vec3(1.0)), 1.0));
             }
         }
     }

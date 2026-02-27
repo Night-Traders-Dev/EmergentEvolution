@@ -99,6 +99,9 @@ private:
     uint32_t nuclear_decay_count_ = 0;
     uint32_t entangled_pair_count_ = 0;
 
+    // Covalent bond tracking (CPU-authoritative, uploaded to GPU each frame)
+    std::vector<uint32_t> bond_data_;  // [particle_count * MAX_BONDS_PER_PARTICLE]
+
     double fps_acc_       = 0.0;
     int    fps_frame_cnt_ = 0;
     uint32_t frame_counter_ = 0;
@@ -116,6 +119,7 @@ private:
     void check_virtual_pairs();
     void update_entanglement();
     void update_orbitals();
+    void update_bonds();
     void check_nuclear_decay();
     void check_photoelectric();
     void check_spallation();

@@ -147,6 +147,9 @@ public:
     int32_t export_element_rep     = -1;    // nucleus rep to export
     bool element_move_mode         = false;
 
+    // Molecule detail card
+    int32_t molecule_card_index    = -1;    // index into molecule_list (-1=hidden)
+
     // Element import
     bool show_import_dialog = false;
     bool request_import     = false;
@@ -247,6 +250,10 @@ public:
     const glm::vec2*  readback_positions_ptr = nullptr;
     const uint32_t*   entangled_partners_ptr = nullptr;
 
+    // Bond data pointers for overlay visualization
+    const uint32_t* bond_data_ptr = nullptr;
+    uint32_t        bond_data_count = 0;
+
     // Element list (populated by simulation from detected_nuclei_)
     struct ElementSummary {
         int Z, N;           // proton/neutron count
@@ -258,6 +265,15 @@ public:
     };
     std::vector<ElementSummary> element_list;
     bool show_element_list = false;
+
+    // Molecule grouping (bonded atom clusters)
+    struct MoleculeSummary {
+        std::vector<uint32_t> atom_indices;  // indices into element_list
+        float total_energy_MeV = 0.0f;
+        uint32_t oldest_birth = UINT32_MAX;
+        int total_charge = 0;       // net ionic charge of molecule
+    };
+    std::vector<MoleculeSummary> molecule_list;
 
     // Particle list (all active particles, populated each tick)
     bool show_particle_list = false;
@@ -353,6 +369,7 @@ private:
     void draw_save_load_dialog();
     void refresh_browse_entries();
     void draw_element_card(const Particles& particles);
+    void draw_molecule_card(const Particles& particles);
     void draw_element_list();
     void draw_particle_list(const Particles& particles);
     void draw_accelerator_panel();

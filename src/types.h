@@ -163,6 +163,7 @@ struct SimConfig {
     float local_density_cap   = 1.0f;
 
     // Bond parameters
+    bool     bonds_enabled            = true;
     float    bond_spring_k            = 80.0f;
     float    bond_rest_length         = 22.0f;  // pixels, approx repulsion_radius
     float    bond_break_factor        = 2.2f;   // breaks when dist > rest * factor
@@ -279,6 +280,19 @@ struct SimConfig {
     float     camera_zoom        = 1.0f;
     float     current_camera_zoom = 1.0f;
 };
+
+// ── Valence electrons from atomic number (periods 1-3) ───────────────────────
+inline int valence_from_Z(int Z) {
+    if (Z <= 0 || Z == 2 || Z == 10 || Z == 18) return 0; // noble gases + invalid
+    if (Z == 1 || Z == 3 || Z == 11) return 1;   // H, Li, Na
+    if (Z == 4 || Z == 12) return 2;               // Be, Mg
+    if (Z == 5 || Z == 13) return 3;               // B, Al
+    if (Z == 6 || Z == 14) return 4;               // C, Si
+    if (Z == 7 || Z == 15) return 3;               // N, P
+    if (Z == 8 || Z == 16) return 2;               // O, S
+    if (Z == 9 || Z == 17) return 1;               // F, Cl
+    return 0;
+}
 
 // ── Colour helpers ────────────────────────────────────────────────────────────
 

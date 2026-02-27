@@ -4,7 +4,7 @@
 
 **A GPU-accelerated quantum particle physics sandbox**
 
-Standard Model + Beyond · Nuclear fusion & fission · Hadronization & Color Confinement · Gluon Interactions · Photon-matter interactions · Orbital mechanics · Emergent thermodynamics · Quantum entanglement · Wave-particle duality · Achievements · Tools · Save/Load
+Standard Model + Beyond · Nuclear fusion & fission · Covalent Bonds & Molecules · Hadronization & Color Confinement · Gluon Interactions · Photon-matter interactions · Orbital mechanics · Emergent thermodynamics · Quantum entanglement · Wave-particle duality · Achievements · Tools · Save/Load
 
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
 [![Vulkan](https://img.shields.io/badge/Vulkan-1.3-red.svg)](https://www.vulkan.org/)
@@ -20,17 +20,18 @@ Particle Playground is a real-time particle physics sandbox powered by Vulkan co
 forces: Coulomb + Yukawa + QCD + weak, with centrifugal barrier orbitals, nuclear fusion/fission,
 radioactive decay with realistic isotope half-lives, photoelectric effect, Compton scattering,
 nuclear spallation, photodisintegration, pair production, pion production, vector meson dominance,
-hard-sphere collisions, hadronization & color confinement (meson formation, baryon condensation,
-vacuum instability, string breaking), gluon interactions (quark absorption, self-coupling,
-confinement splitting), emergent thermodynamics, virtual particle pair creation, quantum
-entanglement, antimatter element detection, electron cloud visualization, a persistent event log,
-an achievement system, measurement tools (thermometer, velocity meter, ruler with nanometer scale,
-density counter), visualization overlays (energy heatmap, velocity field, trajectory tracer, force
-vectors, atom grid, wave-particle duality mode), interactive tools (particle accelerator, mirrors),
-12 UI themes, 12 environment presets, element export/import, six per-force multiplier knobs,
-relativistic energy readouts in electronvolts (PDG rest masses, E = γm₀c²), a browsable
-particle list and element list with live energy/age tracking, and an animated particle
-splash screen.
+hard-sphere collisions, covalent bonds with spring forces and molecular detection (Hill system
+formulas, molecule detail cards), hadronization & color confinement (meson formation, baryon
+condensation, vacuum instability, string breaking), gluon interactions (quark absorption,
+self-coupling, confinement splitting), emergent thermodynamics, virtual particle pair creation,
+quantum entanglement, antimatter element detection, electron cloud visualization, a persistent
+event log, an achievement system, measurement tools (thermometer, velocity meter, ruler with
+nanometer scale, density counter), visualization overlays (energy heatmap, velocity field,
+trajectory tracer, force vectors, atom grid, wave-particle duality mode), interactive tools
+(particle accelerator, mirrors), 12 UI themes, 12 environment presets, element export/import, six
+per-force multiplier knobs, relativistic energy readouts in electronvolts (PDG rest masses,
+E = γm₀c²), a browsable particle list and element list with live molecular formula grouping
+and energy/age tracking, and an animated particle splash screen.
 
 Simulates up to **100,000 particles** in real time on a toroidal 2560 x 1440 world. GPU compute
 shaders handle O(n^2) pairwise forces; CPU-side physics uses a **spatial acceleration grid** for
@@ -44,6 +45,7 @@ O(n) neighbor queries with **OpenMP** parallelization across all available cores
 - [Standard Model + Beyond — 33 Particle Types](#standard-model--beyond--33-particle-types)
 - [Four Fundamental Forces + Multipliers](#four-fundamental-forces--multipliers)
 - [Orbital Mechanics](#orbital-mechanics)
+- [Covalent Bonds & Molecules](#covalent-bonds--molecules)
 - [Nuclear Fusion](#nuclear-fusion)
 - [Nuclear Fission](#nuclear-fission)
 - [Radioactive Decay](#radioactive-decay)
@@ -189,6 +191,54 @@ Electrons orbit nuclei using real quantum-mechanical centrifugal barriers, not a
 - Computes L_ground per shell using the Bohr model with screening:
   - `R_target = n^2 * R_BOHR / Z_eff` where `Z_eff = Z - inner_electrons`
   - `L_ground = sqrt(Z_eff * K_COULOMB * R^3 / (R^2 + SOFTEN^2))`
+
+---
+
+## Covalent Bonds & Molecules
+
+Atoms share valence electrons to form covalent bonds, producing stable molecules (H₂, H₂O, CH₄,
+etc.). Bond formation and breaking run CPU-side; GPU spring forces maintain bond geometry.
+
+### Bond Formation
+
+| Property | Detail |
+|---|---|
+| **Valence** | Period 1-3 elements: H=1, Be=2, B=3, C=4, N=3, O=2, F=1; noble gases=0 |
+| **Search radius** | Configurable (default 28px) — nuclei within range are bond candidates |
+| **Activation energy** | Relative KE between nuclei must exceed threshold (default 0.02) but not be too high (scattering) |
+| **Capacity** | Up to 6 bonds per particle (`MAX_BONDS_PER_PARTICLE`); limited by valence |
+| **Rate** | Max 10 new bonds per frame to prevent runaway clustering |
+
+### Bond Physics (GPU)
+
+| Property | Detail |
+|---|---|
+| **Spring force** | Hooke's law: `F = K * (d - rest_length)` along bond axis (K=80, rest=22px) |
+| **Damping** | Dashpot: `F_damp = 0.3 * relative_velocity_along_bond` — prevents oscillation |
+| **Breaking** | Bonds break when distance exceeds `rest_length * break_factor` (default 2.2x) |
+
+### Bond Rendering
+
+Bonds render as **pale blue glowing lines** between bonded atoms in the compute shader, using
+energy-dependent brightness. Only the lower-index partner renders each bond to avoid double-drawing.
+An ImGui overlay also draws solid blue lines for bonds visible on screen.
+
+### Molecule Detection
+
+Bonded atoms are grouped into molecules using a **Union-Find** algorithm each frame. Molecules
+are displayed with **Hill system molecular formulas** (C first, H second, rest alphabetical) in
+the Element List and bottom bar. Each molecule tracks total energy, age, and net ionic charge.
+
+### Tuning (Nuclear Debug Window)
+
+| Parameter | Range | Default | Effect |
+|---|---|---|---|
+| **Enable Bonds** | on/off | on | Master toggle for covalent bonding |
+| **Spring K** | 10 - 200 | 80 | Bond stiffness |
+| **Rest Length** | 8 - 60 px | 22 | Equilibrium bond length |
+| **Break Factor** | 1.5 - 5.0 | 2.2 | Distance multiplier before bond breaks |
+| **Form Radius** | 15 - 80 px | 28 | Search radius for new bond partners |
+| **Activation Energy** | 0.001 - 0.2 | 0.02 | Minimum KE for bond formation |
 
 ---
 
@@ -386,6 +436,16 @@ clouds) are detected and displayed with distinct cyan-tinted UI styling.
 - **Duplicate**: spawn a copy of the element nearby with correct orbital structure
 - **Export**: save the element to a `.ppel` file for import into other simulations
 
+**Molecule Detail Card** (opens from Element List when clicking a multi-atom molecule):
+- **Molecular formula** in Hill system notation (C first, H second, rest alphabetical)
+- Composition: total protons, neutrons, electrons, covalent bond count
+- Net ionic charge, total mass, particle count
+- Center-of-mass speed, total momentum, total relativistic energy
+- Age (from oldest constituent particle)
+- **Clickable atom buttons** — each constituent atom opens its Element Detail Card
+- **Navigate**: pan camera to molecule center
+- **Close**: dismiss card
+
 ---
 
 ## Particle List, Element List & Event Log
@@ -401,17 +461,20 @@ in collapsible tree nodes:
   it for the info card
 - **Hover tooltip**: speed, energy, age summary
 
-**Element List** — The bottom bar displays a clickable **"Elements: N"** counter showing
-the total number of detected elements in the simulation. Clicking opens a centered,
-scrollable window listing every element with:
+**Element List** — The bottom bar displays clickable **"Atoms: N"** and **"Mol: M"** counters
+showing detected atoms and molecules. Clicking opens a centered, scrollable window listing
+all atoms and molecules:
 
-- **Stability dot**: green (stable), yellow (long-lived), orange (medium), red (short-lived)
-- **Composition**: symbol, mass number (A), element name, charge
+- **Molecules** (blue dot): displayed with **Hill system molecular formula** (e.g. CH₄, H₂O,
+  NaCl). Sorted largest first. Tooltip shows constituent atoms. Click to open **Molecule
+  Detail Card**
+- **Free atoms** (stability dot): green (stable), yellow (long-lived), orange (medium),
+  red (short-lived). Shows symbol, mass number (A), element name, charge
 - **Relativistic energy**: total E = Σγm₀c² across all constituents (eV/keV/MeV/GeV)
 - **Age**: time since the oldest constituent was spawned
 - **Tooltip**: Z, N, electrons, decay mode and half-life for unstable isotopes
-- **Click to inspect**: clicking any row navigates the camera to that element and opens
-  its Element Detail Card
+- **Click to inspect**: clicking a molecule opens its Molecule Detail Card; clicking a
+  free atom navigates to it and opens its Element Detail Card
 
 **Event Notifications** — Toast-style notifications appear in the top-right corner when
 physics events occur, rendering above all other windows. Stacks vertically with a 5-second
@@ -856,7 +919,7 @@ O(n^2) to O(n * k) where k is the average number of particles per cell.
 |---|---|
 | **Cell size** | 30px (covers largest search radius used by any physics check) |
 | **Build** | Single O(n) pass per frame: count, prefix sum, scatter |
-| **Functions accelerated** | `check_annihilation` (5px), `check_fusion` (8px), `check_fission` (12px), `check_photoelectric` (25px), `update_orbitals` BFS (10px), `check_virtual_pairs` (15px), `check_hadronization` (45px confinement, 15px baryon, 12px gluon) |
+| **Functions accelerated** | `check_annihilation` (5px), `check_fusion` (8px), `check_fission` (12px), `check_photoelectric` (25px), `update_orbitals` BFS (10px), `update_bonds` (28px form radius), `check_virtual_pairs` (15px), `check_hadronization` (45px confinement, 15px baryon, 12px gluon) |
 | **Fallback** | Brute-force O(n^2) when spatial grid is disabled in settings |
 
 ### Batched GPU Synchronization
@@ -934,10 +997,11 @@ physics skip, spatial grid) are persisted across sessions.
 > belongs to a nucleus, click the element button to open the **Element Detail Card** with
 > full composition, stability info, and Move / Delete / Duplicate / Export actions.
 >
-> **Element List** — Click the gold **"Elements: N"** counter in the bottom bar to open a
-> scrollable list of all detected elements. Each row shows symbol, mass number, name,
-> charge, electrons, and a stability indicator. Click any element to navigate to it and
-> open its detail card.
+> **Element List** — Click the **"Atoms: N"** or **"Mol: M"** counter in the bottom bar to
+> open a scrollable list of all detected atoms and molecules. Molecules display Hill system
+> molecular formulas (e.g. H₂, CH₄). Free atoms show symbol, mass number, name, charge,
+> and a stability indicator. Click any molecule to open its Molecule Detail Card, or any
+> free atom to navigate to it and open its Element Detail Card.
 >
 > **Event Log** — Click the **"Events: N"** counter in the bottom bar to open the decay/event
 > log showing all physics events (decays, fusions, fissions, annihilations, photoelectric,
@@ -989,8 +1053,8 @@ EmergentEvolution/
 │   └── stb_image_impl.cpp       # stb_image implementation unit
 ├── src/physics/
 │   ├── phys_particles.h/.cpp    # 33 particle types, masses, charges, decay rates, isotope table, environments
-│   ├── interface.h/.cpp         # ImGui: animated splash screen, spawn picker, force multipliers, element cards, tools, event log, achievements
-│   ├── simulation.h/.cpp        # Main loop: fusion, fission, decay, orbitals, entanglement, photoelectric, spallation, hadronization, spatial grid
+│   ├── interface.h/.cpp         # ImGui: animated splash screen, spawn picker, force multipliers, element cards, molecule cards, bond overlay, tools, event log, achievements
+│   ├── simulation.h/.cpp        # Main loop: fusion, fission, decay, orbitals, covalent bonds, molecule detection, entanglement, photoelectric, spallation, hadronization, spatial grid
 │   ├── achievements.h/.cpp      # 36 achievements across 5 categories with persistence
 │   ├── save_load.h/.cpp         # Binary .ppsg/.ppel save/load/export/import serialization
 │   └── main.cpp                 # Entry point (borderless maximized, window icon from assets/)
@@ -999,7 +1063,7 @@ EmergentEvolution/
 │   ├── icon_32/64/128/256/512.png  # Window icons (multiple sizes)
 │   └── particle_playground.ico  # Windows ICO format
 ├── shaders/
-│   ├── physics.comp             # GPU: 7 forces, centrifugal barrier, hard-sphere, mirror reflection, 5 field viz, wave packet rendering
+│   ├── physics.comp             # GPU: 7 forces, covalent bond springs, centrifugal barrier, hard-sphere, mirror reflection, bond line rendering, 5 field viz, wave packet rendering
 │   ├── fullscreen.vert          # Fullscreen triangle vertex shader
 │   └── fullscreen.frag          # Particle texture blit
 └── CMakeLists.txt

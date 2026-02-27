@@ -5,6 +5,7 @@
 #include <random>
 #include <cstdio>
 #include <algorithm>
+#include <map>
 #include <filesystem>
 #include <fstream>
 #ifdef HAS_OPENMP
@@ -82,6 +83,10 @@ static void fmt_energy_ev(char* buf, size_t sz, float MeV) {
     else
         snprintf(buf, sz, "%.2f TeV", eV / 1e12f);
 }
+
+// Forward declarations for helpers defined later in file
+static std::string build_molecular_formula(const std::vector<PhysicsInterface::ElementSummary>& elems,
+                                            const std::vector<uint32_t>& atom_indices);
 
 void PhysicsInterface::init() {
     std::random_device rd;
@@ -798,6 +803,10 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     if (element_card_nucleus_rep >= 0)
         draw_element_card(particles);
 
+    // Draw molecule detail card
+    if (molecule_card_index >= 0)
+        draw_molecule_card(particles);
+
     // Fade save/load status message
     if (save_load_msg_timer > 0.0f)
         save_load_msg_timer -= ImGui::GetIO().DeltaTime;
@@ -1096,6 +1105,44 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
                 }
                 et += seg;
                 draw_seg = !draw_seg;
+            }
+        }
+    }
+
+    // ── Covalent bond overlay ──────────────────────────────────────────────
+    if (cfg.bonds_enabled && bond_data_ptr && readback_positions_ptr && readback_count > 0) {
+        ImGuiIO& bio = ImGui::GetIO();
+        float bwin_w = bio.DisplaySize.x, bwin_h = bio.DisplaySize.y;
+        auto w2s_bond = [&](glm::vec2 w) -> ImVec2 {
+            glm::vec2 s = glm::vec2(bwin_w, bwin_h) * 0.5f
+                        + (w - cfg.camera_origin) * cfg.current_camera_zoom;
+            return ImVec2(s.x, s.y);
+        };
+
+        ImDrawList* bfg = ImGui::GetForegroundDrawList();
+        ImU32 bond_col = ImGui::ColorConvertFloat4ToU32(ImVec4(0.4f, 0.65f, 1.0f, 0.5f));
+        uint32_t max_particles = bond_data_count / MAX_BONDS_PER_PARTICLE;
+
+        for (uint32_t bi = 0; bi < max_particles && bi < readback_count; ++bi) {
+            for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+                uint32_t partner = bond_data_ptr[bi * MAX_BONDS_PER_PARTICLE + s];
+                if (partner == 0xFFFFFFFFu || partner >= readback_count) continue;
+                if (bi > partner) continue;  // draw once per pair
+
+                ImVec2 a = w2s_bond(readback_positions_ptr[bi]);
+                ImVec2 b = w2s_bond(readback_positions_ptr[partner]);
+
+                // Skip off-screen
+                if (a.x < -50.0f || a.x > bwin_w + 50.0f ||
+                    a.y < -50.0f || a.y > bwin_h + 50.0f) continue;
+                if (b.x < -50.0f || b.x > bwin_w + 50.0f ||
+                    b.y < -50.0f || b.y > bwin_h + 50.0f) continue;
+
+                float dx = b.x - a.x, dy = b.y - a.y;
+                float len = std::sqrt(dx * dx + dy * dy);
+                if (len < 1.0f || len > 600.0f) continue;
+
+                bfg->AddLine(a, b, bond_col, 1.5f);
             }
         }
     }
@@ -2044,8 +2091,14 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
             ImGui::SameLine(0, 20);
             ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
             ImGui::SameLine(0, 10);
-            char elem_btn[32];
-            snprintf(elem_btn, sizeof(elem_btn), "Elements: %d", static_cast<int>(element_list.size()));
+            char elem_btn[64];
+            int nmol = 0;
+            for (auto& m : molecule_list) if (m.atom_indices.size() > 1) nmol++;
+            if (nmol > 0)
+                snprintf(elem_btn, sizeof(elem_btn), "Atoms: %d  Mol: %d",
+                         static_cast<int>(element_list.size()), nmol);
+            else
+                snprintf(elem_btn, sizeof(elem_btn), "Elements: %d", static_cast<int>(element_list.size()));
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.3f, 0.5f, 0.5f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.2f, 0.4f, 0.7f));
@@ -3927,6 +3980,244 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// ── Molecule Detail Card ────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_molecule_card(const Particles& particles) {
+    if (molecule_card_index < 0 ||
+        static_cast<size_t>(molecule_card_index) >= molecule_list.size()) {
+        molecule_card_index = -1;
+        return;
+    }
+
+    auto& mol = molecule_list[static_cast<size_t>(molecule_card_index)];
+    if (mol.atom_indices.empty()) { molecule_card_index = -1; return; }
+
+    // Build formula for title
+    std::string formula = build_molecular_formula(element_list, mol.atom_indices);
+
+    // Aggregate physics from all constituent particles
+    int total_Z = 0, total_N = 0, total_leptons = 0;
+    int total_particles = 0;
+    float total_energy_MeV = 0.0f;
+    float total_momentum_MeV = 0.0f;
+    glm::vec2 com_vel(0.0f);
+    float total_sim_mass = 0.0f;
+    uint32_t oldest_birth = UINT32_MAX;
+    uint32_t n_total = static_cast<uint32_t>(particles.types.size());
+
+    // Collect per-atom data
+    struct AtomInfo {
+        int Z, N, electrons;
+        uint32_t rep;
+        const char* sym;
+        const char* name;
+    };
+    std::vector<AtomInfo> atoms;
+
+    for (uint32_t ei : mol.atom_indices) {
+        if (ei >= element_list.size()) continue;
+        auto& elem = element_list[ei];
+        total_Z += elem.Z;
+        total_N += elem.N;
+        total_leptons += elem.electrons;
+
+        const char* sym = (elem.Z >= 1 && elem.Z <= FULL_ELEMENT_COUNT) ? ELEMENT_SYMBOLS[elem.Z] : "?";
+        const char* name = (elem.Z >= 1 && elem.Z <= FULL_ELEMENT_COUNT) ? ELEMENT_NAMES[elem.Z] : "?";
+        atoms.push_back({elem.Z, elem.N, elem.electrons, elem.rep, sym, name});
+
+        // Scan all particles belonging to this atom for physics data
+        for (uint32_t pi = 0; pi < n_total; ++pi) {
+            if (pi >= particles.orbital_parent.size()) break;
+            int32_t par = particles.orbital_parent[pi];
+            if (par != static_cast<int32_t>(elem.rep) &&
+                static_cast<int32_t>(pi) != static_cast<int32_t>(elem.rep)) continue;
+
+            uint32_t pt = particles.types[pi];
+            bool is_nucleon = (pt == PROTON_TYPE || pt == NEUTRON_TYPE);
+            bool is_lepton = (pt == ELECTRON_TYPE_PHYS);
+            if (!is_nucleon && !is_lepton) continue;
+            total_particles++;
+
+            if (readback_velocities && pi < readback_count) {
+                float sim_mass = (pt <= 1) ? 40.0f : 1.0f;
+                com_vel += readback_velocities[pi] * sim_mass;
+                total_sim_mass += sim_mass;
+
+                float m0 = rest_mass_MeV(pt);
+                float spd = glm::length(readback_velocities[pi]);
+                float beta = std::min(spd / C_SIM, 0.9999f);
+                float gamma = 1.0f / std::sqrt(1.0f - beta * beta);
+                total_energy_MeV += (gamma - 1.0f) * m0;
+                total_momentum_MeV += gamma * m0 * beta;
+            }
+
+            if (pi < particles.birth_frames.size() &&
+                particles.birth_frames[pi] < oldest_birth)
+                oldest_birth = particles.birth_frames[pi];
+        }
+    }
+
+    int net_charge = total_Z - total_leptons;
+    float com_speed_sim = (total_sim_mass > 0.0f) ? glm::length(com_vel) / total_sim_mass : 0.0f;
+
+    // Count bonds within molecule
+    int bond_count = 0;
+    if (bond_data_ptr && bond_data_count > 0) {
+        for (auto& atom : atoms) {
+            uint32_t base = atom.rep * MAX_BONDS_PER_PARTICLE;
+            for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+                if (base + s >= bond_data_count) break;
+                uint32_t partner = bond_data_ptr[base + s];
+                if (partner != 0xFFFFFFFFu && atom.rep < partner) bond_count++;
+            }
+        }
+    }
+
+    // Window position — next to element card position
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 590, io.DisplaySize.y - 60),
+                            ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+    ImGui::SetNextWindowSize(ImVec2(340, 0));
+
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize
+        | ImGuiWindowFlags_NoNav;
+
+    bool open = true;
+    char title[128];
+    snprintf(title, sizeof(title), "Molecule: %s###MoleculeCard", formula.c_str());
+
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.04f, 0.07f, 0.14f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.06f, 0.12f, 0.24f, 0.95f));
+
+    if (ImGui::Begin(title, &open, flags)) {
+        float col_w = 120.0f;
+
+        // Big formula display
+        ImGui::TextColored(ImVec4(0.4f, 0.65f, 1.0f, 1.0f), "%s", formula.c_str());
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.35f, 0.55f, 0.85f, 0.8f), "(%d atoms)", static_cast<int>(atoms.size()));
+        ImGui::Separator();
+
+        // Composition
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Total Protons");
+        ImGui::SameLine(col_w); ImGui::Text("%d", total_Z);
+
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Total Neutrons");
+        ImGui::SameLine(col_w); ImGui::Text("%d", total_N);
+
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Total Electrons");
+        ImGui::SameLine(col_w); ImGui::Text("%d", total_leptons);
+
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Bonds");
+        ImGui::SameLine(col_w); ImGui::Text("%d", bond_count);
+
+        ImGui::Spacing();
+        ImGui::Separator();
+
+        // Charge
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Net Charge");
+        ImGui::SameLine(col_w);
+        if (net_charge == 0)
+            ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f), "0 (neutral)");
+        else if (net_charge > 0)
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "+%d (ion)", net_charge);
+        else
+            ImGui::TextColored(ImVec4(0.4f, 0.6f, 1.0f, 1.0f), "%d (ion)", net_charge);
+
+        // Mass
+        float total_mass = total_Z * 40.0f + total_N * 40.0f + total_leptons * 1.0f;
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Total Mass");
+        ImGui::SameLine(col_w); ImGui::Text("%.0f u", total_mass);
+
+        // Particles
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Particles");
+        ImGui::SameLine(col_w); ImGui::Text("%d", total_particles);
+
+        // Speed
+        {
+            char spd_buf[32];
+            fmt_speed(spd_buf, sizeof(spd_buf), com_speed_sim);
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Speed");
+            ImGui::SameLine(col_w); ImGui::Text("%s", spd_buf);
+        }
+
+        // Momentum
+        {
+            char mom_buf[32];
+            if (total_momentum_MeV < 0.001f)
+                snprintf(mom_buf, sizeof(mom_buf), "~0");
+            else if (total_momentum_MeV < 1.0f)
+                snprintf(mom_buf, sizeof(mom_buf), "%.2f keV/c", total_momentum_MeV * 1e3f);
+            else if (total_momentum_MeV < 1e3f)
+                snprintf(mom_buf, sizeof(mom_buf), "%.2f MeV/c", total_momentum_MeV);
+            else if (total_momentum_MeV < 1e6f)
+                snprintf(mom_buf, sizeof(mom_buf), "%.2f GeV/c", total_momentum_MeV / 1e3f);
+            else
+                snprintf(mom_buf, sizeof(mom_buf), "%.2f TeV/c", total_momentum_MeV / 1e6f);
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Momentum");
+            ImGui::SameLine(col_w); ImGui::Text("%s", mom_buf);
+        }
+
+        // Energy
+        {
+            char e_buf[32];
+            fmt_energy_ev(e_buf, sizeof(e_buf), total_energy_MeV);
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Energy");
+            ImGui::SameLine(col_w); ImGui::Text("%s", e_buf);
+        }
+
+        // Age
+        if (oldest_birth != UINT32_MAX) {
+            uint32_t age_frames = frame_counter_display - oldest_birth;
+            float age_sec = age_frames / 60.0f;
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Age");
+            ImGui::SameLine(col_w);
+            if (age_sec < 60.0f) ImGui::Text("%.1f s", age_sec);
+            else ImGui::Text("%.1f min", age_sec / 60.0f);
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+
+        // Constituent atoms — clickable buttons that open element cards
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Atoms:");
+        ImGui::SameLine(col_w);
+        for (size_t ai = 0; ai < atoms.size() && ai < 12; ++ai) {
+            auto& a = atoms[ai];
+            int A = a.Z + a.N;
+            char btn[32];
+            snprintf(btn, sizeof(btn), "%s-%d##ma%zu", a.sym, A, ai);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.85f, 0.6f, 1.0f));
+            if (ImGui::SmallButton(btn)) {
+                element_card_nucleus_rep = static_cast<int32_t>(a.rep);
+                navigate_to_particle = static_cast<int32_t>(a.rep);
+            }
+            ImGui::PopStyleColor();
+            if (ai + 1 < atoms.size() && ai < 11) ImGui::SameLine();
+        }
+        if (atoms.size() > 12) ImGui::Text("+%zu more", atoms.size() - 12);
+
+        // Action buttons
+        ImGui::Spacing();
+        ImGui::Separator();
+
+        if (ImGui::Button("Navigate", ImVec2(100, 26))) {
+            uint32_t first_rep = element_list[mol.atom_indices[0]].rep;
+            navigate_to_particle = static_cast<int32_t>(first_rep);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Close", ImVec2(100, 26))) {
+            molecule_card_index = -1;
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleColor(2);
+
+    if (!open) molecule_card_index = -1;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // ── Event Notifications (Top-Right Toast Stack) ─────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -4215,6 +4506,50 @@ void PhysicsInterface::draw_nuclear_debug(SimConfig& cfg) {
             ImGui::SetTooltip("Maximum virtual pairs spawned per tick.\nDefault: 2");
     }
 
+    // ── Covalent Bonds ─────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Covalent Bonds")) {
+        ImGui::Checkbox("Bonds Enabled##cbond", &cfg.bonds_enabled);
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Spring K##cbond", &cfg.bond_spring_k, 10.0f, 200.0f, "%.0f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Bond spring constant (Hooke's law).\nHigher = stiffer bonds.\nDefault: 80");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Rest Length (px)##cbond", &cfg.bond_rest_length, 8.0f, 60.0f, "%.1f px");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Equilibrium bond length.\nDefault: 22 px");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Break Factor##cbond", &cfg.bond_break_factor, 1.5f, 5.0f, "%.1fx");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Bond breaks at distance > rest * factor.\nDefault: 2.2x");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Form Radius (px)##cbond", &cfg.bond_form_radius, 15.0f, 80.0f, "%.0f px");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Max distance for new bond formation.\nDefault: 28 px");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Activation Energy##cbond", &cfg.bond_activation_energy, 0.001f, 0.2f, "%.3f",
+                           ImGuiSliderFlags_Logarithmic);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Max relative velocity for bonding (too fast = scattering).\nDefault: 0.02");
+
+        // Count active bonds
+        uint32_t active_bonds = 0;
+        if (bond_data_ptr && bond_data_count > 0) {
+            uint32_t max_p = bond_data_count / MAX_BONDS_PER_PARTICLE;
+            for (uint32_t bi = 0; bi < max_p; ++bi) {
+                for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+                    uint32_t partner = bond_data_ptr[bi * MAX_BONDS_PER_PARTICLE + s];
+                    if (partner != 0xFFFFFFFFu && bi < partner) active_bonds++;
+                }
+            }
+        }
+        ImGui::TextColored(ImVec4(0.4f, 0.65f, 1.0f, 1.0f), "Active bonds: %u", active_bonds);
+    }
+
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
@@ -4248,6 +4583,13 @@ void PhysicsInterface::draw_nuclear_debug(SimConfig& cfg) {
         cfg.decay_enabled             = true;
         cfg.nuclear_decay_enabled     = true;
         cfg.virtual_pairs_enabled     = true;
+
+        cfg.bonds_enabled             = true;
+        cfg.bond_spring_k             = 80.0f;
+        cfg.bond_rest_length          = 22.0f;
+        cfg.bond_break_factor         = 2.2f;
+        cfg.bond_form_radius          = 28.0f;
+        cfg.bond_activation_energy    = 0.02f;
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Reset all nuclear reaction parameters to Standard Model defaults");
@@ -4388,27 +4730,98 @@ void PhysicsInterface::draw_accelerator_panel() {
 // ── Element List Window ─────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
+
+// Helper: format energy value as human-readable string
+static void format_energy_str(char* buf, size_t buf_size, float energy_MeV) {
+    float eV = energy_MeV * 1e6f;
+    if (eV < 1e3f)
+        snprintf(buf, buf_size, "%.0f eV", eV);
+    else if (eV < 1e6f)
+        snprintf(buf, buf_size, "%.1f keV", eV / 1e3f);
+    else if (eV < 1e9f)
+        snprintf(buf, buf_size, "%.1f MeV", eV / 1e6f);
+    else if (eV < 1e12f)
+        snprintf(buf, buf_size, "%.2f GeV", eV / 1e9f);
+    else
+        snprintf(buf, buf_size, "%.2f TeV", eV / 1e12f);
+}
+
+// Helper: format age from birth frame
+static void format_age_str(char* buf, size_t buf_size, uint32_t oldest_birth, uint32_t current_frame) {
+    if (oldest_birth != UINT32_MAX) {
+        float age_sec = (current_frame - oldest_birth) / 60.0f;
+        if (age_sec < 60.0f)
+            snprintf(buf, buf_size, "%.0fs", age_sec);
+        else
+            snprintf(buf, buf_size, "%.1fm", age_sec / 60.0f);
+    } else {
+        snprintf(buf, buf_size, "-");
+    }
+}
+
+// Helper: build molecular formula string from element Z counts (Hill system: C first, H second, rest alpha)
+static std::string build_molecular_formula(const std::vector<PhysicsInterface::ElementSummary>& elems,
+                                            const std::vector<uint32_t>& atom_indices) {
+    struct FormulaEntry { const char* sym; int count; int Z; };
+    std::map<int, int> z_counts;
+    for (uint32_t ei : atom_indices) {
+        z_counts[elems[ei].Z]++;
+    }
+    std::vector<FormulaEntry> entries;
+    for (auto& [z, cnt] : z_counts) {
+        const char* sym = (z >= 1 && z <= FULL_ELEMENT_COUNT) ? ELEMENT_SYMBOLS[z] : "?";
+        entries.push_back({sym, cnt, z});
+    }
+    std::sort(entries.begin(), entries.end(), [](const FormulaEntry& a, const FormulaEntry& b) {
+        if (a.Z == 6 && b.Z != 6) return true;
+        if (b.Z == 6 && a.Z != 6) return false;
+        if (a.Z == 1 && b.Z != 1) return true;
+        if (b.Z == 1 && a.Z != 1) return false;
+        return a.sym < b.sym ? true : (a.sym > b.sym ? false : a.Z < b.Z);
+    });
+    std::string formula;
+    for (auto& e : entries) {
+        formula += e.sym;
+        if (e.count > 1) formula += std::to_string(e.count);
+    }
+    return formula;
+}
+
 void PhysicsInterface::draw_element_list() {
     if (!show_element_list || element_list.empty()) return;
 
     ImGuiIO& io = ImGui::GetIO();
-    float win_w = 320.0f;
+    float win_w = 360.0f;
     float max_h = io.DisplaySize.y - 120.0f;
-    float win_h = std::min(40.0f + static_cast<float>(element_list.size()) * 28.0f + 40.0f, max_h);
+
+    // Count display rows: molecules if available, else individual atoms
+    size_t display_count = molecule_list.empty() ? element_list.size() : molecule_list.size();
+    float win_h = std::min(40.0f + static_cast<float>(display_count) * 28.0f + 40.0f, max_h);
 
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
                                     io.DisplaySize.y * 0.5f - win_h * 0.5f),
                             ImGuiCond_Appearing);
     ImGui::SetNextWindowSize(ImVec2(win_w, win_h), ImGuiCond_Appearing);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(340, 120), ImVec2(480, max_h));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(340, 120), ImVec2(520, max_h));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.05f, 0.09f, 0.95f));
     ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.08f, 0.06f, 0.03f, 0.95f));
     ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.14f, 0.10f, 0.04f, 0.95f));
 
+    // Count molecules vs free atoms
+    int mol_count = 0, free_count = 0;
+    for (auto& mol : molecule_list) {
+        if (mol.atom_indices.size() > 1) mol_count++;
+        else free_count++;
+    }
+
     char title[64];
-    snprintf(title, sizeof(title), "Elements (%d)###ElementList",
-             static_cast<int>(element_list.size()));
+    if (mol_count > 0)
+        snprintf(title, sizeof(title), "Elements (%d) + Molecules (%d)###ElementList",
+                 static_cast<int>(element_list.size()), mol_count);
+    else
+        snprintf(title, sizeof(title), "Elements (%d)###ElementList",
+                 static_cast<int>(element_list.size()));
 
     if (!ImGui::Begin(title, &show_element_list)) {
         ImGui::End();
@@ -4416,138 +4829,207 @@ void PhysicsInterface::draw_element_list() {
         return;
     }
 
-    // Column headers
-    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "%-6s %-12s %3s %3s %10s %6s",
-                       "Sym", "Name", "A", "Q", "Energy", "Age");
-    ImGui::Separator();
+    // Use molecule_list if available (always populated when bonds_enabled)
+    if (!molecule_list.empty()) {
+        // Column headers
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "  %-14s %4s %10s %6s",
+                           "Formula", "Q", "Energy", "Age");
+        ImGui::Separator();
 
-    // Scrollable list
-    ImGui::BeginChild("##ElemListScroll", ImVec2(0, 0), false);
+        ImGui::BeginChild("##ElemListScroll", ImVec2(0, 0), false);
 
-    for (size_t i = 0; i < element_list.size(); ++i) {
-        auto& elem = element_list[i];
-        int Z = elem.Z;
-        int A = elem.Z + elem.N;
-        int net_charge = Z - elem.electrons;
+        for (size_t mi = 0; mi < molecule_list.size(); ++mi) {
+            auto& mol = molecule_list[mi];
+            bool is_molecule = mol.atom_indices.size() > 1;
 
-        const char* sym_base = (Z >= 1 && Z <= FULL_ELEMENT_COUNT) ? ELEMENT_SYMBOLS[Z] : "?";
-        const char* name_base = (Z >= 1 && Z <= FULL_ELEMENT_COUNT) ? ELEMENT_NAMES[Z] : "Unknown";
+            // Build formula
+            std::string formula = build_molecular_formula(element_list, mol.atom_indices);
 
-        // Add anti- prefix for antimatter elements
-        char sym[16], name[64];
-        if (elem.is_anti) {
-            snprintf(sym, sizeof(sym), "\xc4\x80%s", sym_base);   // macron-A + symbol (anti prefix)
-            snprintf(name, sizeof(name), "Anti-%s", name_base);
-        } else {
-            snprintf(sym, sizeof(sym), "%s", sym_base);
-            snprintf(name, sizeof(name), "%s", name_base);
-        }
+            // Charge string
+            char charge_str[16];
+            if (mol.total_charge == 0) snprintf(charge_str, sizeof(charge_str), "0");
+            else if (mol.total_charge > 0) snprintf(charge_str, sizeof(charge_str), "+%d", mol.total_charge);
+            else snprintf(charge_str, sizeof(charge_str), "%d", mol.total_charge);
 
-        // Stability color indicator (antinuclei are always "stable" in our model since
-        // nuclear decay table is for matter nuclei only — show as cyan)
-        const IsotopeDecayEntry* decay = elem.is_anti ? nullptr : lookup_isotope_decay(Z, elem.N);
-        float hl = 0.0f;
-        NuclearDecayMode dmode = NDECAY_NONE;
-        if (decay) { dmode = decay->mode; hl = decay->half_life_frames; }
-        else if (!elem.is_anti) { dmode = general_stability_rule(Z, elem.N, hl); }
+            // Energy and age
+            char energy_str[32], age_str[16];
+            format_energy_str(energy_str, sizeof(energy_str), mol.total_energy_MeV);
+            format_age_str(age_str, sizeof(age_str), mol.oldest_birth, frame_counter_display);
 
-        ImVec4 stab_col;
-        if (elem.is_anti)               stab_col = ImVec4(0.5f, 0.8f, 1.0f, 1.0f);  // antimatter cyan
-        else if (dmode == NDECAY_NONE)   stab_col = ImVec4(0.3f, 0.9f, 0.4f, 1.0f);  // stable green
-        else if (hl > 7200.0f)          stab_col = ImVec4(0.9f, 0.9f, 0.5f, 1.0f);  // long-lived yellow
-        else if (hl > 60.0f)            stab_col = ImVec4(1.0f, 0.65f, 0.2f, 1.0f); // medium orange
-        else                            stab_col = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);  // short red
+            ImGui::PushID(static_cast<int>(mi + 10000));
 
-        // Charge string
-        char charge_str[16];
-        if (net_charge == 0) snprintf(charge_str, sizeof(charge_str), "0");
-        else if (net_charge > 0) snprintf(charge_str, sizeof(charge_str), "+%d", net_charge);
-        else snprintf(charge_str, sizeof(charge_str), "%d", net_charge);
-
-        // Build clickable button label
-        char label[128];
-        snprintf(label, sizeof(label), "##elem_%zu", i);
-
-        // Stability dot + element row as a selectable
-        bool is_selected = (element_card_nucleus_rep == static_cast<int32_t>(elem.rep));
-        ImGui::PushID(static_cast<int>(i));
-
-        // Stability dot
-        ImVec2 cursor = ImGui::GetCursorScreenPos();
-        ImGui::GetWindowDrawList()->AddCircleFilled(
-            ImVec2(cursor.x + 5.0f, cursor.y + 10.0f), 4.0f,
-            ImGui::ColorConvertFloat4ToU32(stab_col));
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.0f);
-
-        // Format energy string
-        char energy_str[32];
-        {
-            float eV = elem.energy_MeV * 1e6f;
-            if (eV < 1e3f)
-                snprintf(energy_str, sizeof(energy_str), "%.0f eV", eV);
-            else if (eV < 1e6f)
-                snprintf(energy_str, sizeof(energy_str), "%.1f keV", eV / 1e3f);
-            else if (eV < 1e9f)
-                snprintf(energy_str, sizeof(energy_str), "%.1f MeV", eV / 1e6f);
-            else if (eV < 1e12f)
-                snprintf(energy_str, sizeof(energy_str), "%.2f GeV", eV / 1e9f);
-            else
-                snprintf(energy_str, sizeof(energy_str), "%.2f TeV", eV / 1e12f);
-        }
-
-        // Format age string
-        char age_str[16];
-        if (elem.oldest_birth != UINT32_MAX) {
-            float age_sec = (frame_counter_display - elem.oldest_birth) / 60.0f;
-            if (age_sec < 60.0f)
-                snprintf(age_str, sizeof(age_str), "%.0fs", age_sec);
-            else
-                snprintf(age_str, sizeof(age_str), "%.1fm", age_sec / 60.0f);
-        } else {
-            snprintf(age_str, sizeof(age_str), "-");
-        }
-
-        // Selectable row
-        const char* lepton_label = elem.is_anti ? "e+" : "e-";
-        char row_text[192];
-        snprintf(row_text, sizeof(row_text), "%-4s %-4s-%-3d  %-10s %3s %10s %6s",
-                 sym, sym, A, name, charge_str, energy_str, age_str);
-
-        if (ImGui::Selectable(row_text, is_selected, ImGuiSelectableFlags_None, ImVec2(0, 22))) {
-            element_card_nucleus_rep = static_cast<int32_t>(elem.rep);
-            navigate_to_particle = static_cast<int32_t>(elem.rep);
-        }
-
-        // Tooltip with details
-        if (ImGui::IsItemHovered()) {
-            ImGui::BeginTooltip();
-            ImGui::TextColored(elem.is_anti ? ImVec4(0.5f, 0.8f, 1.0f, 1.0f) : ImVec4(0.9f, 0.85f, 0.6f, 1.0f),
-                               "%s-%d%s", sym, A, elem.is_anti ? " (antimatter)" : "");
-            ImGui::Text("Z=%d  N=%d  %s=%d", Z, elem.N, lepton_label, elem.electrons);
-            if (elem.is_anti) {
-                ImGui::TextColored(stab_col, "Antimatter");
-            } else if (dmode == NDECAY_NONE) {
-                ImGui::TextColored(stab_col, "Stable");
+            // Color dot: blue for molecules, stability color for single atoms
+            ImVec2 cursor = ImGui::GetCursorScreenPos();
+            ImVec4 dot_col;
+            if (is_molecule) {
+                dot_col = ImVec4(0.4f, 0.65f, 1.0f, 1.0f);  // bond blue
             } else {
-                const char* mode_str = "";
-                switch (dmode) {
-                    case NDECAY_ALPHA: mode_str = "alpha"; break;
-                    case NDECAY_BETA_MINUS: mode_str = "beta-"; break;
-                    case NDECAY_BETA_PLUS: mode_str = "beta+"; break;
-                    case NDECAY_NEUTRON_EMISSION: mode_str = "n-emit"; break;
-                    case NDECAY_PROTON_EMISSION: mode_str = "p-emit"; break;
-                    default: break;
-                }
-                ImGui::TextColored(stab_col, "Unstable (%s, t1/2=%.0f frames)", mode_str, hl);
+                auto& elem = element_list[mol.atom_indices[0]];
+                const IsotopeDecayEntry* decay = elem.is_anti ? nullptr : lookup_isotope_decay(elem.Z, elem.N);
+                float hl = 0.0f;
+                NuclearDecayMode dmode = NDECAY_NONE;
+                if (decay) { dmode = decay->mode; hl = decay->half_life_frames; }
+                else if (!elem.is_anti) { dmode = general_stability_rule(elem.Z, elem.N, hl); }
+
+                if (elem.is_anti)             dot_col = ImVec4(0.5f, 0.8f, 1.0f, 1.0f);
+                else if (dmode == NDECAY_NONE) dot_col = ImVec4(0.3f, 0.9f, 0.4f, 1.0f);
+                else if (hl > 7200.0f)        dot_col = ImVec4(0.9f, 0.9f, 0.5f, 1.0f);
+                else if (hl > 60.0f)          dot_col = ImVec4(1.0f, 0.65f, 0.2f, 1.0f);
+                else                          dot_col = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
             }
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "Click to inspect");
-            ImGui::EndTooltip();
+            ImGui::GetWindowDrawList()->AddCircleFilled(
+                ImVec2(cursor.x + 5.0f, cursor.y + 10.0f), 4.0f,
+                ImGui::ColorConvertFloat4ToU32(dot_col));
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.0f);
+
+            // Selectable row
+            uint32_t first_rep = element_list[mol.atom_indices[0]].rep;
+            bool is_selected_mol = (molecule_card_index == static_cast<int32_t>(mi));
+            bool is_selected_elem = !is_molecule && (element_card_nucleus_rep == static_cast<int32_t>(first_rep));
+            char row_text[192];
+            snprintf(row_text, sizeof(row_text), "%-14s %4s %10s %6s",
+                     formula.c_str(), charge_str, energy_str, age_str);
+
+            if (ImGui::Selectable(row_text, is_selected_mol || is_selected_elem,
+                                  ImGuiSelectableFlags_None, ImVec2(0, 22))) {
+                if (is_molecule) {
+                    molecule_card_index = static_cast<int32_t>(mi);
+                    element_card_nucleus_rep = -1;  // close atom card
+                } else {
+                    element_card_nucleus_rep = static_cast<int32_t>(first_rep);
+                    molecule_card_index = -1;  // close molecule card
+                }
+                navigate_to_particle = static_cast<int32_t>(first_rep);
+            }
+
+            // Tooltip
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                if (is_molecule) {
+                    ImGui::TextColored(ImVec4(0.4f, 0.65f, 1.0f, 1.0f), "Molecule: %s", formula.c_str());
+                    ImGui::Text("Atoms: %d  Charge: %s", static_cast<int>(mol.atom_indices.size()), charge_str);
+                    ImGui::Separator();
+                    for (uint32_t ei : mol.atom_indices) {
+                        auto& elem = element_list[ei];
+                        const char* sym = (elem.Z >= 1 && elem.Z <= FULL_ELEMENT_COUNT) ? ELEMENT_SYMBOLS[elem.Z] : "?";
+                        ImGui::Text("  %s-%d (Z=%d N=%d)", sym, elem.Z + elem.N, elem.Z, elem.N);
+                    }
+                } else {
+                    auto& elem = element_list[mol.atom_indices[0]];
+                    int Z = elem.Z;
+                    int A = Z + elem.N;
+                    const char* sym = (Z >= 1 && Z <= FULL_ELEMENT_COUNT) ? ELEMENT_SYMBOLS[Z] : "?";
+                    const char* name = (Z >= 1 && Z <= FULL_ELEMENT_COUNT) ? ELEMENT_NAMES[Z] : "Unknown";
+                    ImGui::TextColored(ImVec4(0.9f, 0.85f, 0.6f, 1.0f), "%s-%d %s", sym, A, name);
+                    const char* lep = elem.is_anti ? "e+" : "e-";
+                    ImGui::Text("Z=%d  N=%d  %s=%d", Z, elem.N, lep, elem.electrons);
+                }
+                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "Click to inspect");
+                ImGui::EndTooltip();
+            }
+
+            ImGui::PopID();
         }
 
-        ImGui::PopID();
+        ImGui::EndChild();
+    } else {
+        // Fallback: original atom-by-atom display (no bonds)
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "%-6s %-12s %3s %3s %10s %6s",
+                           "Sym", "Name", "A", "Q", "Energy", "Age");
+        ImGui::Separator();
+
+        ImGui::BeginChild("##ElemListScroll", ImVec2(0, 0), false);
+
+        for (size_t i = 0; i < element_list.size(); ++i) {
+            auto& elem = element_list[i];
+            int Z = elem.Z;
+            int A = elem.Z + elem.N;
+            int net_charge = Z - elem.electrons;
+
+            const char* sym_base = (Z >= 1 && Z <= FULL_ELEMENT_COUNT) ? ELEMENT_SYMBOLS[Z] : "?";
+            const char* name_base = (Z >= 1 && Z <= FULL_ELEMENT_COUNT) ? ELEMENT_NAMES[Z] : "Unknown";
+
+            char sym[16], name[64];
+            if (elem.is_anti) {
+                snprintf(sym, sizeof(sym), "\xc4\x80%s", sym_base);
+                snprintf(name, sizeof(name), "Anti-%s", name_base);
+            } else {
+                snprintf(sym, sizeof(sym), "%s", sym_base);
+                snprintf(name, sizeof(name), "%s", name_base);
+            }
+
+            const IsotopeDecayEntry* decay = elem.is_anti ? nullptr : lookup_isotope_decay(Z, elem.N);
+            float hl = 0.0f;
+            NuclearDecayMode dmode = NDECAY_NONE;
+            if (decay) { dmode = decay->mode; hl = decay->half_life_frames; }
+            else if (!elem.is_anti) { dmode = general_stability_rule(Z, elem.N, hl); }
+
+            ImVec4 stab_col;
+            if (elem.is_anti)               stab_col = ImVec4(0.5f, 0.8f, 1.0f, 1.0f);
+            else if (dmode == NDECAY_NONE)   stab_col = ImVec4(0.3f, 0.9f, 0.4f, 1.0f);
+            else if (hl > 7200.0f)          stab_col = ImVec4(0.9f, 0.9f, 0.5f, 1.0f);
+            else if (hl > 60.0f)            stab_col = ImVec4(1.0f, 0.65f, 0.2f, 1.0f);
+            else                            stab_col = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+
+            char charge_str[16];
+            if (net_charge == 0) snprintf(charge_str, sizeof(charge_str), "0");
+            else if (net_charge > 0) snprintf(charge_str, sizeof(charge_str), "+%d", net_charge);
+            else snprintf(charge_str, sizeof(charge_str), "%d", net_charge);
+
+            bool is_selected = (element_card_nucleus_rep == static_cast<int32_t>(elem.rep));
+            ImGui::PushID(static_cast<int>(i));
+
+            ImVec2 cursor = ImGui::GetCursorScreenPos();
+            ImGui::GetWindowDrawList()->AddCircleFilled(
+                ImVec2(cursor.x + 5.0f, cursor.y + 10.0f), 4.0f,
+                ImGui::ColorConvertFloat4ToU32(stab_col));
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.0f);
+
+            char energy_str[32], age_str[16];
+            format_energy_str(energy_str, sizeof(energy_str), elem.energy_MeV);
+            format_age_str(age_str, sizeof(age_str), elem.oldest_birth, frame_counter_display);
+
+            char row_text[192];
+            snprintf(row_text, sizeof(row_text), "%-4s %-4s-%-3d  %-10s %3s %10s %6s",
+                     sym, sym, A, name, charge_str, energy_str, age_str);
+
+            if (ImGui::Selectable(row_text, is_selected, ImGuiSelectableFlags_None, ImVec2(0, 22))) {
+                element_card_nucleus_rep = static_cast<int32_t>(elem.rep);
+                navigate_to_particle = static_cast<int32_t>(elem.rep);
+            }
+
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::TextColored(elem.is_anti ? ImVec4(0.5f, 0.8f, 1.0f, 1.0f) : ImVec4(0.9f, 0.85f, 0.6f, 1.0f),
+                                   "%s-%d%s", sym, A, elem.is_anti ? " (antimatter)" : "");
+                const char* lep = elem.is_anti ? "e+" : "e-";
+                ImGui::Text("Z=%d  N=%d  %s=%d", Z, elem.N, lep, elem.electrons);
+                if (elem.is_anti) {
+                    ImGui::TextColored(stab_col, "Antimatter");
+                } else if (dmode == NDECAY_NONE) {
+                    ImGui::TextColored(stab_col, "Stable");
+                } else {
+                    const char* mode_str = "";
+                    switch (dmode) {
+                        case NDECAY_ALPHA: mode_str = "alpha"; break;
+                        case NDECAY_BETA_MINUS: mode_str = "beta-"; break;
+                        case NDECAY_BETA_PLUS: mode_str = "beta+"; break;
+                        case NDECAY_NEUTRON_EMISSION: mode_str = "n-emit"; break;
+                        case NDECAY_PROTON_EMISSION: mode_str = "p-emit"; break;
+                        default: break;
+                    }
+                    ImGui::TextColored(stab_col, "Unstable (%s, t1/2=%.0f frames)", mode_str, hl);
+                }
+                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "Click to inspect");
+                ImGui::EndTooltip();
+            }
+
+            ImGui::PopID();
+        }
+
+        ImGui::EndChild();
     }
 
-    ImGui::EndChild();
     ImGui::End();
     ImGui::PopStyleColor(3);
 }
