@@ -171,10 +171,10 @@ struct SimConfig {
 
     // Bond parameters
     bool     bonds_enabled            = true;
-    float    bond_spring_k            = 80.0f;
-    float    bond_rest_length         = 22.0f;  // pixels, approx repulsion_radius
+    float    bond_spring_k            = 500.0f;
+    float    bond_rest_length         = 36.0f;  // pixels — must exceed largest nuclear pair extent
     float    bond_break_factor        = 2.2f;   // breaks when dist > rest * factor
-    float    bond_form_radius         = 28.0f;
+    float    bond_form_radius         = 44.0f;
     uint32_t bond_update_interval     = 2;      // update bonds every N frames
     float    bond_activation_energy   = 0.02f;  // min relative KE required to form a bond
 

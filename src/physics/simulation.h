@@ -7,6 +7,7 @@
 #include "renderer.h"
 #include "physics/interface.h"
 #include "physics/achievements.h"
+#include "physics/audio.h"
 #include <GLFW/glfw3.h>
 #include <vector>
 #include <random>
@@ -66,6 +67,7 @@ public:
     Renderer        renderer{};
     PhysicsInterface iface{};
     AchievementManager achievements{};
+    AudioPlayer        audio{};
 
     // Force objects (stationary force emitters)
     ForceObject  force_objects_[MAX_FORCE_OBJECTS] = {};
@@ -145,7 +147,7 @@ private:
     void check_spallation();
     void check_hadronization();
 
-    void spawn_atom_at(glm::vec2 pos, int Z, int N, std::mt19937& rng, uint32_t& search_start);
+    uint32_t spawn_atom_at(glm::vec2 pos, int Z, int N, std::mt19937& rng, uint32_t& search_start);
     void place_force_object(glm::vec2 world_pos, ForceObjectType type);
     void place_mirror(glm::vec2 endpoint1, glm::vec2 endpoint2);
     int  hit_test_force_objects(glm::vec2 world_pos, float snap_radius);

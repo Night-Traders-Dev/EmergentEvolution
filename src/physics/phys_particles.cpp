@@ -119,9 +119,17 @@ static void write_genome(Particles& p, uint32_t type, std::mt19937& rng) {
         std::uniform_int_distribution<int> c(1, 3);
         color = -static_cast<float>(c(rng));
     } else if (type == GLUON_TYPE_PHYS) {
-        // Gluon: bi-colored, encode as R(1) for simplicity
-        std::uniform_int_distribution<int> c(1, 3);
-        color = static_cast<float>(c(rng));
+        // Gluon: color-anticolor pair from SU(3) octet
+        // Encoded as X.Y: floor(val)=carried color (R=1,G=2,B=3),
+        //                  round(fract(val)*10)=anticolor index
+        static const float GLUON_COLORS[8] = {
+            1.2f, 1.3f,   // r-ḡ, r-b̄
+            2.1f, 2.3f,   // g-r̄, g-b̄
+            3.1f, 3.2f,   // b-r̄, b-ḡ
+            1.1f, 2.2f    // diagonal (rr̄ mix, gḡ mix)
+        };
+        std::uniform_int_distribution<int> s(0, 7);
+        color = GLUON_COLORS[s(rng)];
     } else if (type == SQUARK_TYPE_PHYS || type == GLUINO_TYPE_PHYS || type == PREON_TYPE_PHYS) {
         // Color-charged SUSY/exotic: random R/G/B like quarks
         std::uniform_int_distribution<int> c(1, 3);
@@ -193,7 +201,7 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
 
     // Bosons
     p.behavior_flags[PHOTON_TYPE_PHYS]     = BEHAVIOR_PHOTON;
-    p.behavior_flags[GLUON_TYPE_PHYS]      = BEHAVIOR_GLUON | BEHAVIOR_PHOTON;  // ballistic like photon
+    p.behavior_flags[GLUON_TYPE_PHYS]      = BEHAVIOR_GLUON;  // colored boson, own QCD fast-path
     p.behavior_flags[W_PLUS_TYPE_PHYS]     = BEHAVIOR_WEAK_BOSON | BEHAVIOR_IONIC_POS;
     p.behavior_flags[W_MINUS_TYPE_PHYS]    = BEHAVIOR_WEAK_BOSON | BEHAVIOR_IONIC_NEG;
     p.behavior_flags[Z_BOSON_TYPE_PHYS]    = BEHAVIOR_WEAK_BOSON;

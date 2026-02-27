@@ -56,6 +56,7 @@ add_executable(particle_physics
     src/physics/interface.cpp
     src/physics/save_load.cpp
     src/physics/achievements.cpp
+    src/physics/audio.cpp
     src/stb_image_impl.cpp
 
     # Shared infrastructure
@@ -81,10 +82,16 @@ target_include_directories(particle_physics PRIVATE
     ${imgui_SOURCE_DIR}/backends
 )
 
+# Threads (required by miniaudio audio engine)
+find_package(Threads REQUIRED)
+
 target_link_libraries(particle_physics PRIVATE
     Vulkan::Vulkan
     glfw
     glm::glm
+    ${CMAKE_DL_LIBS}     # dlopen for miniaudio backend loading
+    Threads::Threads      # pthreads for miniaudio
+    m                     # libm for miniaudio
 )
 
 # OpenMP — link if available, define HAS_OPENMP so source can guard omp calls

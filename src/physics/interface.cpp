@@ -1,4 +1,5 @@
 #include "physics/interface.h"
+#include "physics/audio.h"
 #include "physics/molecules.h"
 #include "physics/phys_particles.h"
 #include <imgui.h>
@@ -1842,6 +1843,27 @@ void PhysicsInterface::draw_settings_menu() {
                 ImGui::Text("%s", THEME_NAMES[i]);
         }
 
+        ImGui::Dummy(ImVec2(0, 10));
+
+        // ── Audio ───────────────────────────────────────────────────────
+        ImGui::TextColored(tc.accent, "Audio");
+        ImGui::Separator();
+
+        if (ImGui::Checkbox("Mute Music", &prefs.music_muted)) {
+            if (audio_ptr) {
+                if (prefs.music_muted) audio_ptr->pause();
+                else                   audio_ptr->resume();
+            }
+        }
+
+        if (!prefs.music_muted) {
+            float vol_pct = prefs.music_volume * 100.0f;
+            if (ImGui::SliderFloat("Music Volume", &vol_pct, 0.0f, 100.0f, "%.0f%%")) {
+                prefs.music_volume = vol_pct / 100.0f;
+                if (audio_ptr) audio_ptr->set_volume(prefs.music_volume);
+            }
+        }
+
         ImGui::PopItemWidth();
         ImGui::EndChild();
 
@@ -2919,6 +2941,10 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
         ImGui::Checkbox("Enable Virtual Pairs", &cfg.virtual_pairs_enabled);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Spontaneous particle-antiparticle pairs\nfrom quantum vacuum fluctuations\n(Casimir effect source)");
+
+        ImGui::Checkbox("Hide Virtual Trails", &hide_virtual_trails);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Hide virtual particle rendering\nwhile keeping the physics active");
 
         if (cfg.virtual_pairs_enabled) {
             ImGui::SliderFloat("Vacuum Energy", &cfg.vacuum_energy, 0.0f, 2.0f, "%.2f");
@@ -5189,14 +5215,14 @@ void PhysicsInterface::draw_nuclear_debug(SimConfig& cfg) {
         ImGui::Checkbox("Bonds Enabled##cbond", &cfg.bonds_enabled);
 
         ImGui::SetNextItemWidth(-1);
-        ImGui::SliderFloat("Spring K##cbond", &cfg.bond_spring_k, 10.0f, 200.0f, "%.0f");
+        ImGui::SliderFloat("Spring K##cbond", &cfg.bond_spring_k, 10.0f, 2000.0f, "%.0f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Bond spring constant (Hooke's law).\nHigher = stiffer bonds.\nDefault: 80");
+            ImGui::SetTooltip("Bond spring constant (Hooke's law).\nHigher = stiffer bonds.\nDefault: 500");
 
         ImGui::SetNextItemWidth(-1);
-        ImGui::SliderFloat("Rest Length (px)##cbond", &cfg.bond_rest_length, 8.0f, 60.0f, "%.1f px");
+        ImGui::SliderFloat("Rest Length (px)##cbond", &cfg.bond_rest_length, 8.0f, 80.0f, "%.1f px");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Equilibrium bond length.\nDefault: 22 px");
+            ImGui::SetTooltip("Equilibrium bond length.\nMust exceed nuclear radii + 10px.\nDefault: 36 px");
 
         ImGui::SetNextItemWidth(-1);
         ImGui::SliderFloat("Break Factor##cbond", &cfg.bond_break_factor, 1.5f, 5.0f, "%.1fx");
@@ -5204,9 +5230,9 @@ void PhysicsInterface::draw_nuclear_debug(SimConfig& cfg) {
             ImGui::SetTooltip("Bond breaks at distance > rest * factor.\nDefault: 2.2x");
 
         ImGui::SetNextItemWidth(-1);
-        ImGui::SliderFloat("Form Radius (px)##cbond", &cfg.bond_form_radius, 15.0f, 80.0f, "%.0f px");
+        ImGui::SliderFloat("Form Radius (px)##cbond", &cfg.bond_form_radius, 15.0f, 100.0f, "%.0f px");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Max distance for new bond formation.\nDefault: 28 px");
+            ImGui::SetTooltip("Max distance for new bond formation.\nDefault: 44 px");
 
         ImGui::SetNextItemWidth(-1);
         ImGui::SliderFloat("Activation Energy##cbond", &cfg.bond_activation_energy, 0.001f, 0.2f, "%.3f",
@@ -5266,10 +5292,10 @@ void PhysicsInterface::draw_nuclear_debug(SimConfig& cfg) {
         cfg.virtual_pairs_enabled     = true;
 
         cfg.bonds_enabled             = true;
-        cfg.bond_spring_k             = 80.0f;
-        cfg.bond_rest_length          = 22.0f;
+        cfg.bond_spring_k             = 500.0f;
+        cfg.bond_rest_length          = 36.0f;
         cfg.bond_break_factor         = 2.2f;
-        cfg.bond_form_radius          = 28.0f;
+        cfg.bond_form_radius          = 44.0f;
         cfg.bond_activation_energy    = 0.02f;
     }
     if (ImGui::IsItemHovered())

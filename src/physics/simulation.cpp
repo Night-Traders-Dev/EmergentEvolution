@@ -106,6 +106,7 @@ void PhysicsSimulation::init(GLFWwindow* window) {
 
     iface.init();
     iface.achievements_ptr = &achievements;
+    iface.audio_ptr = &audio;
     cfg.generation_seed = static_cast<uint32_t>(iface.seed_value);
 
     // Load persistent achievements from disk
@@ -116,10 +117,17 @@ void PhysicsSimulation::init(GLFWwindow* window) {
     compute.init(vk, COMPUTE_SPV);
     renderer.init(vk, window, compute);
 
+    // Background music — try multiple paths (CWD may be project root or build/)
+    if (!audio.init("assets/sound.mp3"))
+        audio.init("../assets/sound.mp3");
+    audio.set_volume(iface.prefs.music_volume);
+    if (iface.prefs.music_muted) audio.pause();
+
     reset();
 }
 
 void PhysicsSimulation::destroy() {
+    audio.destroy();
     achievements.save("saves/achievements.ppach");
     vkDeviceWaitIdle(vk.device);
     compute.destroy(vk);
@@ -682,8 +690,8 @@ void PhysicsSimulation::do_accelerator_fire(glm::vec2 aim_world_pos) {
 
 // ── Spawn a single atom (nucleus + electrons) at world position ──────────────
 
-void PhysicsSimulation::spawn_atom_at(glm::vec2 pos, int Z, int N,
-                                       std::mt19937& rng, uint32_t& search_start) {
+uint32_t PhysicsSimulation::spawn_atom_at(glm::vec2 pos, int Z, int N,
+                                          std::mt19937& rng, uint32_t& search_start) {
     uint32_t n = cfg.particle_count;
 
     auto find_dormant = [&](uint32_t start_from) -> uint32_t {
@@ -714,6 +722,8 @@ void PhysicsSimulation::spawn_atom_at(glm::vec2 pos, int Z, int N,
     struct NucPos { float x, y; };
     std::vector<NucPos> nuc_positions;
     nuc_positions.reserve(A);
+
+    uint32_t first_nucleon_slot = UINT32_MAX;
 
     nuc_positions.push_back({0.0f, 0.0f});
     int ring = 1;
@@ -758,6 +768,8 @@ void PhysicsSimulation::spawn_atom_at(glm::vec2 pos, int Z, int N,
         uint32_t slot = find_dormant(search_start);
         if (slot == UINT32_MAX) break;
         search_start = slot + 1;
+
+        if (first_nucleon_slot == UINT32_MAX) first_nucleon_slot = slot;
 
         readback_positions_[slot] = wrap_pos(pos + glm::vec2(nuc_positions[k].x, nuc_positions[k].y));
         readback_velocities_[slot] = glm::vec2(0.0f);
@@ -812,6 +824,8 @@ void PhysicsSimulation::spawn_atom_at(glm::vec2 pos, int Z, int N,
         shell_fill_spawn[shell] = cap;
         electrons_left -= cap;
     }
+
+    return first_nucleon_slot;
 }
 
 // ── Spawn at world position ──────────────────────────────────────────────────
@@ -854,12 +868,126 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
         iface.spawn_molecule_idx < MOLECULE_TEMPLATE_COUNT) {
         const auto& mol = MOLECULE_TEMPLATES[iface.spawn_molecule_idx];
         uint32_t search_start = 0;
+
+        // Nuclear extent: radius of hex-packed nucleus (NUC_SPACING=3.8)
+        auto nuc_extent = [](int Z) -> float {
+            int N_def = (Z <= 2) ? Z : Z + static_cast<int>(std::round(Z * 0.31f));
+            int A = Z + N_def;
+            if (A <= 0) return 0.0f;
+            int ring = 0, placed = 1;
+            while (placed < A) { ++ring; placed += 6 * ring; }
+            return ring * 3.8f + 1.9f;
+        };
+
+        // Scale template so no bonded atom pair overlaps within nuclear force range.
+        // Templates designed with ~22px spacing; we need at least:
+        //   actual_dist >= extent_A + extent_B + SAFE_MARGIN
+        // where SAFE_MARGIN = YUKAWA_RANGE(8) + 2px buffer = 10
+        const float TEMPLATE_SPACING = 22.0f;
+        const float SAFE_MARGIN = 10.0f;  // keep nucleons outside Yukawa range
+        float min_scale = cfg.bond_rest_length / TEMPLATE_SPACING;
+        for (uint32_t ai = 0; ai < mol.atom_count; ++ai) {
+            for (uint32_t aj = ai + 1; aj < mol.atom_count; ++aj) {
+                float dx = mol.atoms[ai].dx - mol.atoms[aj].dx;
+                float dy = mol.atoms[ai].dy - mol.atoms[aj].dy;
+                float tdist = std::sqrt(dx * dx + dy * dy);
+                if (tdist < 1.0f) continue;
+                float safe = nuc_extent(mol.atoms[ai].Z) + nuc_extent(mol.atoms[aj].Z)
+                           + SAFE_MARGIN;
+                min_scale = std::max(min_scale, safe / tdist);
+            }
+        }
+        float scale = min_scale;
+
+        // Track spawned atom reps for pre-bonding
+        struct SpawnedAtom { uint32_t rep; glm::vec2 pos; int Z; };
+        std::vector<SpawnedAtom> spawned_atoms;
+        spawned_atoms.reserve(mol.atom_count);
+
         for (uint32_t ai = 0; ai < mol.atom_count; ++ai) {
             int Z = mol.atoms[ai].Z;
             int N = default_neutron_count(Z);
-            glm::vec2 atom_pos = wrap_pos(world_pos + glm::vec2(mol.atoms[ai].dx, mol.atoms[ai].dy));
-            spawn_atom_at(atom_pos, Z, N, rng, search_start);
+            glm::vec2 atom_pos = wrap_pos(world_pos +
+                glm::vec2(mol.atoms[ai].dx * scale, mol.atoms[ai].dy * scale));
+            uint32_t rep = spawn_atom_at(atom_pos, Z, N, rng, search_start);
+            if (rep != UINT32_MAX)
+                spawned_atoms.push_back({rep, atom_pos, Z});
         }
+
+        // Pre-create covalent bonds between nearby atoms (before GPU forces scatter them)
+        if (cfg.bonds_enabled && spawned_atoms.size() > 1) {
+            size_t required = static_cast<size_t>(cfg.particle_count) * MAX_BONDS_PER_PARTICLE;
+            if (bond_data_.size() < required)
+                bond_data_.resize(required, 0xFFFFFFFFu);
+
+            const float FORM_R_SQ = cfg.bond_form_radius * cfg.bond_form_radius;
+
+            // Count existing bonds for a rep
+            auto count_bonds = [&](uint32_t rep) -> int {
+                int cnt = 0;
+                uint32_t base = rep * MAX_BONDS_PER_PARTICLE;
+                for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s)
+                    if (bond_data_[base + s] != 0xFFFFFFFFu) ++cnt;
+                return cnt;
+            };
+
+            // Add one bond slot (returns true if added)
+            auto add_slot = [&](uint32_t rep, uint32_t partner) -> bool {
+                uint32_t base = rep * MAX_BONDS_PER_PARTICLE;
+                for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+                    if (bond_data_[base + s] == 0xFFFFFFFFu) {
+                        bond_data_[base + s] = partner;
+                        return true;
+                    }
+                }
+                return false;
+            };
+
+            // Sort atoms by valence (highest first) so carbons bond first
+            std::vector<size_t> order(spawned_atoms.size());
+            for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+            std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+                return valence_from_Z(spawned_atoms[a].Z) > valence_from_Z(spawned_atoms[b].Z);
+            });
+
+            for (size_t ii = 0; ii < order.size(); ++ii) {
+                size_t i = order[ii];
+                int val_a = valence_from_Z(spawned_atoms[i].Z);
+                if (val_a <= 0) continue;
+                if (count_bonds(spawned_atoms[i].rep) >= val_a) continue;
+
+                // Collect candidate partners sorted by distance
+                struct Cand { size_t idx; float d2; };
+                std::vector<Cand> cands;
+                for (size_t j = 0; j < spawned_atoms.size(); ++j) {
+                    if (j == i) continue;
+                    int val_b = valence_from_Z(spawned_atoms[j].Z);
+                    if (val_b <= 0) continue;
+                    glm::vec2 delta = spawned_atoms[j].pos - spawned_atoms[i].pos;
+                    float d2 = glm::dot(delta, delta);
+                    if (d2 <= FORM_R_SQ)
+                        cands.push_back({j, d2});
+                }
+                std::sort(cands.begin(), cands.end(), [](const Cand& a, const Cand& b) {
+                    return a.d2 < b.d2;
+                });
+
+                for (auto& c : cands) {
+                    if (count_bonds(spawned_atoms[i].rep) >= val_a) break;
+                    int val_b = valence_from_Z(spawned_atoms[c.idx].Z);
+                    if (count_bonds(spawned_atoms[c.idx].rep) >= val_b) continue;
+
+                    // Create bidirectional bond
+                    if (add_slot(spawned_atoms[i].rep, spawned_atoms[c.idx].rep))
+                        add_slot(spawned_atoms[c.idx].rep, spawned_atoms[i].rep);
+                }
+            }
+
+            // Upload bond data for GPU
+            particles.bond_partners_ptr = bond_data_.data();
+            particles.bond_partners_count = static_cast<uint32_t>(bond_data_.size());
+        }
+
         iface.spawn_molecule_idx = -1;
     }
 
@@ -1002,7 +1130,7 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
         }
     } else {
         // Single particle spawn
-        bool is_massless = (particles.behavior_flags[type] & BEHAVIOR_PHOTON) != 0;
+        bool is_massless = (particles.behavior_flags[type] & (BEHAVIOR_PHOTON | BEHAVIOR_GLUON)) != 0;
         float m0 = (type < PHYS_PARTICLE_TYPES) ? PHYS_REST_MASS_MEV[type] : 0.0f;
         float KE_MeV = iface.spawn_energy_mev;
         // Convert kinetic energy → sim velocity
@@ -1101,7 +1229,7 @@ void PhysicsSimulation::check_annihilation() {
             if (readback_energies_[j] < 0.01f) return;
             if (particles.types[j] != target_type) return;
 
-            glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
+            glm::vec2 delta = (readback_positions_[j] - readback_positions_[i]);
             float d2 = delta.x * delta.x + delta.y * delta.y;
             if (d2 < best_dist_sq) {
                 best_dist_sq = d2;
@@ -1292,7 +1420,7 @@ void PhysicsSimulation::check_fusion() {
             // Skip nucleons already bound in the same nucleus
             if (particles.orbital_parent[i] >= 0 &&
                 particles.orbital_parent[i] == particles.orbital_parent[j]) return;
-            glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
+            glm::vec2 delta = (readback_positions_[j] - readback_positions_[i]);
             float d2 = delta.x * delta.x + delta.y * delta.y;
             if (d2 > FUSION_RADIUS_SQ) return;
 
@@ -1393,7 +1521,7 @@ void PhysicsSimulation::check_fusion() {
             // Skip nucleons already bound in the same nucleus
             if (particles.orbital_parent[i] >= 0 &&
                 particles.orbital_parent[i] == particles.orbital_parent[j]) return;
-            glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
+            glm::vec2 delta = (readback_positions_[j] - readback_positions_[i]);
             float d2 = delta.x * delta.x + delta.y * delta.y;
             if (d2 > FUSION_RADIUS_SQ) return;
 
@@ -1519,7 +1647,7 @@ void PhysicsSimulation::check_fission() {
             if (readback_energies_[j] < 0.01f) return;
             uint32_t t = particles.types[j];
             if (t != PROTON_TYPE && t != NEUTRON_TYPE) return;
-            glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
+            glm::vec2 delta = (readback_positions_[j] - readback_positions_[i]);
             float d2 = delta.x * delta.x + delta.y * delta.y;
             if (d2 < CLUSTER_RADIUS_SQ) {
                 cluster.push_back(j);
@@ -1579,7 +1707,7 @@ void PhysicsSimulation::check_fission() {
             if (slot == UINT32_MAX) break;
             used[slot] = true;
             write_spawn_genome(particles, slot, NEUTRON_TYPE, rng, frame_counter_);
-            readback_positions_[slot] = center + rand_dir() * cfg.fission_spawn_radius;
+            readback_positions_[slot] = (center + rand_dir() * cfg.fission_spawn_radius);
             readback_velocities_[slot] = rand_dir() * ke_to_speed(neutron_KE, NEUTRON_TYPE);
             readback_energies_[slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[NEUTRON_TYPE] + neutron_KE);
         }
@@ -1663,7 +1791,7 @@ void PhysicsSimulation::update_orbitals() {
                 if (readback_energies_[j] < 0.01f) return;
                 uint32_t tj = particles.types[j];
                 if (tj != PROTON_TYPE && tj != NEUTRON_TYPE) return;
-                glm::vec2 d = readback_positions_[j] - readback_positions_[mi];
+                glm::vec2 d = (readback_positions_[j] - readback_positions_[mi]);
                 if (glm::dot(d, d) < NUCLEAR_CLUSTER_RADIUS_SQ) {
                     members.push_back(j);
                     clustered[j] = true;
@@ -1744,7 +1872,7 @@ void PhysicsSimulation::update_orbitals() {
                 if (clustered[j]) return;
                 if (readback_energies_[j] < 0.01f) return;
                 if (particles.types[j] != ANTIPROTON_TYPE_PHYS) return;
-                glm::vec2 d = readback_positions_[j] - readback_positions_[mi];
+                glm::vec2 d = (readback_positions_[j] - readback_positions_[mi]);
                 if (glm::dot(d, d) < NUCLEAR_CLUSTER_RADIUS_SQ) {
                     members.push_back(j);
                     clustered[j] = true;
@@ -2194,7 +2322,7 @@ void PhysicsSimulation::update_bonds() {
                 continue;
             }
 
-            glm::vec2 delta = readback_positions_[partner] - readback_positions_[rep];
+            glm::vec2 delta = (readback_positions_[partner] - readback_positions_[rep]);
             float d2 = delta.x * delta.x + delta.y * delta.y;
             if (d2 > BREAK_DIST_SQ) {
                 bond_data_[base + s] = 0xFFFFFFFFu;
@@ -3659,7 +3787,7 @@ void PhysicsSimulation::check_nuclear_decay() {
                 for (uint32_t j = 0; j < n; ++j) {
                     if (particles.types[j] != ELECTRON_TYPE_PHYS) continue;
                     if (readback_energies_[j] < 0.01f) continue;
-                    glm::vec2 delta = readback_positions_[j] - nuc.center;
+                    glm::vec2 delta = (readback_positions_[j] - nuc.center);
                     float d2 = delta.x * delta.x + delta.y * delta.y;
                     if (d2 < best_dist_sq) {
                         best_dist_sq = d2;
@@ -3858,7 +3986,7 @@ void PhysicsSimulation::check_photoelectric() {
             if (readback_energies_[j] < 0.01f) return;
             uint32_t t = particles.types[j];
             if (t != ELECTRON_TYPE_PHYS && t != POSITRON_TYPE_PHYS) return;
-            glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
+            glm::vec2 delta = (readback_positions_[j] - readback_positions_[i]);
             float d2 = delta.x * delta.x + delta.y * delta.y;
             if (d2 < best_dist_sq) {
                 best_dist_sq = d2;
@@ -3891,7 +4019,7 @@ void PhysicsSimulation::check_photoelectric() {
 
                 // Determine which shell this electron is in by distance
                 float R_BOHR_PE = 15.0f;
-                float ed = glm::length(readback_positions_[best_e] - nuc.center);
+                float ed = glm::length((readback_positions_[best_e] - nuc.center));
                 float shell_radii[3];
                 for (int s = 0; s < 3; ++s) {
                     float screening = 0.0f;
@@ -3930,7 +4058,7 @@ void PhysicsSimulation::check_photoelectric() {
                 // Eject electron: direction = away from nucleus
                 glm::vec2 eject_dir = rand_dir();
                 if (orbital_parent >= 0 && static_cast<uint32_t>(orbital_parent) < n) {
-                    glm::vec2 to_electron = readback_positions_[best_e] - readback_positions_[orbital_parent];
+                    glm::vec2 to_electron = (readback_positions_[best_e] - readback_positions_[orbital_parent]);
                     float len = glm::length(to_electron);
                     if (len > 0.1f) eject_dir = to_electron / len;
                 }
@@ -3967,7 +4095,7 @@ void PhysicsSimulation::check_photoelectric() {
                 // Boost electron: if transfer > binding, ionize; otherwise kick to higher shell
                 if (transfer >= binding) {
                     // Ionize
-                    glm::vec2 kick_dir = glm::normalize(readback_positions_[best_e] - readback_positions_[i] + glm::vec2(0.001f));
+                    glm::vec2 kick_dir = glm::normalize((readback_positions_[best_e] - readback_positions_[i]) + glm::vec2(0.001f));
                     float eject_speed = std::min(std::sqrt(transfer - binding) * 60.0f, 200.0f);
                     readback_velocities_[best_e] = kick_dir * eject_speed;
                     readback_energies_[best_e] = std::min(readback_energies_[best_e] + transfer, 1.0f);
@@ -3984,7 +4112,7 @@ void PhysicsSimulation::check_photoelectric() {
                     // Small radial kick outward
                     glm::vec2 outward(0.0f);
                     if (orbital_parent >= 0 && static_cast<uint32_t>(orbital_parent) < n) {
-                        outward = readback_positions_[best_e] - readback_positions_[orbital_parent];
+                        outward = (readback_positions_[best_e] - readback_positions_[orbital_parent]);
                         float len = glm::length(outward);
                         if (len > 0.1f) outward /= len;
                     }
@@ -4062,7 +4190,7 @@ void PhysicsSimulation::check_photoelectric() {
             if (t != PROTON_TYPE && t != NEUTRON_TYPE && t != ANTIPROTON_TYPE_PHYS) return;
             if (j < particles.orbital_parent.size() && particles.orbital_parent[j] >= 0 &&
                 particles.orbital_parent[j] != static_cast<int32_t>(j)) return;
-            glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
+            glm::vec2 delta = (readback_positions_[j] - readback_positions_[i]);
             float d2 = delta.x * delta.x + delta.y * delta.y;
             if (d2 < best_dist_sq) {
                 best_dist_sq = d2;
@@ -4147,7 +4275,7 @@ void PhysicsSimulation::check_spallation() {
         // photonuclear is handled in check_photoelectric via a separate path)
         if (ptype >= PHYS_PARTICLE_TYPES) continue;
         uint32_t bhv = particles.behavior_flags[ptype];
-        if (bhv & BEHAVIOR_PHOTON) continue;
+        if (bhv & (BEHAVIOR_PHOTON | BEHAVIOR_GLUON)) continue;
         if (bhv & BEHAVIOR_NEUTRINO) continue;
 
         float speed = glm::length(readback_velocities_[i]);
@@ -4163,7 +4291,7 @@ void PhysicsSimulation::check_spallation() {
             if (total_nucleons < MIN_NUCLEUS_SIZE) continue;
 
             // Check if projectile is inside the nucleus
-            glm::vec2 delta = proj_pos - nuc.center;
+            glm::vec2 delta = (proj_pos - nuc.center);
             float d2 = delta.x * delta.x + delta.y * delta.y;
             if (d2 > HIT_RADIUS_SQ) continue;
 
@@ -4335,7 +4463,7 @@ void PhysicsSimulation::check_spallation() {
             int total_nucleons = nuc.Z + static_cast<int>(nuc.neutron_indices.size());
             if (total_nucleons < 2) continue;
 
-            glm::vec2 delta = ph_pos - nuc.center;
+            glm::vec2 delta = (ph_pos - nuc.center);
             float d2 = delta.x * delta.x + delta.y * delta.y;
 
             // Use a larger interaction radius for pair production (virtual photon
@@ -4810,9 +4938,9 @@ void PhysicsSimulation::check_virtual_pairs() {
         float angle = angle_dist_(rng);
         glm::vec2 dir(std::cos(angle), std::sin(angle));
 
-        // Position: spawn at vacuum point with pair scatter
-        readback_positions_[slot_a] = P + dir * scatter;
-        readback_positions_[slot_b] = P - dir * scatter;
+        // Position: spawn at vacuum point with pair scatter (toroidal wrap)
+        readback_positions_[slot_a] = (P + dir * scatter);
+        readback_positions_[slot_b] = (P - dir * scatter);
 
         // Velocity: massless at c, massive at relativistic speed
         float pair_speed = (pair_mass < 0.01f) ? C_SIM : ke_to_speed(pair_mass * 0.5f, vtype_a);
@@ -4902,7 +5030,7 @@ void PhysicsSimulation::check_hadronization() {
             if (has_partner || j == i) return;
             if (readback_energies_[j] < 0.01f) return;
             if (!is_any_quark(particles.types[j])) return;
-            glm::vec2 d = readback_positions_[j] - readback_positions_[i];
+            glm::vec2 d = (readback_positions_[j] - readback_positions_[i]);
             if (d.x * d.x + d.y * d.y < CONFINEMENT_RADIUS * CONFINEMENT_RADIUS)
                 has_partner = true;
         };
@@ -4945,7 +5073,7 @@ void PhysicsSimulation::check_hadronization() {
             float color_j = particles.genomes[j * GENOME_SIZE + 2];
             if (std::abs(std::abs(color_i) - std::abs(color_j)) > 0.1f) return;
             if (color_i * color_j >= 0.0f) return;
-            glm::vec2 d = readback_positions_[j] - readback_positions_[i];
+            glm::vec2 d = (readback_positions_[j] - readback_positions_[i]);
             float d2 = d.x * d.x + d.y * d.y;
             if (d2 < best_d2) { best_d2 = d2; best_j = j; }
         };
@@ -4958,7 +5086,7 @@ void PhysicsSimulation::check_hadronization() {
 
         if (best_j != UINT32_MAX) {
             // Velocity impulse toward each other (binding)
-            glm::vec2 delta = readback_positions_[best_j] - readback_positions_[i];
+            glm::vec2 delta = (readback_positions_[best_j] - readback_positions_[i]);
             float dist = std::sqrt(best_d2);
             if (dist > 0.1f) {
                 glm::vec2 dir = delta / dist;
@@ -5022,7 +5150,7 @@ void PhysicsSimulation::check_hadronization() {
                 if (matter_i ? !is_quark(tj) : !is_antiquark(tj)) return;
                 float color_j = particles.genomes[j * GENOME_SIZE + 2];
                 int cj = static_cast<int>(std::round(color_j));
-                glm::vec2 d = readback_positions_[j] - readback_positions_[i];
+                glm::vec2 d = (readback_positions_[j] - readback_positions_[i]);
                 float d2 = d.x * d.x + d.y * d.y;
                 if (cj == need[0] && d2 < best_j_d2) { best_j_d2 = d2; best_j = j; }
                 if (cj == need[1] && d2 < best_k_d2) { best_k_d2 = d2; best_k = j; }
@@ -5180,7 +5308,7 @@ void PhysicsSimulation::check_hadronization() {
             float color_j = particles.genomes[j * GENOME_SIZE + 2];
             if (color_i * color_j >= 0.0f) return;
             if (std::abs(std::abs(color_i) - std::abs(color_j)) > 0.1f) return;
-            glm::vec2 d = readback_positions_[j] - readback_positions_[i];
+            glm::vec2 d = (readback_positions_[j] - readback_positions_[i]);
             float d2 = d.x * d.x + d.y * d.y;
             if (d2 > STRING_BREAK_DIST * STRING_BREAK_DIST && d2 > best_d2) {
                 best_d2 = d2; best_j = j;
@@ -5204,7 +5332,7 @@ void PhysicsSimulation::check_hadronization() {
         search_from = slot_qbar + 1;
 
         glm::vec2 midpoint = (readback_positions_[i] + readback_positions_[best_j]) * 0.5f;
-        glm::vec2 axis = readback_positions_[best_j] - readback_positions_[i];
+        glm::vec2 axis = (readback_positions_[best_j] - readback_positions_[i]);
         float dist = std::sqrt(best_d2);
         glm::vec2 dir = (dist > 0.1f) ? axis / dist : glm::vec2(1.0f, 0.0f);
 
@@ -5217,8 +5345,8 @@ void PhysicsSimulation::check_hadronization() {
         write_spawn_genome(particles, slot_qbar, new_qbar_type, rng, frame_counter_);
         particles.genomes[slot_qbar * GENOME_SIZE + 2] = -color_i;
 
-        readback_positions_[slot_q]    = midpoint - dir * 3.0f;
-        readback_positions_[slot_qbar] = midpoint + dir * 3.0f;
+        readback_positions_[slot_q]    = (midpoint - dir * 3.0f);
+        readback_positions_[slot_qbar] = (midpoint + dir * 3.0f);
         readback_velocities_[slot_q]    = -dir * MESON_SPEED;
         readback_velocities_[slot_qbar] =  dir * MESON_SPEED;
         readback_energies_[slot_q]    = MESON_ENERGY;
@@ -5262,15 +5390,24 @@ void PhysicsSimulation::check_hadronization() {
         if (consumed[i]) continue;
         if (particles.types[i] != GLUON_TYPE_PHYS) continue;
 
-        // ── Try quark absorption first (most common interaction) ────────
+        // ── Try quark absorption first (color-aware vertex) ────────────
+        // Gluon absorbed only if anticolor matches quark's color (QCD vertex)
         uint32_t nearest_quark = UINT32_MAX;
         float nearest_q_d2 = GLUON_ABSORB_RADIUS_SQ;
+        float g_color_raw = particles.genomes[i * GENOME_SIZE + 2];
+        float g_carried   = std::floor(std::abs(g_color_raw));           // 1,2,3
+        float g_anti      = std::round(std::fmod(std::abs(g_color_raw), 1.0f) * 10.0f); // 1,2,3
 
         auto quark_absorb = [&](uint32_t j) {
             if (j == i || consumed[j]) return;
             if (readback_energies_[j] < 0.01f) return;
             if (!is_any_quark(particles.types[j])) return;
-            glm::vec2 d = readback_positions_[j] - readback_positions_[i];
+            // Color vertex check: gluon anticolor must match quark color
+            float q_abs_color = std::abs(particles.genomes[j * GENOME_SIZE + 2]);
+            bool vertex_ok = (std::abs(g_anti - q_abs_color) < 0.1f) ||
+                             (std::abs(g_carried - q_abs_color) < 0.1f);
+            if (!vertex_ok) return;
+            glm::vec2 d = (readback_positions_[j] - readback_positions_[i]);
             float d2 = d.x * d.x + d.y * d.y;
             if (d2 < nearest_q_d2) { nearest_q_d2 = d2; nearest_quark = j; }
         };
@@ -5282,7 +5419,11 @@ void PhysicsSimulation::check_hadronization() {
             for (uint32_t j = 0; j < n; ++j) quark_absorb(j);
 
         if (nearest_quark != UINT32_MAX) {
-            // Gluon absorbed by quark — transfer energy and momentum
+            // Gluon absorbed by quark — color rotation + energy transfer
+            // Quark's color rotates to the gluon's carried color
+            bool is_antiquark_target = (particles.behavior_flags[particles.types[nearest_quark]] & BEHAVIOR_ANTIQUARK) != 0;
+            float new_q_color = is_antiquark_target ? -g_carried : g_carried;
+            particles.genomes[nearest_quark * GENOME_SIZE + 2] = new_q_color;
             readback_energies_[nearest_quark] += readback_energies_[i] * 0.5f;
             readback_energies_[nearest_quark] = std::min(readback_energies_[nearest_quark], 1.5f);
             readback_velocities_[nearest_quark] += readback_velocities_[i] * 0.3f;
@@ -5301,7 +5442,7 @@ void PhysicsSimulation::check_hadronization() {
             if (j <= i || consumed[j]) return;  // j > i avoids double processing
             if (readback_energies_[j] < 0.01f) return;
             if (particles.types[j] != GLUON_TYPE_PHYS) return;
-            glm::vec2 d = readback_positions_[j] - readback_positions_[i];
+            glm::vec2 d = (readback_positions_[j] - readback_positions_[i]);
             float d2 = d.x * d.x + d.y * d.y;
             if (d2 < nearest_g_d2) { nearest_g_d2 = d2; nearest_gluon = j; }
         };
@@ -5313,7 +5454,12 @@ void PhysicsSimulation::check_hadronization() {
             for (uint32_t j = 0; j < n; ++j) gluon_merge(j);
 
         if (nearest_gluon != UINT32_MAX) {
-            // Merge: i absorbs j's energy, j dies
+            // Trilinear merge: g(a,b̄) + g(b,c̄) → g(a,c̄)
+            // Result: carried color from gluon i, anticolor from gluon j
+            float c2_raw = particles.genomes[nearest_gluon * GENOME_SIZE + 2];
+            float new_anticolor = std::round(std::fmod(std::abs(c2_raw), 1.0f) * 10.0f);
+            if (new_anticolor < 0.5f) new_anticolor = g_carried; // fallback: diagonal state
+            particles.genomes[i * GENOME_SIZE + 2] = g_carried + new_anticolor * 0.1f;
             readback_energies_[i] += readback_energies_[nearest_gluon] * 0.7f;
             readback_energies_[i] = std::min(readback_energies_[i], 1.5f);
             readback_velocities_[i] = (readback_velocities_[i] + readback_velocities_[nearest_gluon]) * 0.5f;
@@ -5325,14 +5471,14 @@ void PhysicsSimulation::check_hadronization() {
         }
 
         // ── Isolated gluon — split into q+q̄ (color confinement) ────────
+        // Quark gets gluon's carried color, antiquark gets gluon's anticolor
         if (readback_energies_[i] >= GLUON_SPLIT_ENERGY) {
             uint32_t slot = find_dormant(search_from);
             if (slot == UINT32_MAX) continue;
             search_from = slot + 1;
 
-            float gluon_color = particles.genomes[i * GENOME_SIZE + 2];
-            float q_color  = (gluon_color > 0.0f) ?  gluon_color : -gluon_color;
-            float qb_color = -q_color;
+            float q_color  = g_carried;                // quark gets carried color (positive)
+            float qb_color = -(g_anti > 0.5f ? g_anti : g_carried); // antiquark gets anticolor (negative)
 
             // Convert gluon slot → quark
             uint32_t q_type = (rng() % 2 == 0) ? UP_QUARK_TYPE : DOWN_QUARK_TYPE;
@@ -5360,7 +5506,7 @@ void PhysicsSimulation::check_hadronization() {
                 char gluon_detail[512];
                 snprintf(gluon_detail, sizeof(gluon_detail),
                     "Gluon #%u E=%.4f color=%.3f\nSplit: q type=%u color=%.3f slot %u\nAnti-q type=%u color=%.3f slot %u\nHalf energy: %.4f each",
-                    i, readback_energies_[i] + half_energy, gluon_color,
+                    i, readback_energies_[i] + half_energy, g_color_raw,
                     q_type, q_color, i,
                     qbar_type, qb_color, slot,
                     half_energy);
@@ -5684,6 +5830,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     if (iface.field_higgs)   cfg.field_flags |= (1u << 4);
     if (iface.wave_mode)     cfg.field_flags |= (1u << 5);
     if (iface.show_collision_radii) cfg.field_flags |= (1u << 6);
+    if (iface.hide_virtual_trails)  cfg.field_flags |= (1u << 7);
 
     // Pass field intensity via legacy density_limit/local_density_cap path
     cfg.density_limit    = (cfg.field_flags != 0) ? 1.0f : 0.0f;
@@ -6925,7 +7072,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 if (slot == UINT32_MAX) break;
                 search_start = slot + 1;
 
-                readback_positions_[slot] = glm::vec2(spawn_pos.x + p.dx, spawn_pos.y + p.dy);
+                readback_positions_[slot] = (glm::vec2(spawn_pos.x + p.dx, spawn_pos.y + p.dy));
                 readback_velocities_[slot] = glm::vec2(p.vx, p.vy);
                 readback_energies_[slot] = p.energy;
                 particles.types[slot] = p.type;
@@ -6989,7 +7136,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                     if (slot == UINT32_MAX) break;
                     search_start = slot + 1;
 
-                    readback_positions_[slot] = glm::vec2(atom_center.x + p.dx, atom_center.y + p.dy);
+                    readback_positions_[slot] = (glm::vec2(atom_center.x + p.dx, atom_center.y + p.dy));
                     readback_velocities_[slot] = glm::vec2(p.vx, p.vy);
                     readback_energies_[slot] = p.energy;
                     particles.types[slot] = p.type;

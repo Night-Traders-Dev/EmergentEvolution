@@ -21,6 +21,8 @@ struct UserPrefs {
     int   physics_quality = 2;     // 0=Low, 1=Medium, 2=High
     int   physics_skip    = 0;     // run CPU physics every (skip+1) frames
     bool  spatial_grid    = true;  // use spatial grid for neighbor queries
+    float music_volume    = 0.5f;  // 0.0-1.0 background music volume
+    bool  music_muted     = false; // mute toggle
 };
 
 // ── Group template for spawning composite structures ─────────────────────────
@@ -254,6 +256,7 @@ public:
     bool  field_higgs   = false;
     float field_intensity = 0.5f;
     bool  show_collision_radii = false;
+    bool  hide_virtual_trails  = false;
 
     // Emergent feedback display
     float emergent_temp_display   = 0.0f;
@@ -321,6 +324,7 @@ public:
     // Achievements
     bool show_achievements_panel = false;
     AchievementManager* achievements_ptr = nullptr;  // set by simulation
+    struct AudioPlayer* audio_ptr = nullptr;         // set by simulation
 
     // Camera navigation (set by info card click, consumed by simulation)
     int32_t navigate_to_particle = -1;

@@ -242,7 +242,7 @@ float get_zpe(uint type) {
     return mass_zpe_buffer.data[type * 2u + 1u];
 }
 
-// Color interaction factor between two colored particles
+// Color interaction factor between two colored particles (quark-quark)
 float color_factor(float ca, float cb) {
     // Quark-antiquark: same abs color → strong attraction (meson)
     if (ca * cb < 0.0 && abs(abs(ca) - abs(cb)) < 0.1) return -1.0;
@@ -252,6 +252,49 @@ float color_factor(float ca, float cb) {
     if (ca > 0.0 && cb > 0.0) return -0.3;
     if (ca < 0.0 && cb < 0.0) return -0.3;
     return 0.0;
+}
+
+// ── Gluon bi-color extractors ──────────────────────────────────────────────
+// Gluon color encoded as X.Y: X = carried color, Y/10 = anticolor index
+float gluon_carried(float c)  { return floor(abs(c)); }            // 1=R, 2=G, 3=B
+float gluon_anticolor(float c){ return round(fract(abs(c))*10.0); }// 1=R̄, 2=Ḡ, 3=B̄
+
+// Enhanced color factor that handles gluon color-anticolor pairs
+float color_factor_gluon(float ca, float cb, uint flags_a, uint flags_b) {
+    bool ga = (flags_a & BEHAVIOR_GLUON_FLAG) != 0u;
+    bool gb = (flags_b & BEHAVIOR_GLUON_FLAG) != 0u;
+
+    // ── Gluon-gluon: SU(3) non-Abelian self-coupling ──────────────────
+    if (ga && gb) {
+        float ac_a = gluon_carried(ca);
+        float aac_a = gluon_anticolor(ca);
+        float ac_b = gluon_carried(cb);
+        float aac_b = gluon_anticolor(cb);
+        // Trilinear vertex: anticolor of A matches color of B (or vice versa)
+        if (abs(aac_a - ac_b) < 0.1 || abs(aac_b - ac_a) < 0.1)
+            return -1.5;  // strong attraction — vertex allowed
+        // Identical state: boson repulsion
+        if (abs(ac_a - ac_b) < 0.1 && abs(aac_a - aac_b) < 0.1)
+            return 0.8;   // repulsion
+        return -0.2;      // weak residual attraction
+    }
+
+    // ── Gluon-quark: absorption/emission vertices ──────────────────────
+    if (ga || gb) {
+        float gc = ga ? ca : cb;  // gluon's color
+        float qc = ga ? cb : ca;  // quark's color
+        float g_carried = gluon_carried(gc);
+        float g_anti    = gluon_anticolor(gc);
+        float q_abs     = abs(qc);
+        // Absorption vertex: gluon anticolor matches quark color
+        if (abs(g_anti - q_abs) < 0.1) return -1.2;
+        // Emission vertex: gluon carried color matches quark color
+        if (abs(g_carried - q_abs) < 0.1) return -0.8;
+        return -0.1;  // weak residual
+    }
+
+    // ── Quark-quark: original logic ────────────────────────────────────
+    return color_factor(ca, cb);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -275,7 +318,7 @@ void apply_physics(uint i) {
         return;
     }
 
-    // ── Photon/Gluon fast-path ────────────────────────────────────────────────
+    // ── Photon fast-path ─────────────────────────────────────────────────────
     if ((flags_a & BEHAVIOR_PHOTON) != 0u) {
         // Tachyon: superluminal, high energy drain, enforce speed > 1.33c
         if (type_a == TACHYON_TYPE) {
@@ -294,13 +337,12 @@ void apply_physics(uint i) {
             avel_out_buffer.data[i]   = avel_in_buffer.data[i];
             return;
         }
-        float drain = (type_a == GLUON_TYPE) ? PHOTON_DRAIN * 1.5 : PHOTON_DRAIN;
-        float ph_energy = max(energy - drain * params.dt, 0.0);
+        float ph_energy = max(energy - PHOTON_DRAIN * params.dt, 0.0);
         vec2  ph_vel = vel_a;
 
         // High-energy photon Compton recoil: scan for nearest charged matter
         // and deflect slightly + lose energy on close approach
-        if (ph_energy > 0.2 && type_a != GLUON_TYPE) {
+        if (ph_energy > 0.2) {
             float closest_ch_dist = 9999.0;
             vec2  closest_ch_pos  = vec2(0.0);
             float closest_ch_charge = 0.0;
@@ -346,6 +388,107 @@ void apply_physics(uint i) {
         out_energy_buffer.data[i] = ph_energy;
         out_pos_buffer.data[i]    = pos_a + ph_vel * params.dt;
         out_vel_buffer.data[i]    = ph_vel;
+        angle_out_buffer.data[i]  = angle_in_buffer.data[i];
+        avel_out_buffer.data[i]   = avel_in_buffer.data[i];
+        return;
+    }
+
+    // ── Gluon QCD fast-path ──────────────────────────────────────────────────
+    // Gluons are massless colored bosons: travel at c, deflected by color forces.
+    // Non-Abelian: self-interact via SU(3) trilinear vertex (g+g→g coupling).
+    // Uses strided scan to find colored neighbors (quarks + other gluons).
+    if ((flags_a & BEHAVIOR_GLUON_FLAG) != 0u) {
+        float glu_energy = max(energy - PHOTON_DRAIN * 1.5 * params.dt, 0.0);
+        vec2  glu_vel = vel_a;
+        float glu_speed = length(glu_vel);
+
+        // Effective mass from energy: m_eff = E/c² (relativistic inertia)
+        // Higher-energy gluons resist deflection (asymptotic freedom)
+        float glu_eff_mass = max(glu_energy / C_SIM_SQ, 0.0001);
+        float glu_color = get_color(i);
+
+        // Accumulated QCD color force from nearby colored particles
+        vec2  color_force = vec2(0.0);
+        float interaction_e = 0.0;
+
+        if (glu_energy > 0.05) {
+            // Strided scan for colored neighbors (60px QCD confinement range)
+            uint stride = max(1u, (params.particle_count + 1023u) / 1024u);
+            for (uint jj = 0u; jj < min(params.particle_count, 1024u); jj++) {
+                uint j = jj * stride;
+                if (j >= params.particle_count || j == i) continue;
+                float e_j = in_energy_buffer.data[j];
+                if (e_j < 0.001) continue;
+
+                uint type_j  = type_buffer.data[j];
+                uint flags_j = behavior_buffer.data[type_j];
+                if (!is_colored(flags_j)) continue;
+
+                vec2  p_j = in_pos_buffer.data[j];
+                vec2  d   = p_j - pos_a;
+                float d2  = dot(d, d);
+                if (d2 > 3600.0 || d2 <= 0.0) continue;  // 60px radius
+
+                float dist   = sqrt(d2);
+                vec2  normal = d / dist;
+                float color_j = get_color(j);
+
+                float cf = color_factor_gluon(glu_color, color_j, flags_a, flags_j);
+                if (abs(cf) < 0.01) continue;
+
+                float inv_r = 1.0 / max(dist, 0.5);
+
+                // Cornell potential: color-Coulomb + linear confinement
+                // Running coupling: asymptotic freedom at short distance
+                float alpha_eff = params.alpha_s_scale * COLOR_ALPHA_S
+                    * max(0.3, 1.0 + 0.3 * log(max(dist, 0.5)));
+                float short_range = alpha_eff * inv_r * inv_r;
+                float confine = params.string_tension * 0.1;
+
+                // Casimir enhancement for gluon-gluon pairs: C_A/C_F ≈ 2.25
+                bool both_gluons = (flags_j & BEHAVIOR_GLUON_FLAG) != 0u;
+                float casimir = both_gluons ? 2.25 : 1.0;
+
+                float cornell_F = cf * casimir * (-short_range - confine);
+                color_force += normal * cornell_F;
+
+                // Hard-core repulsion at very close range
+                if (dist < 2.0) {
+                    float core = 400.0 / (dist * dist + 0.1);
+                    color_force -= normal * core;
+                }
+
+                // Binding energy for close color interactions
+                if (dist < 15.0 && cf < 0.0) {
+                    interaction_e += 0.004 * params.dt;
+                }
+
+                // String tension energy drain when far from colored partners
+                if (cf < -0.5 && dist > 40.0) {
+                    interaction_e -= 0.2 * params.dt;
+                }
+            }
+        }
+
+        // Apply color force as momentum deflection (massless kinematics)
+        // Momentum p = E/c for massless, direction from velocity
+        if (glu_speed > 0.1 && dot(color_force, color_force) > 0.0001) {
+            vec2 momentum = normalize(glu_vel) * glu_energy / C_SIM;
+            momentum += color_force * params.dt * 0.01 / glu_eff_mass;
+            glu_vel = normalize(momentum) * C_SIM;
+        } else if (glu_speed < 0.1) {
+            // Stationary gluon: random kick at c
+            uint seed = (i * 1664525u + params.step * 1013904223u) ^ 0x9e3779b9u;
+            seed ^= (seed >> 17u); seed *= 0xbf58476du; seed ^= (seed >> 31u);
+            float angle = float(seed) * (6.28318 / 4294967296.0);
+            glu_vel = vec2(cos(angle), sin(angle)) * C_SIM;
+        }
+
+        glu_energy = clamp(glu_energy + interaction_e, 0.0, 1.0);
+
+        out_energy_buffer.data[i] = glu_energy;
+        out_pos_buffer.data[i]    = pos_a + glu_vel * params.dt;
+        out_vel_buffer.data[i]    = glu_vel;
         angle_out_buffer.data[i]  = angle_in_buffer.data[i];
         avel_out_buffer.data[i]   = avel_in_buffer.data[i];
         return;
@@ -558,10 +701,10 @@ void apply_physics(uint i) {
             }
         }
 
-        // ── 4. Color confinement (quark-quark, Cornell potential) ────────────
+        // ── 4. Color confinement (Cornell potential: quarks + gluon neighbors) ─
         if (is_colored(flags_a) && is_colored(flags_b)) {
             float color_b = get_color(uint(j));
-            float cf = color_factor(color_a, color_b);
+            float cf = color_factor_gluon(color_a, color_b, flags_a, flags_b);
 
             if (abs(cf) > 0.01) {
                 // Cornell: F = -alpha_s/r^2 (short-range) + sigma*r (confinement)
@@ -768,6 +911,8 @@ void apply_physics(uint i) {
     // Magnetic dipoles feel F = ∇(μ·B) in external B-field gradients.
     // Proton:   μ_p = +2.793 μ_N (anomalous g ≈ 5.586, from quark substructure)
     // Neutron:  μ_n = −1.913 μ_N (nonzero despite zero charge!)
+    // Quarks:   μ_q = g_q·q·S/(2m) — fractional charge → fractional magnetic moment
+    //           QCD corrections: δg ≈ α_s/π ≈ 5%, included as g_eff = 2.10
     // Electron: μ_e ≈ q·S/m (Dirac g ≈ 2, accurate to 0.1%)
     if (abs(accumulated_Bz) > 0.001) {
         float mu_eff = 0.0;
@@ -777,6 +922,12 @@ void apply_physics(uint i) {
             mu_eff = -MU_PROTON_ANOM * spin_a * mass_inv_a;
         else if (type_a == NEUTRON_TYPE)
             mu_eff = MU_NEUTRON * spin_a * mass_inv_a;
+        else if (is_quark_type(flags_a) || (flags_a & BEHAVIOR_ANTIQUARK) != 0u) {
+            // Quarks: Dirac g=2 + QCD anomalous correction (α_s/π ≈ 5%)
+            // μ = g_eff/2 · q · S / m  where g_eff ≈ 2.10
+            float g_quark = 2.10;  // Dirac + leading QCD correction
+            mu_eff = g_quark * 0.5 * charge_a * spin_a * mass_inv_a;
+        }
         else if (abs(charge_a * spin_a) > 0.01)
             mu_eff = charge_a * spin_a * mass_inv_a;  // Dirac g=2
 
@@ -880,9 +1031,9 @@ void apply_physics(uint i) {
 
     // ── Covalent bond spring forces ─────────────────────────────────────────
     {
-        const float BOND_K    = 80.0;   // spring constant
-        const float BOND_REST = 22.0;   // rest length (px)
-        const float BOND_DAMP = 0.3;    // velocity damping along bond axis
+        const float BOND_K    = 500.0;  // spring constant (strong enough to resist Coulomb)
+        const float BOND_REST = 36.0;   // rest length (px) — must exceed nuclear extents
+        const float BOND_DAMP = 2.0;    // velocity damping along bond axis
         for (uint s = 0u; s < 6u; s++) {
             uint partner = bond_buffer.data[i * 6u + s];
             if (partner == 0xFFFFFFFFu || partner >= params.particle_count) continue;
@@ -1282,8 +1433,12 @@ void render_particle(uint i) {
 
     if (energy < 0.01) return;
 
+    // Hide virtual particle trails: skip rendering if decay > 0.05 (virtual) and bit 7 set
+    if ((params.field_flags & (1u << 7)) != 0u && get_decay(i) > 0.05) return;
+
     // Particle classification
     bool is_photon_p    = (flags & BEHAVIOR_PHOTON) != 0u;
+    bool is_gluon_p     = (flags & BEHAVIOR_GLUON_FLAG) != 0u;
     bool is_neutrino_p  = (flags & BEHAVIOR_NEUTRINO) != 0u;
     bool is_nucleon     = (type <= NEUTRON_TYPE || type == ANTIPROTON_TYPE);
     bool is_lepton_p    = (flags & BEHAVIOR_LEPTON) != 0u;
@@ -1300,6 +1455,7 @@ void render_particle(uint i) {
     float base_radius = params.radius * params.camera_zoom;
     float render_radius;
     if (is_photon_p)        render_radius = base_radius * 0.25;      // massless: smaller than electron
+    else if (is_gluon_p)    render_radius = base_radius * 0.3;       // colored boson: slightly larger than photon
     else if (is_neutrino_p) render_radius = base_radius * 0.2;       // nearly massless: smallest
     else if (is_dark_matter) render_radius = max(base_radius * 3.0, 4.0);  // diffuse halo
     else if (is_dark_energy) render_radius = max(base_radius * 5.0, 6.0);  // wide field
@@ -1351,13 +1507,29 @@ void render_particle(uint i) {
             vec4 col = base_col;
 
             if (d < render_radius) {
-                // ── Photon/Gluon: radial glow ───────────────────────────────
+                // ── Photon: radial glow ──────────────────────────────────────
                 if (is_photon_p) {
                     float norm_d = d / render_radius;
                     float glow = max(0.0, 1.0 - norm_d * norm_d);
                     col.rgb *= glow * 1.6;
-                    // Gluon: green tint
-                    if (type == GLUON_TYPE) col.rgb = mix(col.rgb, vec3(0.3, 1.0, 0.3), 0.3);
+                    vec4 existing = imageLoad(out_render_texture, pixel_pos);
+                    imageStore(out_render_texture, pixel_pos,
+                               vec4(min(existing.rgb + col.rgb, vec3(1.0)), 1.0));
+                    continue;
+                }
+
+                // ── Gluon: colored radial glow with color charge accent ─────
+                if (is_gluon_p) {
+                    float norm_d = d / render_radius;
+                    float glow = max(0.0, 1.0 - norm_d * norm_d);
+                    // Base green tint (gluon identity)
+                    col.rgb = mix(col.rgb, vec3(0.3, 1.0, 0.3), 0.4);
+                    // Accent by carried color (R/G/B)
+                    float gc = gluon_carried(get_color(i));
+                    if (abs(gc - 1.0) < 0.1)      col.rgb = mix(col.rgb, vec3(1.0, 0.3, 0.3), 0.25);
+                    else if (abs(gc - 2.0) < 0.1)  col.rgb = mix(col.rgb, vec3(0.3, 1.0, 0.3), 0.25);
+                    else if (abs(gc - 3.0) < 0.1)  col.rgb = mix(col.rgb, vec3(0.3, 0.3, 1.0), 0.25);
+                    col.rgb *= glow * 1.4;
                     vec4 existing = imageLoad(out_render_texture, pixel_pos);
                     imageStore(out_render_texture, pixel_pos,
                                vec4(min(existing.rgb + col.rgb, vec3(1.0)), 1.0));
@@ -1474,7 +1646,8 @@ void render_particle(uint i) {
 
         vec2 screen_ctr = params.region_size * 0.5;
         vec2 sa = screen_ctr + (pos - params.camera_origin) * params.camera_zoom;
-        vec2 sb = screen_ctr + (in_pos_buffer.data[partner] - params.camera_origin) * params.camera_zoom;
+        vec2 partner_pos = in_pos_buffer.data[partner];
+        vec2 sb = screen_ctr + (partner_pos - params.camera_origin) * params.camera_zoom;
 
         float glow_w = max(2.5, 1.2 * params.camera_zoom);
         vec2 lo = min(sa, sb) - glow_w;
