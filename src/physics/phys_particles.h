@@ -130,15 +130,38 @@ static constexpr float PHYS_DECAY_RATE[PHYS_PARTICLE_TYPES] = {
     0.0f, 0.0f, 0.0f,
 };
 
+// ── Simulation constants ─────────────────────────────────────────────────────
+static constexpr float C_SIM       = 300.0f;   // speed of light in sim units (px/frame)
+static constexpr float E_SCALE_MEV = 1.0f;     // 1.0 energy buffer = 1 MeV
+
+// PDG rest masses in MeV/c² (2024 Review of Particle Physics)
+static constexpr float PHYS_REST_MASS_MEV[PHYS_PARTICLE_TYPES] = {
+    // 0-6: stable particles
+    938.272f, 939.565f, 0.511f, 0.0f, 0.511f, 938.272f, 0.0f,
+    // 7:μ   8:μ+    9:τ      10:τ+     11:νμ  12:ντ
+    105.658f, 105.658f, 1776.86f, 1776.86f, 0.0f, 0.0f,
+    // 13:u    14:d    15:s    16:c      17:t        18:b
+    2.16f, 4.67f, 93.4f, 1270.0f, 172760.0f, 4180.0f,
+    // 19:ū   20:d̄   21:s̄   22:c̄     23:t̄       24:b̄
+    2.16f, 4.67f, 93.4f, 1270.0f, 172760.0f, 4180.0f,
+    // 25:g   26:W+      27:W-      28:Z       29:H
+    0.0f, 80379.0f, 80379.0f, 91188.0f, 125100.0f,
+    // 30:graviton  31:DM(~100GeV WIMP)  32:DE(quintessence)
+    0.0f, 100000.0f, 0.001f,
+};
+
 // ── Nuclear isotope decay ────────────────────────────────────────────────────
 
 enum NuclearDecayMode : uint8_t {
     NDECAY_NONE = 0,
-    NDECAY_ALPHA,            // emit He-4 (2p + 2n)
-    NDECAY_BETA_MINUS,       // n → p + e⁻ + ν̄e
-    NDECAY_BETA_PLUS,        // p → n + e⁺ + νe
-    NDECAY_NEUTRON_EMISSION, // eject 1 neutron
-    NDECAY_PROTON_EMISSION,  // eject 1 proton
+    NDECAY_ALPHA,               // emit He-4 (2p + 2n)
+    NDECAY_BETA_MINUS,          // n → p + e⁻ + ν̄e
+    NDECAY_BETA_PLUS,           // p → n + e⁺ + νe
+    NDECAY_NEUTRON_EMISSION,    // eject 1 neutron
+    NDECAY_PROTON_EMISSION,     // eject 1 proton
+    NDECAY_GAMMA,               // excited nucleus → ground state + γ
+    NDECAY_ELECTRON_CAPTURE,    // p + e⁻ → n + νe (orbital electron captured)
+    NDECAY_SPONTANEOUS_FISSION, // heavy nucleus → 2 fragments + neutrons
 };
 
 struct IsotopeDecayEntry {
@@ -170,7 +193,7 @@ static constexpr IsotopeDecayEntry ISOTOPE_DECAY_TABLE[] = {
     {3, 6, NDECAY_NEUTRON_EMISSION,   6.0f},   // Li-9 (real: 178 ms)
 
     // ── Beryllium isotopes ───────────────────────────────────────────────
-    {4, 3, NDECAY_BETA_PLUS,       7200.0f},   // Be-7 electron capture (real: 53 d)
+    {4, 3, NDECAY_ELECTRON_CAPTURE, 7200.0f},   // Be-7 electron capture (real: 53 d)
     {4, 4, NDECAY_ALPHA,              6.0f},    // Be-8 → 2 He-4 (instant)
     {4, 6, NDECAY_BETA_MINUS,        60.0f},   // Be-10 (real: 1.4 Myr → long-lived in sim)
 
@@ -229,7 +252,7 @@ static constexpr IsotopeDecayEntry ISOTOPE_DECAY_TABLE[] = {
     {20, 25, NDECAY_BETA_MINUS,    1200.0f},   // Ca-45 (real: 163 d)
 
     // ── Iron ─────────────────────────────────────────────────────────────
-    {26, 29, NDECAY_BETA_PLUS,     3600.0f},   // Fe-55 EC (real: 2.7 yr)
+    {26, 29, NDECAY_ELECTRON_CAPTURE, 3600.0f}, // Fe-55 EC (real: 2.7 yr)
     {26, 33, NDECAY_BETA_MINUS,    1800.0f},   // Fe-59 (real: 44.5 d)
 
     // ── Cobalt ───────────────────────────────────────────────────────────
@@ -259,6 +282,16 @@ static constexpr IsotopeDecayEntry ISOTOPE_DECAY_TABLE[] = {
 
     // ── Plutonium ────────────────────────────────────────────────────────
     {94, 145, NDECAY_ALPHA,        7200.0f},    // Pu-239 (real: 24.1 kyr)
+    {94, 146, NDECAY_SPONTANEOUS_FISSION, 18000.0f}, // Pu-240 SF (real: 6500 yr for SF branch)
+
+    // ── Californium ─────────────────────────────────────────────────────
+    {98, 154, NDECAY_SPONTANEOUS_FISSION, 3600.0f},  // Cf-252 (real: 2.6 yr, 3.1% SF branch)
+
+    // ── Gamma isomeric transitions ──────────────────────────────────────
+    // These represent metastable nuclear excited states that de-excite via γ emission.
+    // In the sim, nuclei that just underwent beta decay can match these entries.
+    {56, 81, NDECAY_GAMMA,          180.0f},    // Ba-137m (from Cs-137 β⁻, real: 2.55 min)
+    {43, 56, NDECAY_GAMMA,         3600.0f},    // Tc-99m (real: 6.01 hr) — medical imaging
 };
 static constexpr int ISOTOPE_DECAY_TABLE_SIZE =
     static_cast<int>(sizeof(ISOTOPE_DECAY_TABLE) / sizeof(ISOTOPE_DECAY_TABLE[0]));
@@ -284,6 +317,9 @@ inline NuclearDecayMode general_stability_rule(int Z, int N, float& half_life_ou
     // Nuclear gaps: A=5 and A=8 are unbound
     if (A == 5) { half_life_out = 6.0f; return (N > Z) ? NDECAY_NEUTRON_EMISSION : NDECAY_PROTON_EMISSION; }
     if (A == 8 && Z == 4) { half_life_out = 6.0f; return NDECAY_ALPHA; }
+
+    // Super-heavy elements (Z>95, A>240): spontaneous fission dominates
+    if (Z > 95 && A > 240) { half_life_out = 600.0f + Z * 30.0f; return NDECAY_SPONTANEOUS_FISSION; }
 
     // All elements above bismuth (Z>83) alpha-decay
     if (Z > 83) { half_life_out = 1200.0f + Z * 60.0f; return NDECAY_ALPHA; }

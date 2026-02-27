@@ -131,7 +131,7 @@ const float YUKAWA_COUPLING  = 2000.0;  // ~10x Coulomb at nuclear distances
 const float PAULI_CORE       = 6.0;     // nucleon hard-core radius (smooth overlap)
 const float PAULI_STRENGTH   = 12000.0; // must dominate Yukawa at close range
 const float K_COULOMB        = 1200.0;  // electromagnetic strength
-const float SOFTEN_MIN       = 8.0;     // softening distance for Coulomb
+const float SOFTEN_MIN       = 2.0;     // softening distance for Coulomb (numerical only)
 const float L_MIN              = 120.0;  // minimum angular momentum (ground state orbital)
 const float K_SPIN_ORBIT       = 0.3;   // spin-orbit coupling strength (fine structure)
 const float CENTRIFUGAL_SOFTEN = 1.0;   // softening for r→0 stability
@@ -142,6 +142,10 @@ const float ANNIHIL_DRAIN    = 0.4;
 const float PHOTON_DRAIN     = 0.07;
 const float NEUTRINO_DRAIN   = 0.02;
 const float COLOR_ALPHA_S    = 400.0;   // QCD short-range coupling
+
+// ── Relativistic constants ──────────────────────────────────────────────────
+const float C_SIM       = 300.0;   // speed of light in sim units (px/frame)
+const float C_SIM_SQ    = 90000.0; // c²
 
 // ── Genome accessors ────────────────────────────────────────────────────────
 float get_charge(uint i) { return genome_buffer.data[i * 4u + 0u]; }
@@ -297,7 +301,7 @@ void apply_physics(uint i) {
                 float deflect = 0.15 * ph_energy / (closest_ch_dist + 2.0);
                 // Rotate velocity slightly toward the charged particle
                 ph_vel += to_matter * deflect * length(ph_vel);
-                ph_vel = normalize(ph_vel) * length(vel_a);  // maintain speed (c)
+                ph_vel = normalize(ph_vel) * C_SIM;  // enforce speed of light
                 // Energy transfer: photon loses energy proportional to proximity
                 float e_loss = ph_energy * 0.02 / (closest_ch_dist * 0.1 + 1.0);
                 ph_energy = max(ph_energy - e_loss, 0.0);
@@ -438,12 +442,19 @@ void apply_physics(uint i) {
         }
 
         // ── 2. Yukawa nuclear force (baryon-baryon, skip for DM) ─────────────
+        // Tighter cutoff than raw exponential: full strength within nucleus
+        // (0–8 px), smooth fade to zero by 12 px.  This prevents nucleons
+        // from separate atoms being dragged together by the Yukawa tail.
         if (is_baryon(type_a) && is_baryon(type_b) && !dm_interaction) {
-            if (dist < YUKAWA_RANGE * 3.0) {
+            if (dist < YUKAWA_RANGE) {
                 float inv_r = 1.0 / max(dist, 0.5);
                 float yukawa_F = params.yukawa_strength * YUKAWA_COUPLING * exp(-dist / YUKAWA_RANGE)
                                  * (inv_r + 1.0 / YUKAWA_RANGE) * inv_r;
-                total_force += normal * yukawa_F;
+
+                // Smooth window: full strength within 5px, fades to 0 at 8px
+                // Tight cutoff prevents nucleons from separate atoms merging
+                float window = 1.0 - smoothstep(YUKAWA_RANGE * 0.625, YUKAWA_RANGE, dist);
+                total_force += normal * yukawa_F * window;
 
                 if (dist < PAULI_CORE) {
                     float overlap = 1.0 - dist / PAULI_CORE;
@@ -464,8 +475,15 @@ void apply_physics(uint i) {
             if (abs(q_prod) > 0.001) {
                 float soften_sq = max(SOFTEN_MIN * SOFTEN_MIN,
                                       params.repulsion_radius * 0.5 * params.repulsion_radius * 0.5);
-                float coulomb = params.coulomb_strength * K_COULOMB * q_prod / (dist_sq + soften_sq);
-                coulomb = clamp(coulomb, -50.0, 50.0);
+
+                // Running QED coupling: α(Q²) increases at short distances
+                // α(Q²) = α₀ / (1 - α₀/(3π) · ln(Q²/mₑ²))
+                float alpha_em = 1.0 / 137.036;
+                float log_Q2 = max(0.0, -log(max(dist_sq, 1.0)));
+                float alpha_run = alpha_em / max(0.5, 1.0 - alpha_em / (3.0 * 3.14159) * log_Q2);
+                float running_scale = alpha_run / alpha_em;
+
+                float coulomb = params.coulomb_strength * K_COULOMB * running_scale * q_prod / (dist_sq + soften_sq);
                 total_force -= normal * coulomb;
 
                 if (q_prod < 0.0 && dist < params.interaction_radius * 0.5) {
@@ -539,8 +557,9 @@ void apply_physics(uint i) {
                 total_force += normal * f_grav;
             }
             // Normal gravity (slider-controlled)
+            // F = G·m1·m2 / r²  (Newton's law, slider 1.0 = vanilla)
             else if (params.gravity_strength > 0.001) {
-                float f_grav = params.gravity_strength * mass_a * mass_b * 8.0
+                float f_grav = params.gravity_strength * mass_a * mass_b
                                / (dist_sq + 25.0);
                 total_force += normal * f_grav;
             }
@@ -548,14 +567,15 @@ void apply_physics(uint i) {
 
         // ── 6. Magnetic force (Biot-Savart, skip for DM) ─────────────────────
         // Each moving charge generates a B field; other charges feel Lorentz force.
-        // K_MAGNETIC is the intrinsic coupling; slider amplifies on top.
+        // F = q·(v × B), B = μ₀·q·(v × r̂)/(4π·r²)
+        // Slider 1.0 = standard Biot-Savart + Lorentz
         if (!dm_interaction) {
             float charge_b = get_charge(uint(j));
             if (abs(charge_a) > 0.01 && abs(charge_b) > 0.01) {
                 nearby_charge_sum += abs(charge_b);
                 vec2  vel_b   = in_vel_buffer.data[j];
                 float cross_j = vel_b.x * (-normal.y) - vel_b.y * (-normal.x);
-                float coupling = K_MAGNETIC + params.lorentz_strength * 5.0;
+                float coupling = params.lorentz_strength * K_MAGNETIC;
                 float B_z     = coupling * charge_b * cross_j / (dist_sq + 1.0);
                 total_force  += charge_a * B_z * vec2(vel_a.y, -vel_a.x);
                 accumulated_Bz += B_z;
@@ -584,14 +604,15 @@ void apply_physics(uint i) {
         // ── 8b. Hard-sphere collision accumulation (massive pairs) ────────
         // Accumulate position corrections from ALL overlapping neighbors.
         // After integration, pos_a is snapped outward to resolve ALL overlaps.
-        // Skip for baryon-baryon (governed by Yukawa + Pauli core) and
-        // colored pairs (governed by Cornell + QCD hard-core repulsion).
+        // Baryons use a larger hard-sphere (nucleon size) so separate atoms
+        // bounce instead of merging.  Colored pairs governed by Cornell.
         bool both_baryons = is_baryon(type_a) && is_baryon(type_b);
         bool both_colored = is_colored(flags_a) && is_colored(flags_b);
-        if (!dm_interaction && !both_baryons && !both_colored) {
+        if (!dm_interaction && !both_colored) {
             float mi_b = get_mass_inv(type_b);
             if (is_massive_a && mi_b < 10.0) {
-                float MIN_SEP = params.radius * 2.0;
+                // Baryons: tight safety net (1.5px) — Pauli force handles smooth repulsion
+                float MIN_SEP = both_baryons ? PAULI_CORE * 0.25 : params.radius * 2.0;
                 float penetration = MIN_SEP - dist;
                 if (penetration > 0.0) {
                     // Push away from each overlapping neighbor
@@ -642,8 +663,9 @@ void apply_physics(uint i) {
 
     // ── 9. Spin magnetic moment: μ·∇B (force in external B-field) ─────
     // Magnetic dipole feels F = ∇(μ·B) — only in external field, not self-force
+    // μ = g·q·S/(2m), Dirac g-factor = 2 → μ = q·S/m
     if (abs(spin_a * charge_a) > 0.01 && abs(accumulated_Bz) > 0.001) {
-        float mu = spin_a * charge_a * 0.5 * mass_inv_a;  // μ = g·q·S/(2m)
+        float mu = spin_a * charge_a * mass_inv_a;  // μ = q·S/m (g=2)
         float grad_scale = 0.05;  // phenomenological B-gradient length scale
         total_force += mu * accumulated_Bz * grad_scale * vec2(vel_a.y, -vel_a.x);
     }
@@ -706,7 +728,9 @@ void apply_physics(uint i) {
             heat_seed ^= (heat_seed >> 31u);
             float heat_angle = float(heat_seed) * (6.28318 / 4294967296.0);
             vec2  heat_dir = vec2(cos(heat_angle), sin(heat_angle));
-            vel_a += heat_dir * fo_str * 3.0 * falloff * sqrt(mass_inv_a);
+            // Apply as force (will be integrated via relativistic momentum update)
+            float heat_mass = 1.0 / max(mass_inv_a, 0.00001);
+            total_force += heat_dir * fo_str * 3.0 * falloff * heat_mass;
         }
     }
 
@@ -714,9 +738,12 @@ void apply_physics(uint i) {
     {
         float spd = length(vel_a);
         float delta_e = 0.0;
-        delta_e += 0.005 * params.dt;                    // zero-point / vacuum fluctuation gain
-        delta_e -= 0.005 * params.dt;                    // radiation loss (balanced in vacuum)
-        delta_e -= spd * 0.00002 * params.dt;            // synchrotron radiation cost (gentle)
+
+        // Relativistic synchrotron radiation: scales as γ²v² (strong near c)
+        float beta_e = min(spd / C_SIM, 0.9999);
+        float gamma_e = inversesqrt(max(1.0 - beta_e * beta_e, 0.0001));
+        delta_e -= gamma_e * gamma_e * spd * spd * 0.0000001 * params.dt;
+
         delta_e += interaction_energy;
         if (params.vacuum_energy > 0.001)
             delta_e += params.vacuum_energy * 0.003 * params.dt;
@@ -727,34 +754,45 @@ void apply_physics(uint i) {
             delta_e -= decay_rate * params.dt;
         }
 
-        // Virtual particles handled via genome[3] decay_rate above
-
         energy = clamp(energy + delta_e, 0.0, 1.0);
     }
     out_energy_buffer.data[i] = energy;
 
-    // ── Integration ──────────────────────────────────────────────────────────
-    total_force *= mass_inv_a;
-    vel_a += total_force * params.dt;
+    // ── Relativistic Integration (dp/dt = F) ────────────────────────────────
+    // Special Relativity: momentum p = γmv, velocity derived from momentum
+    // v = pc / √(m²c² + p²) — naturally limits |v| < c
+    {
+        float mass = 1.0 / max(mass_inv_a, 0.00001);
 
-    // Viscosity from local density
-    float viscosity_factor = clamp(local_density * params.viscosity_strength, 0.0, 0.9);
-    float effective_damp = params.dampening * (1.0 - viscosity_factor);
-    vel_a *= clamp(effective_damp, 0.0, 0.99);
+        // Current Lorentz factor from velocity
+        float spd = length(vel_a);
+        float beta = min(spd / C_SIM, 0.9999);
+        float gamma = inversesqrt(max(1.0 - beta * beta, 0.0001));
 
-    // Speed cap (lighter particles can move faster, but capped for stability)
-    float max_speed = mix(150.0, 400.0, clamp(mass_inv_a * 5.0, 0.0, 1.0));
-    max_speed /= (1.0 + local_density * 0.1);
-    float speed = length(vel_a);
-    if (speed > max_speed) vel_a = (vel_a / speed) * max_speed;
+        // Current relativistic momentum: p = γmv
+        vec2 momentum = gamma * mass * vel_a;
 
-    // Thermal noise
-    if (params.temperature > 0.001) {
-        uint bm_seed = (i * 1664525u + params.step * 1013904223u) ^ 0x9e3779b9u;
-        bm_seed ^= (bm_seed >> 17u); bm_seed *= 0xbf58476du; bm_seed ^= (bm_seed >> 31u);
-        float rng_angle = float(bm_seed) * (6.28318 / 4294967296.0);
-        vec2  noise_dir = vec2(cos(rng_angle), sin(rng_angle));
-        vel_a += noise_dir * params.temperature * 2.0 * sqrt(mass_inv_a);
+        // Force impulse: dp = F·dt (force, NOT acceleration)
+        momentum += total_force * params.dt;
+
+        // Viscosity damping on momentum (radiation/medium losses)
+        float viscosity_factor = clamp(local_density * params.viscosity_strength, 0.0, 0.9);
+        float effective_damp = params.dampening * (1.0 - viscosity_factor);
+        momentum *= clamp(effective_damp, 0.0, 0.99);
+
+        // Thermal noise as momentum impulse (equipartition: δp ∝ √m)
+        if (params.temperature > 0.001) {
+            uint bm_seed = (i * 1664525u + params.step * 1013904223u) ^ 0x9e3779b9u;
+            bm_seed ^= (bm_seed >> 17u); bm_seed *= 0xbf58476du; bm_seed ^= (bm_seed >> 31u);
+            float rng_angle = float(bm_seed) * (6.28318 / 4294967296.0);
+            vec2  noise_dir = vec2(cos(rng_angle), sin(rng_angle));
+            momentum += noise_dir * params.temperature * 2.0 * sqrt(mass);
+        }
+
+        // Derive velocity from momentum: v = pc / √(m²c² + p²)
+        float p_sq = dot(momentum, momentum);
+        float mc = mass * C_SIM;
+        vel_a = momentum * C_SIM / sqrt(mc * mc + p_sq);
     }
 
     pos_a += vel_a * params.dt;
@@ -763,8 +801,8 @@ void apply_physics(uint i) {
     // Both particles independently push → each applies half correction → net = full.
     // Momentum-conserving elastic collision with slight inelasticity for stability.
     if (length(collision_push) > 0.001) {
-        // Position: half-correction (both particles push independently)
-        pos_a += collision_push * 0.5;
+        // Position: gentle correction (smooths out over several frames)
+        pos_a += collision_push * 0.15;
 
         // Velocity: elastic collision impulse along strongest collision normal
         if (max_vn > 0.0) {
@@ -1266,6 +1304,7 @@ void render_particle(uint i) {
             }
         }
     }
+
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1307,6 +1346,7 @@ void render_field(uint i) {
     bool is_nucleon  = is_baryon(type);
     bool is_colored_p = is_colored(flags);
     bool is_weak_b   = (flags & BEHAVIOR_WEAK_BOSON) != 0u;
+    bool is_massive  = get_mass_inv(type) < 10.0;
 
     float intensity  = params.local_density_cap;
 
@@ -1314,9 +1354,9 @@ void render_field(uint i) {
     bool contributes = false;
     if (show_em && has_charge) contributes = true;
     if (show_strong && (is_nucleon || is_colored_p)) contributes = true;
-    if (show_weak && is_weak_b) contributes = true;
-    if (show_grav) contributes = true;
-    if (show_higgs) contributes = true;
+    if (show_weak && (is_weak_b || is_massive)) contributes = true;  // all massive feel weak
+    if (show_grav && is_massive) contributes = true;
+    if (show_higgs && is_massive) contributes = true;
     if (!contributes) return;
 
     vec2 screen_center = params.region_size * 0.5;
@@ -1325,9 +1365,9 @@ void render_field(uint i) {
     float world_range = 0.0;
     if (show_em && has_charge) world_range = FIELD_MAX_WORLD_RADIUS;
     if (show_strong && (is_nucleon || is_colored_p)) world_range = max(world_range, YUKAWA_RANGE * 3.5);
-    if (show_weak && is_weak_b) world_range = max(world_range, 5.0);
-    if (show_grav) world_range = max(world_range, FIELD_MAX_WORLD_RADIUS);
-    if (show_higgs) world_range = max(world_range, 30.0);
+    if (show_weak && (is_weak_b || is_massive)) world_range = max(world_range, 15.0);
+    if (show_grav && is_massive) world_range = max(world_range, FIELD_MAX_WORLD_RADIUS);
+    if (show_higgs && is_massive) world_range = max(world_range, 40.0);
 
     float screen_range = min(world_range * params.camera_zoom, FIELD_MAX_SCREEN_RADIUS);
     int range = int(ceil(screen_range));
@@ -1377,24 +1417,26 @@ void render_field(uint i) {
                 }
             }
 
-            // ── Weak field (very short range around W/Z) ────────────────
-            if (show_weak && is_weak_b) {
-                float weak_V = exp(-world_dist / 0.8) * 100.0;
-                field_color += vec3(weak_V * 0.5, weak_V * 0.1, weak_V * 0.8) * 0.0005;
+            // ── Weak field (short range, all massive particles participate) ─
+            if (show_weak && (is_weak_b || is_massive)) {
+                float weak_range = is_weak_b ? 0.8 : 3.0;  // W/Z tighter, fermions broader
+                float weak_str = is_weak_b ? 3.0 : 0.8;    // W/Z brighter
+                float weak_V = weak_str * exp(-world_dist / weak_range);
+                field_color += vec3(weak_V * 0.5, weak_V * 0.1, weak_V * 0.9) * 800.0;
             }
 
             // ── Gravitational ───────────────────────────────────────────
-            if (show_grav) {
+            if (show_grav && is_massive) {
                 float mass = get_mass(type);
-                float grav_phi = mass * 0.5 / (world_dist + 2.0);
-                field_color += vec3(grav_phi * 0.3, grav_phi * 0.3, grav_phi * 0.4) * 0.01;
+                float grav_phi = mass / (world_dist * world_dist + 4.0);
+                field_color += vec3(grav_phi * 0.2, grav_phi * 0.25, grav_phi * 0.5) * 500.0;
             }
 
-            // ── Higgs field ─────────────────────────────────────────────
-            if (show_higgs) {
+            // ── Higgs field (Yukawa coupling — massive particles source it) ─
+            if (show_higgs && is_massive) {
                 float mass = get_mass(type);
-                float higgs_d = mass * exp(-world_dist / 30.0);
-                field_color += vec3(higgs_d * 0.6, higgs_d * 0.5, higgs_d * 0.2) * 0.0001;
+                float higgs_d = mass * exp(-world_dist / 30.0) / (world_dist + 1.0);
+                field_color += vec3(higgs_d * 0.7, higgs_d * 0.6, higgs_d * 0.15) * 400.0;
             }
 
             field_color *= scale;
@@ -1423,6 +1465,78 @@ void fade_pixel(uint pixel_idx) {
     imageStore(out_render_texture, px, existing);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+//  COLLISION DEBUG OVERLAY (step 4) — runs AFTER all particles are rendered
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void render_collision_debug(uint i) {
+    vec2  pos    = in_pos_buffer.data[i];
+    uint  type   = type_buffer.data[i];
+    float energy = in_energy_buffer.data[i];
+
+    if (energy < 0.01) return;
+
+    bool is_nuc = is_baryon(type);
+
+    vec2 screen_center = params.region_size * 0.5;
+    vec2 center = screen_center + (pos - params.camera_origin) * params.camera_zoom;
+
+    // ── Collision radii (world-space px, same as physics code) ───────────
+    float r_hard = is_nuc ? PAULI_CORE * 0.25 : params.radius * 2.0;
+    float r_repulsion = params.repulsion_radius;
+
+    // Outermost ring determines pixel scan area
+    float max_r = max(r_hard, r_repulsion);
+    if (is_nuc) max_r = max(max_r, YUKAWA_RANGE);
+    float screen_max = max_r * params.camera_zoom;
+    int ring_range = int(ceil(screen_max)) + 2;
+
+    // Frustum cull
+    if (center.x + float(ring_range) < 0.0 || center.x - float(ring_range) > params.region_size.x) return;
+    if (center.y + float(ring_range) < 0.0 || center.y - float(ring_range) > params.region_size.y) return;
+
+    float thickness = max(1.2, params.camera_zoom * 0.4);
+
+    for (int x = -ring_range; x <= ring_range; x++) {
+        for (int y = -ring_range; y <= ring_range; y++) {
+            ivec2 px = ivec2(floor(center)) + ivec2(x, y);
+            if (px.x < 0 || px.x >= int(params.region_size.x)) continue;
+            if (px.y < 0 || px.y >= int(params.region_size.y)) continue;
+
+            float d_screen = distance(vec2(px) + 0.5, center);
+            vec3 ring_col = vec3(0.0);
+
+            // Hard-sphere ring (green) — actual collision boundary
+            float r_hard_s = r_hard * params.camera_zoom;
+            if (abs(d_screen - r_hard_s) < thickness)
+                ring_col = vec3(0.0, 1.0, 0.0);
+
+            // Soft-body repulsion ring (cyan)
+            float r_rep_s = r_repulsion * params.camera_zoom;
+            if (abs(d_screen - r_rep_s) < thickness)
+                ring_col = max(ring_col, vec3(0.0, 0.8, 0.8));
+
+            if (is_nuc) {
+                // Pauli core ring (yellow) — smooth repulsion zone
+                float r_pauli_s = PAULI_CORE * params.camera_zoom;
+                if (abs(d_screen - r_pauli_s) < thickness)
+                    ring_col = max(ring_col, vec3(1.0, 1.0, 0.0));
+
+                // Yukawa range ring (red) — nuclear force cutoff
+                float r_yukawa_s = YUKAWA_RANGE * params.camera_zoom;
+                if (abs(d_screen - r_yukawa_s) < thickness)
+                    ring_col = max(ring_col, vec3(1.0, 0.0, 0.0));
+            }
+
+            if (dot(ring_col, ring_col) > 0.001) {
+                vec4 existing = imageLoad(out_render_texture, px);
+                imageStore(out_render_texture, px,
+                           vec4(min(existing.rgb + ring_col * 0.9, vec3(1.0)), 1.0));
+            }
+        }
+    }
+}
+
 void main() {
     uint i = gl_GlobalInvocationID.x;
 
@@ -1438,5 +1552,6 @@ void main() {
         case 0: apply_physics(i);    break;
         case 1: render_particle(i);  break;
         case 2: render_field(i);     break;
+        case 4: render_collision_debug(i); break;
     }
 }

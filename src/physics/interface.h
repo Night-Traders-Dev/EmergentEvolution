@@ -127,7 +127,7 @@ public:
     // Spawn settings
     int   spawn_type    = 0;     // phys_particles.h type index
     int   spawn_count   = 1;
-    float spawn_energy  = 0.7f;
+    float spawn_energy_mev = 0.0f;  // kinetic energy in MeV (0 = stationary)
     float spawn_scatter = 20.0f;
     int   spawn_group   = -1;    // -1=single particle, 0+=group template
     int   spawn_atom_Z  = -1;    // -1=not spawning atom, >0=atomic number
@@ -235,6 +235,7 @@ public:
     bool  field_gravity = true;
     bool  field_higgs   = true;
     float field_intensity = 0.5f;
+    bool  show_collision_radii = false;
 
     // Emergent feedback display
     float emergent_temp_display   = 0.0f;
@@ -329,6 +330,7 @@ public:
     static constexpr int DECAY_LOG_MAX = 10000;
     std::vector<DecayLogEntry> decay_log;
     bool show_decay_log = false;
+    bool show_nuclear_debug = false;
 
     void push_decay_event(const char* desc, DecayEventType type, ImVec4 color = ImVec4(1,0.6f,0.2f,1));
 
@@ -358,6 +360,7 @@ private:
     void draw_settings_menu();
     void draw_achievements_panel();
     void draw_decay_log();
+    void draw_nuclear_debug(SimConfig& cfg);
     void draw_measurement_overlays(const SimConfig& cfg);
     void draw_energy_heatmap(const SimConfig& cfg);
     void draw_velocity_field(const SimConfig& cfg);

@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#ifdef HAS_OPENMP
 #include <omp.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -18,6 +20,68 @@ static constexpr float R_BOHR_WORLD    = 15.0f;             // Bohr radius in wo
 static constexpr float BOHR_RADIUS_NM  = 0.0529f;           // Bohr radius in nanometers
 static constexpr float WORLD_TO_NM     = BOHR_RADIUS_NM / R_BOHR_WORLD;  // ~0.00353 nm/wu
 static constexpr float H_ATOM_DIAMETER = 2.0f * R_BOHR_WORLD;            // 30 world units
+
+// ── Physics constants for real-world display ─────────────────────────────
+// C_SIM defined in phys_particles.h (300.0f)
+static constexpr float C_REAL = 299792458.0f;      // speed of light (m/s)
+
+// PDG rest masses — use shared table from phys_particles.h
+static inline float rest_mass_MeV(uint32_t t) {
+    return (t < PHYS_PARTICLE_TYPES) ? PHYS_REST_MASS_MEV[t] : 0.0f;
+}
+
+// Format speed in real-world units: m/s, km/s, or fraction of c
+static void fmt_speed(char* buf, size_t sz, float sim_speed) {
+    float beta = std::min(sim_speed / C_SIM, 0.9999f);
+    float real_speed = beta * C_REAL;
+    if (beta >= 0.01f)
+        snprintf(buf, sz, "%.4fc", beta);
+    else if (real_speed >= 1000.0f)
+        snprintf(buf, sz, "%.1f km/s", real_speed / 1000.0f);
+    else
+        snprintf(buf, sz, "%.0f m/s", real_speed);
+}
+
+// Format momentum in MeV/c (relativistic p = γm₀βc)
+static void fmt_momentum(char* buf, size_t sz, float sim_speed, uint32_t ptype) {
+    float m0 = rest_mass_MeV(ptype);
+    float beta = std::min(sim_speed / C_SIM, 0.9999f);
+    float p_MeV;
+    if (m0 < 0.001f) {
+        // Massless: p = E/c; use beta as proxy
+        p_MeV = beta * 1.0f;
+    } else {
+        float gamma = 1.0f / std::sqrt(1.0f - beta * beta);
+        p_MeV = gamma * m0 * beta;
+    }
+    if (p_MeV < 0.001f)
+        snprintf(buf, sz, "~0");
+    else if (p_MeV < 1.0f)
+        snprintf(buf, sz, "%.2f keV/c", p_MeV * 1e3f);
+    else if (p_MeV < 1e3f)
+        snprintf(buf, sz, "%.2f MeV/c", p_MeV);
+    else if (p_MeV < 1e6f)
+        snprintf(buf, sz, "%.2f GeV/c", p_MeV / 1e3f);
+    else
+        snprintf(buf, sz, "%.2f TeV/c", p_MeV / 1e6f);
+}
+
+// Format energy in eV auto-scaling
+static void fmt_energy_ev(char* buf, size_t sz, float MeV) {
+    float eV = MeV * 1e6f;
+    if (eV < 0.01f)
+        snprintf(buf, sz, "~0 eV");
+    else if (eV < 1e3f)
+        snprintf(buf, sz, "%.1f eV", eV);
+    else if (eV < 1e6f)
+        snprintf(buf, sz, "%.2f keV", eV / 1e3f);
+    else if (eV < 1e9f)
+        snprintf(buf, sz, "%.2f MeV", eV / 1e6f);
+    else if (eV < 1e12f)
+        snprintf(buf, sz, "%.2f GeV", eV / 1e9f);
+    else
+        snprintf(buf, sz, "%.2f TeV", eV / 1e12f);
+}
 
 void PhysicsInterface::init() {
     std::random_device rd;
@@ -723,6 +787,9 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
 
     // Draw decay log window
     draw_decay_log();
+
+    // Draw nuclear reactions debug window
+    draw_nuclear_debug(cfg);
 
     // Draw particle info card (bottom-right, always on top)
     draw_info_card(particles);
@@ -1579,12 +1646,16 @@ void PhysicsInterface::draw_settings_menu() {
         ImGui::TextColored(tc.accent, "Performance");
         ImGui::Separator();
 
+#ifdef HAS_OPENMP
         int sys_max = omp_get_max_threads();
         if (prefs.max_threads <= 0) prefs.max_threads = sys_max;
         prefs.max_threads = std::clamp(prefs.max_threads, 1, sys_max);
         ImGui::SliderInt("CPU Threads", &prefs.max_threads, 1, sys_max);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("OpenMP thread count for physics\nSystem max: %d", sys_max);
+#else
+        ImGui::TextDisabled("CPU Threads: single-threaded (no OpenMP)");
+#endif
 
         const char* fps_labels[] = { "Uncapped", "30", "60", "120", "144", "240" };
         const int   fps_values[] = { 0, 30, 60, 120, 144, 240 };
@@ -1908,7 +1979,12 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
         ImGui::SameLine(0, 20);
         ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
         ImGui::SameLine(0, 10);
-        ImGui::Text("E: %.2f avg", avg_energy_display);
+        {
+            char ebuf[32];
+            float total_MeV = total_energy_display * E_SCALE_MEV;
+            fmt_energy_ev(ebuf, sizeof(ebuf), total_MeV);
+            ImGui::Text("E: %s", ebuf);
+        }
 
         // Nuclear decays (clickable — opens decay log)
         if (nuclear_decay_count_display > 0 || !decay_log.empty()) {
@@ -1927,6 +2003,22 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
             ImGui::PopStyleColor(4);
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Click to open decay/interaction event log");
+        }
+
+        // Nuclear debug (clickable)
+        {
+            ImGui::SameLine(0, 20);
+            ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
+            ImGui::SameLine(0, 10);
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.15f, 0.05f, 0.5f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.2f, 0.1f, 0.02f, 0.7f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.15f, 1.0f));
+            if (ImGui::SmallButton("Nuclear###NucDbgBtn"))
+                show_nuclear_debug = !show_nuclear_debug;
+            ImGui::PopStyleColor(4);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Nuclear reactions debug — tune thresholds and rates");
         }
 
         // Particle count (clickable)
@@ -2298,7 +2390,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.repulsion_radius = 1.0f;
                     cfg.pressure_resistance = 100.0f;
                     cfg.interaction_radius = 200.0f;
-                    cfg.gravity_strength = 0.0f;
+                    cfg.gravity_strength = 1.0f;
                     cfg.lorentz_strength = 1.0f;
                     cfg.weak_coupling = 1.0f;
                     cfg.string_tension = 100.0f;
@@ -2313,7 +2405,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.repulsion_radius = 5.0f;
                     cfg.pressure_resistance = 60.0f;
                     cfg.interaction_radius = 120.0f;
-                    cfg.gravity_strength = 0.0f;
+                    cfg.gravity_strength = 1.0f;
                     particle_count_slider = 100.0f;
                     break;
                 case 2:  // Neutron Star Surface
@@ -2323,7 +2415,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.repulsion_radius = 3.0f;
                     cfg.pressure_resistance = 80.0f;
                     cfg.interaction_radius = 80.0f;
-                    cfg.gravity_strength = 0.5f;
+                    cfg.gravity_strength = 1.0f;
                     particle_count_slider = 120.0f;
                     break;
                 case 3:  // Solar Core
@@ -2333,7 +2425,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.repulsion_radius = 5.0f;
                     cfg.pressure_resistance = 60.0f;
                     cfg.interaction_radius = 120.0f;
-                    cfg.gravity_strength = 0.2f;
+                    cfg.gravity_strength = 1.0f;
                     particle_count_slider = 110.0f;
                     break;
                 case 4:  // Particle Soup
@@ -2343,7 +2435,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.repulsion_radius = 5.0f;
                     cfg.pressure_resistance = 60.0f;
                     cfg.interaction_radius = 120.0f;
-                    cfg.gravity_strength = 0.0f;
+                    cfg.gravity_strength = 1.0f;
                     particle_count_slider = 80.0f;
                     break;
                 case 5:  // Alpha Emitter
@@ -2353,7 +2445,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.repulsion_radius = 5.0f;
                     cfg.pressure_resistance = 60.0f;
                     cfg.interaction_radius = 120.0f;
-                    cfg.gravity_strength = 0.0f;
+                    cfg.gravity_strength = 1.0f;
                     particle_count_slider = 60.0f;
                     break;
                 case 6:  // Heavy Nucleus
@@ -2363,7 +2455,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.repulsion_radius = 4.0f;
                     cfg.pressure_resistance = 80.0f;
                     cfg.interaction_radius = 100.0f;
-                    cfg.gravity_strength = 0.3f;
+                    cfg.gravity_strength = 1.0f;
                     particle_count_slider = 50.0f;
                     break;
                 case 7:  // Quark-Gluon Plasma
@@ -2373,7 +2465,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.repulsion_radius = 3.0f;
                     cfg.pressure_resistance = 40.0f;
                     cfg.interaction_radius = 80.0f;
-                    cfg.gravity_strength = 0.0f;
+                    cfg.gravity_strength = 1.0f;
                     cfg.string_tension = 10.0f;
                     cfg.hadronization_enabled = false;  // quarks deconfined in QGP
                     cfg.weak_coupling = 0.5f;
@@ -2386,7 +2478,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.repulsion_radius = 3.0f;
                     cfg.pressure_resistance = 40.0f;
                     cfg.interaction_radius = 80.0f;
-                    cfg.gravity_strength = 0.0f;
+                    cfg.gravity_strength = 1.0f;
                     cfg.weak_coupling = 1.0f;
                     cfg.string_tension = 50.0f;
                     particle_count_slider = 80.0f;
@@ -2398,7 +2490,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.repulsion_radius = 4.0f;
                     cfg.pressure_resistance = 50.0f;
                     cfg.interaction_radius = 100.0f;
-                    cfg.gravity_strength = 0.0f;
+                    cfg.gravity_strength = 1.0f;
                     cfg.string_tension = 60.0f;
                     cfg.weak_coupling = 0.2f;
                     particle_count_slider = 90.0f;
@@ -2410,7 +2502,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.repulsion_radius = 5.0f;
                     cfg.pressure_resistance = 60.0f;
                     cfg.interaction_radius = 120.0f;
-                    cfg.gravity_strength = 0.0f;
+                    cfg.gravity_strength = 1.0f;
                     cfg.lorentz_strength = 1.5f;
                     cfg.weak_coupling = 0.0f;
                     cfg.string_tension = 50.0f;
@@ -2479,7 +2571,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
         ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "Electromagnetic");
         ImGui::SliderFloat("B Field", &cfg.lorentz_strength, 0.0f, 2.0f, "%.2f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("External magnetic field strength\nAffects charged particle trajectories");
+            ImGui::SetTooltip("Magnetic force (Biot-Savart + Lorentz)\n1.0 = F = q(v x B), B = q(v x r)/r²\n0 = off\n>1 = enhanced");
         if (cfg.magnetic_feedback_enabled)
             ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "  Measured: %.3f T", emergent_bfield_display);
         ImGui::Checkbox("Emergent B Field", &cfg.magnetic_feedback_enabled);
@@ -2506,6 +2598,37 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                 "Disabled above QGP temperature (2 trillion K)");
 
         ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.4f, 0.9f, 1.0f, 1.0f), "Nuclear Reactions");
+        ImGui::Checkbox("Fusion", &cfg.fusion_enabled);
+        ImGui::SameLine();
+        ImGui::Checkbox("Fission", &cfg.fission_enabled);
+        ImGui::Checkbox("Spallation", &cfg.spallation_enabled);
+        ImGui::SameLine();
+        ImGui::Checkbox("Compton", &cfg.compton_enabled);
+        ImGui::Checkbox("Annihilation", &cfg.annihilation_enabled);
+        ImGui::SameLine();
+        ImGui::Checkbox("Decay", &cfg.decay_enabled);
+        ImGui::Checkbox("Nuclear Decay", &cfg.nuclear_decay_enabled);
+        if (cfg.fusion_enabled) {
+            char barrier_label[32];
+            float barrier_keV = cfg.fusion_threshold_keV;
+            if (barrier_keV < 1.0f)
+                snprintf(barrier_label, sizeof(barrier_label), "%.0f eV", barrier_keV * 1000.0f);
+            else if (barrier_keV < 1000.0f)
+                snprintf(barrier_label, sizeof(barrier_label), "%.1f keV", barrier_keV);
+            else
+                snprintf(barrier_label, sizeof(barrier_label), "%.1f MeV", barrier_keV / 1000.0f);
+            ImGui::SliderFloat("Coulomb Barrier", &cfg.fusion_threshold_keV, 0.0f, 2000.0f, barrier_label,
+                               ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Energy required to overcome Coulomb repulsion\n"
+                    "for proton-proton fusion (Gamow tunneling)\n"
+                    "Realistic: ~550 keV\n"
+                    "0 = instant fusion (no barrier)\n"
+                    "Higher = harder to fuse (need more energy)");
+        }
+
+        ImGui::Spacing();
 
         // Weak Nuclear
         ImGui::TextColored(ImVec4(0.7f, 0.3f, 0.9f, 1.0f), "Weak Nuclear");
@@ -2523,7 +2646,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
         ImGui::TextColored(ImVec4(0.8f, 0.6f, 0.3f, 1.0f), "Gravity");
         ImGui::SliderFloat("Strength##grav", &cfg.gravity_strength, 0.0f, 2.0f, "%.2f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Gravitational attraction between massive particles\n0 = off (negligible at particle scale)\nUseful for stellar/neutron star scenarios");
+            ImGui::SetTooltip("Gravitational attraction (Newton's law)\n1.0 = F = G·m1·m2/r²\n0 = off\n>1 = enhanced gravity");
     }
 
     // ── Force Multipliers ─────────────────────────────────────────────────────
@@ -2597,6 +2720,9 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
 
         ImGui::Checkbox("Higgs##field", &field_higgs);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show Higgs field coupling to massive particles");
+        ImGui::SameLine();
+        ImGui::Checkbox("Collision##field", &show_collision_radii);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show collision detection radii\nGreen = hard-sphere, Yellow = Pauli core, Red = Yukawa range");
 
         if (field_em || field_strong || field_weak || field_gravity || field_higgs) {
             ImGui::SliderFloat("Brightness", &field_intensity, 0.05f, 2.0f, "%.2f");
@@ -3054,7 +3180,15 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
     // ── Spawn Settings (shared, outside headers) ─────────────────────────────
     ImGui::Separator();
     ImGui::SliderInt("Count", &spawn_count, 1, 100);
-    ImGui::SliderFloat("Energy", &spawn_energy, 0.1f, 1.0f, "%.2f");
+    {
+        // Energy slider: 0 eV to 9999 TeV (stored in MeV)
+        // 9999 TeV = 9.999e9 MeV
+        static constexpr float MAX_ENERGY_MEV = 9.999e9f;
+        char e_label[32];
+        fmt_energy_ev(e_label, sizeof(e_label), spawn_energy_mev);
+        ImGui::SliderFloat("Energy", &spawn_energy_mev, 0.0f, MAX_ENERGY_MEV, e_label,
+                           ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
+    }
     ImGui::SliderFloat("Scatter", &spawn_scatter, 1.0f, 100.0f, "%.0f");
 
     // Status text
@@ -3191,104 +3325,71 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
                 ImGui::Text("%.1f min", age_sec / 60.0f);
         }
 
-        // ── Momentum, Temperature, Magnetic Moment (need readback velocity) ──
+        // ── Speed, Momentum, Energy, Temperature, Magnetic Moment ──
         if (readback_velocities && idx < readback_count) {
             glm::vec2 vel = readback_velocities[idx];
             float speed = glm::length(vel);
+            float beta = std::min(speed / C_SIM, 0.9999f);
 
-            // Mass lookup (mirrors shader get_mass_inv)
-            auto get_mass_display = [](uint32_t t) -> float {
-                if (t <= 1 || t == 5) return 40.0f;   // proton/neutron/antiproton
-                if (t == 2 || t == 4) return 1.0f;     // electron/positron
-                if (t == 7 || t == 8) return 200.0f;    // muon/antimuon
-                if (t == 9 || t == 10) return 3333.0f;  // tau/antitau
-                if (t == 6 || t == 11 || t == 12) return 0.01f;  // neutrinos
-                if (t == 3 || t == 25) return 0.01f;    // photon/gluon
-                if (t == 13 || t == 19) return 5.0f;    // up/anti-up
-                if (t == 14 || t == 20) return 6.7f;    // down/anti-down
-                if (t == 15 || t == 21) return 200.0f;  // strange
-                if (t == 16 || t == 22) return 2500.0f; // charm
-                if (t == 17 || t == 23) return 333333.0f; // top
-                if (t == 18 || t == 24) return 8333.0f; // bottom
-                if (t == 26 || t == 27) return 16667.0f; // W
-                if (t == 28) return 20000.0f;  // Z
-                if (t == 29) return 25000.0f;  // Higgs
-                return 1.0f;
-            };
-
-            float mass = get_mass_display(ptype);
-            float momentum = mass * speed;
-            float ke = 0.5f * mass * speed * speed;
-            float particle_temp = ke * 0.1f;
-
-            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Momentum");
-            ImGui::SameLine(col_w);
-            ImGui::Text("%.1f", momentum);
-
-            // Energy — relativistic E = γm₀c² (real rest masses, β = v/c_sim)
+            // Speed — real-world units
             {
-                // Real rest mass energy in MeV (PDG values)
-                auto get_rest_mass_MeV = [](uint32_t t) -> float {
-                    if (t == 0 || t == 5) return 938.272f;    // proton/antiproton
-                    if (t == 1)           return 939.565f;    // neutron
-                    if (t == 2 || t == 4) return 0.511f;      // electron/positron
-                    if (t == 3)           return 0.0f;         // photon
-                    if (t == 6 || t == 11 || t == 12) return 0.0f; // neutrinos (~0)
-                    if (t == 7 || t == 8) return 105.658f;    // muon/antimuon
-                    if (t == 9 || t == 10) return 1776.86f;   // tau/antitau
-                    if (t == 13 || t == 19) return 2.16f;     // up/anti-up
-                    if (t == 14 || t == 20) return 4.67f;     // down/anti-down
-                    if (t == 15 || t == 21) return 93.4f;     // strange/anti-strange
-                    if (t == 16 || t == 22) return 1270.0f;   // charm/anti-charm
-                    if (t == 17 || t == 23) return 172760.0f; // top/anti-top
-                    if (t == 18 || t == 24) return 4180.0f;   // bottom/anti-bottom
-                    if (t == 25) return 0.0f;                  // gluon
-                    if (t == 26 || t == 27) return 80379.0f;  // W+/W-
-                    if (t == 28) return 91188.0f;              // Z0
-                    if (t == 29) return 125100.0f;             // Higgs
-                    if (t == 30) return 0.0f;                  // graviton
-                    if (t == 31) return 100000.0f;             // dark matter (hypothetical ~100 GeV)
-                    if (t == 32) return 0.001f;                // dark energy (near-massless)
-                    return 0.0f;
-                };
-
-                constexpr float C_SIM = 300.0f;  // sim speed of light
-                float m0 = get_rest_mass_MeV(ptype);
-                float beta = std::min(speed / C_SIM, 0.9999f);
-                float E_MeV;
-                if (m0 < 0.001f) {
-                    // Massless: E = pc; use sim momentum scaled to MeV
-                    // p_sim / c_sim gives a dimensionless ratio; scale by typical energy
-                    E_MeV = speed / C_SIM * 1.0f;  // ~1 MeV photon at c
-                    if (E_MeV < 0.001f) E_MeV = 0.0f;
-                } else {
-                    float gamma = 1.0f / std::sqrt(1.0f - beta * beta);
-                    E_MeV = gamma * m0;
-                }
-
-                float eV = E_MeV * 1e6f;
-                ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Energy");
+                char spd_buf[32];
+                fmt_speed(spd_buf, sizeof(spd_buf), speed);
+                ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Speed");
                 ImGui::SameLine(col_w);
-                if (eV < 0.01f)
-                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "~0 eV");
-                else if (eV < 1e3f)
-                    ImGui::Text("%.1f eV", eV);
-                else if (eV < 1e6f)
-                    ImGui::Text("%.2f keV", eV / 1e3f);
-                else if (eV < 1e9f)
-                    ImGui::Text("%.2f MeV", eV / 1e6f);
-                else if (eV < 1e12f)
-                    ImGui::Text("%.2f GeV", eV / 1e9f);
-                else
-                    ImGui::Text("%.2f TeV", eV / 1e12f);
+                ImGui::Text("%s", spd_buf);
             }
 
-            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Temp");
-            ImGui::SameLine(col_w);
-            if (particle_temp < 1000.0f)
-                ImGui::Text("%.1f K", particle_temp);
-            else
-                ImGui::Text("%.1fk K", particle_temp / 1000.0f);
+            // Momentum — relativistic p = γm₀βc (MeV/c)
+            {
+                char mom_buf[32];
+                fmt_momentum(mom_buf, sizeof(mom_buf), speed, ptype);
+                ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Momentum");
+                ImGui::SameLine(col_w);
+                ImGui::Text("%s", mom_buf);
+            }
+
+            // Kinetic energy — KE = (γ-1)m₀c² for massive, E = pc for massless
+            {
+                float m0 = rest_mass_MeV(ptype);
+                float KE_MeV;
+                if (m0 < 0.001f) {
+                    KE_MeV = beta * 1.0f;  // massless: all energy is kinetic
+                    if (KE_MeV < 0.001f) KE_MeV = 0.0f;
+                } else {
+                    float gamma = 1.0f / std::sqrt(1.0f - beta * beta);
+                    KE_MeV = (gamma - 1.0f) * m0;
+                }
+
+                char e_buf[32];
+                fmt_energy_ev(e_buf, sizeof(e_buf), KE_MeV);
+                ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Energy");
+                ImGui::SameLine(col_w);
+                ImGui::Text("%s", e_buf);
+            }
+
+            // Temperature — from kinetic energy
+            {
+                // Sim mass for KE-based temp (keep existing sim-unit mass for thermal calc)
+                auto get_sim_mass = [](uint32_t t) -> float {
+                    if (t <= 1 || t == 5) return 40.0f;
+                    if (t == 2 || t == 4) return 1.0f;
+                    if (t == 7 || t == 8) return 200.0f;
+                    if (t == 9 || t == 10) return 3333.0f;
+                    if (t == 6 || t == 11 || t == 12) return 0.01f;
+                    if (t == 3 || t == 25) return 0.01f;
+                    return 1.0f;
+                };
+                float sim_mass = get_sim_mass(ptype);
+                float ke = 0.5f * sim_mass * speed * speed;
+                float particle_temp = ke * 0.1f;
+                ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Temp");
+                ImGui::SameLine(col_w);
+                if (particle_temp < 1000.0f)
+                    ImGui::Text("%.1f K", particle_temp);
+                else
+                    ImGui::Text("%.1fk K", particle_temp / 1000.0f);
+            }
 
             // Magnetic moment: |charge| * speed * coupling
             float mag_moment = std::abs(charge) * speed * 0.5f;
@@ -3493,24 +3594,12 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
     int Z = 0, N_count = 0, lepton_count = 0;
     std::vector<uint32_t> nucleon_indices;
     std::vector<uint32_t> lepton_indices;
-    glm::vec2 sum_pos(0.0f), sum_mom(0.0f);
+    glm::vec2 sum_pos(0.0f);
     float total_energy_MeV = 0.0f;
+    float total_momentum_MeV = 0.0f;  // sum of γm₀β per constituent (MeV/c)
+    glm::vec2 com_vel(0.0f);          // center-of-mass velocity (sim units)
+    float total_sim_mass = 0.0f;
     uint32_t oldest_birth = UINT32_MAX;
-
-    auto get_mass_elem = [](uint32_t t) -> float {
-        if (t <= 1 || t == 5) return 40.0f;
-        if (t == 2 || t == 4) return 1.0f;
-        return 1.0f;
-    };
-
-    // Real rest mass energy in MeV (PDG values) — for element energy display
-    auto get_rest_mass_MeV = [](uint32_t t) -> float {
-        if (t == 0 || t == 5) return 938.272f;    // proton/antiproton
-        if (t == 1)           return 939.565f;    // neutron
-        if (t == 2 || t == 4) return 0.511f;      // electron/positron
-        return 0.0f;
-    };
-    constexpr float C_SIM_ELEM = 300.0f;
 
     for (uint32_t pi = 0; pi < n_total; ++pi) {
         if (pi >= particles.orbital_parent.size()) break;
@@ -3533,15 +3622,18 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
         sum_pos += particles.positions[pi];
 
         if (readback_velocities && pi < readback_count) {
-            float mass = get_mass_elem(pt);
-            sum_mom += readback_velocities[pi] * mass;
+            // Sim-mass weighted velocity for CoM
+            float sim_mass = (pt <= 1 || pt == 5) ? 40.0f : 1.0f;
+            com_vel += readback_velocities[pi] * sim_mass;
+            total_sim_mass += sim_mass;
 
-            // Accumulate relativistic energy: E = γm₀c²
-            float m0 = get_rest_mass_MeV(pt);
+            // Kinetic energy and momentum per constituent
+            float m0 = rest_mass_MeV(pt);
             float spd = glm::length(readback_velocities[pi]);
-            float beta = std::min(spd / C_SIM_ELEM, 0.9999f);
+            float beta = std::min(spd / C_SIM, 0.9999f);
             float gamma = 1.0f / std::sqrt(1.0f - beta * beta);
-            total_energy_MeV += gamma * m0;
+            total_energy_MeV += (gamma - 1.0f) * m0;  // KE = (γ-1)m₀c²
+            total_momentum_MeV += gamma * m0 * beta;   // p = γm₀βc (MeV/c)
         }
 
         if (pi < particles.birth_frames.size()) {
@@ -3555,7 +3647,8 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
     int A = Z + N_count;
     int net_charge = Z - lepton_count;
     float total_mass = Z * 40.0f + N_count * 40.0f + lepton_count * 1.0f;
-    float momentum = glm::length(sum_mom);
+    // Center-of-mass speed for speed display
+    float com_speed_sim = (total_sim_mass > 0.0f) ? glm::length(com_vel) / total_sim_mass : 0.0f;
     // Shell configuration string
     const int SHELL_CAP[] = {2, 8, 18, 32, 32, 18, 8};
     char shell_str[64] = {};
@@ -3655,25 +3748,37 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Particles");
         ImGui::SameLine(col_w); ImGui::Text("%d", Z + N_count + lepton_count);
 
-        // Momentum
-        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Momentum");
-        ImGui::SameLine(col_w); ImGui::Text("%.1f", momentum);
+        // Speed — center-of-mass
+        {
+            char spd_buf[32];
+            fmt_speed(spd_buf, sizeof(spd_buf), com_speed_sim);
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Speed");
+            ImGui::SameLine(col_w); ImGui::Text("%s", spd_buf);
+        }
+
+        // Momentum — sum of constituent relativistic momenta
+        {
+            char mom_buf[32];
+            if (total_momentum_MeV < 0.001f)
+                snprintf(mom_buf, sizeof(mom_buf), "~0");
+            else if (total_momentum_MeV < 1.0f)
+                snprintf(mom_buf, sizeof(mom_buf), "%.2f keV/c", total_momentum_MeV * 1e3f);
+            else if (total_momentum_MeV < 1e3f)
+                snprintf(mom_buf, sizeof(mom_buf), "%.2f MeV/c", total_momentum_MeV);
+            else if (total_momentum_MeV < 1e6f)
+                snprintf(mom_buf, sizeof(mom_buf), "%.2f GeV/c", total_momentum_MeV / 1e3f);
+            else
+                snprintf(mom_buf, sizeof(mom_buf), "%.2f TeV/c", total_momentum_MeV / 1e6f);
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Momentum");
+            ImGui::SameLine(col_w); ImGui::Text("%s", mom_buf);
+        }
 
         // Energy — relativistic total (sum of γm₀c² for all constituents)
         {
-            float eV = total_energy_MeV * 1e6f;
+            char e_buf[32];
+            fmt_energy_ev(e_buf, sizeof(e_buf), total_energy_MeV);
             ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Energy");
-            ImGui::SameLine(col_w);
-            if (eV < 1e3f)
-                ImGui::Text("%.1f eV", eV);
-            else if (eV < 1e6f)
-                ImGui::Text("%.2f keV", eV / 1e3f);
-            else if (eV < 1e9f)
-                ImGui::Text("%.2f MeV", eV / 1e6f);
-            else if (eV < 1e12f)
-                ImGui::Text("%.2f GeV", eV / 1e9f);
-            else
-                ImGui::Text("%.2f TeV", eV / 1e12f);
+            ImGui::SameLine(col_w); ImGui::Text("%s", e_buf);
         }
 
         // Age
@@ -3949,6 +4054,209 @@ void PhysicsInterface::draw_decay_log() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// ── Nuclear Reactions Debug Window ──────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_nuclear_debug(SimConfig& cfg) {
+    if (!show_nuclear_debug) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 680, 60), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(320, 540), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(280, 300), ImVec2(500, 800));
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.04f, 0.07f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.14f, 0.08f, 0.02f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.22f, 0.12f, 0.03f, 0.95f));
+
+    if (!ImGui::Begin("Nuclear Reactions###NuclearDebug", &show_nuclear_debug)) {
+        ImGui::End();
+        ImGui::PopStyleColor(3);
+        return;
+    }
+
+    float w = ImGui::GetContentRegionAvail().x;
+
+    // ── Reaction Toggles ─────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Reaction Toggles", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Fusion", &cfg.fusion_enabled);
+        ImGui::SameLine(w * 0.5f);
+        ImGui::Checkbox("Fission", &cfg.fission_enabled);
+
+        ImGui::Checkbox("Spallation", &cfg.spallation_enabled);
+        ImGui::SameLine(w * 0.5f);
+        ImGui::Checkbox("Compton", &cfg.compton_enabled);
+
+        ImGui::Checkbox("Annihilation", &cfg.annihilation_enabled);
+        ImGui::SameLine(w * 0.5f);
+        ImGui::Checkbox("Decay", &cfg.decay_enabled);
+
+        ImGui::Checkbox("Nuclear Decay", &cfg.nuclear_decay_enabled);
+        ImGui::SameLine(w * 0.5f);
+        ImGui::Checkbox("Virtual Pairs", &cfg.virtual_pairs_enabled);
+    }
+
+    ImGui::Spacing();
+
+    // ── Fusion ───────────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Fusion")) {
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Coulomb Barrier (keV)##fus", &cfg.fusion_threshold_keV, 0.0f, 2000.0f, "%.0f keV");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Gamow peak barrier energy.\n550 keV = p+p (solar core).\nLower = easier fusion.");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Radius (px)##fus", &cfg.fusion_radius, 2.0f, 30.0f, "%.1f px");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Collision distance for fusion check.\nDefault: 8 px");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderInt("Max/frame##fus", &cfg.max_fusions_per_frame, 1, 20);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Maximum fusion events per tick.\nDefault: 5");
+    }
+
+    // ── Fission ──────────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Fission")) {
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Neutron Threshold##fis", &cfg.fission_neutron_threshold, 0.1f, 2.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Minimum neutron energy to trigger fission.\nDefault: 0.6");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderInt("Min Cluster Size##fis", &cfg.min_fission_cluster, 2, 20);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Minimum nucleons in target nucleus.\nDefault: 6");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderInt("Max/frame##fis", &cfg.max_fissions_per_frame, 1, 10);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Maximum fission events per tick.\nDefault: 2");
+    }
+
+    // ── Particle Decay ───────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Particle Decay")) {
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Energy Threshold##pdec", &cfg.decay_threshold, 0.01f, 0.50f, "%.3f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Particle decays when energy drops below this.\nDefault: 0.08\nLower = particles live longer before decaying.");
+    }
+
+    // ── Nuclear Decay ────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Nuclear Decay")) {
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Rate Multiplier##ndec", &cfg.decay_rate_multiplier, 0.01f, 10.0f, "%.2fx",
+                           ImGuiSliderFlags_Logarithmic);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Scales all nuclear half-lives.\n< 1 = faster decay, > 1 = slower.\nDefault: 1.0");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Alpha KE (MeV)##ndec", &cfg.alpha_ke_mev, 0.5f, 20.0f, "%.1f MeV");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Kinetic energy of emitted alpha particles.\nDefault: 5.0 MeV (typical: 4-6 MeV)");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Nucleon KE (MeV)##ndec", &cfg.nucleon_emit_ke_mev, 0.1f, 10.0f, "%.1f MeV");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Kinetic energy of emitted neutrons/protons.\nDefault: 2.0 MeV (typical: 1-3 MeV)");
+    }
+
+    // ── Compton / Photoelectric ──────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Compton / Photoelectric")) {
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Radius (px)##comp", &cfg.compton_radius, 5.0f, 60.0f, "%.0f px");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Photon-electron interaction distance.\nDefault: 25 px");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderInt("Max/frame##comp", &cfg.max_compton_per_frame, 1, 20);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Maximum Compton interactions per tick.\nDefault: 8");
+    }
+
+    // ── Spallation ───────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Spallation")) {
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Min Speed (px/f)##spal", &cfg.spallation_min_speed, 20.0f, 300.0f, "%.0f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Minimum projectile speed to trigger spallation.\nDefault: 120 px/frame");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Min Energy##spal", &cfg.spallation_min_energy, 0.1f, 2.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Minimum projectile energy.\nDefault: 0.5");
+
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderInt("Max/frame##spal", &cfg.max_spallations_per_frame, 1, 10);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Maximum spallation events per tick.\nDefault: 3");
+    }
+
+    // ── Annihilation ─────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Annihilation")) {
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Contact Radius (px)##annih", &cfg.annihilation_radius, 1.0f, 20.0f, "%.1f px");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Matter-antimatter annihilation distance.\nDefault: 5.0 px");
+    }
+
+    // ── Virtual Pairs ────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Virtual Pairs")) {
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("Threshold##vpair", &cfg.virtual_pair_threshold, 0.5f, 5.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Minimum combined energy for pair creation.\nDefault: 2.1");
+
+        ImGui::SetNextItemWidth(-1);
+        int vp_max = static_cast<int>(cfg.virtual_pair_max_per_tick);
+        if (ImGui::SliderInt("Max/frame##vpair", &vp_max, 1, 10))
+            cfg.virtual_pair_max_per_tick = static_cast<uint32_t>(vp_max);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Maximum virtual pairs spawned per tick.\nDefault: 2");
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // ── Reset to Defaults ────────────────────────────────────────────────
+    if (ImGui::Button("Reset to Defaults", ImVec2(-1, 0))) {
+        cfg.fusion_threshold_keV      = 550.0f;
+        cfg.fusion_radius             = 8.0f;
+        cfg.max_fusions_per_frame     = 5;
+        cfg.fission_neutron_threshold = 0.6f;
+        cfg.min_fission_cluster       = 6;
+        cfg.max_fissions_per_frame    = 2;
+        cfg.decay_threshold           = 0.08f;
+        cfg.alpha_ke_mev              = 5.0f;
+        cfg.nucleon_emit_ke_mev       = 2.0f;
+        cfg.decay_rate_multiplier     = 1.0f;
+        cfg.compton_radius            = 25.0f;
+        cfg.max_compton_per_frame     = 8;
+        cfg.spallation_min_speed      = 120.0f;
+        cfg.spallation_min_energy     = 0.5f;
+        cfg.max_spallations_per_frame = 3;
+        cfg.annihilation_radius       = 5.0f;
+        cfg.virtual_pair_threshold    = 2.1f;
+        cfg.virtual_pair_max_per_tick = 2;
+
+        cfg.fusion_enabled            = true;
+        cfg.fission_enabled           = true;
+        cfg.spallation_enabled        = true;
+        cfg.compton_enabled           = true;
+        cfg.annihilation_enabled      = true;
+        cfg.decay_enabled             = true;
+        cfg.nuclear_decay_enabled     = true;
+        cfg.virtual_pairs_enabled     = true;
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Reset all nuclear reaction parameters to Standard Model defaults");
+
+    ImGui::End();
+    ImGui::PopStyleColor(3);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // ── Particle Accelerator Panel ──────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -4041,10 +4349,22 @@ void PhysicsInterface::draw_accelerator_panel() {
 
     // ── Speed ──
     if (ImGui::CollapsingHeader("Speed", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::SliderFloat("##AccelSpeed", &accel_speed, 10.0f, 300.0f, "%.0f px/s");
-        if (accel_speed >= 295.0f) {
+        // Show slider as fraction of c (0.03c – 1.00c)
+        float beta = accel_speed / C_SIM;
+        char slider_label[32];
+        snprintf(slider_label, sizeof(slider_label), "%.3fc", beta);
+        ImGui::SliderFloat("##AccelSpeed", &accel_speed, 10.0f, C_SIM, slider_label);
+
+        // Real-world speed annotation
+        char spd_buf[32];
+        fmt_speed(spd_buf, sizeof(spd_buf), accel_speed);
+        ImGui::TextColored(ImVec4(0.6f, 0.7f, 0.9f, 1.0f), "%s", spd_buf);
+
+        // Massless particles always travel at c — note this
+        float m0 = rest_mass_MeV(accel_fire_type);
+        if (m0 < 0.001f) {
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.5f, 1.0f), "(c)");
+            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.5f, 1.0f), "(massless: always c)");
         }
     }
 
@@ -4239,57 +4559,15 @@ void PhysicsInterface::draw_element_list() {
 void PhysicsInterface::draw_particle_list(const Particles& particles) {
     if (!show_particle_list || active_particle_display == 0) return;
 
-    // Real rest mass energy in MeV (PDG values)
-    auto rest_mass_MeV = [](uint32_t t) -> float {
-        if (t == 0 || t == 5) return 938.272f;    // proton/antiproton
-        if (t == 1)           return 939.565f;     // neutron
-        if (t == 2 || t == 4) return 0.511f;       // electron/positron
-        if (t == 3)           return 0.0f;          // photon
-        if (t == 6 || t == 11 || t == 12) return 0.0f; // neutrinos
-        if (t == 7 || t == 8) return 105.658f;     // muon/antimuon
-        if (t == 9 || t == 10) return 1776.86f;    // tau/antitau
-        if (t == 13 || t == 19) return 2.16f;      // up/anti-up
-        if (t == 14 || t == 20) return 4.67f;      // down/anti-down
-        if (t == 15 || t == 21) return 93.4f;      // strange
-        if (t == 16 || t == 22) return 1270.0f;    // charm
-        if (t == 17 || t == 23) return 172760.0f;  // top
-        if (t == 18 || t == 24) return 4180.0f;    // bottom
-        if (t == 25) return 0.0f;                   // gluon
-        if (t == 26 || t == 27) return 80379.0f;   // W+/W-
-        if (t == 28) return 91188.0f;               // Z0
-        if (t == 29) return 125100.0f;              // Higgs
-        if (t == 30) return 0.0f;                   // graviton
-        if (t == 31) return 100000.0f;              // dark matter
-        if (t == 32) return 0.001f;                 // dark energy
-        return 0.0f;
-    };
-
-    constexpr float C_SIM_PL = 300.0f;
-
-    // Format energy value into string
-    auto fmt_energy = [](char* buf, size_t sz, float MeV) {
-        float eV = MeV * 1e6f;
-        if (eV < 1e3f)
-            snprintf(buf, sz, "%.0f eV", eV);
-        else if (eV < 1e6f)
-            snprintf(buf, sz, "%.1f keV", eV / 1e3f);
-        else if (eV < 1e9f)
-            snprintf(buf, sz, "%.1f MeV", eV / 1e6f);
-        else if (eV < 1e12f)
-            snprintf(buf, sz, "%.2f GeV", eV / 1e9f);
-        else
-            snprintf(buf, sz, "%.2f TeV", eV / 1e12f);
-    };
-
     ImGuiIO& io = ImGui::GetIO();
-    float win_w = 380.0f;
+    float win_w = 460.0f;
     float max_h = io.DisplaySize.y - 120.0f;
 
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
                                     io.DisplaySize.y * 0.5f - max_h * 0.35f),
                             ImGuiCond_Appearing);
     ImGui::SetNextWindowSize(ImVec2(win_w, max_h * 0.7f), ImGuiCond_Appearing);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(340, 150), ImVec2(500, max_h));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(420, 150), ImVec2(580, max_h));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.05f, 0.09f, 0.95f));
     ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.03f, 0.06f, 0.10f, 0.95f));
@@ -4305,7 +4583,7 @@ void PhysicsInterface::draw_particle_list(const Particles& particles) {
     }
 
     // Column headers
-    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), " %-4s %-12s %6s  %10s %6s",
+    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), " %-4s %-12s %12s  %10s %6s",
                        "ID", "Type", "Speed", "Energy", "Age");
     ImGui::Separator();
 
@@ -4335,30 +4613,26 @@ void PhysicsInterface::draw_particle_list(const Particles& particles) {
                 if (particles.types[i] != t) continue;
                 if (readback_energies_ptr && readback_energies_ptr[i] < 0.01f) continue;
 
-                // Compute energy
-                float E_MeV = m0;
+                // Compute kinetic energy
+                float KE_MeV = 0.0f;
                 float speed = 0.0f;
                 if (readback_velocities && i < readback_count) {
                     speed = glm::length(readback_velocities[i]);
-                    float beta = std::min(speed / C_SIM_PL, 0.9999f);
+                    float beta = std::min(speed / C_SIM, 0.9999f);
                     if (massless) {
-                        E_MeV = beta * 1.0f;
+                        KE_MeV = beta * 1.0f;  // all kinetic for massless
                     } else {
                         float gamma = 1.0f / std::sqrt(1.0f - beta * beta);
-                        E_MeV = gamma * m0;
+                        KE_MeV = (gamma - 1.0f) * m0;
                     }
                 }
 
                 char energy_str[32];
-                fmt_energy(energy_str, sizeof(energy_str), E_MeV);
+                fmt_energy_ev(energy_str, sizeof(energy_str), KE_MeV);
 
-                // Speed as fraction of c
-                char speed_str[16];
-                float beta_disp = speed / C_SIM_PL;
-                if (beta_disp > 0.01f)
-                    snprintf(speed_str, sizeof(speed_str), "%.2fc", beta_disp);
-                else
-                    snprintf(speed_str, sizeof(speed_str), "%.0f", speed);
+                // Speed in real-world units
+                char speed_str[32];
+                fmt_speed(speed_str, sizeof(speed_str), speed);
 
                 bool is_selected = (selected_particle_idx == static_cast<int32_t>(i));
                 ImGui::PushID(static_cast<int>(i));
@@ -4382,8 +4656,8 @@ void PhysicsInterface::draw_particle_list(const Particles& particles) {
                     snprintf(age_str, sizeof(age_str), "-");
                 }
 
-                char row[160];
-                snprintf(row, sizeof(row), "#%-5u %-10s %6s  %10s %6s",
+                char row[200];
+                snprintf(row, sizeof(row), "#%-5u %-10s %12s  %10s %6s",
                          i, tname, speed_str, energy_str, age_str);
 
                 if (ImGui::Selectable(row, is_selected, ImGuiSelectableFlags_None, ImVec2(0, 20))) {
@@ -4901,7 +5175,6 @@ void PhysicsInterface::draw_measurement_overlays(const SimConfig& cfg) {
             ImVec2 scr = w2s(pos);
 
             float speed = glm::length(vel);
-            float ke = 0.5f * glm::dot(vel, vel);
 
             // Arrow
             if (speed > 0.1f) {
@@ -4921,9 +5194,11 @@ void PhysicsInterface::draw_measurement_overlays(const SimConfig& cfg) {
                     IM_COL32(80, 255, 130, 200));
             }
 
-            // Label
+            // Label — real-world speed
+            char spd_buf[32];
+            fmt_speed(spd_buf, sizeof(spd_buf), speed);
             char buf[64];
-            snprintf(buf, sizeof(buf), "v=%.1f  KE=%.3f", speed, ke);
+            snprintf(buf, sizeof(buf), "v=%s", spd_buf);
             ImVec2 ts = ImGui::CalcTextSize(buf);
             float lx = scr.x + 10, ly = scr.y - 20;
             fg->AddRectFilled(ImVec2(lx - 4, ly - 2), ImVec2(lx + ts.x + 4, ly + ts.y + 2),
@@ -5280,8 +5555,9 @@ void PhysicsInterface::draw_measurement_panel() {
             if (vm.active && readback_velocities && static_cast<uint32_t>(vm.particle_idx) < readback_count) {
                 glm::vec2 v = readback_velocities[vm.particle_idx];
                 float speed = glm::length(v);
-                float ke = 0.5f * glm::dot(v, v);
-                ImGui::Text("  Speed: %.1f  KE: %.4f", speed, ke);
+                char spd_buf[32];
+                fmt_speed(spd_buf, sizeof(spd_buf), speed);
+                ImGui::Text("  Speed: %s", spd_buf);
             }
             ImGui::PopID();
             ImGui::Separator();

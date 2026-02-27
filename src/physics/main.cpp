@@ -6,7 +6,9 @@
 #include <chrono>
 #include <thread>
 #include <cstdlib>
+#ifdef HAS_OPENMP
 #include <omp.h>
+#endif
 
 static PhysicsSimulation* g_sim_resize = nullptr;
 
@@ -16,11 +18,15 @@ static void framebuffer_resize_callback(GLFWwindow*, int, int) {
 }
 
 int main() {
+#ifdef HAS_OPENMP
     omp_set_num_threads(omp_get_max_threads());  // initial default; updated by settings after prefs load
+#endif
 
+#ifndef _WIN32
     // Suppress GTK libdecor plugin (crashes in fontconfig on some systems).
     // Window is borderless (GLFW_DECORATED=FALSE) so decorations aren't needed.
     setenv("LIBDECOR_PLUGIN_DIR", "/nonexistent", 0);
+#endif
 
     if (!glfwInit()) {
         std::cerr << "Failed to initialise GLFW\n";

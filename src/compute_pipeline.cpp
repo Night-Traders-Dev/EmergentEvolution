@@ -614,6 +614,21 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     pc.step = 1;
     dispatch(cmd, active_set, pc, particle_count);
 
+    // ── Step 4: collision debug overlay (after all particles are rendered) ────
+    if (pc.field_flags & (1u << 6)) {
+        VkMemoryBarrier coll_barrier{};
+        coll_barrier.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        coll_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        coll_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 1, &coll_barrier, 0, nullptr, 0, nullptr);
+
+        pc.step = 4;
+        dispatch(cmd, active_set, pc, particle_count);
+    }
+
     // Memory barrier: compute image write → fragment shader read
     img_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     img_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;

@@ -174,7 +174,7 @@ struct SimConfig {
     float    temperature              = 0.30f;  // Brownian motion strength (0 = off)
 
     // Fundamental forces
-    float    gravity_strength         = 0.0f;   // scaled gravitational attraction
+    float    gravity_strength         = 1.0f;   // Newton's law at 1.0
     float    lorentz_strength         = 1.0f;   // scaled Lorentz / magnetic deflection
     float    vacuum_energy            = 0.0f;   // vacuum fluctuation rate + ZPE floor (0=off)
 
@@ -201,6 +201,45 @@ struct SimConfig {
     // Environment presets
     uint32_t environment_mode = 0;  // 0=Lab 1=Tide Pool 2=Vent 3=Primordial
                                     // 4=Pond 5=Space 6=Nebula 7=Asteroid 8=Comet
+
+    // Nuclear reaction toggles
+    bool     fusion_enabled            = true;
+    bool     fission_enabled           = true;
+    bool     spallation_enabled        = true;
+    bool     compton_enabled           = true;
+    bool     annihilation_enabled      = true;
+    bool     decay_enabled             = true;
+    bool     nuclear_decay_enabled     = true;
+
+    // Fusion parameters
+    float    fusion_threshold_keV      = 550.0f;  // Coulomb barrier for p+p (keV), Gamow peak
+    float    fusion_radius             = 8.0f;    // collision distance (px)
+    int      max_fusions_per_frame     = 5;
+
+    // Fission parameters
+    float    fission_neutron_threshold = 0.6f;    // min neutron energy to trigger fission
+    int      min_fission_cluster       = 6;       // min nucleons for fissile nucleus
+    int      max_fissions_per_frame    = 2;
+
+    // Particle decay
+    float    decay_threshold           = 0.08f;   // energy below which particle decays
+
+    // Nuclear decay
+    float    alpha_ke_mev              = 5.0f;    // alpha particle KE (MeV)
+    float    nucleon_emit_ke_mev       = 2.0f;    // emitted nucleon KE (MeV)
+    float    decay_rate_multiplier     = 1.0f;    // half-life scaler (0.5 = 2x faster, 2.0 = 2x slower)
+
+    // Compton / photoelectric
+    float    compton_radius            = 25.0f;   // interaction distance (px)
+    int      max_compton_per_frame     = 8;
+
+    // Spallation
+    float    spallation_min_speed      = 120.0f;  // min projectile speed (px/frame)
+    float    spallation_min_energy     = 0.5f;    // min projectile energy
+    int      max_spallations_per_frame = 3;
+
+    // Annihilation
+    float    annihilation_radius       = 5.0f;    // contact distance (px)
 
     // Virtual particle pair creation
     bool     virtual_pairs_enabled     = true;

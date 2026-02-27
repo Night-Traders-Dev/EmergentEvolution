@@ -11,7 +11,9 @@
 #include <filesystem>
 #include <iostream>
 #include <random>
+#ifdef HAS_OPENMP
 #include <omp.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -85,7 +87,7 @@ void PhysicsSimulation::init(GLFWwindow* window) {
     cfg.interaction_radius = 200.0f;
     cfg.pressure_resistance = 100.0f;
     cfg.gravity_strength   = 1.0f;
-    cfg.lorentz_strength   = 0.0f;
+    cfg.lorentz_strength   = 1.0f;
     cfg.magnetic_coupling  = 1.0f;
     cfg.radius             = 1.0f;
     cfg.density_limit      = 0.0f;
@@ -490,6 +492,41 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
     if (!lmb) iface.accel_stream_timer = 0;
 }
 
+// ── Relativistic kinematics helpers ───────────────────────────────────────────
+
+static float compute_gamma(const glm::vec2& vel) {
+    float beta = std::min(glm::length(vel) / C_SIM, 0.9999f);
+    return 1.0f / std::sqrt(1.0f - beta * beta);
+}
+
+// Total relativistic energy E = γm₀c² (in MeV)
+static float total_rel_energy(uint32_t type, const glm::vec2& vel) {
+    float m0 = (type < PHYS_PARTICLE_TYPES) ? PHYS_REST_MASS_MEV[type] : 0.0f;
+    if (m0 < 0.001f) return glm::length(vel) / C_SIM * 1.0f; // massless: E ∝ β
+    return compute_gamma(vel) * m0;
+}
+
+// Convert kinetic energy (MeV) to sim speed for a given particle type
+static float ke_to_speed(float KE_MeV, uint32_t type) {
+    float m0 = (type < PHYS_PARTICLE_TYPES) ? PHYS_REST_MASS_MEV[type] : 0.0f;
+    if (m0 < 0.001f) return C_SIM;  // massless always at c
+    float gamma = 1.0f + KE_MeV / m0;
+    float beta = std::sqrt(std::max(0.0f, 1.0f - 1.0f / (gamma * gamma)));
+    return beta * C_SIM;
+}
+
+// Convert MeV to energy buffer [0, 1]
+static float mev_to_ebuf(float MeV) {
+    return std::clamp(MeV / E_SCALE_MEV, 0.0f, 1.0f);
+}
+
+// 2-body decay kinematics: returns child momentum magnitude in parent rest frame (MeV/c)
+static float two_body_decay_momentum(float M, float m1, float m2) {
+    float sum = m1 + m2, diff = m1 - m2;
+    float arg = (M * M - sum * sum) * (M * M - diff * diff);
+    return (arg > 0.0f) ? std::sqrt(arg) / (2.0f * M) : 0.0f;
+}
+
 // ── Helper: write genome for a particle type ─────────────────────────────────
 
 static void write_spawn_genome(Particles& particles, uint32_t slot, uint32_t type,
@@ -592,8 +629,22 @@ void PhysicsSimulation::do_accelerator_fire(glm::vec2 aim_world_pos) {
         spawn_pos.y = std::fmod(spawn_pos.y + rh, rh);
 
         readback_positions_[slot] = spawn_pos;
-        readback_velocities_[slot] = sd * speed;
-        readback_energies_[slot] = 0.7f;
+
+        // Massless particles always travel at c
+        float m0 = (fire_type < PHYS_PARTICLE_TYPES) ? PHYS_REST_MASS_MEV[fire_type] : 0.0f;
+        float actual_speed = (m0 < 0.001f) ? C_SIM : speed;
+        readback_velocities_[slot] = sd * actual_speed;
+
+        // Relativistic energy: E = γm₀c² for massive, E ∝ β for massless
+        float beta = std::min(actual_speed / C_SIM, 0.9999f);
+        float E_MeV;
+        if (m0 < 0.001f) {
+            E_MeV = beta;  // massless: energy proxy
+        } else {
+            float gamma = 1.0f / std::sqrt(1.0f - beta * beta);
+            E_MeV = gamma * m0;  // total relativistic energy
+        }
+        readback_energies_[slot] = mev_to_ebuf(E_MeV);
 
         write_spawn_genome(particles, slot, fire_type, rng, frame_counter_);
         any_spawned = true;
@@ -713,9 +764,6 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
         }
         nuc_extent += NUC_SPACING * 0.5f;
 
-        // Energy-to-velocity scaling: KE ∝ v², so v ∝ sqrt(E)
-        const float e_scale = std::sqrt(std::max(iface.spawn_energy, 0.01f));
-
         for (int k = 0; k < A; ++k) {
             uint32_t slot = find_dormant(search_start);
             if (slot == UINT32_MAX) break;
@@ -723,7 +771,7 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
 
             readback_positions_[slot] = wrap_pos(world_pos + glm::vec2(nuc_positions[k].x, nuc_positions[k].y));
             readback_velocities_[slot] = glm::vec2(0.0f);  // nucleons stay bound in nucleus
-            readback_energies_[slot] = iface.spawn_energy;
+            readback_energies_[slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[nuc_types[k]]);
 
             write_spawn_genome(particles, slot, nuc_types[k], rng, frame_counter_);
             spawned_slots.push_back(slot);
@@ -767,11 +815,16 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
                 glm::vec2 tangent(-std::sin(angle), std::cos(angle));
 
                 readback_positions_[slot] = wrap_pos(world_pos + offset);
-                readback_velocities_[slot] = tangent * v_orbital * e_scale;
-                readback_energies_[slot] = iface.spawn_energy;
+                readback_velocities_[slot] = tangent * v_orbital;
+
+                // Electron energy: rest mass + orbital KE
+                float e_speed = glm::length(tangent * v_orbital);
+                float e_beta = std::min(e_speed / C_SIM, 0.9999f);
+                float e_gamma = 1.0f / std::sqrt(1.0f - e_beta * e_beta);
+                readback_energies_[slot] = mev_to_ebuf(e_gamma * PHYS_REST_MASS_MEV[ELECTRON_TYPE_PHYS]);
 
                 write_spawn_genome(particles, slot, ELECTRON_TYPE_PHYS, rng, frame_counter_);
-                particles.genomes[slot * GENOME_SIZE + 2] = L_ground * e_scale;
+                particles.genomes[slot * GENOME_SIZE + 2] = L_ground;
                 spawned_slots.push_back(slot);
             }
 
@@ -792,7 +845,6 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
 
     if (resolved_tmpl) {
         const auto& tmpl = *resolved_tmpl;
-        const float e_scale_g = std::sqrt(std::max(iface.spawn_energy, 0.01f));
 
         // Find nucleus center and count protons for Z
         glm::vec2 nucleus_center(0.0f);
@@ -858,10 +910,11 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
 
             readback_positions_[slot] = wrap_pos(
                 world_pos + glm::vec2(tmpl.atoms[a].dx, tmpl.atoms[a].dy));
-            readback_energies_[slot] = iface.spawn_energy;
 
             uint32_t t = tmpl.atoms[a].type;
             bool is_electron = (t == ELECTRON_TYPE_PHYS || t == POSITRON_TYPE_PHYS);
+            float part_speed = 0.0f;
+
             if (is_electron && nucleon_count > 0) {
                 glm::vec2 to_electron = glm::vec2(tmpl.atoms[a].dx, tmpl.atoms[a].dy)
                                       - nucleus_center;
@@ -879,7 +932,8 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
                     float v_orbital = L_g / std::max(r, 3.0f);
                     glm::vec2 radial = to_electron / r;
                     glm::vec2 tangent(-radial.y, radial.x);
-                    readback_velocities_[slot] = tangent * v_orbital * e_scale_g;
+                    readback_velocities_[slot] = tangent * v_orbital;
+                    part_speed = v_orbital;
                 } else {
                     readback_velocities_[slot] = glm::vec2(0.0f);
                 }
@@ -887,14 +941,24 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
                 readback_velocities_[slot] = glm::vec2(0.0f);
             }
 
+            // Energy from rest mass + kinetic energy
+            float m0_t = (t < PHYS_PARTICLE_TYPES) ? PHYS_REST_MASS_MEV[t] : 0.0f;
+            if (m0_t < 0.001f) {
+                readback_energies_[slot] = mev_to_ebuf(std::max(part_speed / C_SIM, 0.1f));
+            } else {
+                float beta_t = std::min(part_speed / C_SIM, 0.9999f);
+                float gamma_t = 1.0f / std::sqrt(1.0f - beta_t * beta_t);
+                readback_energies_[slot] = mev_to_ebuf(gamma_t * m0_t);
+            }
+
             write_spawn_genome(particles, slot, t, rng, frame_counter_);
 
-            // Write L_ground to genome[2] for electrons (scaled by energy)
+            // Write L_ground to genome[2] for electrons
             if (is_electron && nucleon_count > 0) {
                 for (size_t ei = 0; ei < electron_entries.size(); ++ei) {
                     if (std::abs(electron_entries[ei].dx - tmpl.atoms[a].dx) < 0.1f &&
                         std::abs(electron_entries[ei].dy - tmpl.atoms[a].dy) < 0.1f) {
-                        particles.genomes[slot * GENOME_SIZE + 2] = electron_shells[ei].L_ground * e_scale_g;
+                        particles.genomes[slot * GENOME_SIZE + 2] = electron_shells[ei].L_ground;
                         break;
                     }
                 }
@@ -902,10 +966,11 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
         }
     } else {
         // Single particle spawn
-        const float PHOTON_SPEED = 200.0f;      // massless particles travel at "c"
-        const float BASE_THERMAL_SPEED = 20.0f;  // massive particles' base thermal speed
         bool is_massless = (particles.behavior_flags[type] & BEHAVIOR_PHOTON) != 0;
-        float e_scale_s = std::sqrt(std::max(iface.spawn_energy, 0.01f));
+        float m0 = (type < PHYS_PARTICLE_TYPES) ? PHYS_REST_MASS_MEV[type] : 0.0f;
+        float KE_MeV = iface.spawn_energy_mev;
+        // Convert kinetic energy → sim velocity
+        float spawn_speed = (is_massless) ? C_SIM : ke_to_speed(KE_MeV, type);
         std::uniform_real_distribution<float> angle_dist(0.0f, 2.0f * 3.14159265f);
 
         for (int c = 0; c < count; ++c) {
@@ -921,15 +986,22 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
 
             readback_positions_[slot] = wrap_pos(world_pos + offset);
 
-            // Give particles initial velocity proportional to energy
-            float angle = angle_dist(rng);
-            glm::vec2 dir(std::cos(angle), std::sin(angle));
-            if (is_massless) {
-                readback_velocities_[slot] = dir * PHOTON_SPEED * e_scale_s;
+            // Velocity: random direction at KE-derived speed (massless always at c)
+            if (spawn_speed > 0.01f) {
+                float angle = angle_dist(rng);
+                glm::vec2 dir(std::cos(angle), std::sin(angle));
+                readback_velocities_[slot] = dir * spawn_speed;
             } else {
-                readback_velocities_[slot] = dir * BASE_THERMAL_SPEED * e_scale_s;
+                readback_velocities_[slot] = glm::vec2(0.0f);
             }
-            readback_energies_[slot] = iface.spawn_energy;
+
+            // Energy buffer: rest mass + kinetic energy
+            // Massless particles (photon, graviton, gluon) always travel at c — need non-zero energy
+            if (m0 < 0.001f) {
+                readback_energies_[slot] = mev_to_ebuf(std::max(KE_MeV, 1.0f));  // minimum 1 MeV for massless
+            } else {
+                readback_energies_[slot] = mev_to_ebuf(m0 + KE_MeV);
+            }
 
             write_spawn_genome(particles, slot, type, rng, frame_counter_);
         }
@@ -944,14 +1016,12 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
 // ── CPU-side annihilation product conversion ─────────────────────────────────
 
 void PhysicsSimulation::check_annihilation() {
+    if (!cfg.annihilation_enabled) return;
     if (readback_positions_.empty()) return;
 
     const uint32_t n = cfg.particle_count;
-    const float CONTACT_RADIUS = 5.0f;
+    const float CONTACT_RADIUS = cfg.annihilation_radius;
     const float CONTACT_RADIUS_SQ = CONTACT_RADIUS * CONTACT_RADIUS;
-    const float PHOTON_SPEED = 300.0f;
-    const float NEUTRINO_SPEED = 280.0f;
-    const float PRODUCT_ENERGY = 0.9f;
 
     bool any_annihilated = false;
     std::vector<bool> consumed(n, false);
@@ -1037,6 +1107,11 @@ void PhysicsSimulation::check_annihilation() {
         glm::vec2 dir1(std::cos(angle), std::sin(angle));
         glm::vec2 dir2 = -dir1;
 
+        // E=mc²: total relativistic energy of the pair → photon products
+        float E_total = total_rel_energy(type_i, readback_velocities_[i])
+                      + total_rel_energy(target_type, readback_velocities_[best_j]);
+        float E_per_photon = E_total * 0.5f;
+
         // All annihilation → 2 photons (+ optional neutrino for baryon pairs)
         particles.types[i] = PHOTON_TYPE_PHYS;
         particles.genomes[i * GENOME_SIZE + 0] = 0.0f;
@@ -1044,8 +1119,8 @@ void PhysicsSimulation::check_annihilation() {
         particles.genomes[i * GENOME_SIZE + 2] = 0.0f;
         particles.genomes[i * GENOME_SIZE + 3] = 0.0f;
         readback_positions_[i] = mid;
-        readback_velocities_[i] = dir1 * PHOTON_SPEED;
-        readback_energies_[i] = PRODUCT_ENERGY;
+        readback_velocities_[i] = dir1 * C_SIM;
+        readback_energies_[i] = mev_to_ebuf(E_per_photon);
 
         particles.types[best_j] = PHOTON_TYPE_PHYS;
         particles.genomes[best_j * GENOME_SIZE + 0] = 0.0f;
@@ -1053,10 +1128,10 @@ void PhysicsSimulation::check_annihilation() {
         particles.genomes[best_j * GENOME_SIZE + 2] = 0.0f;
         particles.genomes[best_j * GENOME_SIZE + 3] = 0.0f;
         readback_positions_[best_j] = mid;
-        readback_velocities_[best_j] = dir2 * PHOTON_SPEED;
-        readback_energies_[best_j] = PRODUCT_ENERGY;
+        readback_velocities_[best_j] = dir2 * C_SIM;
+        readback_energies_[best_j] = mev_to_ebuf(E_per_photon);
 
-        // Baryon annihilation produces extra neutrino
+        // Baryon annihilation produces extra neutrino (carries ~5% of energy)
         if (type_i == ANTIPROTON_TYPE_PHYS) {
             uint32_t nu_slot = UINT32_MAX;
             for (uint32_t k = 0; k < n; ++k) {
@@ -1068,8 +1143,8 @@ void PhysicsSimulation::check_annihilation() {
                 glm::vec2 dir3(-dir1.y, dir1.x);
                 write_spawn_genome(particles, nu_slot, NEUTRINO_TYPE_PHYS, rng, frame_counter_);
                 readback_positions_[nu_slot] = mid;
-                readback_velocities_[nu_slot] = dir3 * NEUTRINO_SPEED;
-                readback_energies_[nu_slot] = PRODUCT_ENERGY * 0.5f;
+                readback_velocities_[nu_slot] = dir3 * C_SIM * 0.9999f;
+                readback_energies_[nu_slot] = mev_to_ebuf(E_total * 0.05f);
             }
         }
     }
@@ -1085,16 +1160,21 @@ void PhysicsSimulation::check_annihilation() {
 
 void PhysicsSimulation::check_fusion() {
     if (readback_positions_.empty()) return;
+    if (!cfg.fusion_enabled) return;
 
     const uint32_t n = cfg.particle_count;
-    const float FUSION_RADIUS = 8.0f;
+    const float FUSION_RADIUS = cfg.fusion_radius;
     const float FUSION_RADIUS_SQ = FUSION_RADIUS * FUSION_RADIUS;
-    const int MAX_FUSIONS_PER_FRAME = 5;
+    const int MAX_FUSIONS_PER_FRAME = cfg.max_fusions_per_frame;
+
+    // Coulomb barrier energy in MeV (user-configurable, realistic ~550 keV)
+    const float E_barrier_MeV = cfg.fusion_threshold_keV * 0.001f;
 
     int fusion_count = 0;
     bool any_fused = false;
     std::vector<bool> used(n, false);
     std::mt19937 rng(frame_counter_ * 3141592653u);
+    std::uniform_real_distribution<float> prob_dist(0.0f, 1.0f);
 
     auto rand_dir = [&]() -> glm::vec2 {
         std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
@@ -1112,27 +1192,58 @@ void PhysicsSimulation::check_fusion() {
         return UINT32_MAX;
     };
 
+    // ── Helper: compute center-of-mass kinetic energy (MeV) ──────────────
+    // Non-relativistic: KE_cm = ½ μ v_rel²  where μ = m₁m₂/(m₁+m₂)
+    // v_rel in sim units, convert to fraction of c for MeV calculation
+    auto cm_kinetic_energy = [](float m1_MeV, float m2_MeV, float v_rel_sq) -> float {
+        float mu = (m1_MeV * m2_MeV) / (m1_MeV + m2_MeV);  // reduced mass (MeV/c²)
+        float beta_rel_sq = v_rel_sq / (C_SIM * C_SIM);
+        return 0.5f * mu * beta_rel_sq;  // KE_cm in MeV
+    };
+
+    // ── Helper: Gamow tunneling probability ──────────────────────────────
+    // P(E) = exp(-sqrt(E_barrier / E_cm)) for charged pairs
+    // Returns 1.0 for uncharged pairs (no Coulomb barrier)
+    auto gamow_probability = [&](float KE_cm_MeV, bool has_coulomb_barrier) -> float {
+        if (!has_coulomb_barrier) return 1.0f;  // no barrier for p+n
+        if (E_barrier_MeV < 0.001f) return 1.0f;  // barrier disabled
+        if (KE_cm_MeV < 1e-6f) return 0.0f;  // essentially zero energy
+        float gamow_exp = std::sqrt(E_barrier_MeV / KE_cm_MeV);
+        return std::exp(-gamow_exp);
+    };
+
     // ── Pass 1: Proton-proton chain (p + p → p + n + e⁺ + νe) ───────────
-    // Requires high energy AND high relative velocity (Coulomb barrier tunneling)
+    // Requires sufficient CM kinetic energy to overcome Coulomb barrier
+    // with quantum tunneling probability (Gamow factor)
+    float m_proton = PHYS_REST_MASS_MEV[PROTON_TYPE];
     for (uint32_t i = 0; i < n && fusion_count < MAX_FUSIONS_PER_FRAME; ++i) {
         if (used[i]) continue;
-        if (readback_energies_[i] < 0.8f) continue;
+        if (readback_energies_[i] < 0.1f) continue;
         if (particles.types[i] != PROTON_TYPE) continue;
 
-        // Find nearby proton for p+p chain (spatial grid accelerated)
         uint32_t best_pp = UINT32_MAX;
+        float best_KE_cm = 0.0f;
         auto pp_search = [&](uint32_t j) {
             if (best_pp != UINT32_MAX) return;
             if (j <= i || used[j]) return;
-            if (readback_energies_[j] < 0.8f) return;
+            if (readback_energies_[j] < 0.1f) return;
             if (particles.types[j] != PROTON_TYPE) return;
             glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
             float d2 = delta.x * delta.x + delta.y * delta.y;
             if (d2 > FUSION_RADIUS_SQ) return;
+
+            // Center-of-mass kinetic energy check
             glm::vec2 rel_vel = readback_velocities_[j] - readback_velocities_[i];
-            float rel_speed_sq = glm::dot(rel_vel, rel_vel);
-            if (rel_speed_sq < 60.0f * 60.0f) return;
+            float v_rel_sq = glm::dot(rel_vel, rel_vel);
+            float KE_cm = cm_kinetic_energy(m_proton, m_proton, v_rel_sq);
+
+            // Gamow tunneling probability
+            float p_tunnel = gamow_probability(KE_cm, true);
+            if (p_tunnel < 1e-6f) return;  // negligible probability
+            if (prob_dist(rng) > p_tunnel) return;  // probabilistic check
+
             best_pp = j;
+            best_KE_cm = KE_cm;
         };
         if (iface.prefs.spatial_grid)
             grid_.query(readback_positions_[i].x, readback_positions_[i].y, FUSION_RADIUS, pp_search);
@@ -1141,17 +1252,18 @@ void PhysicsSimulation::check_fusion() {
         if (best_pp == UINT32_MAX) continue;
         {
             uint32_t j = best_pp;
-            // Convert one proton to neutron
             used[i] = true;
             used[j] = true;
             any_fused = true;
             fusion_count++;
 
             write_spawn_genome(particles, j, NEUTRON_TYPE, rng, frame_counter_);
-            readback_energies_[i] += 0.2f;
-            readback_energies_[j] += 0.2f;
 
-            // Spawn positron
+            float Q_binding = 2.22f;
+            readback_energies_[i] = std::min(readback_energies_[i] + mev_to_ebuf(Q_binding * 0.5f), 1.0f);
+            readback_energies_[j] = std::min(readback_energies_[j] + mev_to_ebuf(Q_binding * 0.5f), 1.0f);
+
+            float Q_leptonic = 0.42f;
             uint32_t e_slot = find_dormant(j + 1);
             if (e_slot != UINT32_MAX) {
                 used[e_slot] = true;
@@ -1159,11 +1271,10 @@ void PhysicsSimulation::check_fusion() {
                 glm::vec2 dir = rand_dir();
                 write_spawn_genome(particles, e_slot, POSITRON_TYPE_PHYS, rng, frame_counter_);
                 readback_positions_[e_slot] = mid;
-                readback_velocities_[e_slot] = dir * 200.0f;
-                readback_energies_[e_slot] = 0.6f;
+                readback_velocities_[e_slot] = dir * ke_to_speed(Q_leptonic * 0.5f, POSITRON_TYPE_PHYS);
+                readback_energies_[e_slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[POSITRON_TYPE_PHYS] + Q_leptonic * 0.5f);
             }
 
-            // Spawn neutrino
             uint32_t nu_slot = find_dormant((e_slot != UINT32_MAX) ? e_slot + 1 : j + 1);
             if (nu_slot != UINT32_MAX) {
                 used[nu_slot] = true;
@@ -1171,11 +1282,13 @@ void PhysicsSimulation::check_fusion() {
                 glm::vec2 dir = rand_dir();
                 write_spawn_genome(particles, nu_slot, NEUTRINO_TYPE_PHYS, rng, frame_counter_);
                 readback_positions_[nu_slot] = mid;
-                readback_velocities_[nu_slot] = dir * 280.0f;
-                readback_energies_[nu_slot] = 0.4f;
+                readback_velocities_[nu_slot] = dir * C_SIM * 0.9999f;
+                readback_energies_[nu_slot] = mev_to_ebuf(Q_leptonic * 0.5f);
             }
-            iface.push_notification("Fusion: p + p \xe2\x86\x92 d + e\xe2\x81\xba + \xce\xbd",
-                                    ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
+
+            char msg[64];
+            snprintf(msg, sizeof(msg), "Fusion: p+p (%.1f keV)", best_KE_cm * 1000.0f);
+            iface.push_notification(msg, ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
             iface.push_decay_event("p + p \xe2\x86\x92 d + e\xe2\x81\xba + \xce\xbd",
                                     PhysicsInterface::DEVT_FUSION, ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
             achievements.total_fusions++;
@@ -1184,26 +1297,33 @@ void PhysicsSimulation::check_fusion() {
     }
 
     // ── Pass 2: Deuteron formation (p + n → bound pair) ──────────────────
-    // Requires moderate energy AND relative approach velocity
+    // No Coulomb barrier (neutron is uncharged), but requires proximity.
+    // In reality, neutron capture cross-section is huge for slow neutrons.
+    float m_neutron = PHYS_REST_MASS_MEV[NEUTRON_TYPE];
     for (uint32_t i = 0; i < n && fusion_count < MAX_FUSIONS_PER_FRAME; ++i) {
         if (used[i]) continue;
-        if (readback_energies_[i] < 0.6f) continue;
+        if (readback_energies_[i] < 0.1f) continue;
         if (particles.types[i] != PROTON_TYPE) continue;
 
-        // Find nearby neutron for deuteron formation (spatial grid accelerated)
         uint32_t best_pn = UINT32_MAX;
         glm::vec2 best_pn_delta{};
         auto pn_search = [&](uint32_t j) {
             if (best_pn != UINT32_MAX) return;
             if (j == i || used[j]) return;
-            if (readback_energies_[j] < 0.6f) return;
+            if (readback_energies_[j] < 0.1f) return;
             if (particles.types[j] != NEUTRON_TYPE) return;
             glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
             float d2 = delta.x * delta.x + delta.y * delta.y;
             if (d2 > FUSION_RADIUS_SQ) return;
+
+            // No Coulomb barrier for p+n — just need proximity
+            // But require minimum relative velocity to prevent every
+            // nearby neutron from instantly binding
             glm::vec2 rel_vel = readback_velocities_[j] - readback_velocities_[i];
-            float rel_speed_sq = glm::dot(rel_vel, rel_vel);
-            if (rel_speed_sq < 30.0f * 30.0f) return;
+            float v_rel_sq = glm::dot(rel_vel, rel_vel);
+            float KE_cm = cm_kinetic_energy(m_proton, m_neutron, v_rel_sq);
+            if (KE_cm < 0.001f) return;  // 1 keV minimum (essentially thermal)
+
             best_pn = j;
             best_pn_delta = delta;
         };
@@ -1216,7 +1336,6 @@ void PhysicsSimulation::check_fusion() {
             uint32_t j = best_pn;
             glm::vec2 delta = best_pn_delta;
 
-            // Bind them: move close together and match velocities
             used[i] = true;
             used[j] = true;
             any_fused = true;
@@ -1225,14 +1344,15 @@ void PhysicsSimulation::check_fusion() {
             glm::vec2 mid = (readback_positions_[i] + readback_positions_[j]) * 0.5f;
             glm::vec2 avg_vel = (readback_velocities_[i] + readback_velocities_[j]) * 0.5f;
 
-            // Place within Yukawa binding range
             glm::vec2 sep = glm::normalize(delta + glm::vec2(0.001f, 0.0f)) * 3.0f;
             readback_positions_[i] = mid - sep * 0.5f;
             readback_positions_[j] = mid + sep * 0.5f;
             readback_velocities_[i] = avg_vel;
             readback_velocities_[j] = avg_vel;
-            readback_energies_[i] += 0.15f;
-            readback_energies_[j] += 0.15f;
+
+            float E_bind = 2.22f;
+            readback_energies_[i] = std::min(readback_energies_[i] + mev_to_ebuf(E_bind * 0.5f), 1.0f);
+            readback_energies_[j] = std::min(readback_energies_[j] + mev_to_ebuf(E_bind * 0.5f), 1.0f);
             iface.push_notification("Fusion: p + n \xe2\x86\x92 deuteron",
                                     ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
             iface.push_decay_event("p + n \xe2\x86\x92 deuteron",
@@ -1244,7 +1364,6 @@ void PhysicsSimulation::check_fusion() {
     }
 
     if (any_fused) {
-        // Clamp energies
         for (uint32_t i = 0; i < n; ++i) {
             readback_energies_[i] = std::clamp(readback_energies_[i], 0.0f, 1.0f);
         }
@@ -1256,14 +1375,15 @@ void PhysicsSimulation::check_fusion() {
 // Fast neutrons hitting heavy nuclei (6+ nucleons) trigger splitting.
 
 void PhysicsSimulation::check_fission() {
+    if (!cfg.fission_enabled) return;
     if (readback_positions_.empty()) return;
 
     const uint32_t n = cfg.particle_count;
     const float CLUSTER_RADIUS = 12.0f;
     const float CLUSTER_RADIUS_SQ = CLUSTER_RADIUS * CLUSTER_RADIUS;
-    const float NEUTRON_ENERGY_THRESHOLD = 0.6f;
-    const int MIN_CLUSTER_SIZE = 6;
-    const int MAX_FISSIONS_PER_FRAME = 2;
+    const float NEUTRON_ENERGY_THRESHOLD = cfg.fission_neutron_threshold;
+    const int MIN_CLUSTER_SIZE = cfg.min_fission_cluster;
+    const int MAX_FISSIONS_PER_FRAME = cfg.max_fissions_per_frame;
 
     int fission_count = 0;
     bool any_fissioned = false;
@@ -1316,6 +1436,13 @@ void PhysicsSimulation::check_fission() {
 
         if (static_cast<int>(cluster.size()) < MIN_CLUSTER_SIZE) continue;
 
+        // Fission requires protons — Coulomb repulsion is what destabilizes heavy nuclei.
+        // Pure neutron clusters (neutron star matter) are stable against fission.
+        int proton_count = 0;
+        for (uint32_t idx : cluster)
+            if (particles.types[idx] == PROTON_TYPE) proton_count++;
+        if (proton_count < 2) continue;  // need at least 2 protons for Coulomb instability
+
         // Fission! Split cluster in half with separation impulse
         any_fissioned = true;
         fission_count++;
@@ -1324,29 +1451,34 @@ void PhysicsSimulation::check_fission() {
         glm::vec2 dir = rand_dir();
         uint32_t half = static_cast<uint32_t>(cluster.size()) / 2;
 
+        // Fission releases ~1 MeV/nucleon as fragment KE (~200 MeV total for heavy nuclei)
+        // Scale kick by mass-energy: ~200 MeV split among fragments
+        float E_fission_MeV = static_cast<float>(cluster.size()) * 1.0f;  // ~1 MeV/nucleon
+        float kick_speed = ke_to_speed(E_fission_MeV / static_cast<float>(cluster.size()), PROTON_TYPE);
+
         for (uint32_t c = 0; c < static_cast<uint32_t>(cluster.size()); ++c) {
             uint32_t idx = cluster[c];
-            float kick = 80.0f;
             if (c < half) {
-                readback_velocities_[idx] += dir * kick;
+                readback_velocities_[idx] += dir * kick_speed;
             } else {
-                readback_velocities_[idx] -= dir * kick;
+                readback_velocities_[idx] -= dir * kick_speed;
             }
-            readback_energies_[idx] = std::min(readback_energies_[idx] + 0.4f, 1.0f);
+            readback_energies_[idx] = std::min(readback_energies_[idx] + mev_to_ebuf(1.0f), 1.0f);
         }
 
-        // Spawn 2-3 free neutrons (chain reaction fuel)
+        // Spawn 2-3 free neutrons (chain reaction fuel) — each ~2 MeV KE
         std::uniform_int_distribution<int> neutron_dist(2, 3);
         int free_neutrons = neutron_dist(rng);
         glm::vec2 center = readback_positions_[cluster[0]];
+        float neutron_KE = 2.0f;  // MeV — fast fission neutrons
         for (int f = 0; f < free_neutrons; ++f) {
             uint32_t slot = find_dormant(0);
             if (slot == UINT32_MAX) break;
             used[slot] = true;
             write_spawn_genome(particles, slot, NEUTRON_TYPE, rng, frame_counter_);
             readback_positions_[slot] = center + rand_dir() * 5.0f;
-            readback_velocities_[slot] = rand_dir() * 150.0f;
-            readback_energies_[slot] = 0.7f;
+            readback_velocities_[slot] = rand_dir() * ke_to_speed(neutron_KE, NEUTRON_TYPE);
+            readback_energies_[slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[NEUTRON_TYPE] + neutron_KE);
         }
 
         {
@@ -1710,12 +1842,11 @@ void PhysicsSimulation::update_orbitals() {
 // (via genome[3] decay_rate) and converts them to appropriate decay products.
 
 void PhysicsSimulation::check_decay() {
+    if (!cfg.decay_enabled) return;
     if (readback_positions_.empty()) return;
 
     const uint32_t n = cfg.particle_count;
-    const float DECAY_THRESHOLD = 0.08f;  // energy below which particle "decays"
-    const float PRODUCT_ENERGY  = 0.6f;
-    const float FAST_SPEED      = 200.0f;
+    const float DECAY_THRESHOLD = cfg.decay_threshold;
 
     bool any_decayed = false;
     std::mt19937 rng(frame_counter_ * 2654435761u);
@@ -1755,14 +1886,19 @@ void PhysicsSimulation::check_decay() {
             // ── Top quark → W + bottom ──
             case TOP_QUARK_TYPE: {
                 uint32_t w_slot = find_dormant(i + 1);
+                // M=172760, m1=4180(b), m2=80379(W) → 2-body kinematics
+                float p_dec = two_body_decay_momentum(PHYS_REST_MASS_MEV[TOP_QUARK_TYPE],
+                    PHYS_REST_MASS_MEV[BOTTOM_QUARK_TYPE], PHYS_REST_MASS_MEV[W_PLUS_TYPE_PHYS]);
+                float KE_b = std::sqrt(p_dec * p_dec + PHYS_REST_MASS_MEV[BOTTOM_QUARK_TYPE] * PHYS_REST_MASS_MEV[BOTTOM_QUARK_TYPE]) - PHYS_REST_MASS_MEV[BOTTOM_QUARK_TYPE];
+                float KE_w = std::sqrt(p_dec * p_dec + PHYS_REST_MASS_MEV[W_PLUS_TYPE_PHYS] * PHYS_REST_MASS_MEV[W_PLUS_TYPE_PHYS]) - PHYS_REST_MASS_MEV[W_PLUS_TYPE_PHYS];
                 write_spawn_genome(particles, i, BOTTOM_QUARK_TYPE, rng, frame_counter_);
-                readback_energies_[i] = PRODUCT_ENERGY;
-                readback_velocities_[i] = dir * FAST_SPEED * 0.5f;
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[BOTTOM_QUARK_TYPE] + KE_b);
+                readback_velocities_[i] = dir * ke_to_speed(KE_b, BOTTOM_QUARK_TYPE);
                 if (w_slot != UINT32_MAX) {
                     write_spawn_genome(particles, w_slot, W_PLUS_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[w_slot] = pos;
-                    readback_velocities_[w_slot] = -dir * FAST_SPEED;
-                    readback_energies_[w_slot] = PRODUCT_ENERGY;
+                    readback_velocities_[w_slot] = -dir * ke_to_speed(KE_w, W_PLUS_TYPE_PHYS);
+                    readback_energies_[w_slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[W_PLUS_TYPE_PHYS] + KE_w);
                 }
                 iface.push_notification("Decay: t \xe2\x86\x92 b + W\xe2\x81\xba", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 iface.push_decay_event("t \xe2\x86\x92 b + W\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
@@ -1770,14 +1906,18 @@ void PhysicsSimulation::check_decay() {
             }
             case ANTI_TOP_TYPE: {
                 uint32_t w_slot = find_dormant(i + 1);
+                float p_dec = two_body_decay_momentum(PHYS_REST_MASS_MEV[ANTI_TOP_TYPE],
+                    PHYS_REST_MASS_MEV[ANTI_BOTTOM_TYPE], PHYS_REST_MASS_MEV[W_MINUS_TYPE_PHYS]);
+                float KE_b = std::sqrt(p_dec * p_dec + PHYS_REST_MASS_MEV[ANTI_BOTTOM_TYPE] * PHYS_REST_MASS_MEV[ANTI_BOTTOM_TYPE]) - PHYS_REST_MASS_MEV[ANTI_BOTTOM_TYPE];
+                float KE_w = std::sqrt(p_dec * p_dec + PHYS_REST_MASS_MEV[W_MINUS_TYPE_PHYS] * PHYS_REST_MASS_MEV[W_MINUS_TYPE_PHYS]) - PHYS_REST_MASS_MEV[W_MINUS_TYPE_PHYS];
                 write_spawn_genome(particles, i, ANTI_BOTTOM_TYPE, rng, frame_counter_);
-                readback_energies_[i] = PRODUCT_ENERGY;
-                readback_velocities_[i] = dir * FAST_SPEED * 0.5f;
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[ANTI_BOTTOM_TYPE] + KE_b);
+                readback_velocities_[i] = dir * ke_to_speed(KE_b, ANTI_BOTTOM_TYPE);
                 if (w_slot != UINT32_MAX) {
                     write_spawn_genome(particles, w_slot, W_MINUS_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[w_slot] = pos;
-                    readback_velocities_[w_slot] = -dir * FAST_SPEED;
-                    readback_energies_[w_slot] = PRODUCT_ENERGY;
+                    readback_velocities_[w_slot] = -dir * ke_to_speed(KE_w, W_MINUS_TYPE_PHYS);
+                    readback_energies_[w_slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[W_MINUS_TYPE_PHYS] + KE_w);
                 }
                 iface.push_notification("Decay: \xc4\xab \xe2\x86\x92 b\xcc\x84 + W\xe2\x81\xbb", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 iface.push_decay_event("\xc4\xab \xe2\x86\x92 b\xcc\x84 + W\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
@@ -1787,14 +1927,18 @@ void PhysicsSimulation::check_decay() {
             // ── W+ → positron + neutrino ──
             case W_PLUS_TYPE_PHYS: {
                 uint32_t nu_slot = find_dormant(i + 1);
+                // M=80379, m1=0.511(e+), m2≈0(ν) → nearly all energy to KE
+                float p_dec = two_body_decay_momentum(PHYS_REST_MASS_MEV[W_PLUS_TYPE_PHYS],
+                    PHYS_REST_MASS_MEV[POSITRON_TYPE_PHYS], PHYS_REST_MASS_MEV[NEUTRINO_TYPE_PHYS]);
+                float KE_e = std::sqrt(p_dec * p_dec + PHYS_REST_MASS_MEV[POSITRON_TYPE_PHYS] * PHYS_REST_MASS_MEV[POSITRON_TYPE_PHYS]) - PHYS_REST_MASS_MEV[POSITRON_TYPE_PHYS];
                 write_spawn_genome(particles, i, POSITRON_TYPE_PHYS, rng, frame_counter_);
-                readback_energies_[i] = PRODUCT_ENERGY;
-                readback_velocities_[i] = dir * FAST_SPEED;
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[POSITRON_TYPE_PHYS] + KE_e);
+                readback_velocities_[i] = dir * ke_to_speed(KE_e, POSITRON_TYPE_PHYS);
                 if (nu_slot != UINT32_MAX) {
                     write_spawn_genome(particles, nu_slot, NEUTRINO_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[nu_slot] = pos;
-                    readback_velocities_[nu_slot] = -dir * FAST_SPEED;
-                    readback_energies_[nu_slot] = PRODUCT_ENERGY * 0.5f;
+                    readback_velocities_[nu_slot] = -dir * C_SIM * 0.9999f;
+                    readback_energies_[nu_slot] = mev_to_ebuf(p_dec);  // massless: E=p
                 }
                 iface.push_notification("Decay: W\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 iface.push_decay_event("W\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
@@ -1804,97 +1948,251 @@ void PhysicsSimulation::check_decay() {
             // ── W- → electron + neutrino ──
             case W_MINUS_TYPE_PHYS: {
                 uint32_t nu_slot = find_dormant(i + 1);
+                float p_dec = two_body_decay_momentum(PHYS_REST_MASS_MEV[W_MINUS_TYPE_PHYS],
+                    PHYS_REST_MASS_MEV[ELECTRON_TYPE_PHYS], PHYS_REST_MASS_MEV[NEUTRINO_TYPE_PHYS]);
+                float KE_e = std::sqrt(p_dec * p_dec + PHYS_REST_MASS_MEV[ELECTRON_TYPE_PHYS] * PHYS_REST_MASS_MEV[ELECTRON_TYPE_PHYS]) - PHYS_REST_MASS_MEV[ELECTRON_TYPE_PHYS];
                 write_spawn_genome(particles, i, ELECTRON_TYPE_PHYS, rng, frame_counter_);
-                readback_energies_[i] = PRODUCT_ENERGY;
-                readback_velocities_[i] = dir * FAST_SPEED;
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[ELECTRON_TYPE_PHYS] + KE_e);
+                readback_velocities_[i] = dir * ke_to_speed(KE_e, ELECTRON_TYPE_PHYS);
                 if (nu_slot != UINT32_MAX) {
                     write_spawn_genome(particles, nu_slot, NEUTRINO_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[nu_slot] = pos;
-                    readback_velocities_[nu_slot] = -dir * FAST_SPEED;
-                    readback_energies_[nu_slot] = PRODUCT_ENERGY * 0.5f;
+                    readback_velocities_[nu_slot] = -dir * C_SIM * 0.9999f;
+                    readback_energies_[nu_slot] = mev_to_ebuf(p_dec);
                 }
                 iface.push_notification("Decay: W\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xcc\x84", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 iface.push_decay_event("W\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xcc\x84", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
 
-            // ── Z0 → electron + positron ──
+            // ── Z0 → lepton pair (branching: e⁺e⁻, μ⁺μ⁻, τ⁺τ⁻, νν̄) ──
             case Z_BOSON_TYPE_PHYS: {
-                uint32_t e_slot = find_dormant(i + 1);
-                write_spawn_genome(particles, i, ELECTRON_TYPE_PHYS, rng, frame_counter_);
-                readback_energies_[i] = PRODUCT_ENERGY;
-                readback_velocities_[i] = dir * FAST_SPEED;
-                if (e_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, e_slot, POSITRON_TYPE_PHYS, rng, frame_counter_);
-                    readback_positions_[e_slot] = pos;
-                    readback_velocities_[e_slot] = -dir * FAST_SPEED;
-                    readback_energies_[e_slot] = PRODUCT_ENERGY;
+                uint32_t p2_slot = find_dormant(i + 1);
+                std::uniform_real_distribution<float> br(0.0f, 1.0f);
+                float roll = br(rng);
+                // Branching ratios (leptonic only): ee 25%, μμ 25%, ττ 25%, νν 25%
+                uint32_t type1, type2;
+                const char* notif_msg;
+                const char* event_msg;
+                if (roll < 0.25f) {
+                    type1 = ELECTRON_TYPE_PHYS; type2 = POSITRON_TYPE_PHYS;
+                    notif_msg = "Decay: Z\xe2\x81\xb0 \xe2\x86\x92 e\xe2\x81\xbb + e\xe2\x81\xba";
+                    event_msg = "Z\xe2\x81\xb0 \xe2\x86\x92 e\xe2\x81\xbb + e\xe2\x81\xba";
+                } else if (roll < 0.50f) {
+                    type1 = MUON_TYPE_PHYS; type2 = ANTIMUON_TYPE_PHYS;
+                    notif_msg = "Decay: Z\xe2\x81\xb0 \xe2\x86\x92 \xce\xbc\xe2\x81\xbb + \xce\xbc\xe2\x81\xba";
+                    event_msg = "Z\xe2\x81\xb0 \xe2\x86\x92 \xce\xbc\xe2\x81\xbb + \xce\xbc\xe2\x81\xba";
+                } else if (roll < 0.75f) {
+                    type1 = TAU_TYPE_PHYS; type2 = ANTITAU_TYPE_PHYS;
+                    notif_msg = "Decay: Z\xe2\x81\xb0 \xe2\x86\x92 \xcf\x84\xe2\x81\xbb + \xcf\x84\xe2\x81\xba";
+                    event_msg = "Z\xe2\x81\xb0 \xe2\x86\x92 \xcf\x84\xe2\x81\xbb + \xcf\x84\xe2\x81\xba";
+                } else {
+                    // νν̄ — random flavor
+                    float nu_roll = br(rng);
+                    if (nu_roll < 0.33f) {
+                        type1 = NEUTRINO_TYPE_PHYS; type2 = NEUTRINO_TYPE_PHYS;
+                        notif_msg = "Decay: Z\xe2\x81\xb0 \xe2\x86\x92 \xce\xbd" "e + \xce\xbd\xcc\x84" "e";
+                        event_msg = "Z\xe2\x81\xb0 \xe2\x86\x92 \xce\xbd" "e\xce\xbd\xcc\x84" "e";
+                    } else if (nu_roll < 0.67f) {
+                        type1 = MU_NEUTRINO_TYPE_PHYS; type2 = MU_NEUTRINO_TYPE_PHYS;
+                        notif_msg = "Decay: Z\xe2\x81\xb0 \xe2\x86\x92 \xce\xbd\xce\xbc + \xce\xbd\xcc\x84\xce\xbc";
+                        event_msg = "Z\xe2\x81\xb0 \xe2\x86\x92 \xce\xbd\xce\xbc\xce\xbd\xcc\x84\xce\xbc";
+                    } else {
+                        type1 = TAU_NEUTRINO_TYPE_PHYS; type2 = TAU_NEUTRINO_TYPE_PHYS;
+                        notif_msg = "Decay: Z\xe2\x81\xb0 \xe2\x86\x92 \xce\xbd\xcf\x84 + \xce\xbd\xcc\x84\xcf\x84";
+                        event_msg = "Z\xe2\x81\xb0 \xe2\x86\x92 \xce\xbd\xcf\x84\xce\xbd\xcc\x84\xcf\x84";
+                    }
                 }
-                iface.push_notification("Decay: Z\xe2\x81\xb0 \xe2\x86\x92 e\xe2\x81\xbb + e\xe2\x81\xba", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                iface.push_decay_event("Z\xe2\x81\xb0 \xe2\x86\x92 e\xe2\x81\xbb + e\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                float p_dec = two_body_decay_momentum(PHYS_REST_MASS_MEV[Z_BOSON_TYPE_PHYS],
+                    PHYS_REST_MASS_MEV[type1], PHYS_REST_MASS_MEV[type2]);
+                float KE_1 = std::sqrt(p_dec * p_dec + PHYS_REST_MASS_MEV[type1] * PHYS_REST_MASS_MEV[type1]) - PHYS_REST_MASS_MEV[type1];
+                float KE_2 = std::sqrt(p_dec * p_dec + PHYS_REST_MASS_MEV[type2] * PHYS_REST_MASS_MEV[type2]) - PHYS_REST_MASS_MEV[type2];
+                write_spawn_genome(particles, i, type1, rng, frame_counter_);
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[type1] + KE_1);
+                readback_velocities_[i] = dir * ke_to_speed(KE_1, type1);
+                if (p2_slot != UINT32_MAX) {
+                    write_spawn_genome(particles, p2_slot, type2, rng, frame_counter_);
+                    readback_positions_[p2_slot] = pos;
+                    readback_velocities_[p2_slot] = -dir * ke_to_speed(KE_2, type2);
+                    readback_energies_[p2_slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[type2] + KE_2);
+                }
+                iface.push_notification(notif_msg, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                iface.push_decay_event(event_msg, PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
 
-            // ── Higgs → 2 photons ──
+            // ── Higgs → branching: bb̄(40%), WW*(25%), ττ̄(15%), ZZ*(10%), γγ(10%) ──
             case HIGGS_TYPE_PHYS: {
-                uint32_t g_slot = find_dormant(i + 1);
-                write_spawn_genome(particles, i, PHOTON_TYPE_PHYS, rng, frame_counter_);
-                readback_energies_[i] = PRODUCT_ENERGY;
-                readback_velocities_[i] = dir * 300.0f;
-                if (g_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, g_slot, PHOTON_TYPE_PHYS, rng, frame_counter_);
-                    readback_positions_[g_slot] = pos;
-                    readback_velocities_[g_slot] = -dir * 300.0f;
-                    readback_energies_[g_slot] = PRODUCT_ENERGY;
+                uint32_t p2_slot = find_dormant(i + 1);
+                std::uniform_real_distribution<float> br(0.0f, 1.0f);
+                float roll = br(rng);
+                float M_H = PHYS_REST_MASS_MEV[HIGGS_TYPE_PHYS];
+
+                if (roll < 0.40f) {
+                    // H → bb̄ (dominant channel, BR 58% real, ~40% sim)
+                    float p_dec = two_body_decay_momentum(M_H, PHYS_REST_MASS_MEV[BOTTOM_QUARK_TYPE], PHYS_REST_MASS_MEV[ANTI_BOTTOM_TYPE]);
+                    float KE_b = std::sqrt(p_dec * p_dec + PHYS_REST_MASS_MEV[BOTTOM_QUARK_TYPE] * PHYS_REST_MASS_MEV[BOTTOM_QUARK_TYPE]) - PHYS_REST_MASS_MEV[BOTTOM_QUARK_TYPE];
+                    write_spawn_genome(particles, i, BOTTOM_QUARK_TYPE, rng, frame_counter_);
+                    readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[BOTTOM_QUARK_TYPE] + KE_b);
+                    readback_velocities_[i] = dir * ke_to_speed(KE_b, BOTTOM_QUARK_TYPE);
+                    if (p2_slot != UINT32_MAX) {
+                        write_spawn_genome(particles, p2_slot, ANTI_BOTTOM_TYPE, rng, frame_counter_);
+                        readback_positions_[p2_slot] = pos;
+                        readback_velocities_[p2_slot] = -dir * ke_to_speed(KE_b, ANTI_BOTTOM_TYPE);
+                        readback_energies_[p2_slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[ANTI_BOTTOM_TYPE] + KE_b);
+                    }
+                    iface.push_notification("Decay: H \xe2\x86\x92 b + b\xcc\x84", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                    iface.push_decay_event("H \xe2\x86\x92 bb\xcc\x84", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                } else if (roll < 0.65f) {
+                    // H → W⁺W⁻* (off-shell, M_H < 2*M_W; split energy evenly)
+                    float E_each = M_H * 0.5f;
+                    write_spawn_genome(particles, i, W_PLUS_TYPE_PHYS, rng, frame_counter_);
+                    readback_energies_[i] = mev_to_ebuf(E_each);
+                    readback_velocities_[i] = dir * ke_to_speed(E_each * 0.3f, W_PLUS_TYPE_PHYS);
+                    if (p2_slot != UINT32_MAX) {
+                        write_spawn_genome(particles, p2_slot, W_MINUS_TYPE_PHYS, rng, frame_counter_);
+                        readback_positions_[p2_slot] = pos;
+                        readback_velocities_[p2_slot] = -dir * ke_to_speed(E_each * 0.3f, W_MINUS_TYPE_PHYS);
+                        readback_energies_[p2_slot] = mev_to_ebuf(E_each);
+                    }
+                    iface.push_notification("Decay: H \xe2\x86\x92 W\xe2\x81\xba + W\xe2\x81\xbb", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                    iface.push_decay_event("H \xe2\x86\x92 W\xe2\x81\xbaW\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                } else if (roll < 0.80f) {
+                    // H → τ⁺τ⁻
+                    float p_dec = two_body_decay_momentum(M_H, PHYS_REST_MASS_MEV[TAU_TYPE_PHYS], PHYS_REST_MASS_MEV[ANTITAU_TYPE_PHYS]);
+                    float KE_t = std::sqrt(p_dec * p_dec + PHYS_REST_MASS_MEV[TAU_TYPE_PHYS] * PHYS_REST_MASS_MEV[TAU_TYPE_PHYS]) - PHYS_REST_MASS_MEV[TAU_TYPE_PHYS];
+                    write_spawn_genome(particles, i, TAU_TYPE_PHYS, rng, frame_counter_);
+                    readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[TAU_TYPE_PHYS] + KE_t);
+                    readback_velocities_[i] = dir * ke_to_speed(KE_t, TAU_TYPE_PHYS);
+                    if (p2_slot != UINT32_MAX) {
+                        write_spawn_genome(particles, p2_slot, ANTITAU_TYPE_PHYS, rng, frame_counter_);
+                        readback_positions_[p2_slot] = pos;
+                        readback_velocities_[p2_slot] = -dir * ke_to_speed(KE_t, ANTITAU_TYPE_PHYS);
+                        readback_energies_[p2_slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[ANTITAU_TYPE_PHYS] + KE_t);
+                    }
+                    iface.push_notification("Decay: H \xe2\x86\x92 \xcf\x84\xe2\x81\xbb + \xcf\x84\xe2\x81\xba", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                    iface.push_decay_event("H \xe2\x86\x92 \xcf\x84\xcf\x84\xcc\x84", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                } else if (roll < 0.90f) {
+                    // H → ZZ* (off-shell, M_H < 2*M_Z; split energy evenly)
+                    float E_each = M_H * 0.5f;
+                    write_spawn_genome(particles, i, Z_BOSON_TYPE_PHYS, rng, frame_counter_);
+                    readback_energies_[i] = mev_to_ebuf(E_each);
+                    readback_velocities_[i] = dir * ke_to_speed(E_each * 0.3f, Z_BOSON_TYPE_PHYS);
+                    if (p2_slot != UINT32_MAX) {
+                        write_spawn_genome(particles, p2_slot, Z_BOSON_TYPE_PHYS, rng, frame_counter_);
+                        readback_positions_[p2_slot] = pos;
+                        readback_velocities_[p2_slot] = -dir * ke_to_speed(E_each * 0.3f, Z_BOSON_TYPE_PHYS);
+                        readback_energies_[p2_slot] = mev_to_ebuf(E_each);
+                    }
+                    iface.push_notification("Decay: H \xe2\x86\x92 Z + Z", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                    iface.push_decay_event("H \xe2\x86\x92 ZZ", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                } else {
+                    // H → γγ (rare but iconic, BR 0.23% real, ~10% sim)
+                    float E_photon = M_H * 0.5f;
+                    write_spawn_genome(particles, i, PHOTON_TYPE_PHYS, rng, frame_counter_);
+                    readback_energies_[i] = mev_to_ebuf(E_photon);
+                    readback_velocities_[i] = dir * C_SIM;
+                    if (p2_slot != UINT32_MAX) {
+                        write_spawn_genome(particles, p2_slot, PHOTON_TYPE_PHYS, rng, frame_counter_);
+                        readback_positions_[p2_slot] = pos;
+                        readback_velocities_[p2_slot] = -dir * C_SIM;
+                        readback_energies_[p2_slot] = mev_to_ebuf(E_photon);
+                    }
+                    iface.push_notification("Decay: H \xe2\x86\x92 \xce\xb3 + \xce\xb3", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                    iface.push_decay_event("H \xe2\x86\x92 \xce\xb3\xce\xb3", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 }
-                iface.push_notification("Decay: H \xe2\x86\x92 \xce\xb3 + \xce\xb3", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                iface.push_decay_event("H \xe2\x86\x92 \xce\xb3\xce\xb3", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
 
-            // ── Tau → electron + neutrino_tau ──
+            // ── Tau → lepton + ντ + ν̄l (3-body, branching: ~50% electronic, ~50% muonic) ──
             case TAU_TYPE_PHYS: {
-                uint32_t nu_slot = find_dormant(i + 1);
-                write_spawn_genome(particles, i, ELECTRON_TYPE_PHYS, rng, frame_counter_);
-                readback_energies_[i] = PRODUCT_ENERGY;
-                readback_velocities_[i] = dir * FAST_SPEED;
-                if (nu_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, nu_slot, TAU_NEUTRINO_TYPE_PHYS, rng, frame_counter_);
-                    readback_positions_[nu_slot] = pos;
-                    readback_velocities_[nu_slot] = -dir * FAST_SPEED;
-                    readback_energies_[nu_slot] = PRODUCT_ENERGY * 0.4f;
+                uint32_t nu1 = find_dormant(i + 1);
+                uint32_t nu2 = (nu1 != UINT32_MAX) ? find_dormant(nu1 + 1) : UINT32_MAX;
+                // Branching: τ⁻ → e⁻ + ν̄ₑ + ντ (BR 17.8%) or τ⁻ → μ⁻ + ν̄μ + ντ (BR 17.4%)
+                // Normalized to leptonic channels only: ~50/50
+                std::uniform_real_distribution<float> br(0.0f, 1.0f);
+                bool muonic = (br(rng) < 0.5f);
+                uint32_t lepton_type = muonic ? MUON_TYPE_PHYS : ELECTRON_TYPE_PHYS;
+                uint32_t antinu_flavor = muonic ? MU_NEUTRINO_TYPE_PHYS : NEUTRINO_TYPE_PHYS;
+                float Q = PHYS_REST_MASS_MEV[TAU_TYPE_PHYS] - PHYS_REST_MASS_MEV[lepton_type];
+                float KE_l = Q * 0.33f;
+                float KE_nu1 = Q * 0.33f;
+                float KE_nu2 = Q * 0.34f;
+                write_spawn_genome(particles, i, lepton_type, rng, frame_counter_);
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[lepton_type] + KE_l);
+                readback_velocities_[i] = dir * ke_to_speed(KE_l, lepton_type);
+                if (nu1 != UINT32_MAX) {
+                    write_spawn_genome(particles, nu1, TAU_NEUTRINO_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[nu1] = pos;
+                    readback_velocities_[nu1] = glm::vec2(-dir.y, dir.x) * C_SIM * 0.9999f;
+                    readback_energies_[nu1] = mev_to_ebuf(KE_nu1);
                 }
-                iface.push_notification("Decay: \xcf\x84 \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xcf\x84", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                iface.push_decay_event("\xcf\x84 \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xcf\x84", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                if (nu2 != UINT32_MAX) {
+                    write_spawn_genome(particles, nu2, antinu_flavor, rng, frame_counter_);
+                    readback_positions_[nu2] = pos;
+                    readback_velocities_[nu2] = -dir * C_SIM * 0.9999f;
+                    readback_energies_[nu2] = mev_to_ebuf(KE_nu2);
+                }
+                if (muonic) {
+                    iface.push_notification("Decay: \xcf\x84\xe2\x81\xbb \xe2\x86\x92 \xce\xbc\xe2\x81\xbb + \xce\xbd\xcf\x84 + \xce\xbd\xcc\x84\xce\xbc", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                    iface.push_decay_event("\xcf\x84\xe2\x81\xbb \xe2\x86\x92 \xce\xbc\xe2\x81\xbb + \xce\xbd\xcf\x84 + \xce\xbd\xcc\x84\xce\xbc", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                } else {
+                    iface.push_notification("Decay: \xcf\x84\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xcf\x84 + \xce\xbd\xcc\x84" "e", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                    iface.push_decay_event("\xcf\x84\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xcf\x84 + \xce\xbd\xcc\x84" "e", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                }
                 break;
             }
             case ANTITAU_TYPE_PHYS: {
-                uint32_t nu_slot = find_dormant(i + 1);
-                write_spawn_genome(particles, i, POSITRON_TYPE_PHYS, rng, frame_counter_);
-                readback_energies_[i] = PRODUCT_ENERGY;
-                readback_velocities_[i] = dir * FAST_SPEED;
-                if (nu_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, nu_slot, TAU_NEUTRINO_TYPE_PHYS, rng, frame_counter_);
-                    readback_positions_[nu_slot] = pos;
-                    readback_velocities_[nu_slot] = -dir * FAST_SPEED;
-                    readback_energies_[nu_slot] = PRODUCT_ENERGY * 0.4f;
+                uint32_t nu1 = find_dormant(i + 1);
+                uint32_t nu2 = (nu1 != UINT32_MAX) ? find_dormant(nu1 + 1) : UINT32_MAX;
+                std::uniform_real_distribution<float> br(0.0f, 1.0f);
+                bool muonic = (br(rng) < 0.5f);
+                uint32_t lepton_type = muonic ? ANTIMUON_TYPE_PHYS : POSITRON_TYPE_PHYS;
+                uint32_t nu_flavor = muonic ? MU_NEUTRINO_TYPE_PHYS : NEUTRINO_TYPE_PHYS;
+                float Q = PHYS_REST_MASS_MEV[ANTITAU_TYPE_PHYS] - PHYS_REST_MASS_MEV[lepton_type];
+                float KE_l = Q * 0.33f;
+                float KE_nu1 = Q * 0.33f;
+                float KE_nu2 = Q * 0.34f;
+                write_spawn_genome(particles, i, lepton_type, rng, frame_counter_);
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[lepton_type] + KE_l);
+                readback_velocities_[i] = dir * ke_to_speed(KE_l, lepton_type);
+                if (nu1 != UINT32_MAX) {
+                    write_spawn_genome(particles, nu1, TAU_NEUTRINO_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[nu1] = pos;
+                    readback_velocities_[nu1] = glm::vec2(-dir.y, dir.x) * C_SIM * 0.9999f;
+                    readback_energies_[nu1] = mev_to_ebuf(KE_nu1);
                 }
-                iface.push_notification("Decay: \xcf\x84\xcc\x84 \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xcf\x84", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-                iface.push_decay_event("\xcf\x84\xcc\x84 \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xcf\x84", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                if (nu2 != UINT32_MAX) {
+                    write_spawn_genome(particles, nu2, nu_flavor, rng, frame_counter_);
+                    readback_positions_[nu2] = pos;
+                    readback_velocities_[nu2] = -dir * C_SIM * 0.9999f;
+                    readback_energies_[nu2] = mev_to_ebuf(KE_nu2);
+                }
+                if (muonic) {
+                    iface.push_notification("Decay: \xcf\x84\xcc\x84 \xe2\x86\x92 \xce\xbc\xe2\x81\xba + \xce\xbd\xcf\x84 + \xce\xbd\xce\xbc", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                    iface.push_decay_event("\xcf\x84\xcc\x84 \xe2\x86\x92 \xce\xbc\xe2\x81\xba + \xce\xbd\xcf\x84 + \xce\xbd\xce\xbc", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                } else {
+                    iface.push_notification("Decay: \xcf\x84\xcc\x84 \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xcf\x84 + \xce\xbd" "e", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                    iface.push_decay_event("\xcf\x84\xcc\x84 \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xcf\x84 + \xce\xbd" "e", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                }
                 break;
             }
 
             // ── Bottom → charm + W ──
             case BOTTOM_QUARK_TYPE: {
                 uint32_t w_slot = find_dormant(i + 1);
+                // M=4180, m1=1270(c), m2=80379(W) — note: W is off-shell (virtual) since M < m2
+                // In reality b→c+W* with W* virtual. For sim: give products proportional KE
+                float M_b = PHYS_REST_MASS_MEV[BOTTOM_QUARK_TYPE];
+                float available_KE = M_b * 0.5f;  // approximate: half rest mass as KE
                 write_spawn_genome(particles, i, CHARM_QUARK_TYPE, rng, frame_counter_);
-                readback_energies_[i] = PRODUCT_ENERGY;
-                readback_velocities_[i] = dir * FAST_SPEED * 0.3f;
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[CHARM_QUARK_TYPE] + available_KE * 0.3f);
+                readback_velocities_[i] = dir * ke_to_speed(available_KE * 0.3f, CHARM_QUARK_TYPE);
                 if (w_slot != UINT32_MAX) {
                     write_spawn_genome(particles, w_slot, W_MINUS_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[w_slot] = pos;
-                    readback_velocities_[w_slot] = -dir * FAST_SPEED;
-                    readback_energies_[w_slot] = PRODUCT_ENERGY;
+                    readback_velocities_[w_slot] = -dir * ke_to_speed(available_KE * 0.7f, W_MINUS_TYPE_PHYS);
+                    readback_energies_[w_slot] = mev_to_ebuf(available_KE * 0.7f);
                 }
                 iface.push_notification("Decay: b \xe2\x86\x92 c + W\xe2\x81\xbb", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 iface.push_decay_event("b \xe2\x86\x92 c + W\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
@@ -1902,31 +2200,35 @@ void PhysicsSimulation::check_decay() {
             }
             case ANTI_BOTTOM_TYPE: {
                 uint32_t w_slot = find_dormant(i + 1);
+                float M_b = PHYS_REST_MASS_MEV[ANTI_BOTTOM_TYPE];
+                float available_KE = M_b * 0.5f;
                 write_spawn_genome(particles, i, ANTI_CHARM_TYPE, rng, frame_counter_);
-                readback_energies_[i] = PRODUCT_ENERGY;
-                readback_velocities_[i] = dir * FAST_SPEED * 0.3f;
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[ANTI_CHARM_TYPE] + available_KE * 0.3f);
+                readback_velocities_[i] = dir * ke_to_speed(available_KE * 0.3f, ANTI_CHARM_TYPE);
                 if (w_slot != UINT32_MAX) {
                     write_spawn_genome(particles, w_slot, W_PLUS_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[w_slot] = pos;
-                    readback_velocities_[w_slot] = -dir * FAST_SPEED;
-                    readback_energies_[w_slot] = PRODUCT_ENERGY;
+                    readback_velocities_[w_slot] = -dir * ke_to_speed(available_KE * 0.7f, W_PLUS_TYPE_PHYS);
+                    readback_energies_[w_slot] = mev_to_ebuf(available_KE * 0.7f);
                 }
                 iface.push_notification("Decay: b\xcc\x84 \xe2\x86\x92 c\xcc\x84 + W\xe2\x81\xba", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 iface.push_decay_event("b\xcc\x84 \xe2\x86\x92 c\xcc\x84 + W\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
 
-            // ── Charm → strange + W ──
+            // ── Charm → strange + W (virtual W*) ──
             case CHARM_QUARK_TYPE: {
                 uint32_t w_slot = find_dormant(i + 1);
+                float M_c = PHYS_REST_MASS_MEV[CHARM_QUARK_TYPE];
+                float available_KE = M_c * 0.5f;
                 write_spawn_genome(particles, i, STRANGE_QUARK_TYPE, rng, frame_counter_);
-                readback_energies_[i] = PRODUCT_ENERGY;
-                readback_velocities_[i] = dir * FAST_SPEED * 0.3f;
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[STRANGE_QUARK_TYPE] + available_KE * 0.3f);
+                readback_velocities_[i] = dir * ke_to_speed(available_KE * 0.3f, STRANGE_QUARK_TYPE);
                 if (w_slot != UINT32_MAX) {
                     write_spawn_genome(particles, w_slot, W_PLUS_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[w_slot] = pos;
-                    readback_velocities_[w_slot] = -dir * FAST_SPEED;
-                    readback_energies_[w_slot] = PRODUCT_ENERGY;
+                    readback_velocities_[w_slot] = -dir * ke_to_speed(available_KE * 0.7f, W_PLUS_TYPE_PHYS);
+                    readback_energies_[w_slot] = mev_to_ebuf(available_KE * 0.7f);
                 }
                 iface.push_notification("Decay: c \xe2\x86\x92 s + W\xe2\x81\xba", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 iface.push_decay_event("c \xe2\x86\x92 s + W\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
@@ -1934,31 +2236,35 @@ void PhysicsSimulation::check_decay() {
             }
             case ANTI_CHARM_TYPE: {
                 uint32_t w_slot = find_dormant(i + 1);
+                float M_c = PHYS_REST_MASS_MEV[ANTI_CHARM_TYPE];
+                float available_KE = M_c * 0.5f;
                 write_spawn_genome(particles, i, ANTI_STRANGE_TYPE, rng, frame_counter_);
-                readback_energies_[i] = PRODUCT_ENERGY;
-                readback_velocities_[i] = dir * FAST_SPEED * 0.3f;
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[ANTI_STRANGE_TYPE] + available_KE * 0.3f);
+                readback_velocities_[i] = dir * ke_to_speed(available_KE * 0.3f, ANTI_STRANGE_TYPE);
                 if (w_slot != UINT32_MAX) {
                     write_spawn_genome(particles, w_slot, W_MINUS_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[w_slot] = pos;
-                    readback_velocities_[w_slot] = -dir * FAST_SPEED;
-                    readback_energies_[w_slot] = PRODUCT_ENERGY;
+                    readback_velocities_[w_slot] = -dir * ke_to_speed(available_KE * 0.7f, W_MINUS_TYPE_PHYS);
+                    readback_energies_[w_slot] = mev_to_ebuf(available_KE * 0.7f);
                 }
                 iface.push_notification("Decay: c\xcc\x84 \xe2\x86\x92 s\xcc\x84 + W\xe2\x81\xbb", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 iface.push_decay_event("c\xcc\x84 \xe2\x86\x92 s\xcc\x84 + W\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
 
-            // ── Strange → up + W ──
+            // ── Strange → up + W (virtual W*) ──
             case STRANGE_QUARK_TYPE: {
                 uint32_t w_slot = find_dormant(i + 1);
+                float M_s = PHYS_REST_MASS_MEV[STRANGE_QUARK_TYPE];
+                float available_KE = M_s * 0.5f;
                 write_spawn_genome(particles, i, UP_QUARK_TYPE, rng, frame_counter_);
-                readback_energies_[i] = PRODUCT_ENERGY;
-                readback_velocities_[i] = dir * FAST_SPEED * 0.2f;
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[UP_QUARK_TYPE] + available_KE * 0.3f);
+                readback_velocities_[i] = dir * ke_to_speed(available_KE * 0.3f, UP_QUARK_TYPE);
                 if (w_slot != UINT32_MAX) {
                     write_spawn_genome(particles, w_slot, W_MINUS_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[w_slot] = pos;
-                    readback_velocities_[w_slot] = -dir * FAST_SPEED;
-                    readback_energies_[w_slot] = PRODUCT_ENERGY;
+                    readback_velocities_[w_slot] = -dir * ke_to_speed(available_KE * 0.7f, W_MINUS_TYPE_PHYS);
+                    readback_energies_[w_slot] = mev_to_ebuf(available_KE * 0.7f);
                 }
                 iface.push_notification("Decay: s \xe2\x86\x92 u + W\xe2\x81\xbb", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 iface.push_decay_event("s \xe2\x86\x92 u + W\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
@@ -1966,38 +2272,46 @@ void PhysicsSimulation::check_decay() {
             }
             case ANTI_STRANGE_TYPE: {
                 uint32_t w_slot = find_dormant(i + 1);
+                float M_s = PHYS_REST_MASS_MEV[ANTI_STRANGE_TYPE];
+                float available_KE = M_s * 0.5f;
                 write_spawn_genome(particles, i, ANTI_UP_TYPE, rng, frame_counter_);
-                readback_energies_[i] = PRODUCT_ENERGY;
-                readback_velocities_[i] = dir * FAST_SPEED * 0.2f;
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[ANTI_UP_TYPE] + available_KE * 0.3f);
+                readback_velocities_[i] = dir * ke_to_speed(available_KE * 0.3f, ANTI_UP_TYPE);
                 if (w_slot != UINT32_MAX) {
                     write_spawn_genome(particles, w_slot, W_PLUS_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[w_slot] = pos;
-                    readback_velocities_[w_slot] = -dir * FAST_SPEED;
-                    readback_energies_[w_slot] = PRODUCT_ENERGY;
+                    readback_velocities_[w_slot] = -dir * ke_to_speed(available_KE * 0.7f, W_PLUS_TYPE_PHYS);
+                    readback_energies_[w_slot] = mev_to_ebuf(available_KE * 0.7f);
                 }
                 iface.push_notification("Decay: s\xcc\x84 \xe2\x86\x92 u\xcc\x84 + W\xe2\x81\xba", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 iface.push_decay_event("s\xcc\x84 \xe2\x86\x92 u\xcc\x84 + W\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 break;
             }
 
-            // ── Muon → electron + neutrino_mu + neutrino_e ──
+            // ── Muon → electron + neutrino_mu + neutrino_e (3-body) ──
             case MUON_TYPE_PHYS: {
                 uint32_t nu1 = find_dormant(i + 1);
                 uint32_t nu2 = (nu1 != UINT32_MAX) ? find_dormant(nu1 + 1) : UINT32_MAX;
+                // M=105.658, products: e(0.511) + νμ(0) + ν̄e(0)
+                // Available KE = M - me = 105.147 MeV, split ~1/3 each (phase space average)
+                float Q_mu = PHYS_REST_MASS_MEV[MUON_TYPE_PHYS] - PHYS_REST_MASS_MEV[ELECTRON_TYPE_PHYS];
+                float KE_e = Q_mu * 0.33f;   // electron gets ~1/3
+                float KE_nu1 = Q_mu * 0.33f;  // νμ
+                float KE_nu2 = Q_mu * 0.34f;  // ν̄e
                 write_spawn_genome(particles, i, ELECTRON_TYPE_PHYS, rng, frame_counter_);
-                readback_energies_[i] = PRODUCT_ENERGY;
-                readback_velocities_[i] = dir * FAST_SPEED;
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[ELECTRON_TYPE_PHYS] + KE_e);
+                readback_velocities_[i] = dir * ke_to_speed(KE_e, ELECTRON_TYPE_PHYS);
                 if (nu1 != UINT32_MAX) {
                     write_spawn_genome(particles, nu1, MU_NEUTRINO_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[nu1] = pos;
-                    readback_velocities_[nu1] = glm::vec2(-dir.y, dir.x) * FAST_SPEED;
-                    readback_energies_[nu1] = PRODUCT_ENERGY * 0.3f;
+                    readback_velocities_[nu1] = glm::vec2(-dir.y, dir.x) * C_SIM * 0.9999f;
+                    readback_energies_[nu1] = mev_to_ebuf(KE_nu1);
                 }
                 if (nu2 != UINT32_MAX) {
                     write_spawn_genome(particles, nu2, NEUTRINO_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[nu2] = pos;
-                    readback_velocities_[nu2] = -dir * FAST_SPEED;
-                    readback_energies_[nu2] = PRODUCT_ENERGY * 0.3f;
+                    readback_velocities_[nu2] = -dir * C_SIM * 0.9999f;
+                    readback_energies_[nu2] = mev_to_ebuf(KE_nu2);
                 }
                 iface.push_notification("Decay: \xce\xbc\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xce\xbc + \xce\xbd\xcc\x84" "e", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 iface.push_decay_event("\xce\xbc\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xce\xbc + \xce\xbd\xcc\x84" "e", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
@@ -2006,20 +2320,24 @@ void PhysicsSimulation::check_decay() {
             case ANTIMUON_TYPE_PHYS: {
                 uint32_t nu1 = find_dormant(i + 1);
                 uint32_t nu2 = (nu1 != UINT32_MAX) ? find_dormant(nu1 + 1) : UINT32_MAX;
+                float Q_mu = PHYS_REST_MASS_MEV[ANTIMUON_TYPE_PHYS] - PHYS_REST_MASS_MEV[POSITRON_TYPE_PHYS];
+                float KE_e = Q_mu * 0.33f;
+                float KE_nu1 = Q_mu * 0.33f;
+                float KE_nu2 = Q_mu * 0.34f;
                 write_spawn_genome(particles, i, POSITRON_TYPE_PHYS, rng, frame_counter_);
-                readback_energies_[i] = PRODUCT_ENERGY;
-                readback_velocities_[i] = dir * FAST_SPEED;
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[POSITRON_TYPE_PHYS] + KE_e);
+                readback_velocities_[i] = dir * ke_to_speed(KE_e, POSITRON_TYPE_PHYS);
                 if (nu1 != UINT32_MAX) {
                     write_spawn_genome(particles, nu1, MU_NEUTRINO_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[nu1] = pos;
-                    readback_velocities_[nu1] = glm::vec2(-dir.y, dir.x) * FAST_SPEED;
-                    readback_energies_[nu1] = PRODUCT_ENERGY * 0.3f;
+                    readback_velocities_[nu1] = glm::vec2(-dir.y, dir.x) * C_SIM * 0.9999f;
+                    readback_energies_[nu1] = mev_to_ebuf(KE_nu1);
                 }
                 if (nu2 != UINT32_MAX) {
                     write_spawn_genome(particles, nu2, NEUTRINO_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[nu2] = pos;
-                    readback_velocities_[nu2] = -dir * FAST_SPEED;
-                    readback_energies_[nu2] = PRODUCT_ENERGY * 0.3f;
+                    readback_velocities_[nu2] = -dir * C_SIM * 0.9999f;
+                    readback_energies_[nu2] = mev_to_ebuf(KE_nu2);
                 }
                 iface.push_notification("Decay: \xce\xbc\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xce\xbc + \xce\xbd" "e", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 iface.push_decay_event("\xce\xbc\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xce\xbc + \xce\xbd" "e", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
@@ -2040,11 +2358,14 @@ void PhysicsSimulation::check_decay() {
 // ── Nuclear isotope decay ────────────────────────────────────────────────────
 
 void PhysicsSimulation::check_nuclear_decay() {
+    if (!cfg.nuclear_decay_enabled) return;
     if (detected_nuclei_.empty() || readback_positions_.empty()) return;
 
     const uint32_t n = cfg.particle_count;
-    const float EJECT_SPEED = 150.0f;
-    const float PRODUCT_ENERGY = 0.6f;
+
+    // Nuclear decay energies from mass deficits (MeV)
+    const float ALPHA_KE = cfg.alpha_ke_mev;
+    const float NUCLEON_EMIT_KE = cfg.nucleon_emit_ke_mev;
 
     std::mt19937 rng(frame_counter_ * 1337u + 7919u);
     std::uniform_real_distribution<float> unit(0.0f, 1.0f);
@@ -2083,6 +2404,9 @@ void PhysicsSimulation::check_nuclear_decay() {
 
         if (mode == NDECAY_NONE) continue;
 
+        // Apply global decay rate multiplier (< 1 = faster decay, > 1 = slower)
+        half_life /= std::max(cfg.decay_rate_multiplier, 0.01f);
+
         // Probability of decay this frame: P = 1 - exp(-ln(2)/t½)
         float p_decay = 1.0f - std::exp(-0.693147f / half_life);
         if (unit(rng) > p_decay) continue;
@@ -2101,21 +2425,24 @@ void PhysicsSimulation::check_nuclear_decay() {
                 alpha_n[0] = nuc.neutron_indices.back(); nuc.neutron_indices.pop_back();
                 alpha_n[1] = nuc.neutron_indices.back(); nuc.neutron_indices.pop_back();
 
-                // Give alpha particles velocity away from nucleus
+                // Alpha KE ~5 MeV split among 4 nucleons → ~1.25 MeV each
+                float alpha_speed = ke_to_speed(ALPHA_KE / 4.0f, PROTON_TYPE);
+                float alpha_ebuf = mev_to_ebuf(PHYS_REST_MASS_MEV[PROTON_TYPE] + ALPHA_KE / 4.0f);
                 for (int k = 0; k < 2; ++k) {
-                    readback_velocities_[alpha_p[k]] = dir * EJECT_SPEED;
-                    readback_energies_[alpha_p[k]] = PRODUCT_ENERGY;
+                    readback_velocities_[alpha_p[k]] = dir * alpha_speed;
+                    readback_energies_[alpha_p[k]] = alpha_ebuf;
                     particles.orbital_parent[alpha_p[k]] = -1;
-                    readback_velocities_[alpha_n[k]] = dir * EJECT_SPEED;
-                    readback_energies_[alpha_n[k]] = PRODUCT_ENERGY;
+                    readback_velocities_[alpha_n[k]] = dir * alpha_speed;
+                    readback_energies_[alpha_n[k]] = alpha_ebuf;
                     particles.orbital_parent[alpha_n[k]] = -1;
                 }
-                // Recoil on remaining nucleus
+                // Recoil on remaining nucleus: p_recoil = p_alpha (momentum conservation)
+                float recoil_speed = ke_to_speed(ALPHA_KE * 4.0f / static_cast<float>(std::max(1, nuc.Z + nuc.N)), PROTON_TYPE);
                 if (!nuc.proton_indices.empty()) {
                     for (uint32_t pi : nuc.proton_indices)
-                        readback_velocities_[pi] += -dir * (EJECT_SPEED * 0.1f);
+                        readback_velocities_[pi] += -dir * recoil_speed;
                     for (uint32_t ni : nuc.neutron_indices)
-                        readback_velocities_[ni] += -dir * (EJECT_SPEED * 0.1f);
+                        readback_velocities_[ni] += -dir * recoil_speed;
                 }
                 nuc.Z -= 2; nuc.N -= 2;
                 any_decayed = true;
@@ -2137,31 +2464,35 @@ void PhysicsSimulation::check_nuclear_decay() {
 
             case NDECAY_BETA_MINUS: {
                 // Convert neutron → proton, emit electron + antineutrino
+                // Q = mn - mp - me = 939.565 - 938.272 - 0.511 = 0.782 MeV
                 if (nuc.neutron_indices.empty()) break;
                 uint32_t ni = nuc.neutron_indices.back();
                 nuc.neutron_indices.pop_back();
 
+                float Q_beta = 0.782f;  // MeV (free neutron Q-value)
                 // Transmute neutron to proton
                 write_spawn_genome(particles, ni, PROTON_TYPE, rng, frame_counter_);
-                readback_energies_[ni] = PRODUCT_ENERGY;
+                readback_energies_[ni] = mev_to_ebuf(PHYS_REST_MASS_MEV[PROTON_TYPE]);
                 nuc.proton_indices.push_back(ni);
                 nuc.Z++; nuc.N--;
 
-                // Spawn electron
+                // Spawn electron — gets ~1/3 of Q (beta spectrum average)
                 uint32_t e_slot = find_dormant(ni + 1);
                 if (e_slot != UINT32_MAX) {
+                    float KE_e = Q_beta * 0.33f;
                     write_spawn_genome(particles, e_slot, ELECTRON_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[e_slot] = readback_positions_[ni];
-                    readback_velocities_[e_slot] = dir * EJECT_SPEED;
-                    readback_energies_[e_slot] = PRODUCT_ENERGY * 0.5f;
+                    readback_velocities_[e_slot] = dir * ke_to_speed(KE_e, ELECTRON_TYPE_PHYS);
+                    readback_energies_[e_slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[ELECTRON_TYPE_PHYS] + KE_e);
                 }
-                // Spawn antineutrino
+                // Spawn antineutrino — gets remaining ~2/3 of Q
                 uint32_t nu_slot = find_dormant(e_slot != UINT32_MAX ? e_slot + 1 : ni + 1);
                 if (nu_slot != UINT32_MAX) {
+                    float KE_nu = Q_beta * 0.67f;
                     write_spawn_genome(particles, nu_slot, NEUTRINO_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[nu_slot] = readback_positions_[ni];
-                    readback_velocities_[nu_slot] = -dir * EJECT_SPEED * 1.5f;
-                    readback_energies_[nu_slot] = PRODUCT_ENERGY * 0.3f;
+                    readback_velocities_[nu_slot] = -dir * C_SIM * 0.9999f;
+                    readback_energies_[nu_slot] = mev_to_ebuf(KE_nu);
                 }
                 any_decayed = true;
                 nuclear_decay_count_++;
@@ -2182,31 +2513,35 @@ void PhysicsSimulation::check_nuclear_decay() {
 
             case NDECAY_BETA_PLUS: {
                 // Convert proton → neutron, emit positron + neutrino
+                // Q = mp - mn - me + nuclear binding difference (typically ~1-5 MeV in nuclei)
                 if (nuc.proton_indices.empty()) break;
                 uint32_t pi = nuc.proton_indices.back();
                 nuc.proton_indices.pop_back();
 
+                float Q_beta_plus = 1.5f;  // MeV (typical nuclear β+ Q-value)
                 // Transmute proton to neutron
                 write_spawn_genome(particles, pi, NEUTRON_TYPE, rng, frame_counter_);
-                readback_energies_[pi] = PRODUCT_ENERGY;
+                readback_energies_[pi] = mev_to_ebuf(PHYS_REST_MASS_MEV[NEUTRON_TYPE]);
                 nuc.neutron_indices.push_back(pi);
                 nuc.Z--; nuc.N++;
 
                 // Spawn positron
                 uint32_t pos_slot = find_dormant(pi + 1);
                 if (pos_slot != UINT32_MAX) {
+                    float KE_e = Q_beta_plus * 0.33f;
                     write_spawn_genome(particles, pos_slot, POSITRON_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[pos_slot] = readback_positions_[pi];
-                    readback_velocities_[pos_slot] = dir * EJECT_SPEED;
-                    readback_energies_[pos_slot] = PRODUCT_ENERGY * 0.5f;
+                    readback_velocities_[pos_slot] = dir * ke_to_speed(KE_e, POSITRON_TYPE_PHYS);
+                    readback_energies_[pos_slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[POSITRON_TYPE_PHYS] + KE_e);
                 }
                 // Spawn neutrino
                 uint32_t nu_slot = find_dormant(pos_slot != UINT32_MAX ? pos_slot + 1 : pi + 1);
                 if (nu_slot != UINT32_MAX) {
+                    float KE_nu = Q_beta_plus * 0.67f;
                     write_spawn_genome(particles, nu_slot, NEUTRINO_TYPE_PHYS, rng, frame_counter_);
                     readback_positions_[nu_slot] = readback_positions_[pi];
-                    readback_velocities_[nu_slot] = -dir * EJECT_SPEED * 1.5f;
-                    readback_energies_[nu_slot] = PRODUCT_ENERGY * 0.3f;
+                    readback_velocities_[nu_slot] = -dir * C_SIM * 0.9999f;
+                    readback_energies_[nu_slot] = mev_to_ebuf(KE_nu);
                 }
                 any_decayed = true;
                 nuclear_decay_count_++;
@@ -2226,12 +2561,12 @@ void PhysicsSimulation::check_nuclear_decay() {
             }
 
             case NDECAY_NEUTRON_EMISSION: {
-                // Eject one neutron from nucleus
+                // Eject one neutron from nucleus — ~2 MeV KE
                 if (nuc.neutron_indices.empty()) break;
                 uint32_t ni = nuc.neutron_indices.back();
                 nuc.neutron_indices.pop_back();
-                readback_velocities_[ni] = dir * EJECT_SPEED;
-                readback_energies_[ni] = PRODUCT_ENERGY;
+                readback_velocities_[ni] = dir * ke_to_speed(NUCLEON_EMIT_KE, NEUTRON_TYPE);
+                readback_energies_[ni] = mev_to_ebuf(PHYS_REST_MASS_MEV[NEUTRON_TYPE] + NUCLEON_EMIT_KE);
                 particles.orbital_parent[ni] = -1;
                 nuc.N--;
                 any_decayed = true;
@@ -2250,12 +2585,12 @@ void PhysicsSimulation::check_nuclear_decay() {
             }
 
             case NDECAY_PROTON_EMISSION: {
-                // Eject one proton from nucleus
+                // Eject one proton from nucleus — ~2 MeV KE
                 if (nuc.proton_indices.empty()) break;
                 uint32_t pi = nuc.proton_indices.back();
                 nuc.proton_indices.pop_back();
-                readback_velocities_[pi] = dir * EJECT_SPEED;
-                readback_energies_[pi] = PRODUCT_ENERGY;
+                readback_velocities_[pi] = dir * ke_to_speed(NUCLEON_EMIT_KE, PROTON_TYPE);
+                readback_energies_[pi] = mev_to_ebuf(PHYS_REST_MASS_MEV[PROTON_TYPE] + NUCLEON_EMIT_KE);
                 particles.orbital_parent[pi] = -1;
                 nuc.Z--;
                 any_decayed = true;
@@ -2269,6 +2604,172 @@ void PhysicsSimulation::check_nuclear_decay() {
                              element_symbol(nuc.Z), nuc.Z + nuc.N);
                     iface.push_notification(msg, ImVec4(0.7f, 0.7f, 1.0f, 1.0f));
                     iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(0.7f, 0.7f, 1.0f, 1.0f));
+                }
+                break;
+            }
+
+            case NDECAY_GAMMA: {
+                // Excited nuclear state → ground state + γ photon
+                // Typical nuclear gamma: 0.1–3 MeV
+                float E_gamma = 0.662f;  // MeV — Ba-137m typical (Cs-137 daughter)
+                if (nuc.Z == 43 && nuc.N == 56) E_gamma = 0.140f;  // Tc-99m
+                uint32_t g_slot = find_dormant(0);
+                if (g_slot != UINT32_MAX) {
+                    write_spawn_genome(particles, g_slot, PHOTON_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[g_slot] = nuc.center;
+                    readback_velocities_[g_slot] = dir * C_SIM;
+                    readback_energies_[g_slot] = mev_to_ebuf(E_gamma);
+                }
+                // Nucleus recoil is negligible for gamma emission (p=E/c, tiny for MeV photon vs GeV nucleus)
+                any_decayed = true;
+                nuclear_decay_count_++;
+                achievements.total_nuclear_decays++;
+                {
+                    char msg[128];
+                    int A = nuc.Z + nuc.N;
+                    snprintf(msg, sizeof(msg), "\xce\xb3 Decay: %s-%d* \xe2\x86\x92 %s-%d + \xce\xb3",
+                             element_symbol(nuc.Z), A,
+                             element_symbol(nuc.Z), A);
+                    iface.push_notification(msg, ImVec4(1.0f, 1.0f, 0.4f, 1.0f));
+                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(1.0f, 1.0f, 0.4f, 1.0f));
+                }
+                break;
+            }
+
+            case NDECAY_ELECTRON_CAPTURE: {
+                // p + e⁻ (orbital) → n + νₑ
+                // Captures an orbital electron, converts proton to neutron
+                if (nuc.proton_indices.empty()) break;
+
+                // Find nearest orbital electron to this nucleus
+                uint32_t best_e = UINT32_MAX;
+                float best_dist_sq = 900.0f;  // 30px search radius squared
+                for (uint32_t j = 0; j < n; ++j) {
+                    if (particles.types[j] != ELECTRON_TYPE_PHYS) continue;
+                    if (readback_energies_[j] < 0.01f) continue;
+                    glm::vec2 delta = readback_positions_[j] - nuc.center;
+                    float d2 = delta.x * delta.x + delta.y * delta.y;
+                    if (d2 < best_dist_sq) {
+                        best_dist_sq = d2;
+                        best_e = j;
+                    }
+                }
+                if (best_e == UINT32_MAX) break;  // no nearby electron to capture
+
+                // Capture the electron (kill it)
+                readback_energies_[best_e] = 0.0f;
+                readback_velocities_[best_e] = glm::vec2(0.0f);
+                particles.orbital_parent[best_e] = -1;
+
+                // Transmute proton → neutron
+                uint32_t pi = nuc.proton_indices.back();
+                nuc.proton_indices.pop_back();
+                write_spawn_genome(particles, pi, NEUTRON_TYPE, rng, frame_counter_);
+                readback_energies_[pi] = mev_to_ebuf(PHYS_REST_MASS_MEV[NEUTRON_TYPE]);
+                nuc.neutron_indices.push_back(pi);
+                nuc.Z--; nuc.N++;
+
+                // Emit neutrino carrying the Q-value (~0.86 MeV for Be-7)
+                float Q_ec = 0.86f;
+                uint32_t nu_slot = find_dormant(0);
+                if (nu_slot != UINT32_MAX) {
+                    write_spawn_genome(particles, nu_slot, NEUTRINO_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[nu_slot] = nuc.center;
+                    readback_velocities_[nu_slot] = dir * C_SIM * 0.9999f;
+                    readback_energies_[nu_slot] = mev_to_ebuf(Q_ec);
+                }
+                any_decayed = true;
+                nuclear_decay_count_++;
+                achievements.total_nuclear_decays++;
+                {
+                    char msg[128];
+                    int A = nuc.Z + nuc.N;
+                    snprintf(msg, sizeof(msg), "EC: %s-%d + e\xe2\x81\xbb \xe2\x86\x92 %s-%d + \xce\xbd",
+                             element_symbol(nuc.Z + 1), A,
+                             element_symbol(nuc.Z), A);
+                    iface.push_notification(msg, ImVec4(0.6f, 1.0f, 0.8f, 1.0f));
+                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(0.6f, 1.0f, 0.8f, 1.0f));
+                }
+                break;
+            }
+
+            case NDECAY_SPONTANEOUS_FISSION: {
+                // Heavy nucleus splits into two roughly equal fragments + 2-3 free neutrons
+                // Typical: Cf-252 → Ba + Mo + 3n, ~200 MeV total KE
+                int A = nuc.Z + nuc.N;
+                if (A < 10) break;  // too small to fission
+
+                // Split roughly 60/40 (asymmetric fission is more common than symmetric)
+                int Z1 = static_cast<int>(nuc.Z * 0.58f + 0.5f);
+                int N1 = static_cast<int>(nuc.N * 0.55f + 0.5f);
+                int free_neutrons = std::min(3, nuc.N - N1 - (nuc.N - N1) / 2);
+                if (free_neutrons < 0) free_neutrons = 0;
+                int Z2 = nuc.Z - Z1;
+                int N2 = nuc.N - N1 - free_neutrons;
+                if (Z2 < 1) { Z2 = 1; Z1 = nuc.Z - 1; }
+                if (N2 < 0) { N2 = 0; free_neutrons = nuc.N - N1; }
+
+                // Fragment 1 gets Z1 protons + N1 neutrons (stays in place)
+                // Fragment 2 gets Z2 protons + N2 neutrons (ejected)
+                // Free neutrons ejected in random directions
+                float fission_KE = 200.0f;  // MeV total (typical for actinide fission)
+                float frag_KE = fission_KE * 0.85f * 0.5f;  // 85% to fragments
+                float neutron_KE = fission_KE * 0.15f / std::max(1, free_neutrons);
+
+                // Assign fragment 2 particles: eject last Z2 protons + N2 neutrons
+                int protons_to_eject = std::min(Z2, static_cast<int>(nuc.proton_indices.size()));
+                int neutrons_to_eject = std::min(N2 + free_neutrons, static_cast<int>(nuc.neutron_indices.size()));
+                float frag2_speed = ke_to_speed(frag_KE / std::max(1, Z2 + N2), PROTON_TYPE);
+
+                // Eject fragment 2 protons
+                for (int k = 0; k < protons_to_eject; ++k) {
+                    uint32_t pi = nuc.proton_indices.back();
+                    nuc.proton_indices.pop_back();
+                    readback_velocities_[pi] = dir * frag2_speed;
+                    readback_energies_[pi] = mev_to_ebuf(PHYS_REST_MASS_MEV[PROTON_TYPE] + frag_KE / std::max(1, Z2 + N2));
+                    particles.orbital_parent[pi] = -1;
+                }
+                // Eject fragment 2 neutrons + free neutrons
+                int neutrons_ejected = 0;
+                for (int k = 0; k < neutrons_to_eject; ++k) {
+                    if (nuc.neutron_indices.empty()) break;
+                    uint32_t ni = nuc.neutron_indices.back();
+                    nuc.neutron_indices.pop_back();
+                    if (neutrons_ejected < N2) {
+                        // Fragment 2 neutron
+                        readback_velocities_[ni] = dir * frag2_speed;
+                        readback_energies_[ni] = mev_to_ebuf(PHYS_REST_MASS_MEV[NEUTRON_TYPE] + frag_KE / std::max(1, Z2 + N2));
+                    } else {
+                        // Free prompt neutron — random direction, higher KE
+                        glm::vec2 ndir = rand_dir();
+                        readback_velocities_[ni] = ndir * ke_to_speed(neutron_KE, NEUTRON_TYPE);
+                        readback_energies_[ni] = mev_to_ebuf(PHYS_REST_MASS_MEV[NEUTRON_TYPE] + neutron_KE);
+                    }
+                    particles.orbital_parent[ni] = -1;
+                    neutrons_ejected++;
+                }
+
+                // Recoil on fragment 1
+                float recoil_speed = ke_to_speed(frag_KE / std::max(1, Z1 + N1), PROTON_TYPE);
+                for (uint32_t pi : nuc.proton_indices)
+                    readback_velocities_[pi] += -dir * recoil_speed;
+                for (uint32_t ni : nuc.neutron_indices)
+                    readback_velocities_[ni] += -dir * recoil_speed;
+
+                nuc.Z = Z1; nuc.N = N1;
+                any_decayed = true;
+                nuclear_decay_count_++;
+                achievements.total_nuclear_decays++;
+                {
+                    char msg[128];
+                    int A_parent = Z1 + N1 + Z2 + N2 + free_neutrons;
+                    snprintf(msg, sizeof(msg), "Fission: %s-%d \xe2\x86\x92 %s-%d + %s-%d + %dn",
+                             element_symbol(Z1 + Z2), A_parent,
+                             element_symbol(Z1), Z1 + N1,
+                             element_symbol(Z2), Z2 + N2,
+                             free_neutrons);
+                    iface.push_notification(msg, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+                    iface.push_decay_event(msg, PhysicsInterface::DEVT_NUCLEAR_DECAY, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
                 }
                 break;
             }
@@ -2290,19 +2791,19 @@ void PhysicsSimulation::check_nuclear_decay() {
 // Also handles general photon-electron energy transfer for free electrons.
 
 void PhysicsSimulation::check_photoelectric() {
+    if (!cfg.compton_enabled) return;
     if (readback_positions_.empty()) return;
 
     const uint32_t n = cfg.particle_count;
-    const float INTERACTION_RADIUS = 25.0f;
+    const float INTERACTION_RADIUS = cfg.compton_radius;
     const float INTERACTION_RADIUS_SQ = INTERACTION_RADIUS * INTERACTION_RADIUS;
-    const float PHOTON_SPEED = 300.0f;
 
     // Binding energy per shell (game units): how much photon energy needed to ionize
     // Shell 1 (1s) is tightest, shell 3 (3s3p3d) loosest
     const float BINDING_ENERGY[] = {0.5f, 0.3f, 0.15f};  // indexed by shell
     const int SHELL_CAP[] = {2, 8, 18};
 
-    const int MAX_INTERACTIONS_PER_FRAME = 8;
+    const int MAX_INTERACTIONS_PER_FRAME = cfg.max_compton_per_frame;
     int interaction_count = 0;
     bool any_changed = false;
 
@@ -2446,7 +2947,7 @@ void PhysicsSimulation::check_photoelectric() {
                 // Reduce photon energy and deflect
                 readback_energies_[i] = std::max(ph_energy - transfer, 0.05f);
                 glm::vec2 deflect = rand_dir();
-                readback_velocities_[i] = deflect * PHOTON_SPEED;
+                readback_velocities_[i] = deflect * C_SIM;
 
                 // Boost electron: if transfer > binding, ionize; otherwise kick to higher shell
                 if (transfer >= binding) {
@@ -2492,7 +2993,7 @@ void PhysicsSimulation::check_photoelectric() {
                 // Photon loses energy and deflects
                 glm::vec2 orig_ph_dir = glm::normalize(readback_velocities_[i] + glm::vec2(0.001f));
                 readback_energies_[i] = std::max(ph_energy - transfer, 0.05f);
-                readback_velocities_[i] = rand_dir() * PHOTON_SPEED;
+                readback_velocities_[i] = rand_dir() * C_SIM;
 
                 // Electron gains momentum in photon's original direction
                 readback_velocities_[best_e] += orig_ph_dir * transfer * 100.0f;
@@ -2548,7 +3049,7 @@ void PhysicsSimulation::check_photoelectric() {
         float transfer = ph_energy * 0.08f;  // small fraction due to heavy target
 
         readback_energies_[i] = std::max(ph_energy - transfer, 0.05f);
-        readback_velocities_[i] = rand_dir() * PHOTON_SPEED;
+        readback_velocities_[i] = rand_dir() * C_SIM;
 
         // Nucleon recoil in photon's original direction
         readback_velocities_[best_nuc] += ph_dir * transfer * 15.0f;
@@ -2574,17 +3075,18 @@ void PhysicsSimulation::check_photoelectric() {
 // and can break apart nuclei of any size.
 
 void PhysicsSimulation::check_spallation() {
+    if (!cfg.spallation_enabled) return;
     if (readback_positions_.empty() || detected_nuclei_.empty()) return;
 
     const uint32_t n = cfg.particle_count;
     const float HIT_RADIUS = 10.0f;
     const float HIT_RADIUS_SQ = HIT_RADIUS * HIT_RADIUS;
-    const float MIN_PROJECTILE_SPEED = 120.0f;      // must be moving fast
-    const float MIN_PROJECTILE_ENERGY = 0.5f;
+    const float MIN_PROJECTILE_SPEED = cfg.spallation_min_speed;
+    const float MIN_PROJECTILE_ENERGY = cfg.spallation_min_energy;
     const int MIN_NUCLEUS_SIZE = 2;                  // at least deuteron
     const float FRAGMENT_SPEED = 100.0f;
     const float FRAGMENT_ENERGY = 0.6f;
-    const int MAX_SPALLATIONS_PER_FRAME = 3;
+    const int MAX_SPALLATIONS_PER_FRAME = cfg.max_spallations_per_frame;
 
     int spallation_count = 0;
     bool any_spallated = false;
@@ -3087,8 +3589,6 @@ void PhysicsSimulation::check_virtual_pairs() {
     const uint32_t n = cfg.particle_count;
     const float PAIR_RADIUS = 15.0f;
     const float PAIR_RADIUS_SQ = PAIR_RADIUS * PAIR_RADIUS;
-    const float PAIR_ENERGY = 0.12f;
-    const float PAIR_SPEED = 80.0f;
 
     uint32_t pairs_created = 0;
     uint32_t max_pairs = cfg.virtual_pair_max_per_tick;
@@ -3190,19 +3690,30 @@ void PhysicsSimulation::check_virtual_pairs() {
         float angle = angle_dist(rng);
         glm::vec2 dir(std::cos(angle), std::sin(angle));
 
+        // Virtual pair speed: massless at c, massive at relativistic speed
+        float m_a = (vtype_a < PHYS_PARTICLE_TYPES) ? PHYS_REST_MASS_MEV[vtype_a] : 0.0f;
+        float m_b = (vtype_b < PHYS_PARTICLE_TYPES) ? PHYS_REST_MASS_MEV[vtype_b] : 0.0f;
+        float pair_mass = m_a + m_b;
+        float pair_speed = (pair_mass < 0.01f) ? C_SIM : ke_to_speed(pair_mass * 0.5f, vtype_a);
+        float pair_energy = mev_to_ebuf(std::max(pair_mass * 0.5f, 0.1f));
+
         readback_positions_[slot_a] = mid + dir * 3.0f;
         readback_positions_[slot_b] = mid - dir * 3.0f;
-        readback_velocities_[slot_a] = dir * PAIR_SPEED;
-        readback_velocities_[slot_b] = -dir * PAIR_SPEED;
-        readback_energies_[slot_a] = PAIR_ENERGY;
-        readback_energies_[slot_b] = PAIR_ENERGY;
+        readback_velocities_[slot_a] = dir * pair_speed;
+        readback_velocities_[slot_b] = -dir * pair_speed;
+        readback_energies_[slot_a] = pair_energy;
+        readback_energies_[slot_b] = pair_energy;
 
         // Set types and override genome decay for virtual lifetime
         write_spawn_genome(particles, slot_a, vtype_a, rng, frame_counter_);
         write_spawn_genome(particles, slot_b, vtype_b, rng, frame_counter_);
-        // High per-particle decay rate → shader drains energy fast (~15 frame lifetime)
-        particles.genomes[slot_a * GENOME_SIZE + 3] = 0.08f;
-        particles.genomes[slot_b * GENOME_SIZE + 3] = 0.08f;
+        // Heisenberg uncertainty: ΔE·Δt ≥ ℏ/2
+        // Heavier pairs live shorter: decay_rate ∝ pair_mass
+        // e⁺e⁻ (1 MeV) → 0.08 (~15 frames), γγ (0 MeV) → 0.01 (~120 frames)
+        // W⁺W⁻ (161 GeV) → 0.5 (~2 frames, nearly instant)
+        float virt_decay = (pair_mass < 0.01f) ? 0.01f : std::min(pair_mass * 0.08f, 0.5f);
+        particles.genomes[slot_a * GENOME_SIZE + 3] = virt_decay;
+        particles.genomes[slot_b * GENOME_SIZE + 3] = virt_decay;
 
         // Entangle the pair
         if (cfg.entanglement_enabled) {
@@ -3415,8 +3926,12 @@ void PhysicsSimulation::check_hadronization() {
             uint32_t baryon_type;
             const char* baryon_name;
             if (matter_i) {
-                // uud(1 down)→proton, udd(2 down)→neutron
-                // uuu(0 down)→proton(Delta++ analog), ddd(3 down)→neutron(Delta- analog)
+                // Real baryon content: uud→proton, udd→neutron
+                // 0 down-type (uuu)→Δ++, but sim only has p/n, map to proton
+                // 1 down-type (uud)→proton
+                // 2 down-type (udd/usd/...)→neutron
+                // 3 down-type (ddd/dds/...)→Δ⁻, map to neutron
+                // Note: strange quarks count as down-type but will later decay to up
                 baryon_type = (down_count <= 1) ? PROTON_TYPE : NEUTRON_TYPE;
                 baryon_name = (down_count <= 1) ? "proton" : "neutron";
             } else {
@@ -3982,9 +4497,11 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     frame_counter_++;
 
     // Apply thread count from settings
+#ifdef HAS_OPENMP
     int sys_max = omp_get_max_threads();
     int threads = (iface.prefs.max_threads <= 0) ? sys_max : std::clamp(iface.prefs.max_threads, 1, sys_max);
     omp_set_num_threads(threads);
+#endif
 
     // ── Temperature kelvin → noise amplitude (Berendsen thermostat) ─────────
     // Negative feedback: when system is hotter than target → reduce noise (cool)
@@ -4014,6 +4531,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     if (iface.field_gravity) cfg.field_flags |= (1u << 3);
     if (iface.field_higgs)   cfg.field_flags |= (1u << 4);
     if (iface.wave_mode)     cfg.field_flags |= (1u << 5);
+    if (iface.show_collision_radii) cfg.field_flags |= (1u << 6);
 
     // Pass field intensity via legacy density_limit/local_density_cap path
     cfg.density_limit    = (cfg.field_flags != 0) ? 1.0f : 0.0f;
@@ -4572,13 +5090,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         // Count bound electrons for matter nuclei, bound positrons for antinuclei
         // Also accumulate relativistic energy and track oldest birth for all constituents
         uint32_t lepton_type = nuc.is_anti ? POSITRON_TYPE_PHYS : ELECTRON_TYPE_PHYS;
-        constexpr float C_SIM_E = 300.0f;
-        auto rest_mass_MeV = [](uint32_t t) -> float {
-            if (t == 0 || t == 5) return 938.272f;
-            if (t == 1)           return 939.565f;
-            if (t == 2 || t == 4) return 0.511f;
-            return 0.0f;
-        };
+        // Uses PHYS_REST_MASS_MEV[] and C_SIM from phys_particles.h
         for (uint32_t i = 0; i < cfg.particle_count; ++i) {
             int32_t par = particles.orbital_parent[i];
             if (par != static_cast<int32_t>(nuc.rep) && static_cast<int32_t>(i) != static_cast<int32_t>(nuc.rep)) continue;
@@ -4588,12 +5100,12 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             if (!is_nucleon && !is_lepton) continue;
             if (is_lepton) bound_leptons++;
             // Accumulate relativistic energy
-            float m0 = rest_mass_MeV(pt);
+            float m0 = PHYS_REST_MASS_MEV[pt];
             if (m0 > 0.0f && i < static_cast<uint32_t>(readback_velocities_.size())) {
                 float spd = glm::length(readback_velocities_[i]);
-                float beta = std::min(spd / C_SIM_E, 0.9999f);
+                float beta = std::min(spd / C_SIM, 0.9999f);
                 float gamma = 1.0f / std::sqrt(1.0f - beta * beta);
-                elem_energy_MeV += gamma * m0;
+                elem_energy_MeV += (gamma - 1.0f) * m0;  // KE = (γ-1)m₀c²
             }
             // Track oldest constituent
             if (i < static_cast<uint32_t>(particles.birth_frames.size()) &&
