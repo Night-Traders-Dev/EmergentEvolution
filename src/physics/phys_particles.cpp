@@ -3,7 +3,7 @@
 #include <cmath>
 #include <algorithm>
 
-// ── Sub-atomic particle colors (33 types) ────────────────────────────────────
+// ── Sub-atomic particle colors (67 types) ────────────────────────────────────
 static const glm::vec4 PHYS_COLORS[PHYS_PARTICLE_TYPES] = {
     // 0: Composites + gen1
     { 0.9f, 0.2f, 0.2f, 1.0f },   // 0  Proton      — red
@@ -44,6 +44,45 @@ static const glm::vec4 PHYS_COLORS[PHYS_PARTICLE_TYPES] = {
     { 0.7f, 0.8f, 1.0f, 0.5f },   // 30 Graviton    — faint blue-white
     { 0.15f, 0.05f, 0.25f, 0.6f },// 31 Dark Matter — deep purple-black
     { 0.4f, 0.05f, 0.1f, 0.4f },  // 32 Dark Energy — faint crimson glow
+    // 33-38: Dark Matter Candidates — deep purples & blues
+    { 0.25f, 0.1f, 0.4f, 0.7f },  // 33 Axino           — dark purple
+    { 0.1f, 0.0f, 0.2f, 0.5f },   // 34 WIMPzilla       — near-black violet
+    { 0.2f, 0.15f, 0.35f, 0.8f }, // 35 SIMP            — muted purple
+    { 0.3f, 0.4f, 0.3f, 0.5f },   // 36 Sterile Neutrino— ghostly grey-green
+    { 0.35f, 0.1f, 0.5f, 0.7f },  // 37 Dark Photon     — dark violet
+    { 0.4f, 0.2f, 0.6f, 0.9f },   // 38 Q-Ball          — bright purple
+    // 39-49: SUSY Sparticles — metallic/neon pastels
+    { 0.5f, 0.8f, 1.0f, 1.0f },   // 39 Selectron       — ice blue
+    { 0.7f, 0.6f, 1.0f, 1.0f },   // 40 Smuon           — periwinkle
+    { 0.6f, 0.5f, 0.9f, 1.0f },   // 41 Stau            — soft violet
+    { 1.0f, 0.7f, 0.4f, 1.0f },   // 42 Squark          — neon orange
+    { 0.4f, 1.0f, 0.5f, 1.0f },   // 43 Gluino          — neon green
+    { 1.0f, 1.0f, 0.8f, 0.8f },   // 44 Photino         — pale gold
+    { 0.9f, 0.9f, 1.0f, 1.0f },   // 45 Wino            — platinum
+    { 0.8f, 0.8f, 0.95f, 1.0f },  // 46 Zino            — cool silver
+    { 1.0f, 0.9f, 0.6f, 1.0f },   // 47 Higgsino        — warm gold
+    { 0.3f, 0.15f, 0.5f, 1.0f },  // 48 Neutralino      — dark indigo
+    { 0.55f, 0.85f, 0.55f, 0.8f },// 49 Sneutrino       — sage green
+    // 50-55: Force Carriers & Gravity — bright cyans and whites
+    { 0.6f, 0.7f, 1.0f, 0.6f },   // 50 Gravitino       — pale blue
+    { 1.0f, 0.4f, 0.4f, 1.0f },   // 51 X Boson         — bright red
+    { 1.0f, 0.5f, 0.3f, 1.0f },   // 52 Y Boson         — bright orange-red
+    { 0.9f, 0.9f, 0.9f, 1.0f },   // 53 Monopole        — white
+    { 0.6f, 0.5f, 0.3f, 0.8f },   // 54 Radion          — bronze
+    { 0.5f, 0.45f, 0.35f, 0.8f }, // 55 Dilaton         — warm grey
+    // 56-64: Theoretical Extremes — vivid/unusual
+    { 0.0f, 1.0f, 1.0f, 0.7f },   // 56 Tachyon         — electric cyan
+    { 1.0f, 0.0f, 0.5f, 1.0f },   // 57 Preon           — hot pink
+    { 1.0f, 0.6f, 0.0f, 0.6f },   // 58 Inflaton        — amber glow
+    { 0.45f, 0.5f, 0.45f, 0.4f }, // 59 Majoron         — faint grey-green
+    { 0.7f, 0.3f, 1.0f, 1.0f },   // 60 Odderon         — electric purple
+    { 0.5f, 1.0f, 0.3f, 1.0f },   // 61 Glueball        — lime-yellow
+    { 0.9f, 0.4f, 0.2f, 1.0f },   // 62 Skyrmion        — burnt orange
+    { 0.2f, 0.9f, 0.8f, 1.0f },   // 63 X17             — turquoise
+    { 0.6f, 0.4f, 0.2f, 0.5f },   // 64 Chameleon       — fading brown
+    // 65-66: New Class — distinctive
+    { 0.9f, 0.2f, 1.0f, 1.0f },   // 65 Paraparticle    — vivid magenta
+    { 0.3f, 0.6f, 0.9f, 0.6f },   // 66 Dyn. Axion QP   — soft sky blue
 };
 
 // ── Environment abundance tables ─────────────────────────────────────────────
@@ -81,6 +120,10 @@ static void write_genome(Particles& p, uint32_t type, std::mt19937& rng) {
         color = -static_cast<float>(c(rng));
     } else if (type == GLUON_TYPE_PHYS) {
         // Gluon: bi-colored, encode as R(1) for simplicity
+        std::uniform_int_distribution<int> c(1, 3);
+        color = static_cast<float>(c(rng));
+    } else if (type == SQUARK_TYPE_PHYS || type == GLUINO_TYPE_PHYS || type == PREON_TYPE_PHYS) {
+        // Color-charged SUSY/exotic: random R/G/B like quarks
         std::uniform_int_distribution<int> c(1, 3);
         color = static_cast<float>(c(rng));
     }
@@ -160,6 +203,50 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
     p.behavior_flags[GRAVITON_TYPE_PHYS]     = BEHAVIOR_GRAVITON | BEHAVIOR_PHOTON;  // ballistic massless
     p.behavior_flags[DARK_MATTER_TYPE_PHYS]  = BEHAVIOR_DARK_MATTER | BEHAVIOR_MASS_ULTRA;  // heavy, gravity-only
     p.behavior_flags[DARK_ENERGY_TYPE_PHYS]  = BEHAVIOR_DARK_ENERGY;  // repulsive field
+
+    // ── Dark Matter Candidates ──────────────────────────────────────────────
+    p.behavior_flags[AXINO_TYPE_PHYS]            = BEHAVIOR_DARK_MATTER | BEHAVIOR_EXOTIC;
+    p.behavior_flags[WIMPZILLA_TYPE_PHYS]        = BEHAVIOR_DARK_MATTER | BEHAVIOR_MASS_ULTRA | BEHAVIOR_EXOTIC;
+    p.behavior_flags[SIMP_TYPE_PHYS]             = BEHAVIOR_DARK_MATTER | BEHAVIOR_EXOTIC;  // custom self-force in shader
+    p.behavior_flags[STERILE_NEUTRINO_TYPE_PHYS] = BEHAVIOR_NEUTRINO | BEHAVIOR_EXOTIC;
+    p.behavior_flags[DARK_PHOTON_TYPE_PHYS]      = BEHAVIOR_PHOTON | BEHAVIOR_EXOTIC;
+    p.behavior_flags[QBALL_TYPE_PHYS]            = BEHAVIOR_MASS_ULTRA | BEHAVIOR_IONIC_POS | BEHAVIOR_EXOTIC;
+
+    // ── Supersymmetric Sparticles ───────────────────────────────────────────
+    p.behavior_flags[SELECTRON_TYPE_PHYS]   = BEHAVIOR_SUSY | BEHAVIOR_MASS_ULTRA | BEHAVIOR_IONIC_NEG;
+    p.behavior_flags[SMUON_TYPE_PHYS]       = BEHAVIOR_SUSY | BEHAVIOR_MASS_ULTRA | BEHAVIOR_IONIC_NEG;
+    p.behavior_flags[STAU_TYPE_PHYS]        = BEHAVIOR_SUSY | BEHAVIOR_MASS_ULTRA | BEHAVIOR_IONIC_NEG;
+    p.behavior_flags[SQUARK_TYPE_PHYS]      = BEHAVIOR_SUSY | BEHAVIOR_QUARK | BEHAVIOR_MASS_ULTRA;
+    p.behavior_flags[GLUINO_TYPE_PHYS]      = BEHAVIOR_SUSY | BEHAVIOR_QUARK | BEHAVIOR_MASS_ULTRA;
+    p.behavior_flags[PHOTINO_TYPE_PHYS]     = BEHAVIOR_SUSY | BEHAVIOR_WEAK_BOSON;
+    p.behavior_flags[WINO_TYPE_PHYS]        = BEHAVIOR_SUSY | BEHAVIOR_WEAK_BOSON | BEHAVIOR_IONIC_POS;
+    p.behavior_flags[ZINO_TYPE_PHYS]        = BEHAVIOR_SUSY | BEHAVIOR_WEAK_BOSON;
+    p.behavior_flags[HIGGSINO_TYPE_PHYS]    = BEHAVIOR_SUSY | BEHAVIOR_HIGGS;
+    p.behavior_flags[NEUTRALINO_TYPE_PHYS]  = BEHAVIOR_DARK_MATTER | BEHAVIOR_SUSY;  // stable LSP
+    p.behavior_flags[SNEUTRINO_TYPE_PHYS]   = BEHAVIOR_SUSY | BEHAVIOR_NEUTRINO;
+
+    // ── Force Carriers & Gravity ────────────────────────────────────────────
+    p.behavior_flags[GRAVITINO_TYPE_PHYS]   = BEHAVIOR_GRAVITON | BEHAVIOR_PHOTON | BEHAVIOR_SUSY;
+    p.behavior_flags[X_BOSON_TYPE_PHYS]     = BEHAVIOR_MASS_ULTRA | BEHAVIOR_IONIC_POS | BEHAVIOR_QUARK | BEHAVIOR_EXOTIC;
+    p.behavior_flags[Y_BOSON_TYPE_PHYS]     = BEHAVIOR_MASS_ULTRA | BEHAVIOR_IONIC_POS | BEHAVIOR_QUARK | BEHAVIOR_EXOTIC;
+    p.behavior_flags[MONOPOLE_TYPE_PHYS]    = BEHAVIOR_MASS_ULTRA | BEHAVIOR_EXOTIC;  // custom B-field in shader
+    p.behavior_flags[RADION_TYPE_PHYS]      = BEHAVIOR_MASS_ULTRA | BEHAVIOR_EXOTIC;
+    p.behavior_flags[DILATON_TYPE_PHYS]     = BEHAVIOR_MASS_HEAVY | BEHAVIOR_EXOTIC;
+
+    // ── Theoretical Extremes ────────────────────────────────────────────────
+    p.behavior_flags[TACHYON_TYPE_PHYS]     = BEHAVIOR_PHOTON | BEHAVIOR_EXOTIC;  // superluminal in shader
+    p.behavior_flags[PREON_TYPE_PHYS]       = BEHAVIOR_QUARK | BEHAVIOR_MASS_ULTRA | BEHAVIOR_EXOTIC;
+    p.behavior_flags[INFLATON_TYPE_PHYS]    = BEHAVIOR_DARK_ENERGY | BEHAVIOR_MASS_ULTRA | BEHAVIOR_EXOTIC;
+    p.behavior_flags[MAJORON_TYPE_PHYS]     = BEHAVIOR_NEUTRINO | BEHAVIOR_EXOTIC;
+    p.behavior_flags[ODDERON_TYPE_PHYS]     = BEHAVIOR_QUARK | BEHAVIOR_EXOTIC;
+    p.behavior_flags[GLUEBALL_TYPE_PHYS]    = BEHAVIOR_QUARK | BEHAVIOR_EXOTIC;
+    p.behavior_flags[SKYRMION_TYPE_PHYS]    = BEHAVIOR_MASS_HEAVY | BEHAVIOR_IONIC_POS | BEHAVIOR_EXOTIC;
+    p.behavior_flags[X17_TYPE_PHYS]         = BEHAVIOR_PHOTON | BEHAVIOR_EXOTIC;
+    p.behavior_flags[CHAMELEON_TYPE_PHYS]   = BEHAVIOR_DARK_ENERGY | BEHAVIOR_EXOTIC;
+
+    // ── New Class (2025-2026) ───────────────────────────────────────────────
+    p.behavior_flags[PARAPARTICLE_TYPE_PHYS]     = BEHAVIOR_WEAK_BOSON | BEHAVIOR_EXOTIC;
+    p.behavior_flags[DYN_AXION_QP_TYPE_PHYS]     = BEHAVIOR_NEUTRINO | BEHAVIOR_EXOTIC;
 
     // Force matrix: zeroed (physics is computed in shader, not from matrix)
     p.forces.resize(MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES, 0.0f);
@@ -259,6 +346,16 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
             else if (r < 0.85f) type = ELECTRON_TYPE_PHYS;
             else if (r < 0.95f) type = DARK_ENERGY_TYPE_PHYS;
             else type = GRAVITON_TYPE_PHYS;
+        } else if (env == 12) {
+            // SUSY Sector: 30% neutralino, 20% selectron, 15% smuon, 10% squark, 10% gluino, 10% photon, 5% electron
+            float r = unit(rng);
+            if (r < 0.30f) type = NEUTRALINO_TYPE_PHYS;
+            else if (r < 0.50f) type = SELECTRON_TYPE_PHYS;
+            else if (r < 0.65f) type = SMUON_TYPE_PHYS;
+            else if (r < 0.75f) type = SQUARK_TYPE_PHYS;
+            else if (r < 0.85f) type = GLUINO_TYPE_PHYS;
+            else if (r < 0.95f) type = PHOTON_TYPE_PHYS;
+            else type = ELECTRON_TYPE_PHYS;
         } else {
             // Meson Factory: quark-antiquark pairs
             float r = unit(rng);
@@ -312,8 +409,8 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
                 }
                 break;
             }
-            case 7: case 8: case 9: case 11: {
-                // QGP, Electroweak, Meson Factory, Dark Sector — central Gaussian
+            case 7: case 8: case 9: case 11: case 12: {
+                // QGP, Electroweak, Meson Factory, Dark Sector, SUSY Sector — central Gaussian
                 float cx = rw * 0.5f, cy = rh * 0.5f;
                 float sigma = std::min(rw, rh) * 0.20f;
                 pos = glm::vec2(cx + gauss(rng) * sigma, cy + gauss(rng) * sigma);
@@ -356,9 +453,15 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
                               type == MUON_TYPE_PHYS || type == ANTIMUON_TYPE_PHYS);
             if (is_lepton) vel *= 5.0f;
             if (type >= UP_QUARK_TYPE && type <= ANTI_BOTTOM_TYPE) vel *= 3.0f;
-            if (type == GRAVITON_TYPE_PHYS) vel = glm::normalize(vel + glm::vec2(0.001f)) * 200.0f;  // light-speed
-            if (type == DARK_MATTER_TYPE_PHYS) vel *= 0.3f;  // cold dark matter
-            if (type == DARK_ENERGY_TYPE_PHYS) vel *= 0.1f;  // near-static field
+            if (type == GRAVITON_TYPE_PHYS || type == GRAVITINO_TYPE_PHYS) vel = glm::normalize(vel + glm::vec2(0.001f)) * 200.0f;
+            if (type == DARK_MATTER_TYPE_PHYS || type == NEUTRALINO_TYPE_PHYS || type == WIMPZILLA_TYPE_PHYS) vel *= 0.3f;
+            if (type == DARK_ENERGY_TYPE_PHYS || type == INFLATON_TYPE_PHYS || type == CHAMELEON_TYPE_PHYS) vel *= 0.1f;
+            if (type == DARK_PHOTON_TYPE_PHYS || type == X17_TYPE_PHYS) vel = glm::normalize(vel + glm::vec2(0.001f)) * C_SIM;
+            if (type == TACHYON_TYPE_PHYS) vel = glm::normalize(vel + glm::vec2(0.001f)) * 400.0f;  // superluminal
+            if (type == SIMP_TYPE_PHYS) vel *= 0.5f;
+            if (type == AXINO_TYPE_PHYS || type == STERILE_NEUTRINO_TYPE_PHYS) vel *= 0.4f;
+            // SUSY sparticles: moderate speed, heavy
+            if (type >= SELECTRON_TYPE_PHYS && type <= SNEUTRINO_TYPE_PHYS && type != NEUTRALINO_TYPE_PHYS) vel *= 0.8f;
         }
 
         p.positions.push_back(pos);

@@ -444,6 +444,18 @@ static const char* const PHYS_TYPE_NAMES[PHYS_PARTICLE_TYPES] = {
     "Anti-up", "Anti-down", "Anti-strange", "Anti-charm", "Anti-top", "Anti-bottom",
     "Gluon", "W+", "W-", "Z0", "Higgs",
     "Graviton", "Dark Matter", "Dark Energy",
+    // 33-38: DM candidates
+    "Axino", "WIMPzilla", "SIMP", "Sterile Neutrino", "Dark Photon", "Q-Ball",
+    // 39-49: SUSY
+    "Selectron", "Smuon", "Stau", "Squark", "Gluino", "Photino",
+    "Wino", "Zino", "Higgsino", "Neutralino", "Sneutrino",
+    // 50-55: Force carriers
+    "Gravitino", "X Boson", "Y Boson", "Monopole", "Radion", "Dilaton",
+    // 56-64: Theoretical extremes
+    "Tachyon", "Preon", "Inflaton", "Majoron", "Odderon",
+    "Glueball", "Skyrmion", "X17", "Chameleon",
+    // 65-66: New class
+    "Paraparticle", "Dyn. Axion QP",
 };
 
 static const char* const PHYS_TYPE_LABELS[PHYS_PARTICLE_TYPES] = {
@@ -454,6 +466,18 @@ static const char* const PHYS_TYPE_LABELS[PHYS_PARTICLE_TYPES] = {
     "u~", "d~", "s~", "c~", "t~", "b~",
     "g", "W+", "W-", "Z0", "H0",
     "G", "DM", "DE",
+    // 33-38
+    "Ax", "WZ", "SI", "Ns", "A'", "QB",
+    // 39-49
+    "e~", "mu~", "ta~", "q~", "g~", "y~",
+    "W~", "Z~", "H~", "N1", "v~",
+    // 50-55
+    "G~", "X", "Y", "MM", "Ra", "Di",
+    // 56-64
+    "Ta", "Pr", "In", "Mj", "Od",
+    "Gb", "Sk", "X17", "Ch",
+    // 65-66
+    "Pp", "Dq",
 };
 
 static const ImVec4 PHYS_TYPE_UI_COLORS[PHYS_PARTICLE_TYPES] = {
@@ -501,6 +525,45 @@ static const ImVec4 PHYS_TYPE_UI_COLORS[PHYS_PARTICLE_TYPES] = {
     ImVec4(0.7f, 0.8f, 1.0f, 1.0f),   // graviton — faint blue-white
     ImVec4(0.3f, 0.1f, 0.5f, 1.0f),   // dark matter — deep purple
     ImVec4(0.6f, 0.1f, 0.2f, 1.0f),   // dark energy — faint crimson
+    // 33-38: DM candidates
+    ImVec4(0.4f, 0.2f, 0.6f, 1.0f),   // axino — dark purple
+    ImVec4(0.2f, 0.05f, 0.35f, 1.0f), // WIMPzilla — near-black violet
+    ImVec4(0.35f, 0.25f, 0.55f, 1.0f),// SIMP — muted purple
+    ImVec4(0.45f, 0.55f, 0.45f, 1.0f),// sterile neutrino — ghostly grey-green
+    ImVec4(0.5f, 0.2f, 0.7f, 1.0f),   // dark photon — dark violet
+    ImVec4(0.55f, 0.3f, 0.75f, 1.0f), // Q-Ball — bright purple
+    // 39-49: SUSY
+    ImVec4(0.5f, 0.8f, 1.0f, 1.0f),   // selectron — ice blue
+    ImVec4(0.7f, 0.6f, 1.0f, 1.0f),   // smuon — periwinkle
+    ImVec4(0.6f, 0.5f, 0.9f, 1.0f),   // stau — soft violet
+    ImVec4(1.0f, 0.7f, 0.4f, 1.0f),   // squark — neon orange
+    ImVec4(0.4f, 1.0f, 0.5f, 1.0f),   // gluino — neon green
+    ImVec4(1.0f, 1.0f, 0.8f, 1.0f),   // photino — pale gold
+    ImVec4(0.9f, 0.9f, 1.0f, 1.0f),   // wino — platinum
+    ImVec4(0.8f, 0.8f, 0.95f, 1.0f),  // zino — cool silver
+    ImVec4(1.0f, 0.9f, 0.6f, 1.0f),   // higgsino — warm gold
+    ImVec4(0.4f, 0.2f, 0.65f, 1.0f),  // neutralino — dark indigo
+    ImVec4(0.55f, 0.85f, 0.55f, 1.0f),// sneutrino — sage green
+    // 50-55: Force carriers
+    ImVec4(0.6f, 0.7f, 1.0f, 1.0f),   // gravitino — pale blue
+    ImVec4(1.0f, 0.4f, 0.4f, 1.0f),   // X boson — bright red
+    ImVec4(1.0f, 0.5f, 0.3f, 1.0f),   // Y boson — bright orange-red
+    ImVec4(0.95f, 0.95f, 0.95f, 1.0f),// monopole — white
+    ImVec4(0.7f, 0.6f, 0.4f, 1.0f),   // radion — bronze
+    ImVec4(0.6f, 0.55f, 0.45f, 1.0f), // dilaton — warm grey
+    // 56-64: Theoretical extremes
+    ImVec4(0.0f, 1.0f, 1.0f, 1.0f),   // tachyon — electric cyan
+    ImVec4(1.0f, 0.0f, 0.5f, 1.0f),   // preon — hot pink
+    ImVec4(1.0f, 0.7f, 0.1f, 1.0f),   // inflaton — amber glow
+    ImVec4(0.55f, 0.6f, 0.55f, 1.0f), // majoron — faint grey-green
+    ImVec4(0.7f, 0.3f, 1.0f, 1.0f),   // odderon — electric purple
+    ImVec4(0.5f, 1.0f, 0.3f, 1.0f),   // glueball — lime-yellow
+    ImVec4(0.9f, 0.4f, 0.2f, 1.0f),   // skyrmion — burnt orange
+    ImVec4(0.2f, 0.9f, 0.8f, 1.0f),   // X17 — turquoise
+    ImVec4(0.7f, 0.5f, 0.3f, 1.0f),   // chameleon — fading brown
+    // 65-66: New class
+    ImVec4(0.9f, 0.2f, 1.0f, 1.0f),   // paraparticle — vivid magenta
+    ImVec4(0.4f, 0.7f, 0.95f, 1.0f),  // dyn axion QP — soft sky blue
 };
 
 // ── Temperature formatting ───────────────────────────────────────────────────
@@ -1485,7 +1548,7 @@ void PhysicsInterface::draw_splash_screen() {
         // Subtitle
         ImGui::SetCursorPos(ImVec2(left_margin, title_y + 40.0f * scale));
         ImGui::TextColored(ImVec4(0.0f, 0.78f, 1.0f, 0.7f),
-            "Standard Model  |  Fusion  |  Fission  |  33 Particle Types");
+            "Standard Model  |  Fusion  |  Fission  |  67 Particle Types");
 
         // Top-right badge "QUANTUM PHYSICS SANDBOX"
         {
@@ -2174,6 +2237,9 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
             { ImGui::TextColored(PHYS_TYPE_UI_COLORS[DARK_MATTER_TYPE_PHYS], "DM:%u", type_counts_display[DARK_MATTER_TYPE_PHYS]); ImGui::SameLine(0, 6); }
         if (type_counts_display[DARK_ENERGY_TYPE_PHYS])
             { ImGui::TextColored(PHYS_TYPE_UI_COLORS[DARK_ENERGY_TYPE_PHYS], "DE:%u", type_counts_display[DARK_ENERGY_TYPE_PHYS]); ImGui::SameLine(0, 6); }
+        { uint32_t hyp_count = 0;
+          for (uint32_t t = AXINO_TYPE_PHYS; t <= DYN_AXION_QP_TYPE_PHYS; t++) hyp_count += type_counts_display[t];
+          if (hyp_count) { ImGui::TextColored(ImVec4(0.7f,0.5f,1.0f,1.0f), "Hyp:%u", hyp_count); ImGui::SameLine(0, 6); } }
 
         // Status indicators
         if (select_mode) {
@@ -3286,6 +3352,157 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
         if (spawn_button(DARK_ENERGY_TYPE_PHYS, "DE", PHYS_TYPE_UI_COLORS[DARK_ENERGY_TYPE_PHYS],
                           spawn_type, spawn_group, "Dark Energy (repulsive field)"))
             { spawn_type = DARK_ENERGY_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+
+        // ── Dark Matter Candidates ──
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Dark Matter Candidates:");
+        if (spawn_button(AXINO_TYPE_PHYS, "Ax", PHYS_TYPE_UI_COLORS[AXINO_TYPE_PHYS],
+                          spawn_type, spawn_group, "Axino (SUSY partner of axion)"))
+            { spawn_type = AXINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(WIMPZILLA_TYPE_PHYS, "WZ", PHYS_TYPE_UI_COLORS[WIMPZILLA_TYPE_PHYS],
+                          spawn_type, spawn_group, "WIMPzilla (super-heavy ~10^12 GeV)"))
+            { spawn_type = WIMPZILLA_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(SIMP_TYPE_PHYS, "SI", PHYS_TYPE_UI_COLORS[SIMP_TYPE_PHYS],
+                          spawn_type, spawn_group, "SIMP (strongly self-interacting)"))
+            { spawn_type = SIMP_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+
+        if (spawn_button(STERILE_NEUTRINO_TYPE_PHYS, "Ns", PHYS_TYPE_UI_COLORS[STERILE_NEUTRINO_TYPE_PHYS],
+                          spawn_type, spawn_group, "Sterile Neutrino (no weak force)"))
+            { spawn_type = STERILE_NEUTRINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(DARK_PHOTON_TYPE_PHYS, "A'", PHYS_TYPE_UI_COLORS[DARK_PHOTON_TYPE_PHYS],
+                          spawn_type, spawn_group, "Dark Photon (dark EM carrier)"))
+            { spawn_type = DARK_PHOTON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(QBALL_TYPE_PHYS, "QB", PHYS_TYPE_UI_COLORS[QBALL_TYPE_PHYS],
+                          spawn_type, spawn_group, "Q-Ball (stable field soliton, charged)"))
+            { spawn_type = QBALL_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+
+        // ── Supersymmetric Sparticles ──
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Supersymmetric (Sparticles):");
+        if (spawn_button(SELECTRON_TYPE_PHYS, "e~", PHYS_TYPE_UI_COLORS[SELECTRON_TYPE_PHYS],
+                          spawn_type, spawn_group, "Selectron (scalar e-, 200 GeV)"))
+            { spawn_type = SELECTRON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(SMUON_TYPE_PHYS, "mu~", PHYS_TYPE_UI_COLORS[SMUON_TYPE_PHYS],
+                          spawn_type, spawn_group, "Smuon (scalar muon, 300 GeV)"))
+            { spawn_type = SMUON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(STAU_TYPE_PHYS, "ta~", PHYS_TYPE_UI_COLORS[STAU_TYPE_PHYS],
+                          spawn_type, spawn_group, "Stau (scalar tau, 150 GeV, long-lived)"))
+            { spawn_type = STAU_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(SQUARK_TYPE_PHYS, "q~", PHYS_TYPE_UI_COLORS[SQUARK_TYPE_PHYS],
+                          spawn_type, spawn_group, "Squark (scalar quark, 1.5 TeV, color-charged)"))
+            { spawn_type = SQUARK_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+
+        if (spawn_button(GLUINO_TYPE_PHYS, "g~", PHYS_TYPE_UI_COLORS[GLUINO_TYPE_PHYS],
+                          spawn_type, spawn_group, "Gluino (fermionic gluon, 2 TeV)"))
+            { spawn_type = GLUINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(PHOTINO_TYPE_PHYS, "y~", PHYS_TYPE_UI_COLORS[PHOTINO_TYPE_PHYS],
+                          spawn_type, spawn_group, "Photino (fermionic photon, 100 GeV)"))
+            { spawn_type = PHOTINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(WINO_TYPE_PHYS, "W~", PHYS_TYPE_UI_COLORS[WINO_TYPE_PHYS],
+                          spawn_type, spawn_group, "Wino (fermionic W, 300 GeV)"))
+            { spawn_type = WINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(ZINO_TYPE_PHYS, "Z~", PHYS_TYPE_UI_COLORS[ZINO_TYPE_PHYS],
+                          spawn_type, spawn_group, "Zino (fermionic Z, 300 GeV)"))
+            { spawn_type = ZINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+
+        if (spawn_button(HIGGSINO_TYPE_PHYS, "H~", PHYS_TYPE_UI_COLORS[HIGGSINO_TYPE_PHYS],
+                          spawn_type, spawn_group, "Higgsino (fermionic Higgs, 200 GeV)"))
+            { spawn_type = HIGGSINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(NEUTRALINO_TYPE_PHYS, "N1", PHYS_TYPE_UI_COLORS[NEUTRALINO_TYPE_PHYS],
+                          spawn_type, spawn_group, "Neutralino (stable LSP, DM candidate)"))
+            { spawn_type = NEUTRALINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(SNEUTRINO_TYPE_PHYS, "v~", PHYS_TYPE_UI_COLORS[SNEUTRINO_TYPE_PHYS],
+                          spawn_type, spawn_group, "Sneutrino (scalar neutrino, 200 GeV)"))
+            { spawn_type = SNEUTRINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+
+        // ── Force Carriers & Exotic ──
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Force Carriers & Exotic:");
+        if (spawn_button(GRAVITINO_TYPE_PHYS, "G~", PHYS_TYPE_UI_COLORS[GRAVITINO_TYPE_PHYS],
+                          spawn_type, spawn_group, "Gravitino (SUSY graviton, spin-3/2)"))
+            { spawn_type = GRAVITINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(X_BOSON_TYPE_PHYS, "X", PHYS_TYPE_UI_COLORS[X_BOSON_TYPE_PHYS],
+                          spawn_type, spawn_group, "X Boson (GUT, proton decay, 10^15 GeV)"))
+            { spawn_type = X_BOSON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(Y_BOSON_TYPE_PHYS, "Y", PHYS_TYPE_UI_COLORS[Y_BOSON_TYPE_PHYS],
+                          spawn_type, spawn_group, "Y Boson (GUT, proton decay, 10^15 GeV)"))
+            { spawn_type = Y_BOSON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+
+        if (spawn_button(MONOPOLE_TYPE_PHYS, "MM", PHYS_TYPE_UI_COLORS[MONOPOLE_TYPE_PHYS],
+                          spawn_type, spawn_group, "Magnetic Monopole (radial B-field, 10^16 GeV)"))
+            { spawn_type = MONOPOLE_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(RADION_TYPE_PHYS, "Ra", PHYS_TYPE_UI_COLORS[RADION_TYPE_PHYS],
+                          spawn_type, spawn_group, "Radion (extra-dimension size, 1 TeV)"))
+            { spawn_type = RADION_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(DILATON_TYPE_PHYS, "Di", PHYS_TYPE_UI_COLORS[DILATON_TYPE_PHYS],
+                          spawn_type, spawn_group, "Dilaton (string theory scale, 10 GeV)"))
+            { spawn_type = DILATON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+
+        // ── Theoretical Extremes ──
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Theoretical Extremes:");
+        if (spawn_button(TACHYON_TYPE_PHYS, "Ta", PHYS_TYPE_UI_COLORS[TACHYON_TYPE_PHYS],
+                          spawn_type, spawn_group, "Tachyon (superluminal, imaginary mass)"))
+            { spawn_type = TACHYON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(PREON_TYPE_PHYS, "Pr", PHYS_TYPE_UI_COLORS[PREON_TYPE_PHYS],
+                          spawn_type, spawn_group, "Preon (sub-quark constituent, confined)"))
+            { spawn_type = PREON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(INFLATON_TYPE_PHYS, "In", PHYS_TYPE_UI_COLORS[INFLATON_TYPE_PHYS],
+                          spawn_type, spawn_group, "Inflaton (cosmic inflation driver)"))
+            { spawn_type = INFLATON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(MAJORON_TYPE_PHYS, "Mj", PHYS_TYPE_UI_COLORS[MAJORON_TYPE_PHYS],
+                          spawn_type, spawn_group, "Majoron (neutrino mass, nearly invisible)"))
+            { spawn_type = MAJORON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+
+        if (spawn_button(ODDERON_TYPE_PHYS, "Od", PHYS_TYPE_UI_COLORS[ODDERON_TYPE_PHYS],
+                          spawn_type, spawn_group, "Odderon (3-gluon bound state)"))
+            { spawn_type = ODDERON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(GLUEBALL_TYPE_PHYS, "Gb", PHYS_TYPE_UI_COLORS[GLUEBALL_TYPE_PHYS],
+                          spawn_type, spawn_group, "Glueball (pure-glue bound state)"))
+            { spawn_type = GLUEBALL_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(SKYRMION_TYPE_PHYS, "Sk", PHYS_TYPE_UI_COLORS[SKYRMION_TYPE_PHYS],
+                          spawn_type, spawn_group, "Skyrmion (topological soliton, baryon-like)"))
+            { spawn_type = SKYRMION_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(X17_TYPE_PHYS, "X17", PHYS_TYPE_UI_COLORS[X17_TYPE_PHYS],
+                          spawn_type, spawn_group, "X17 (fifth-force boson, 17 MeV)"))
+            { spawn_type = X17_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+
+        if (spawn_button(CHAMELEON_TYPE_PHYS, "Ch", PHYS_TYPE_UI_COLORS[CHAMELEON_TYPE_PHYS],
+                          spawn_type, spawn_group, "Chameleon (environment-dependent mass)"))
+            { spawn_type = CHAMELEON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+
+        // ── New Class (2025-2026) ──
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "New Class (2025-2026):");
+        if (spawn_button(PARAPARTICLE_TYPE_PHYS, "Pp", PHYS_TYPE_UI_COLORS[PARAPARTICLE_TYPE_PHYS],
+                          spawn_type, spawn_group, "Paraparticle (exotic statistics)"))
+            { spawn_type = PARAPARTICLE_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
+        ImGui::SameLine();
+        if (spawn_button(DYN_AXION_QP_TYPE_PHYS, "Dq", PHYS_TYPE_UI_COLORS[DYN_AXION_QP_TYPE_PHYS],
+                          spawn_type, spawn_group, "Dyn. Axion Quasiparticle (topological EM)"))
+            { spawn_type = DYN_AXION_QP_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
     }
 
     // ── Hadrons ──────────────────────────────────────────────────────────────
@@ -4527,13 +4744,30 @@ void PhysicsInterface::draw_decay_log() {
         if (e.type < DEVT_COUNT) type_counts[e.type]++;
     }
 
-    // Summary bar
-    bool first_tag = true;
+    // Filter toggles — click type label to show/hide that event type
+    float wrap_x = ImGui::GetContentRegionAvail().x - 60.0f;
+    float cur_x = 0.0f;
     for (int t = 0; t < DEVT_COUNT; ++t) {
         if (type_counts[t] == 0) continue;
-        if (!first_tag) ImGui::SameLine(0, 6);
-        first_tag = false;
-        ImGui::TextColored(TYPE_COLORS[t], "%s:%d", TYPE_LABELS[t], type_counts[t]);
+        char tag_label[32];
+        snprintf(tag_label, sizeof(tag_label), "%s:%d###filt%d", TYPE_LABELS[t], type_counts[t], t);
+        float btn_w = ImGui::CalcTextSize(tag_label).x + 10.0f;
+        if (cur_x + btn_w > wrap_x && cur_x > 0.0f) {
+            cur_x = 0.0f;  // wrap to next line
+        } else if (cur_x > 0.0f) {
+            ImGui::SameLine(0, 4);
+        }
+        ImVec4 col = TYPE_COLORS[t];
+        if (!event_filter[t]) col = ImVec4(col.x * 0.3f, col.y * 0.3f, col.z * 0.3f, 0.5f);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(col.x * 0.2f, col.y * 0.2f, col.z * 0.2f, 0.6f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(col.x * 0.35f, col.y * 0.35f, col.z * 0.35f, 0.8f));
+        ImGui::PushStyleColor(ImGuiCol_Text, col);
+        if (ImGui::SmallButton(tag_label)) {
+            event_filter[t] = !event_filter[t];
+            expanded_event_idx = -1;
+        }
+        ImGui::PopStyleColor(3);
+        cur_x += btn_w + 4.0f;
     }
     if (decay_log.empty()) {
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "No events yet");
@@ -4559,6 +4793,7 @@ void PhysicsInterface::draw_decay_log() {
 
     for (int idx = static_cast<int>(decay_log.size()) - 1; idx >= 0; --idx) {
         const auto& entry = decay_log[idx];
+        if (entry.type < DEVT_COUNT && !event_filter[entry.type]) continue;
         bool is_expanded = (expanded_event_idx == idx);
         bool has_details = !entry.details.empty();
 

@@ -4,7 +4,7 @@
 
 **A GPU-accelerated quantum particle physics sandbox**
 
-Standard Model + Beyond · Nuclear fusion & fission · Covalent Bonds & Molecules · Molecule Spawn by Formula · Hadronization & Color Confinement · Gluon Interactions · Photon-matter interactions · Orbital mechanics · Emergent thermodynamics · Quantum entanglement · Wave-particle duality · Achievements · Tools · Save/Load
+Standard Model + Beyond + 34 Hypothetical Particles · Nuclear fusion & fission · Covalent Bonds & Molecules · Molecule Spawn by Formula · Hadronization & Color Confinement · Gluon Interactions · Photon-matter interactions · Orbital mechanics · Emergent thermodynamics · Quantum entanglement · Wave-particle duality · Achievements · Tools · Save/Load
 
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
 [![Vulkan](https://img.shields.io/badge/Vulkan-1.3-red.svg)](https://www.vulkan.org/)
@@ -16,7 +16,7 @@ Standard Model + Beyond · Nuclear fusion & fission · Covalent Bonds & Molecule
 ---
 
 Particle Playground is a real-time particle physics sandbox powered by Vulkan compute shaders.
-33 particle types spanning the Standard Model and beyond interact through all four fundamental
+67 particle types spanning the Standard Model, Beyond Standard Model, and 34 hypothetical particles interact through all four fundamental
 forces: Coulomb + Yukawa + QCD + weak, with centrifugal barrier orbitals, nuclear fusion/fission,
 radioactive decay with realistic isotope half-lives, photoelectric effect, Compton scattering,
 nuclear spallation, photodisintegration, pair production, pion production, vector meson dominance,
@@ -29,7 +29,7 @@ quantum entanglement, antimatter element detection, electron cloud visualization
 event log, an achievement system, measurement tools (thermometer, velocity meter, ruler with
 nanometer scale, density counter), visualization overlays (energy heatmap, velocity field,
 trajectory tracer, force vectors, atom grid, wave-particle duality mode), interactive tools
-(particle accelerator, mirrors), 12 UI themes, 12 environment presets, element export/import, six
+(particle accelerator, mirrors), 12 UI themes, 13 environment presets, element export/import, six
 per-force multiplier knobs, relativistic energy readouts in electronvolts (PDG rest masses,
 E = γm₀c²), a browsable particle list and element list with live molecular formula grouping
 and energy/age tracking, and an animated particle splash screen.
@@ -43,7 +43,7 @@ O(n) neighbor queries with **OpenMP** parallelization across all available cores
 ## Table of Contents
 
 - [Physics Engine](#physics-engine)
-- [Standard Model + Beyond — 33 Particle Types](#standard-model--beyond--33-particle-types)
+- [Standard Model + Beyond — 67 Particle Types](#standard-model--beyond--67-particle-types)
 - [Four Fundamental Forces + Multipliers](#four-fundamental-forces--multipliers)
 - [Orbital Mechanics](#orbital-mechanics)
 - [Covalent Bonds & Molecules](#covalent-bonds--molecules)
@@ -96,7 +96,7 @@ The Vulkan compute pipeline is dispatched each frame.
 
 ---
 
-## Standard Model + Beyond — 33 Particle Types
+## Standard Model + Beyond — 67 Particle Types
 
 <table>
 <thead><tr><th>Family</th><th>#</th><th>Particle</th><th>Mass (inv)</th><th>Charge</th><th>Spin</th><th>Notes</th></tr></thead>
@@ -141,6 +141,45 @@ The Vulkan compute pipeline is dispatched each frame.
   <td>30</td><td><b>Graviton</b> G</td><td>100.0</td><td>0</td><td>+2</td><td>Massless, ballistic (hypothetical)</td></tr>
 <tr><td>31</td><td><b>Dark Matter</b> DM</td><td>0.001</td><td>0</td><td>+0.5</td><td>WIMP — gravity only, no EM/strong</td></tr>
 <tr><td>32</td><td><b>Dark Energy</b> DE</td><td>100.0</td><td>0</td><td>0</td><td>Universal repulsive field quantum</td></tr>
+<tr><td rowspan="6"><b>Dark Matter Candidates</b></td>
+  <td>33</td><td><b>Axino</b></td><td>5.0</td><td>0</td><td>+0.5</td><td>SUSY axion partner, decays to &gamma; + neutralino</td></tr>
+<tr><td>34</td><td><b>WIMPzilla</b></td><td>~0</td><td>0</td><td>+0.5</td><td>Ultra-heavy (10&#x00B9;&#x00B2; MeV), gravity only, stable</td></tr>
+<tr><td>35</td><td><b>SIMP</b></td><td>0.001</td><td>0</td><td>+0.5</td><td>Self-interacting DM — 30x self-gravity, forms clusters</td></tr>
+<tr><td>36</td><td><b>Sterile Neutrino</b></td><td>100.0</td><td>0</td><td>+0.5</td><td>Gravity-only neutrino, stable</td></tr>
+<tr><td>37</td><td><b>Dark Photon</b> A'</td><td>100.0</td><td>0</td><td>+1</td><td>Kinetically mixed, decays to e&#8314;e&#8315;</td></tr>
+<tr><td>38</td><td><b>Q-Ball</b></td><td>~0</td><td>+1</td><td>0</td><td>Supersymmetric soliton, ultra-heavy, stable</td></tr>
+<tr><td rowspan="11"><b>SUSY Sparticles</b></td>
+  <td>39</td><td><b>Selectron</b> &#7869;&#771;</td><td>~0</td><td>-1</td><td>0</td><td>Scalar electron partner, decays to e + neutralino</td></tr>
+<tr><td>40</td><td><b>Smuon</b> &mu;&#771;</td><td>~0</td><td>-1</td><td>0</td><td>Scalar muon partner, decays to &mu; + neutralino</td></tr>
+<tr><td>41</td><td><b>Stau</b> &tau;&#771;</td><td>~0</td><td>-1</td><td>0</td><td>Scalar tau partner, decays to &tau; + neutralino</td></tr>
+<tr><td>42</td><td><b>Squark</b> q&#771;</td><td>~0</td><td>+2/3</td><td>0</td><td>Scalar quark partner, color-charged, decays to q + gluino</td></tr>
+<tr><td>43</td><td><b>Gluino</b> g&#771;</td><td>~0</td><td>0</td><td>+0.5</td><td>Fermionic gluon partner, color-charged, decays to g + neutralino</td></tr>
+<tr><td>44</td><td><b>Photino</b> &gamma;&#771;</td><td>~0</td><td>0</td><td>+0.5</td><td>Fermionic photon partner, decays to &gamma; + neutralino</td></tr>
+<tr><td>45</td><td><b>Wino</b> W&#771;</td><td>~0</td><td>+1</td><td>+0.5</td><td>Fermionic W partner, decays to W + neutralino</td></tr>
+<tr><td>46</td><td><b>Zino</b> Z&#771;</td><td>~0</td><td>0</td><td>+0.5</td><td>Fermionic Z partner, decays to Z + neutralino</td></tr>
+<tr><td>47</td><td><b>Higgsino</b> H&#771;</td><td>~0</td><td>0</td><td>+0.5</td><td>Fermionic Higgs partner, decays to H + neutralino</td></tr>
+<tr><td>48</td><td><b>Neutralino</b> N&#8321;</td><td>~0</td><td>0</td><td>+0.5</td><td>Lightest SUSY particle (LSP), stable DM candidate</td></tr>
+<tr><td>49</td><td><b>Sneutrino</b> &nu;&#771;</td><td>~0</td><td>0</td><td>0</td><td>Scalar neutrino partner, decays to &nu; + neutralino</td></tr>
+<tr><td rowspan="6"><b>Force Carriers &amp; Gravity</b></td>
+  <td>50</td><td><b>Gravitino</b> G&#771;</td><td>100.0</td><td>0</td><td>+1.5</td><td>Spin-3/2 graviton partner, near-massless</td></tr>
+<tr><td>51</td><td><b>X Boson</b></td><td>~0</td><td>+4/3</td><td>+1</td><td>GUT leptoquark, decays to u + e&#8314;</td></tr>
+<tr><td>52</td><td><b>Y Boson</b></td><td>~0</td><td>+1/3</td><td>+1</td><td>GUT leptoquark, decays to d + &nu;</td></tr>
+<tr><td>53</td><td><b>Magnetic Monopole</b></td><td>~0</td><td>0</td><td>0</td><td>Radial B-field (g/r&#x00B2;), deflects charged particles</td></tr>
+<tr><td>54</td><td><b>Radion</b></td><td>~0</td><td>0</td><td>0</td><td>Extra-dimension scalar, decays to &gamma;&gamma;</td></tr>
+<tr><td>55</td><td><b>Dilaton</b></td><td>~0</td><td>0</td><td>0</td><td>String theory scalar, decays to &gamma;&gamma;</td></tr>
+<tr><td rowspan="9"><b>Theoretical Extremes</b></td>
+  <td>56</td><td><b>Tachyon</b></td><td>50.0</td><td>0</td><td>0</td><td>Superluminal (v &gt; 1.33c), rapid decay to &gamma;&gamma;</td></tr>
+<tr><td>57</td><td><b>Preon</b></td><td>~0</td><td>0</td><td>+0.5</td><td>Sub-quark constituent, color-charged, stable</td></tr>
+<tr><td>58</td><td><b>Inflaton</b></td><td>~0</td><td>0</td><td>0</td><td>Scalar field driving inflation, DE-like repulsion</td></tr>
+<tr><td>59</td><td><b>Majoron</b></td><td>100.0</td><td>0</td><td>0</td><td>Goldstone boson of lepton number, near-massless</td></tr>
+<tr><td>60</td><td><b>Odderon</b></td><td>0.002</td><td>0</td><td>+3</td><td>C-odd gluonic composite, decays to 3 gluons</td></tr>
+<tr><td>61</td><td><b>Glueball</b></td><td>0.003</td><td>0</td><td>0</td><td>Pure glue bound state, decays to 2 gluons</td></tr>
+<tr><td>62</td><td><b>Skyrmion</b></td><td>0.005</td><td>+1</td><td>+0.5</td><td>Topological soliton at nucleon mass, stable</td></tr>
+<tr><td>63</td><td><b>X17</b></td><td>100.0</td><td>0</td><td>+1</td><td>Anomalous boson (17 MeV), decays to e&#8314;e&#8315;</td></tr>
+<tr><td>64</td><td><b>Chameleon</b></td><td>100.0</td><td>0</td><td>0</td><td>Scalar field with DE-like repulsion, stable</td></tr>
+<tr><td rowspan="2"><b>New Class (2025)</b></td>
+  <td>65</td><td><b>Paraparticle</b></td><td>~0</td><td>0</td><td>+0.33</td><td>Exotic statistics (neither boson nor fermion)</td></tr>
+<tr><td>66</td><td><b>Dyn. Axion QP</b></td><td>100.0</td><td>0</td><td>0</td><td>Condensed-matter analog of axion, stable</td></tr>
 </tbody>
 </table>
 
@@ -167,7 +206,17 @@ weakly at short distances (asymptotic freedom) and strongly at long distances (c
 **Dark matter**: Only interacts via gravity (self-gravity always on at 20x, DM-normal at 5x).
 No electromagnetic, strong, or weak forces.
 
+**SIMP self-interaction**: Strongly Interacting Massive Particles experience 30x enhanced
+self-gravity, forming dense clusters unlike standard cold DM.
+
 **Dark energy**: Universal repulsive force that grows with distance (cosmological constant analog).
+Inflaton and Chameleon particles share this DE-like repulsion.
+
+**Magnetic Monopole**: Generates a static radial B-field (g/r&#x00B2;) that deflects nearby charged
+particles via the Lorentz force — no velocity cross product needed (pure monopole field).
+
+**Tachyon**: Superluminal particle — shader enforces v > 1.33c with high energy drain. Rapidly
+decays to photon pairs.
 
 **Higgs Field**: Tunable VEV (0-500) provides mass coupling to heavy particles.
 
@@ -666,7 +715,7 @@ Five independent quantum field overlays, each toggled separately.
 <a name="environment-presets"></a>
 ## Environment Presets
 
-Twelve presets spanning vacuum to dark sector. Select from the **Environment** dropdown.
+Thirteen presets spanning vacuum to SUSY sector. Select from the **Environment** dropdown.
 
 | # | Environment | Temperature | Key Features |
 |---|---|---|---|
@@ -682,6 +731,7 @@ Twelve presets spanning vacuum to dark sector. Select from the **Environment** d
 | 9 | **Meson Factory** | 5 x 10^11 K | Quark-antiquark pairs forming mesons |
 | 10 | **Particle Accelerator** | 10^8 K | High-energy protons + synchrotron radiation |
 | 11 | **Dark Sector** | 10^3 K | 40% DM, 30% p, 15% e, 10% DE, 5% gravitons |
+| 12 | **SUSY Sector** | 10^3 K | 30% neutralino, 20% selectron, 15% smuon, 10% squark, 10% gluino, 10% photon, 5% electron |
 
 ---
 
@@ -700,6 +750,16 @@ Gauge: &gamma; (photon), g (gluon) | Weak: W+, W-, Z0 | Scalar: H0 (Higgs)
 
 ### Hypothetical
 G (Graviton), DM (Dark Matter), DE (Dark Energy)
+
+**Dark Matter Candidates**: Axino, WIMPzilla, SIMP, Sterile Neutrino, Dark Photon, Q-Ball
+
+**SUSY Sparticles**: Selectron, Smuon, Stau, Squark, Gluino, Photino, Wino, Zino, Higgsino, Neutralino, Sneutrino
+
+**Force Carriers & Gravity**: Gravitino, X Boson, Y Boson, Magnetic Monopole, Radion, Dilaton
+
+**Theoretical Extremes**: Tachyon, Preon, Inflaton, Majoron, Odderon, Glueball, Skyrmion, X17, Chameleon
+
+**New Class**: Paraparticle, Dynamical Axion QP
 
 ### Atoms (Group Templates)
 
@@ -916,7 +976,7 @@ Simulation state can be saved and loaded in two binary formats.
 |---|---|
 | **Hotkeys** | `Ctrl+S` save, `Ctrl+L` load |
 | **UI** | Save/Load buttons in bottom bar, pause menu, and Tools popup |
-| **Format** | Binary `.ppsg` (magic `0x47535050`, version 1) |
+| **Format** | Binary `.ppsg` (magic `0x47535050`, version 2, backward-compatible with v1) |
 | **Contents** | Full SimConfig, particle positions/velocities/energies/types/angles/genomes, per-type data (forces, colors, behavior flags), force objects, UI field state |
 | **File browser** | Built-in file browser with directory navigation, file size display, and path editing |
 

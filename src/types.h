@@ -8,7 +8,7 @@
 
 static constexpr uint32_t REGION_W           = 2560;
 static constexpr uint32_t REGION_H           = 1440;
-static constexpr uint32_t MAX_PARTICLE_TYPES = 36;
+static constexpr uint32_t MAX_PARTICLE_TYPES = 68;
 static constexpr uint32_t GROUP_DENSITY      = 256;
 static constexpr uint32_t GENOME_SIZE        = 4;   // floats per particle: charge, electronegativity, reactivity, bond_strength
 
@@ -32,8 +32,7 @@ static constexpr uint32_t Z_BOSON_TYPE       = 28u;  // Z⁰ gauge boson (weak f
 static constexpr uint32_t HIGGS_TYPE         = 29u;  // Higgs boson (H⁰)
 
 // Max covalent bonds per particle type (indexed 0–MAX_PARTICLE_TYPES-1)
-// Atoms 0–17, photon 18, SM particles 19–29, hypothetical 30–32, reserved 33–35
-//                                H  C  N  O  P  S Na Cl Fe Ni Si Ca Ti Sr Au Pb Eu  U  γ  α  e- e+ νe μ  τ  νμ ντ W  Z  H  G DM DE  r  r  r
+// Atoms 0–17, photon 18, SM particles 19–29, hypothetical 30–66, reserved 67
 static constexpr uint32_t ATOM_VALENCE[MAX_PARTICLE_TYPES] = {
     1, 4, 3, 2, 5, 2, 1, 1,  // H C N O P S Na Cl (0-7)
     3, 2, 4, 2, 4, 2, 1, 4, 3, 6,  // Fe Ni Si Ca Ti Sr Au Pb Eu U (8-17)
@@ -41,7 +40,12 @@ static constexpr uint32_t ATOM_VALENCE[MAX_PARTICLE_TYPES] = {
     0, 0, 0, 0, 0,       // α e- e+ νe μ (19-23)
     0, 0, 0, 0, 0, 0,    // τ νμ ντ W Z H (24-29)
     0, 0, 0,             // graviton, dark matter, dark energy (30-32)
-    0, 0, 0              // reserved (33-35)
+    0, 0, 0, 0, 0, 0,   // 33-38: DM candidates (axino..Q-ball)
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // 39-49: SUSY sparticles
+    0, 0, 0, 0, 0, 0,   // 50-55: force carriers (gravitino..dilaton)
+    0, 0, 0, 0, 0, 0, 0, 0, 0,  // 56-64: theoretical extremes
+    0, 0,                // 65-66: new class (paraparticle, dyn axion QP)
+    0,                   // 67: reserved
 };
 
 enum ParticleBehavior : uint32_t {
@@ -80,6 +84,9 @@ enum ParticleBehavior : uint32_t {
     BEHAVIOR_DARK_MATTER = 1u << 27, // WIMP — only gravity + weak, no EM/strong
     BEHAVIOR_DARK_ENERGY = 1u << 28, // quintessence — repulsive field quantum
     BEHAVIOR_VIRTUAL     = 1u << 29, // short-TTL virtual particle (fast energy drain)
+    // Hypothetical particle category flags
+    BEHAVIOR_SUSY        = 1u << 30, // supersymmetric partner particle
+    BEHAVIOR_EXOTIC      = 1u << 31, // theoretical extreme / exotic statistics
 };
 
 // ── Force Objects (spawnable stationary force emitters) ──────────────────────

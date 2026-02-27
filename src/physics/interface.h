@@ -375,6 +375,7 @@ public:
     bool show_decay_log = false;
     bool show_nuclear_debug = false;
     int32_t expanded_event_idx = -1;  // which event is expanded in log
+    bool event_filter[DEVT_COUNT] = {true,true,true,true,true,true,true,true,true,true,true,true,true};
 
     void push_decay_event(const char* desc, DecayEventType type, ImVec4 color = ImVec4(1,0.6f,0.2f,1));
     void push_decay_event(const char* desc, DecayEventType type, ImVec4 color, const std::string& details);

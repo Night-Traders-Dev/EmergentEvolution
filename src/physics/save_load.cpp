@@ -3,7 +3,8 @@
 #include <cstring>
 
 static constexpr uint32_t PPSG_MAGIC   = 0x47535050;  // "PPSG" little-endian
-static constexpr uint32_t PPSG_VERSION = 1;
+static constexpr uint32_t PPSG_VERSION = 2;
+static constexpr uint32_t PPSG_V1_MAX_TYPES = 36;  // MAX_PARTICLE_TYPES in version 1
 
 // Helper: write raw bytes
 template<typename T>
@@ -57,6 +58,8 @@ SaveResult save_simulation(
     // Header
     write_val(f, PPSG_MAGIC);
     write_val(f, PPSG_VERSION);
+    uint32_t saved_max_types = MAX_PARTICLE_TYPES;
+    write_val(f, saved_max_types);
 
     // SimConfig (POD)
     write_val(f, cfg);
@@ -116,9 +119,16 @@ LoadResult load_simulation(const std::string& filepath) {
         r.message = "Not a valid .ppsg file";
         return r;
     }
-    if (version != PPSG_VERSION) {
+    if (version < 1 || version > PPSG_VERSION) {
         r.message = "Unsupported version";
         return r;
+    }
+
+    // Determine saved type count
+    uint32_t saved_max_types = PPSG_V1_MAX_TYPES;  // v1 default
+    if (version >= 2) {
+        read_val(f, saved_max_types);
+        if (saved_max_types > MAX_PARTICLE_TYPES) saved_max_types = MAX_PARTICLE_TYPES;
     }
 
     // SimConfig
@@ -139,13 +149,34 @@ LoadResult load_simulation(const std::string& filepath) {
         return r;
     }
 
-    // Per-type data
-    f.read(reinterpret_cast<char*>(r.forces),
-           MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES * sizeof(float));
-    f.read(reinterpret_cast<char*>(r.colors),
-           MAX_PARTICLE_TYPES * sizeof(glm::vec4));
-    f.read(reinterpret_cast<char*>(r.behavior_flags),
-           MAX_PARTICLE_TYPES * sizeof(uint32_t));
+    // Per-type data — read with backward compatibility
+    // Zero-fill first, then read saved portion
+    std::memset(r.forces, 0, sizeof(r.forces));
+    std::memset(r.colors, 0, sizeof(r.colors));
+    std::memset(r.behavior_flags, 0, sizeof(r.behavior_flags));
+
+    if (saved_max_types == MAX_PARTICLE_TYPES) {
+        // Same size — direct read
+        f.read(reinterpret_cast<char*>(r.forces),
+               MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES * sizeof(float));
+        f.read(reinterpret_cast<char*>(r.colors),
+               MAX_PARTICLE_TYPES * sizeof(glm::vec4));
+        f.read(reinterpret_cast<char*>(r.behavior_flags),
+               MAX_PARTICLE_TYPES * sizeof(uint32_t));
+    } else {
+        // Smaller saved size — read row-by-row for force matrix, then colors/flags
+        // Force matrix: saved_max_types × saved_max_types
+        for (uint32_t row = 0; row < saved_max_types; ++row) {
+            f.read(reinterpret_cast<char*>(&r.forces[row * MAX_PARTICLE_TYPES]),
+                   saved_max_types * sizeof(float));
+        }
+        // Colors
+        f.read(reinterpret_cast<char*>(r.colors),
+               saved_max_types * sizeof(glm::vec4));
+        // Behavior flags
+        f.read(reinterpret_cast<char*>(r.behavior_flags),
+               saved_max_types * sizeof(uint32_t));
+    }
 
     // Force objects
     read_val(f, r.force_object_count);

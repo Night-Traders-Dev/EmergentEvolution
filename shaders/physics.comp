@@ -105,6 +105,41 @@ const uint HIGGS_TYPE      = 29u;
 const uint GRAVITON_TYPE   = 30u;
 const uint DARK_MATTER_TYPE = 31u;
 const uint DARK_ENERGY_TYPE = 32u;
+// Hypothetical particles
+const uint AXINO_TYPE           = 33u;
+const uint WIMPZILLA_TYPE       = 34u;
+const uint SIMP_TYPE            = 35u;
+const uint STERILE_NEUTRINO_TYPE = 36u;
+const uint DARK_PHOTON_TYPE     = 37u;
+const uint QBALL_TYPE           = 38u;
+const uint SELECTRON_TYPE       = 39u;
+const uint SMUON_TYPE           = 40u;
+const uint STAU_TYPE            = 41u;
+const uint SQUARK_TYPE          = 42u;
+const uint GLUINO_TYPE          = 43u;
+const uint PHOTINO_TYPE         = 44u;
+const uint WINO_TYPE            = 45u;
+const uint ZINO_TYPE            = 46u;
+const uint HIGGSINO_TYPE        = 47u;
+const uint NEUTRALINO_TYPE      = 48u;
+const uint SNEUTRINO_TYPE       = 49u;
+const uint GRAVITINO_TYPE       = 50u;
+const uint X_BOSON_TYPE         = 51u;
+const uint Y_BOSON_TYPE         = 52u;
+const uint MONOPOLE_TYPE        = 53u;
+const uint RADION_TYPE          = 54u;
+const uint DILATON_TYPE         = 55u;
+const uint TACHYON_TYPE         = 56u;
+const uint PREON_TYPE           = 57u;
+const uint INFLATON_TYPE        = 58u;
+const uint MAJORON_TYPE         = 59u;
+const uint ODDERON_TYPE         = 60u;
+const uint GLUEBALL_TYPE        = 61u;
+const uint SKYRMION_TYPE        = 62u;
+const uint X17_TYPE             = 63u;
+const uint CHAMELEON_TYPE       = 64u;
+const uint PARAPARTICLE_TYPE    = 65u;
+const uint DYN_AXION_QP_TYPE    = 66u;
 
 // ── Behavior flags (must match types.h) ─────────────────────────────────────
 const uint BEHAVIOR_PHOTON      = 1024u;       // 1 << 10
@@ -122,6 +157,8 @@ const uint BEHAVIOR_GRAVITON    = 67108864u;   // 1 << 26
 const uint BEHAVIOR_DARK_MATTER = 134217728u;  // 1 << 27
 const uint BEHAVIOR_DARK_ENERGY = 268435456u;  // 1 << 28
 const uint BEHAVIOR_VIRTUAL     = 536870912u;  // 1 << 29
+const uint BEHAVIOR_SUSY        = 1073741824u; // 1 << 30
+const uint BEHAVIOR_EXOTIC      = 2147483648u; // 1 << 31
 
 // ── Physics constants ───────────────────────────────────────────────────────
 // Force hierarchy: Strong > EM > Weak > Gravity (at nuclear distances)
@@ -215,6 +252,45 @@ float get_mass_inv(uint type) {
     if (type == GRAVITON_TYPE) return 100.0;   // massless
     if (type == DARK_MATTER_TYPE) return 0.001; // ~1 TeV WIMP
     if (type == DARK_ENERGY_TYPE) return 100.0; // massless field quantum
+    // ── Hypothetical: Dark Matter Candidates ──
+    if (type == AXINO_TYPE) return 5.0;            // 0.1 MeV — very light
+    if (type == WIMPZILLA_TYPE) return 0.0000001;  // 1e12 MeV — ultra-heavy
+    if (type == SIMP_TYPE) return 0.001;           // 500 MeV — proton-scale
+    if (type == STERILE_NEUTRINO_TYPE) return 100.0; // 0.001 MeV — near-massless
+    if (type == DARK_PHOTON_TYPE) return 100.0;    // 17 MeV — massless-like boson
+    if (type == QBALL_TYPE) return 0.000005;       // 1e6 MeV — ultra-heavy
+    // ── Hypothetical: Supersymmetric Sparticles ──
+    if (type == SELECTRON_TYPE) return 0.000025;   // 200 GeV
+    if (type == SMUON_TYPE) return 0.000017;       // 300 GeV
+    if (type == STAU_TYPE) return 0.000033;        // 150 GeV
+    if (type == SQUARK_TYPE) return 0.0000033;     // 1.5 TeV
+    if (type == GLUINO_TYPE) return 0.0000025;     // 2 TeV
+    if (type == PHOTINO_TYPE) return 0.00005;      // 100 GeV
+    if (type == WINO_TYPE) return 0.000017;        // 300 GeV
+    if (type == ZINO_TYPE) return 0.000017;        // 300 GeV
+    if (type == HIGGSINO_TYPE) return 0.000025;    // 200 GeV
+    if (type == NEUTRALINO_TYPE) return 0.00005;   // 100 GeV (stable LSP)
+    if (type == SNEUTRINO_TYPE) return 0.000025;   // 200 GeV
+    // ── Hypothetical: Force Carriers & Gravity ──
+    if (type == GRAVITINO_TYPE) return 100.0;      // 0.001 MeV — near-massless
+    if (type == X_BOSON_TYPE) return 0.0000000005; // 1e15 MeV — GUT scale
+    if (type == Y_BOSON_TYPE) return 0.0000000005; // 1e15 MeV — GUT scale
+    if (type == MONOPOLE_TYPE) return 0.0000000003;// 1e16 MeV — heaviest
+    if (type == RADION_TYPE) return 0.000005;      // 1e6 MeV
+    if (type == DILATON_TYPE) return 0.0005;       // 10 GeV
+    // ── Hypothetical: Theoretical Extremes ──
+    if (type == TACHYON_TYPE) return 50.0;         // ~1 MeV imaginary mass
+    if (type == PREON_TYPE) return 0.00000000005;  // 1e17 MeV — sub-quark
+    if (type == INFLATON_TYPE) return 0.0000000004;// 1e13 MeV
+    if (type == MAJORON_TYPE) return 100.0;        // 0.0001 MeV — near-massless
+    if (type == ODDERON_TYPE) return 0.002;        // 2500 MeV
+    if (type == GLUEBALL_TYPE) return 0.003;       // 1700 MeV
+    if (type == SKYRMION_TYPE) return 0.005;       // 939 MeV — nucleon mass
+    if (type == X17_TYPE) return 100.0;            // 17 MeV — boson
+    if (type == CHAMELEON_TYPE) return 100.0;      // 0.01 MeV — DE-like
+    // ── Hypothetical: New Class ──
+    if (type == PARAPARTICLE_TYPE) return 0.00001; // 500 GeV
+    if (type == DYN_AXION_QP_TYPE) return 100.0;   // 0.001 MeV — near-massless
     return 1.0;
 }
 
@@ -232,6 +308,11 @@ float get_zpe(uint type) {
         || type == DARK_ENERGY_TYPE) return 0.0;
     if (type == NEUTRINO_E_TYPE || type == NEUTRINO_MU_TYPE
         || type == NEUTRINO_TAU_TYPE) return 0.0;
+    // Hypothetical massless/near-massless types
+    if (type == STERILE_NEUTRINO_TYPE || type == DARK_PHOTON_TYPE
+        || type == GRAVITINO_TYPE || type == TACHYON_TYPE
+        || type == MAJORON_TYPE || type == X17_TYPE
+        || type == CHAMELEON_TYPE || type == DYN_AXION_QP_TYPE) return 0.0;
     float mass = get_mass(type);
     return clamp(mass * 0.0001, 0.0, 0.05);
 }
@@ -271,6 +352,23 @@ void apply_physics(uint i) {
 
     // ── Photon/Gluon fast-path ────────────────────────────────────────────────
     if ((flags_a & BEHAVIOR_PHOTON) != 0u) {
+        // Tachyon: superluminal, high energy drain, enforce speed > 1.33c
+        if (type_a == TACHYON_TYPE) {
+            float tach_energy = max(energy - 0.3 * params.dt, 0.0);
+            vec2 tach_vel = vel_a;
+            float tach_spd = length(tach_vel);
+            float min_speed = C_SIM * 1.33;
+            if (tach_spd < min_speed) {
+                tach_vel = (tach_spd > 0.1) ? normalize(tach_vel) * min_speed
+                         : vec2(min_speed, 0.0);
+            }
+            out_energy_buffer.data[i] = tach_energy;
+            out_pos_buffer.data[i]    = pos_a + tach_vel * params.dt;
+            out_vel_buffer.data[i]    = tach_vel;
+            angle_out_buffer.data[i]  = angle_in_buffer.data[i];
+            avel_out_buffer.data[i]   = avel_in_buffer.data[i];
+            return;
+        }
         float drain = (type_a == GLUON_TYPE) ? PHOTON_DRAIN * 1.5 : PHOTON_DRAIN;
         float ph_energy = max(energy - drain * params.dt, 0.0);
         vec2  ph_vel = vel_a;
@@ -574,6 +672,11 @@ void apply_physics(uint i) {
                 float f_grav = 20.0 * mass_a * mass_b / (dist_sq + 25.0);
                 total_force += normal * f_grav;
             }
+            // SIMP self-interaction: 30x self-gravity between SIMP pairs
+            if (type_a == SIMP_TYPE && type_b == SIMP_TYPE) {
+                float f_simp = 30.0 * mass_a * mass_b / (dist_sq + 25.0);
+                total_force += normal * f_simp;
+            }
             // DM-normal gravity: always on but weaker
             else if (dm_interaction) {
                 float f_grav = 5.0 * mass_a * mass_b / (dist_sq + 25.0);
@@ -602,6 +705,22 @@ void apply_physics(uint i) {
                 float B_z     = coupling * charge_b * cross_j / (dist_sq + 1.0);
                 total_force  += charge_a * B_z * vec2(vel_a.y, -vel_a.x);
                 accumulated_Bz += B_z;
+            }
+            // Magnetic monopole: static radial B = g/r² (no velocity cross product)
+            // Lorentz force on nearby charged particles: F = q * v × B_radial
+            if (type_b == MONOPOLE_TYPE && abs(charge_a) > 0.01) {
+                float g_mono = 200.0;  // magnetic charge strength
+                float B_mono = g_mono / (dist_sq + 4.0);
+                // Radial B-field → Lorentz force perpendicular to velocity
+                total_force += charge_a * B_mono * vec2(vel_a.y, -vel_a.x);
+            }
+            if (type_a == MONOPOLE_TYPE && abs(get_charge(uint(j))) > 0.01) {
+                float g_mono = 200.0;
+                float B_mono = g_mono / (dist_sq + 4.0);
+                float charge_b_val = get_charge(uint(j));
+                vec2 vel_b = in_vel_buffer.data[j];
+                // Reaction: monopole feels force from charged particle's motion
+                total_force -= charge_b_val * B_mono * vec2(vel_b.y, -vel_b.x) * mass_inv_a;
             }
         }
 

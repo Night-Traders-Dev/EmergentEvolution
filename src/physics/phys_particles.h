@@ -60,11 +60,55 @@ static constexpr uint32_t GRAVITON_TYPE_PHYS     = 30;  // spin-2 massless gravi
 static constexpr uint32_t DARK_MATTER_TYPE_PHYS  = 31;  // WIMP — gravity + weak only
 static constexpr uint32_t DARK_ENERGY_TYPE_PHYS  = 32;  // quintessence — repulsive field quantum
 
-static constexpr uint32_t PHYS_PARTICLE_TYPES  = 33;
+// ── Dark Matter Candidates ──────────────────────────────────────────────────
+static constexpr uint32_t AXINO_TYPE_PHYS              = 33;  // SUSY partner of axion
+static constexpr uint32_t WIMPZILLA_TYPE_PHYS          = 34;  // super-heavy ~10^12 GeV DM
+static constexpr uint32_t SIMP_TYPE_PHYS               = 35;  // strongly interacting massive particle
+static constexpr uint32_t STERILE_NEUTRINO_TYPE_PHYS   = 36;  // right-handed neutrino
+static constexpr uint32_t DARK_PHOTON_TYPE_PHYS        = 37;  // dark electromagnetism carrier A'
+static constexpr uint32_t QBALL_TYPE_PHYS              = 38;  // stable field-energy soliton
+
+// ── Supersymmetric Sparticles ───────────────────────────────────────────────
+static constexpr uint32_t SELECTRON_TYPE_PHYS          = 39;  // scalar partner of electron
+static constexpr uint32_t SMUON_TYPE_PHYS              = 40;  // scalar partner of muon
+static constexpr uint32_t STAU_TYPE_PHYS               = 41;  // scalar partner of tau
+static constexpr uint32_t SQUARK_TYPE_PHYS             = 42;  // scalar partner of quark
+static constexpr uint32_t GLUINO_TYPE_PHYS             = 43;  // fermionic partner of gluon
+static constexpr uint32_t PHOTINO_TYPE_PHYS            = 44;  // fermionic partner of photon
+static constexpr uint32_t WINO_TYPE_PHYS               = 45;  // fermionic partner of W
+static constexpr uint32_t ZINO_TYPE_PHYS               = 46;  // fermionic partner of Z
+static constexpr uint32_t HIGGSINO_TYPE_PHYS           = 47;  // fermionic partner of Higgs
+static constexpr uint32_t NEUTRALINO_TYPE_PHYS         = 48;  // lightest SUSY particle (LSP)
+static constexpr uint32_t SNEUTRINO_TYPE_PHYS          = 49;  // scalar partner of neutrino
+
+// ── Force Carriers & Gravity ────────────────────────────────────────────────
+static constexpr uint32_t GRAVITINO_TYPE_PHYS          = 50;  // SUSY partner of graviton
+static constexpr uint32_t X_BOSON_TYPE_PHYS            = 51;  // GUT leptoquark (proton decay)
+static constexpr uint32_t Y_BOSON_TYPE_PHYS            = 52;  // GUT leptoquark (proton decay)
+static constexpr uint32_t MONOPOLE_TYPE_PHYS           = 53;  // magnetic monopole
+static constexpr uint32_t RADION_TYPE_PHYS             = 54;  // extra-dimension size modulus
+static constexpr uint32_t DILATON_TYPE_PHYS            = 55;  // string theory scale field
+
+// ── Theoretical Extremes ────────────────────────────────────────────────────
+static constexpr uint32_t TACHYON_TYPE_PHYS            = 56;  // imaginary-mass superluminal
+static constexpr uint32_t PREON_TYPE_PHYS              = 57;  // sub-quark constituent
+static constexpr uint32_t INFLATON_TYPE_PHYS           = 58;  // cosmic inflation driver
+static constexpr uint32_t MAJORON_TYPE_PHYS            = 59;  // neutrino mass Goldstone
+static constexpr uint32_t ODDERON_TYPE_PHYS            = 60;  // odd-gluon bound state
+static constexpr uint32_t GLUEBALL_TYPE_PHYS           = 61;  // pure-glue bound state
+static constexpr uint32_t SKYRMION_TYPE_PHYS           = 62;  // topological soliton baryon
+static constexpr uint32_t X17_TYPE_PHYS                = 63;  // fifth-force light boson
+static constexpr uint32_t CHAMELEON_TYPE_PHYS          = 64;  // environment-dependent mass scalar
+
+// ── New Class (2025-2026) ───────────────────────────────────────────────────
+static constexpr uint32_t PARAPARTICLE_TYPE_PHYS       = 65;  // neither boson nor fermion
+static constexpr uint32_t DYN_AXION_QP_TYPE_PHYS       = 66;  // dynamical axion quasiparticle
+
+static constexpr uint32_t PHYS_PARTICLE_TYPES  = 67;
 
 // ── Environment presets ──────────────────────────────────────────────────────
 
-static constexpr int PHYS_ENV_COUNT = 12;
+static constexpr int PHYS_ENV_COUNT = 13;
 static const char* const PHYS_ENV_NAMES[PHYS_ENV_COUNT] = {
     "Lab Mode",
     "Hydrogen Plasma",
@@ -77,7 +121,8 @@ static const char* const PHYS_ENV_NAMES[PHYS_ENV_COUNT] = {
     "Electroweak Era",
     "Meson Factory",
     "Particle Accelerator",
-    "Dark Sector"
+    "Dark Sector",
+    "SUSY Sector"
 };
 
 // ── Per-type physics data ────────────────────────────────────────────────────
@@ -96,6 +141,20 @@ static constexpr float PHYS_CHARGE[PHYS_PARTICLE_TYPES] = {
      0.0f,  1.0f, -1.0f,  0.0f,  0.0f,
     // 30:graviton  31:DM  32:DE
      0.0f,  0.0f,  0.0f,
+    // 33:axino 34:WIMPzilla 35:SIMP 36:sterile_nu 37:dark_photon 38:Q-ball
+     0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  1.0f,
+    // 39:selectron 40:smuon 41:stau 42:squark 43:gluino
+    -1.0f, -1.0f, -1.0f,  0.667f,  0.0f,
+    // 44:photino 45:wino 46:zino 47:higgsino 48:neutralino 49:sneutrino
+     0.0f,  1.0f,  0.0f,  0.0f,  0.0f,  0.0f,
+    // 50:gravitino 51:X_boson 52:Y_boson 53:monopole 54:radion 55:dilaton
+     0.0f,  1.333f,  0.333f,  0.0f,  0.0f,  0.0f,
+    // 56:tachyon 57:preon 58:inflaton 59:majoron 60:odderon 61:glueball
+     0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f,
+    // 62:skyrmion 63:X17 64:chameleon
+     1.0f,  0.0f,  0.0f,
+    // 65:paraparticle 66:dyn_axion_qp
+     0.0f,  0.0f,
 };
 
 // Spin quantum number
@@ -112,6 +171,20 @@ static constexpr float PHYS_SPIN[PHYS_PARTICLE_TYPES] = {
      1.0f,  1.0f,  1.0f,  1.0f,  0.0f,
     // 30:graviton(spin-2)  31:DM(WIMP fermion)  32:DE(scalar)
      2.0f,  0.5f,  0.0f,
+    // 33:axino(1/2) 34:WIMPzilla(1/2) 35:SIMP(1/2) 36:sterile_nu(1/2) 37:dark_photon(1) 38:Q-ball(0)
+     0.5f,  0.5f,  0.5f,  0.5f,  1.0f,  0.0f,
+    // 39:selectron(0) 40:smuon(0) 41:stau(0) 42:squark(0) 43:gluino(1/2)
+     0.0f,  0.0f,  0.0f,  0.0f,  0.5f,
+    // 44:photino(1/2) 45:wino(1/2) 46:zino(1/2) 47:higgsino(1/2) 48:neutralino(1/2) 49:sneutrino(0)
+     0.5f,  0.5f,  0.5f,  0.5f,  0.5f,  0.0f,
+    // 50:gravitino(3/2) 51:X(1) 52:Y(1) 53:monopole(0) 54:radion(0) 55:dilaton(0)
+     1.5f,  1.0f,  1.0f,  0.0f,  0.0f,  0.0f,
+    // 56:tachyon(0) 57:preon(1/2) 58:inflaton(0) 59:majoron(0) 60:odderon(3) 61:glueball(0)
+     0.0f,  0.5f,  0.0f,  0.0f,  3.0f,  0.0f,
+    // 62:skyrmion(1/2) 63:X17(1) 64:chameleon(0)
+     0.5f,  1.0f,  0.0f,
+    // 65:paraparticle(1/3) 66:dyn_axion_qp(0)
+     0.33f,  0.0f,
 };
 
 // Decay rate (energy drain per dt, 0 = stable)
@@ -128,6 +201,20 @@ static constexpr float PHYS_DECAY_RATE[PHYS_PARTICLE_TYPES] = {
     0.0f, 0.50f, 0.50f, 0.50f, 0.40f,
     // 30:graviton  31:DM  32:DE  (all stable)
     0.0f, 0.0f, 0.0f,
+    // 33:axino 34:WIMPzilla 35:SIMP 36:sterile_nu 37:dark_photon 38:Q-ball
+    0.05f, 0.0f, 0.0f, 0.0f, 0.03f, 0.0f,
+    // 39:selectron 40:smuon 41:stau 42:squark 43:gluino
+    0.15f, 0.15f, 0.08f, 0.20f, 0.20f,
+    // 44:photino 45:wino 46:zino 47:higgsino 48:neutralino 49:sneutrino
+    0.10f, 0.15f, 0.15f, 0.12f, 0.0f, 0.12f,
+    // 50:gravitino 51:X_boson 52:Y_boson 53:monopole 54:radion 55:dilaton
+    0.0f, 0.50f, 0.50f, 0.0f, 0.10f, 0.03f,
+    // 56:tachyon 57:preon 58:inflaton 59:majoron 60:odderon 61:glueball
+    0.30f, 0.0f, 0.05f, 0.0f, 0.08f, 0.06f,
+    // 62:skyrmion 63:X17 64:chameleon
+    0.0f, 0.20f, 0.0f,
+    // 65:paraparticle 66:dyn_axion_qp
+    0.10f, 0.0f,
 };
 
 // ── Simulation constants ─────────────────────────────────────────────────────
@@ -148,6 +235,26 @@ static constexpr float PHYS_REST_MASS_MEV[PHYS_PARTICLE_TYPES] = {
     0.0f, 80379.0f, 80379.0f, 91188.0f, 125100.0f,
     // 30:graviton  31:DM(~100GeV WIMP)  32:DE(quintessence)
     0.0f, 100000.0f, 0.001f,
+    // 33:axino(~100keV)  34:WIMPzilla(~10^12GeV)  35:SIMP(500MeV)
+    0.1f, 1.0e12f, 500.0f,
+    // 36:sterile_nu(~1keV) 37:dark_photon(17MeV) 38:Q-ball(~1TeV)
+    0.001f, 17.0f, 1.0e6f,
+    // 39:selectron(200GeV) 40:smuon(300GeV) 41:stau(150GeV) 42:squark(1.5TeV) 43:gluino(2TeV)
+    200000.0f, 300000.0f, 150000.0f, 1.5e6f, 2.0e6f,
+    // 44:photino(100GeV) 45:wino(300GeV) 46:zino(300GeV) 47:higgsino(200GeV)
+    100000.0f, 300000.0f, 300000.0f, 200000.0f,
+    // 48:neutralino(100GeV) 49:sneutrino(200GeV)
+    100000.0f, 200000.0f,
+    // 50:gravitino(~1keV) 51:X(~10^15GeV) 52:Y(~10^15GeV) 53:monopole(~10^16GeV)
+    0.001f, 1.0e15f, 1.0e15f, 1.0e16f,
+    // 54:radion(~1TeV) 55:dilaton(10GeV)
+    1.0e6f, 10000.0f,
+    // 56:tachyon(~1MeV imaginary) 57:preon(~10^17GeV) 58:inflaton(~10^13GeV) 59:majoron(~0.1eV)
+    1.0f, 1.0e17f, 1.0e13f, 0.0001f,
+    // 60:odderon(2.5GeV) 61:glueball(1.7GeV) 62:skyrmion(939MeV) 63:X17(17MeV) 64:chameleon(~0.01eV)
+    2500.0f, 1700.0f, 939.0f, 17.0f, 0.00001f,
+    // 65:paraparticle(500GeV) 66:dyn_axion_qp(~1meV)
+    500000.0f, 0.001f,
 };
 
 // ── Nuclear isotope decay ────────────────────────────────────────────────────

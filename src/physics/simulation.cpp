@@ -2135,7 +2135,7 @@ void PhysicsSimulation::update_bonds() {
     // ── Break pass: remove bonds where atoms are too far apart ───────────
     for (uint32_t ni = 0; ni < detected_nuclei_.size(); ++ni) {
         const auto& nuc = detected_nuclei_[ni];
-        if (nuc.is_anti || nuc.Z == 0) continue;
+        if (nuc.Z == 0) continue;
         uint32_t rep = nuc.rep;
         if (rep >= n) continue;
 
@@ -2197,7 +2197,7 @@ void PhysicsSimulation::update_bonds() {
     int new_bonds = 0;
     for (uint32_t ni = 0; ni < detected_nuclei_.size() && new_bonds < MAX_NEW_BONDS; ++ni) {
         const auto& nuc = detected_nuclei_[ni];
-        if (nuc.is_anti || nuc.Z == 0) continue;
+        if (nuc.Z == 0) continue;
 
         int valence = valence_from_Z(nuc.Z);
         if (valence <= 0) continue;
@@ -2221,7 +2221,8 @@ void PhysicsSimulation::update_bonds() {
 
             uint32_t nj = it->second;
             const auto& nuc_b = detected_nuclei_[nj];
-            if (nuc_b.is_anti || nuc_b.Z == 0) return;
+            if (nuc_b.Z == 0) return;
+            if (nuc_b.is_anti != nuc.is_anti) return;  // no matter-antimatter bonds
             if (nuc_b.rep == rep_a) return;  // same nucleus
 
             // Already bonded?
@@ -2932,6 +2933,369 @@ void PhysicsSimulation::check_decay() {
                         i, KE_e, nu1, KE_nu1, nu2, KE_nu2);
                     iface.push_decay_event("\xce\xbc\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xce\xbc + \xce\xbd" "e", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
                 }
+                break;
+            }
+
+            // ═══════════════════════════════════════════════════════════════
+            //  HYPOTHETICAL PARTICLE DECAYS
+            // ═══════════════════════════════════════════════════════════════
+
+            // ── Axino → photon + neutralino (SUSY cascade) ──
+            case AXINO_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, PHOTON_TYPE_PHYS, rng, frame_counter_);
+                readback_energies_[i] = 0.5f;
+                readback_velocities_[i] = dir * C_SIM;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, NEUTRALINO_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * 5.0f;
+                    readback_energies_[slot] = 0.8f;
+                }
+                iface.push_decay_event("Axino -> gamma + N1", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.6f, 0.3f, 0.9f, 1.0f), "");
+                break;
+            }
+
+            // ── Dark Photon → e+ e- ──
+            case DARK_PHOTON_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, ELECTRON_TYPE_PHYS, rng, frame_counter_);
+                readback_energies_[i] = 0.6f;
+                readback_velocities_[i] = dir * 80.0f;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, POSITRON_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * 80.0f;
+                    readback_energies_[slot] = 0.6f;
+                }
+                iface.push_decay_event("A' -> e+ e-", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.5f, 0.2f, 0.8f, 1.0f), "");
+                break;
+            }
+
+            // ── Selectron → electron + neutralino ──
+            case SELECTRON_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, ELECTRON_TYPE_PHYS, rng, frame_counter_);
+                readback_energies_[i] = 0.7f;
+                readback_velocities_[i] = dir * 100.0f;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, NEUTRALINO_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * 10.0f;
+                    readback_energies_[slot] = 0.8f;
+                }
+                iface.push_decay_event("e~ -> e + N1", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.8f, 0.6f, 0.9f, 1.0f), "");
+                break;
+            }
+
+            // ── Smuon → muon + neutralino ──
+            case SMUON_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, MUON_TYPE_PHYS, rng, frame_counter_);
+                readback_energies_[i] = 0.7f;
+                readback_velocities_[i] = dir * 60.0f;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, NEUTRALINO_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * 10.0f;
+                    readback_energies_[slot] = 0.8f;
+                }
+                iface.push_decay_event("mu~ -> mu + N1", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.8f, 0.5f, 0.9f, 1.0f), "");
+                break;
+            }
+
+            // ── Stau → tau + neutralino ──
+            case STAU_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, TAU_TYPE_PHYS, rng, frame_counter_);
+                readback_energies_[i] = 0.7f;
+                readback_velocities_[i] = dir * 30.0f;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, NEUTRALINO_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * 10.0f;
+                    readback_energies_[slot] = 0.8f;
+                }
+                iface.push_decay_event("tau~ -> tau + N1", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.7f, 0.5f, 0.9f, 1.0f), "");
+                break;
+            }
+
+            // ── Squark → quark + gluino ──
+            case SQUARK_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, UP_QUARK_TYPE, rng, frame_counter_);
+                readback_energies_[i] = 0.7f;
+                readback_velocities_[i] = dir * 50.0f;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, GLUINO_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * 5.0f;
+                    readback_energies_[slot] = 0.8f;
+                }
+                iface.push_decay_event("q~ -> q + g~", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.9f, 0.7f, 0.5f, 1.0f), "");
+                break;
+            }
+
+            // ── Gluino → gluon + neutralino ──
+            case GLUINO_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, GLUON_TYPE_PHYS, rng, frame_counter_);
+                readback_energies_[i] = 0.6f;
+                readback_velocities_[i] = dir * C_SIM;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, NEUTRALINO_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * 5.0f;
+                    readback_energies_[slot] = 0.8f;
+                }
+                iface.push_decay_event("g~ -> g + N1", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.9f, 0.6f, 0.4f, 1.0f), "");
+                break;
+            }
+
+            // ── Photino → photon + neutralino ──
+            case PHOTINO_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, PHOTON_TYPE_PHYS, rng, frame_counter_);
+                readback_energies_[i] = 0.5f;
+                readback_velocities_[i] = dir * C_SIM;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, NEUTRALINO_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * 10.0f;
+                    readback_energies_[slot] = 0.8f;
+                }
+                iface.push_decay_event("y~ -> gamma + N1", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.9f, 0.8f, 0.5f, 1.0f), "");
+                break;
+            }
+
+            // ── Wino → W + neutralino ──
+            case WINO_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, W_PLUS_TYPE_PHYS, rng, frame_counter_);
+                readback_energies_[i] = 0.6f;
+                readback_velocities_[i] = dir * 20.0f;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, NEUTRALINO_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * 10.0f;
+                    readback_energies_[slot] = 0.8f;
+                }
+                iface.push_decay_event("W~ -> W + N1", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.8f, 0.7f, 0.5f, 1.0f), "");
+                break;
+            }
+
+            // ── Zino → Z + neutralino ──
+            case ZINO_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, Z_BOSON_TYPE_PHYS, rng, frame_counter_);
+                readback_energies_[i] = 0.6f;
+                readback_velocities_[i] = dir * 20.0f;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, NEUTRALINO_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * 10.0f;
+                    readback_energies_[slot] = 0.8f;
+                }
+                iface.push_decay_event("Z~ -> Z + N1", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.8f, 0.7f, 0.6f, 1.0f), "");
+                break;
+            }
+
+            // ── Higgsino → Higgs + neutralino ──
+            case HIGGSINO_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, HIGGS_TYPE_PHYS, rng, frame_counter_);
+                readback_energies_[i] = 0.6f;
+                readback_velocities_[i] = dir * 10.0f;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, NEUTRALINO_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * 10.0f;
+                    readback_energies_[slot] = 0.8f;
+                }
+                iface.push_decay_event("H~ -> H + N1", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.7f, 0.8f, 0.5f, 1.0f), "");
+                break;
+            }
+
+            // ── Sneutrino → neutrino + neutralino ──
+            case SNEUTRINO_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, NEUTRINO_TYPE_PHYS, rng, frame_counter_);
+                readback_energies_[i] = 0.5f;
+                readback_velocities_[i] = dir * C_SIM * 0.9999f;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, NEUTRALINO_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * 10.0f;
+                    readback_energies_[slot] = 0.8f;
+                }
+                iface.push_decay_event("v~ -> nu + N1", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.6f, 0.8f, 0.5f, 1.0f), "");
+                break;
+            }
+
+            // ── X Boson → quark + lepton (GUT proton decay mediator) ──
+            case X_BOSON_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, UP_QUARK_TYPE, rng, frame_counter_);
+                readback_energies_[i] = 0.7f;
+                readback_velocities_[i] = dir * 100.0f;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, POSITRON_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * 100.0f;
+                    readback_energies_[slot] = 0.7f;
+                }
+                iface.push_decay_event("X -> u + e+", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.0f, 1.0f, 0.8f, 1.0f), "");
+                break;
+            }
+
+            // ── Y Boson → quark + neutrino ──
+            case Y_BOSON_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, DOWN_QUARK_TYPE, rng, frame_counter_);
+                readback_energies_[i] = 0.7f;
+                readback_velocities_[i] = dir * 100.0f;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, NEUTRINO_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * C_SIM * 0.9999f;
+                    readback_energies_[slot] = 0.5f;
+                }
+                iface.push_decay_event("Y -> d + nu", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.0f, 0.9f, 0.7f, 1.0f), "");
+                break;
+            }
+
+            // ── Radion → photon pair ──
+            case RADION_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, PHOTON_TYPE_PHYS, rng, frame_counter_);
+                readback_energies_[i] = 0.5f;
+                readback_velocities_[i] = dir * C_SIM;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, PHOTON_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * C_SIM;
+                    readback_energies_[slot] = 0.5f;
+                }
+                iface.push_decay_event("Radion -> gamma gamma", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.0f, 0.8f, 0.9f, 1.0f), "");
+                break;
+            }
+
+            // ── Dilaton → photon pair ──
+            case DILATON_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, PHOTON_TYPE_PHYS, rng, frame_counter_);
+                readback_energies_[i] = 0.4f;
+                readback_velocities_[i] = dir * C_SIM;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, PHOTON_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * C_SIM;
+                    readback_energies_[slot] = 0.4f;
+                }
+                iface.push_decay_event("Dilaton -> gamma gamma", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.0f, 0.7f, 0.8f, 1.0f), "");
+                break;
+            }
+
+            // ── Tachyon → photon pair (rapid decay) ──
+            case TACHYON_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, PHOTON_TYPE_PHYS, rng, frame_counter_);
+                readback_energies_[i] = 0.5f;
+                readback_velocities_[i] = dir * C_SIM;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, PHOTON_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * C_SIM;
+                    readback_energies_[slot] = 0.5f;
+                }
+                iface.push_decay_event("Tachyon -> gamma gamma", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.0f, 0.5f, 1.0f), "");
+                break;
+            }
+
+            // ── Inflaton → photon pair (reheating) ──
+            case INFLATON_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, PHOTON_TYPE_PHYS, rng, frame_counter_);
+                readback_energies_[i] = 0.8f;
+                readback_velocities_[i] = dir * C_SIM;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, PHOTON_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * C_SIM;
+                    readback_energies_[slot] = 0.8f;
+                }
+                iface.push_decay_event("Inflaton -> gamma gamma", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.9f, 0.0f, 1.0f), "");
+                break;
+            }
+
+            // ── Odderon → 3 gluons (QCD exotic) ──
+            case ODDERON_TYPE_PHYS: {
+                uint32_t s1 = find_dormant(i + 1);
+                uint32_t s2 = (s1 != UINT32_MAX) ? find_dormant(s1 + 1) : UINT32_MAX;
+                write_spawn_genome(particles, i, GLUON_TYPE_PHYS, rng, frame_counter_);
+                readback_energies_[i] = 0.5f;
+                readback_velocities_[i] = dir * C_SIM;
+                if (s1 != UINT32_MAX) {
+                    write_spawn_genome(particles, s1, GLUON_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[s1] = pos;
+                    readback_velocities_[s1] = glm::vec2(-dir.y, dir.x) * C_SIM;
+                    readback_energies_[s1] = 0.5f;
+                }
+                if (s2 != UINT32_MAX) {
+                    write_spawn_genome(particles, s2, GLUON_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[s2] = pos;
+                    readback_velocities_[s2] = -dir * C_SIM;
+                    readback_energies_[s2] = 0.5f;
+                }
+                iface.push_decay_event("Odderon -> 3g", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.8f, 0.4f, 0.0f, 1.0f), "");
+                break;
+            }
+
+            // ── Glueball → 2 gluons ──
+            case GLUEBALL_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, GLUON_TYPE_PHYS, rng, frame_counter_);
+                readback_energies_[i] = 0.5f;
+                readback_velocities_[i] = dir * C_SIM;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, GLUON_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * C_SIM;
+                    readback_energies_[slot] = 0.5f;
+                }
+                iface.push_decay_event("Glueball -> gg", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.7f, 0.5f, 0.0f, 1.0f), "");
+                break;
+            }
+
+            // ── X17 → e+ e- (anomalous transition) ──
+            case X17_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, ELECTRON_TYPE_PHYS, rng, frame_counter_);
+                readback_energies_[i] = 0.6f;
+                readback_velocities_[i] = dir * 80.0f;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, POSITRON_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * 80.0f;
+                    readback_energies_[slot] = 0.6f;
+                }
+                iface.push_decay_event("X17 -> e+ e-", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.9f, 0.3f, 0.6f, 1.0f), "");
+                break;
+            }
+
+            // ── Paraparticle → W + neutrino ──
+            case PARAPARTICLE_TYPE_PHYS: {
+                uint32_t slot = find_dormant(i + 1);
+                write_spawn_genome(particles, i, W_PLUS_TYPE_PHYS, rng, frame_counter_);
+                readback_energies_[i] = 0.6f;
+                readback_velocities_[i] = dir * 20.0f;
+                if (slot != UINT32_MAX) {
+                    write_spawn_genome(particles, slot, NEUTRINO_TYPE_PHYS, rng, frame_counter_);
+                    readback_positions_[slot] = pos;
+                    readback_velocities_[slot] = -dir * C_SIM * 0.9999f;
+                    readback_energies_[slot] = 0.5f;
+                }
+                iface.push_decay_event("Pp -> W + nu", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.5f, 0.9f, 0.5f, 1.0f), "");
                 break;
             }
 
