@@ -2,7 +2,10 @@
 #include "physics/audio.h"
 #include "physics/molecules.h"
 #include "physics/phys_particles.h"
+#include "vulkan_context.h"
+#include "stb_image.h"
 #include <imgui.h>
+#include <imgui_impl_vulkan.h>
 #include <cmath>
 #include <random>
 #include <cstdio>
@@ -10,6 +13,7 @@
 #include <map>
 #include <filesystem>
 #include <fstream>
+#include <chrono>
 #ifdef HAS_OPENMP
 #include <omp.h>
 #endif
@@ -1274,7 +1278,7 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
 
 static void draw_radial_glow(ImDrawList* dl, float cx, float cy, float radius,
                               ImU32 center_col, ImU32 edge_col) {
-    constexpr int STEPS = 12;
+    constexpr int STEPS = 28;
     for (int s = STEPS; s >= 0; --s) {
         float t = (float)s / STEPS;
         float r = radius * t;
@@ -1289,7 +1293,7 @@ static void draw_radial_glow(ImDrawList* dl, float cx, float cy, float radius,
         int rr = r_c + (int)((r_e - r_c) * blend);
         int gg = g_c + (int)((g_e - g_c) * blend);
         int bb = b_c + (int)((b_e - b_c) * blend);
-        dl->AddCircleFilled(ImVec2(cx, cy), r, IM_COL32(rr, gg, bb, a), 32);
+        dl->AddCircleFilled(ImVec2(cx, cy), r, IM_COL32(rr, gg, bb, a), 64);
     }
 }
 
@@ -1341,17 +1345,20 @@ void PhysicsInterface::init_splash_particles() {
         { IM_COL32(0x88, 0xff, 0x44, 255), IM_COL32(0x66, 0xdd, 0x22, 0x44), 2, 3 },   // gluon
     };
 
-    // Nucleus cluster: 6 protons + 6 neutrons
-    for (int i = 0; i < 12; ++i) {
+    // Nucleus cluster: 12 protons + 12 neutrons
+    for (int i = 0; i < 24; ++i) {
         float angle = randf() * 6.2831853f;
-        float dist = randf() * 18.0f * scale;
-        auto& t = types[i < 6 ? 0 : 1];
+        float dist = randf() * 22.0f * scale;
+        auto& t = types[i < 12 ? 0 : 1];
         SplashParticle p{};
         p.x = ncx + cosf(angle) * dist;
         p.y = ncy + sinf(angle) * dist;
         p.vx = randf_range(-0.5f, 0.5f) * 0.15f;
         p.vy = randf_range(-0.5f, 0.5f) * 0.15f;
         p.r = randf_range(t.r_min, t.r_max) * scale;
+        p.base_r = p.r;
+        p.pulse_phase = randf() * 6.2831853f;
+        p.type_idx = i < 12 ? 0 : 1;
         p.color = t.color;
         p.glow_color = t.glow;
         p.orbit = false;
@@ -1359,18 +1366,21 @@ void PhysicsInterface::init_splash_particles() {
         splash_particles_.push_back(p);
     }
 
-    // 6 orbiting electrons
-    for (int i = 0; i < 6; ++i) {
+    // 12 orbiting electrons
+    for (int i = 0; i < 12; ++i) {
         SplashParticle p{};
         p.orbit = true;
-        p.orbit_r = (40.0f + i * 22.0f + randf() * 10.0f) * scale;
-        p.orbit_speed = 0.008f + randf() * 0.006f;
-        p.phase = (6.2831853f * i / 6.0f) + randf() * 0.5f;
+        p.orbit_r = (35.0f + i * 14.0f + randf() * 10.0f) * scale;
+        p.orbit_speed = 0.006f + randf() * 0.008f;
+        p.phase = (6.2831853f * i / 12.0f) + randf() * 0.5f;
         p.cx = ncx;
         p.cy = ncy;
-        p.tilt_x = 0.5f + randf() * 0.5f;
-        p.tilt_y = 0.7f + randf() * 0.4f;
+        p.tilt_x = 0.4f + randf() * 0.6f;
+        p.tilt_y = 0.6f + randf() * 0.5f;
         p.r = (2.5f + randf() * 1.5f) * scale;
+        p.base_r = p.r;
+        p.pulse_phase = randf() * 6.2831853f;
+        p.type_idx = 2;
         p.color = IM_COL32(0x00, 0xdd, 0xff, 255);
         p.glow_color = IM_COL32(0x00, 0xaa, 0xff, 0x66);
         p.x = p.cx + cosf(p.phase) * p.orbit_r * p.tilt_x;
@@ -1378,8 +1388,30 @@ void PhysicsInterface::init_splash_particles() {
         splash_particles_.push_back(p);
     }
 
-    // 60 scattered ambient particles
-    for (int i = 0; i < 60; ++i) {
+    // 15 inner corona particles (small, fast, warm-colored)
+    for (int i = 0; i < 15; ++i) {
+        SplashParticle p{};
+        p.orbit = true;
+        p.orbit_r = (12.0f + randf() * 20.0f) * scale;
+        p.orbit_speed = 0.015f + randf() * 0.012f;
+        p.phase = randf() * 6.2831853f;
+        p.cx = ncx;
+        p.cy = ncy;
+        p.tilt_x = 0.6f + randf() * 0.4f;
+        p.tilt_y = 0.6f + randf() * 0.4f;
+        p.r = (1.0f + randf() * 1.5f) * scale;
+        p.base_r = p.r;
+        p.pulse_phase = randf() * 6.2831853f;
+        p.type_idx = 3;  // photon-like
+        p.color = IM_COL32(255, 200, 100, 220);
+        p.glow_color = IM_COL32(255, 150, 50, 100);
+        p.x = p.cx + cosf(p.phase) * p.orbit_r * p.tilt_x;
+        p.y = p.cy + sinf(p.phase) * p.orbit_r * p.tilt_y;
+        splash_particles_.push_back(p);
+    }
+
+    // 160 scattered ambient particles
+    for (int i = 0; i < 160; ++i) {
         int ti = (int)(randf() * 8.0f);
         if (ti > 7) ti = 7;
         auto& t = types[ti];
@@ -1389,6 +1421,9 @@ void PhysicsInterface::init_splash_particles() {
         p.vx = randf_range(-0.5f, 0.5f) * 0.8f;
         p.vy = randf_range(-0.5f, 0.5f) * 0.8f;
         p.r = randf_range(t.r_min, t.r_max) * scale;
+        p.base_r = p.r;
+        p.pulse_phase = randf() * 6.2831853f;
+        p.type_idx = ti;
         p.color = t.color;
         p.glow_color = t.glow;
         p.orbit = false;
@@ -1433,9 +1468,13 @@ void PhysicsInterface::draw_splash_screen() {
     // 1. Background fill
     bg->AddRectFilled(ImVec2(0, 0), ImVec2(W, H), IM_COL32(2, 8, 16, 255));
 
-    // 2. Nebula glow
-    draw_radial_glow(bg, W * 0.3f, H * 0.3f, 300.0f * scale,
+    // 2. Multi-layer nebula glow
+    draw_radial_glow(bg, W * 0.3f, H * 0.3f, 350.0f * scale,
                      IM_COL32(10, 20, 60, 80), IM_COL32(10, 20, 60, 0));
+    draw_radial_glow(bg, W * 0.65f, H * 0.55f, 250.0f * scale,
+                     IM_COL32(30, 10, 50, 50), IM_COL32(30, 10, 50, 0));
+    draw_radial_glow(bg, W * 0.5f, H * 0.2f, 200.0f * scale,
+                     IM_COL32(10, 40, 50, 40), IM_COL32(10, 40, 50, 0));
 
     // 3. Energy core glow around nucleus
     float core_r = (35.0f + sinf(splash_time_ * 2.0f) * 5.0f) * scale;
@@ -1444,8 +1483,9 @@ void PhysicsInterface::draw_splash_screen() {
     draw_radial_glow(bg, ncx, ncy, 160.0f * scale,
                      IM_COL32(0, 100, 255, 10), IM_COL32(0, 100, 255, 0));
 
-    // 4. Update particles
+    // 4. Update particles (with radius pulsing)
     for (auto& p : splash_particles_) {
+        p.r = p.base_r * (1.0f + 0.15f * sinf(splash_time_ * 2.5f + p.pulse_phase));
         if (p.orbit) {
             p.phase += p.orbit_speed * dt * 60.0f;
             p.x = p.cx + cosf(p.phase) * p.orbit_r * p.tilt_x;
@@ -1460,25 +1500,27 @@ void PhysicsInterface::draw_splash_screen() {
         }
     }
 
-    // 5. Update trails
+    // 5. Update trails (longer for HD)
     for (size_t i = 0; i < splash_particles_.size(); ++i) {
         splash_trails_[i].push_back(ImVec2(splash_particles_[i].x, splash_particles_[i].y));
-        if (splash_trails_[i].size() > 8) splash_trails_[i].erase(splash_trails_[i].begin());
+        if (splash_trails_[i].size() > 16) splash_trails_[i].erase(splash_trails_[i].begin());
     }
 
-    // 6. Draw trails
+    // 6. Draw trails with tapering width
     for (size_t i = 0; i < splash_particles_.size(); ++i) {
         auto& trail = splash_trails_[i];
         for (size_t j = 1; j < trail.size(); ++j) {
-            float alpha = (float)j / (float)trail.size() * 0.3f;
+            float t = (float)j / (float)trail.size();
+            float alpha = t * 0.45f;
+            float width = splash_particles_[i].r * (0.15f + 0.55f * t);
             ImU32 col = (splash_particles_[i].color & ~IM_COL32_A_MASK) |
                         ((uint32_t)(alpha * 255) << IM_COL32_A_SHIFT);
-            bg->AddLine(trail[j-1], trail[j], col, splash_particles_[i].r * 0.6f);
+            bg->AddLine(trail[j-1], trail[j], col, width);
         }
     }
 
-    // 7. Draw force lines between nearby particles
-    float force_dist = 50.0f * scale;
+    // 7. Draw force lines between nearby particles (wider + glow)
+    float force_dist = 80.0f * scale;
     for (size_t i = 0; i < splash_particles_.size(); ++i) {
         for (size_t j = i + 1; j < splash_particles_.size(); ++j) {
             float dx = splash_particles_[j].x - splash_particles_[i].x;
@@ -1486,10 +1528,13 @@ void PhysicsInterface::draw_splash_screen() {
             float dist2 = dx * dx + dy * dy;
             if (dist2 < force_dist * force_dist && dist2 > 25.0f) {
                 float dist = sqrtf(dist2);
-                float alpha = (1.0f - dist / force_dist) * 0.12f;
-                bg->AddLine(ImVec2(splash_particles_[i].x, splash_particles_[i].y),
-                           ImVec2(splash_particles_[j].x, splash_particles_[j].y),
-                           IM_COL32(0, 180, 255, (int)(alpha * 255)), 0.5f);
+                float alpha = (1.0f - dist / force_dist) * 0.15f;
+                ImVec2 a(splash_particles_[i].x, splash_particles_[i].y);
+                ImVec2 b(splash_particles_[j].x, splash_particles_[j].y);
+                // Outer glow (wider, dimmer)
+                bg->AddLine(a, b, IM_COL32(0, 120, 255, (int)(alpha * 80)), 4.0f);
+                // Core line
+                bg->AddLine(a, b, IM_COL32(0, 180, 255, (int)(alpha * 255)), 1.5f);
             }
         }
     }
@@ -1533,12 +1578,22 @@ void PhysicsInterface::draw_splash_screen() {
                     ImVec2(left_margin + 180.0f * scale, title_y - 8.0f * scale),
                     IM_COL32(0, 200, 255, 153), 1.0f);
 
-        // Title "Particle Playground" — large text
+        // Title "Particle Playground" — large text with glow shadow
         float old_scale = ImGui::GetFont()->Scale;
         float title_font_scale = 2.2f * scale;
         if (title_font_scale < 1.5f) title_font_scale = 1.5f;
         ImGui::GetFont()->Scale = title_font_scale;
         ImGui::PushFont(ImGui::GetFont());
+
+        // Glow shadow layers (drawn behind, progressively offset + dimmer)
+        for (int g = 3; g >= 1; --g) {
+            float ga = 0.12f / (float)g;
+            float off = (float)g * 1.5f;
+            ImGui::SetCursorPos(ImVec2(left_margin + off, title_y + off));
+            ImGui::TextColored(ImVec4(0.0f, 0.4f, 0.8f, ga), "Particle ");
+            ImGui::SameLine(0, 0);
+            ImGui::TextColored(ImVec4(0.0f, 0.4f, 0.8f, ga), "Playground");
+        }
 
         // "Particle " in white
         ImGui::SetCursorPos(ImVec2(left_margin, title_y));
@@ -1694,10 +1749,45 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         ImGui::PopStyleColor(3);
         ImGui::PopStyleVar();
 
+        // ── Music volume control ─────────────────────────────────────
+        float vol_y = btn_y + btn_spacing * 8 + 10.0f;
+        float vol_w = btn_w;
+        ImGui::SetCursorPos(ImVec2(btn_x, vol_y));
+        ImGui::PushItemWidth(vol_w - 40.0f);
+
+        // Mute button + volume slider on one line
+        bool muted = prefs.music_muted;
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.14f, 0.22f, 0.60f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.25f, 0.40f, 0.80f));
+        if (ImGui::Button(muted ? "X##mute" : "♪##mute", ImVec2(30.0f, 24.0f))) {
+            prefs.music_muted = !prefs.music_muted;
+            if (audio_ptr) {
+                if (prefs.music_muted) audio_ptr->pause();
+                else                   audio_ptr->resume();
+            }
+        }
+        ImGui::PopStyleColor(2);
+        ImGui::SameLine();
+
+        if (!prefs.music_muted) {
+            float vol_pct = prefs.music_volume * 100.0f;
+            ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.302f, 0.749f, 0.953f, 0.8f));
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.10f, 0.12f, 0.18f, 0.8f));
+            if (ImGui::SliderFloat("##pausevol", &vol_pct, 0.0f, 100.0f, "%.0f%%")) {
+                prefs.music_volume = vol_pct / 100.0f;
+                if (audio_ptr) audio_ptr->set_volume(prefs.music_volume);
+            }
+            ImGui::PopStyleColor(2);
+        } else {
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.5f), "Music muted");
+        }
+
+        ImGui::PopItemWidth();
+
         // Hint text
         const char* hint = "Press Escape to resume";
         ImVec2 hint_size = ImGui::CalcTextSize(hint);
-        ImGui::SetCursorPos(ImVec2(cx - hint_size.x * 0.5f, btn_y + btn_spacing * 8 + 20.0f));
+        ImGui::SetCursorPos(ImVec2(cx - hint_size.x * 0.5f, vol_y + 40.0f));
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.6f), "%s", hint);
     }
     ImGui::End();
@@ -1804,6 +1894,13 @@ void PhysicsInterface::draw_settings_menu() {
         ImGui::Checkbox("Spatial Grid", &prefs.spatial_grid);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Use spatial acceleration grid for neighbor searches\nGreatly improves CPU physics performance\nDisable only for debugging");
+
+        const char* render_labels[] = { "Native (1x)", "Supersampled (2x)" };
+        int render_idx = prefs.render_scale - 1;
+        if (ImGui::Combo("Render Quality", &render_idx, render_labels, 2))
+            prefs.render_scale = render_idx + 1;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Native: render at base resolution (2560x1440)\nSupersampled: render at 2x resolution and downsample\nHigher quality but uses more GPU memory");
 
         ImGui::Dummy(ImVec2(0, 10));
 
@@ -4912,7 +5009,11 @@ void PhysicsInterface::draw_decay_log() {
         char row_label[384];
         {
             struct tm tm_buf;
+#ifdef _WIN32
+            localtime_s(&tm_buf, &entry.timestamp);
+#else
             localtime_r(&entry.timestamp, &tm_buf);
+#endif
             const char* tag = (entry.type < DEVT_COUNT) ? TYPE_LABELS[entry.type] : "?";
             const char* arrow = has_details ? (is_expanded ? "v " : "> ") : "  ";
             snprintf(row_label, sizeof(row_label), "%s%02d:%02d:%02d  [%-8s]  %s",
@@ -6058,6 +6159,142 @@ void PhysicsInterface::draw_force_object_panel(ForceObject* objects) {
 // ── Save / Load Dialog ──────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ── Thumbnail management ─────────────────────────────────────────────────────
+
+void PhysicsInterface::free_thumbnails() {
+    if (!vk_ctx_) return;
+    vkDeviceWaitIdle(vk_ctx_->device);
+    for (auto& te : thumbnail_entries_) {
+        if (te.imgui_tex) {
+            ImGui_ImplVulkan_RemoveTexture(reinterpret_cast<VkDescriptorSet>(te.imgui_tex));
+            te.imgui_tex = nullptr;
+        }
+        if (te.thumb_view != VK_NULL_HANDLE) {
+            vkDestroyImageView(vk_ctx_->device, te.thumb_view, nullptr);
+            te.thumb_view = VK_NULL_HANDLE;
+        }
+        if (te.thumb_image != VK_NULL_HANDLE) {
+            vkDestroyImage(vk_ctx_->device, te.thumb_image, nullptr);
+            te.thumb_image = VK_NULL_HANDLE;
+        }
+        if (te.thumb_memory != VK_NULL_HANDLE) {
+            vkFreeMemory(vk_ctx_->device, te.thumb_memory, nullptr);
+            te.thumb_memory = VK_NULL_HANDLE;
+        }
+    }
+    thumbnail_entries_.clear();
+    thumbnails_dirty_ = true;
+}
+
+void PhysicsInterface::load_thumbnails() {
+    free_thumbnails();
+
+    if (!vk_ctx_ || browse_current_dir.empty()) return;
+
+    // Create sampler if not yet created
+    if (thumb_sampler_ == VK_NULL_HANDLE) {
+        thumb_sampler_ = vk_ctx_->create_sampler_nearest();
+    }
+
+    std::error_code ec;
+    for (auto& entry : fs::directory_iterator(browse_current_dir, ec)) {
+        if (!entry.is_regular_file(ec)) continue;
+        std::string ext = entry.path().extension().string();
+        if (ext != ".ppsg") continue;
+
+        ThumbnailEntry te;
+        te.filepath = entry.path().string();
+        te.name = entry.path().stem().string();
+        te.size = entry.file_size(ec);
+
+        // Get modification time as string
+        {
+            auto ftime = entry.last_write_time(ec);
+#if defined(__cpp_lib_chrono) && __cpp_lib_chrono >= 201907L
+            auto sctp = std::chrono::file_clock::to_sys(ftime);
+            auto tt = std::chrono::system_clock::to_time_t(sctp);
+#else
+            // Fallback: use file_time_type epoch offset
+            auto dur = ftime.time_since_epoch();
+            auto sec = std::chrono::duration_cast<std::chrono::seconds>(dur).count();
+            // file_time_type epoch differs from system clock; approximate
+            std::time_t tt = static_cast<std::time_t>(sec);
+            // Adjust for NTFS/ext4 epoch difference if needed
+            // Most Linux implementations use the same epoch
+#endif
+            char timebuf[64];
+            struct tm* tm_info = std::localtime(&tt);
+            if (tm_info)
+                std::strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M", tm_info);
+            else
+                snprintf(timebuf, sizeof(timebuf), "Unknown");
+            te.date_str = timebuf;
+        }
+
+        // Try to load thumbnail PNG
+        std::string thumb_path = te.filepath + ".thumb.png";
+        int tw, th, channels;
+        unsigned char* pixels = stbi_load(thumb_path.c_str(), &tw, &th, &channels, 4);
+        if (pixels && tw > 0 && th > 0) {
+            VkDeviceSize img_size = static_cast<VkDeviceSize>(tw) * th * 4;
+
+            // Create staging buffer
+            Buffer staging = vk_ctx_->create_buffer(img_size,
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            vk_ctx_->update_buffer(staging, pixels, img_size);
+
+            // Create device image
+            Image img = vk_ctx_->create_image(
+                static_cast<uint32_t>(tw), static_cast<uint32_t>(th),
+                VK_FORMAT_R8G8B8A8_UNORM,
+                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            img.view = vk_ctx_->create_image_view(img.handle,
+                VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT);
+
+            // Transition to TRANSFER_DST, copy, transition to SHADER_READ
+            vk_ctx_->transition_image_layout(img.handle,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+            VkCommandBuffer cmd = vk_ctx_->begin_single_command();
+            VkBufferImageCopy region{};
+            region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+            region.imageExtent = { static_cast<uint32_t>(tw), static_cast<uint32_t>(th), 1 };
+            vkCmdCopyBufferToImage(cmd, staging.handle, img.handle,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            vk_ctx_->end_single_command(cmd);
+
+            vk_ctx_->transition_image_layout(img.handle,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+            vk_ctx_->destroy_buffer(staging);
+            stbi_image_free(pixels);
+
+            // Register with ImGui
+            te.thumb_image = img.handle;
+            te.thumb_memory = img.memory;
+            te.thumb_view = img.view;
+            te.imgui_tex = reinterpret_cast<ImTextureID>(ImGui_ImplVulkan_AddTexture(
+                thumb_sampler_, img.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+            te.has_thumbnail = true;
+        } else if (pixels) {
+            stbi_image_free(pixels);
+        }
+
+        thumbnail_entries_.push_back(std::move(te));
+    }
+
+    // Sort by date (newest first)
+    std::sort(thumbnail_entries_.begin(), thumbnail_entries_.end(),
+        [](const ThumbnailEntry& a, const ThumbnailEntry& b) {
+            return a.date_str > b.date_str;
+        });
+
+    thumbnails_dirty_ = false;
+}
+
 // ── File browser helpers ─────────────────────────────────────────────────────
 
 static std::string format_file_size(uintmax_t bytes) {
@@ -6122,12 +6359,18 @@ void PhysicsInterface::draw_save_load_dialog() {
             browse_current_dir = fs::current_path(ec).string();
     }
 
-    if (browse_needs_refresh)
+    bool use_thumbnails = !show_import_dialog && !show_molecule_import_dialog;
+
+    if (browse_needs_refresh) {
         refresh_browse_entries();
+        if (use_thumbnails) thumbnails_dirty_ = true;
+    }
+    if (use_thumbnails && thumbnails_dirty_)
+        load_thumbnails();
 
     ImGuiIO& io = ImGui::GetIO();
     ImVec2 center(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
-    ImVec2 size(520, 480);
+    ImVec2 size = use_thumbnails ? ImVec2(720, 520) : ImVec2(520, 480);
 
     ImGui::SetNextWindowPos(ImVec2(center.x - size.x * 0.5f, center.y - size.y * 0.5f), ImGuiCond_Appearing);
     ImGui::SetNextWindowSize(size, ImGuiCond_Appearing);
@@ -6161,82 +6404,192 @@ void PhysicsInterface::draw_save_load_dialog() {
                 browse_current_dir = parent.string();
                 browse_needs_refresh = true;
                 refresh_browse_entries();
+                if (use_thumbnails) { thumbnails_dirty_ = true; load_thumbnails(); }
             }
         }
 
         ImGui::Separator();
 
-        // ── File list ────────────────────────────────────────────────────
         float list_height = ImGui::GetContentRegionAvail().y - 90.0f;
-        if (ImGui::BeginChild("##FileList", ImVec2(0, list_height), ImGuiChildFlags_Border)) {
-            for (int i = 0; i < (int)browse_entries.size(); i++) {
-                const auto& entry = browse_entries[i];
-                bool selected = (browse_selected_idx == i);
 
-                // Build display label
-                char label[320];
-                if (entry.is_dir) {
-                    snprintf(label, sizeof(label), "[DIR]  %s/", entry.name.c_str());
-                } else {
-                    std::string sz = format_file_size(entry.size);
-                    snprintf(label, sizeof(label), "  %s", entry.name.c_str());
-
-                    // We'll draw the size right-aligned after the selectable
-                }
-
-                ImGui::PushID(i);
-                if (entry.is_dir) {
-                    // Directory — colored
+        if (use_thumbnails) {
+            // ── Thumbnail card grid for .ppsg save/load ──────────────────
+            if (ImGui::BeginChild("##ThumbnailGrid", ImVec2(0, list_height), ImGuiChildFlags_Border)) {
+                // Show directories first (as simple selectables)
+                for (int i = 0; i < (int)browse_entries.size(); i++) {
+                    if (!browse_entries[i].is_dir) continue;
+                    ImGui::PushID(i + 10000);
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.7f, 1.0f, 1.0f));
-                    if (ImGui::Selectable(label, selected, ImGuiSelectableFlags_AllowDoubleClick)) {
-                        // Navigate into directory
-                        fs::path new_dir = fs::path(browse_current_dir) / entry.name;
+                    char label[320];
+                    snprintf(label, sizeof(label), "[DIR]  %s/", browse_entries[i].name.c_str());
+                    if (ImGui::Selectable(label, false, ImGuiSelectableFlags_AllowDoubleClick)) {
+                        fs::path new_dir = fs::path(browse_current_dir) / browse_entries[i].name;
                         browse_current_dir = new_dir.string();
                         browse_needs_refresh = true;
                         refresh_browse_entries();
+                        thumbnails_dirty_ = true;
+                        load_thumbnails();
                     }
                     ImGui::PopStyleColor();
-                } else {
-                    // File
-                    if (ImGui::Selectable(label, selected, ImGuiSelectableFlags_AllowDoubleClick)) {
-                        browse_selected_idx = i;
-                        snprintf(browse_filename, sizeof(browse_filename), "%s", entry.name.c_str());
+                    ImGui::PopID();
+                }
 
-                        // Double-click to load/import
-                        if (!show_save_dialog && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-                            fs::path full = fs::path(browse_current_dir) / entry.name;
-                            snprintf(save_filename, sizeof(save_filename), "%s", full.string().c_str());
-                            if (show_molecule_import_dialog) {
-                                request_molecule_import = true;
-                                show_molecule_import_dialog = false;
-                            } else if (show_import_dialog) {
-                                request_import = true;
-                                show_import_dialog = false;
-                            } else {
+                if (!thumbnail_entries_.empty()) {
+                    if (browse_entries.size() > thumbnail_entries_.size())
+                        ImGui::Separator();
+
+                    // Grid layout
+                    float card_w = 192.0f;
+                    float card_h = 155.0f;
+                    float thumb_img_h = 108.0f;
+                    float padding = 10.0f;
+                    float avail_w = ImGui::GetContentRegionAvail().x;
+                    int cols = std::max(1, (int)((avail_w + padding) / (card_w + padding)));
+
+                    for (int i = 0; i < (int)thumbnail_entries_.size(); ++i) {
+                        auto& te = thumbnail_entries_[i];
+                        int col = i % cols;
+                        if (col > 0) ImGui::SameLine(0, padding);
+
+                        ImGui::PushID(i);
+
+                        ImVec2 cursor = ImGui::GetCursorScreenPos();
+                        bool selected = (browse_selected_idx == i);
+                        ImU32 bg_col = selected ? IM_COL32(40, 80, 140, 200) : IM_COL32(20, 25, 35, 200);
+                        ImU32 border_col = selected ? IM_COL32(80, 160, 255, 255) : IM_COL32(50, 60, 80, 200);
+
+                        ImDrawList* dl = ImGui::GetWindowDrawList();
+                        dl->AddRectFilled(cursor, ImVec2(cursor.x + card_w, cursor.y + card_h), bg_col, 6.0f);
+                        dl->AddRect(cursor, ImVec2(cursor.x + card_w, cursor.y + card_h), border_col, 6.0f);
+
+                        // Thumbnail image or placeholder
+                        float img_x = cursor.x + 4;
+                        float img_y = cursor.y + 4;
+                        float img_w = card_w - 8;
+                        if (te.has_thumbnail && te.imgui_tex) {
+                            ImGui::SetCursorScreenPos(ImVec2(img_x, img_y));
+                            ImGui::Image(te.imgui_tex, ImVec2(img_w, thumb_img_h));
+                        } else {
+                            dl->AddRectFilled(ImVec2(img_x, img_y),
+                                ImVec2(img_x + img_w, img_y + thumb_img_h),
+                                IM_COL32(10, 12, 20, 255), 4.0f);
+                            ImVec2 text_sz = ImGui::CalcTextSize("No Preview");
+                            dl->AddText(ImVec2(img_x + (img_w - text_sz.x) * 0.5f,
+                                img_y + (thumb_img_h - text_sz.y) * 0.5f),
+                                IM_COL32(80, 90, 110, 200), "No Preview");
+                        }
+
+                        // Save name (clipped to card width)
+                        float text_y = cursor.y + thumb_img_h + 10;
+                        dl->PushClipRect(ImVec2(cursor.x + 6, text_y),
+                            ImVec2(cursor.x + card_w - 6, text_y + 16), true);
+                        dl->AddText(ImVec2(cursor.x + 6, text_y),
+                            IM_COL32(230, 230, 240, 255), te.name.c_str());
+                        dl->PopClipRect();
+
+                        // Date + size
+                        float info_y = text_y + 16;
+                        std::string info = te.date_str + "  " + format_file_size(te.size);
+                        dl->PushClipRect(ImVec2(cursor.x + 6, info_y),
+                            ImVec2(cursor.x + card_w - 6, info_y + 14), true);
+                        dl->AddText(ImVec2(cursor.x + 6, info_y),
+                            IM_COL32(120, 130, 155, 200), info.c_str());
+                        dl->PopClipRect();
+
+                        // Invisible button for click handling
+                        ImGui::SetCursorScreenPos(cursor);
+                        if (ImGui::InvisibleButton("##card", ImVec2(card_w, card_h))) {
+                            browse_selected_idx = i;
+                            snprintf(browse_filename, sizeof(browse_filename), "%s.ppsg", te.name.c_str());
+                        }
+
+                        // Double-click to load
+                        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                            if (!show_save_dialog) {
+                                snprintf(save_filename, sizeof(save_filename), "%s", te.filepath.c_str());
                                 request_load = true;
                                 show_load_dialog = false;
+                                free_thumbnails();
                             }
-                            show_save_dialog = false;
+                        }
+
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("%s\n%s  %s", te.name.c_str(),
+                                te.date_str.c_str(), format_file_size(te.size).c_str());
+                        }
+
+                        ImGui::PopID();
+
+                        // Advance to next row if needed
+                        if (col == cols - 1 || i == (int)thumbnail_entries_.size() - 1) {
+                            ImGui::Dummy(ImVec2(0, card_h + padding - ImGui::GetTextLineHeight()));
                         }
                     }
-
-                    // Right-align file size
-                    std::string sz = format_file_size(entry.size);
-                    float text_w = ImGui::CalcTextSize(sz.c_str()).x;
-                    float avail = ImGui::GetContentRegionAvail().x;
-                    ImGui::SameLine(avail - text_w + ImGui::GetCursorPosX() - 8);
-                    ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "%s", sz.c_str());
+                } else if (browse_entries.empty()) {
+                    ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.7f),
+                        "  No .ppsg files in this directory");
                 }
-                ImGui::PopID();
             }
+            ImGui::EndChild();
+        } else {
+            // ── File list (for element/molecule imports) ─────────────────
+            if (ImGui::BeginChild("##FileList", ImVec2(0, list_height), ImGuiChildFlags_Border)) {
+                for (int i = 0; i < (int)browse_entries.size(); i++) {
+                    const auto& entry = browse_entries[i];
+                    bool selected = (browse_selected_idx == i);
 
-            if (browse_entries.empty()) {
-                const char* ext_hint = show_molecule_import_dialog ? ".ppmol"
-                                     : show_import_dialog ? ".ppel" : ".ppsg";
-                ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.7f), "  No %s files in this directory", ext_hint);
+                    char label[320];
+                    if (entry.is_dir) {
+                        snprintf(label, sizeof(label), "[DIR]  %s/", entry.name.c_str());
+                    } else {
+                        snprintf(label, sizeof(label), "  %s", entry.name.c_str());
+                    }
+
+                    ImGui::PushID(i);
+                    if (entry.is_dir) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.7f, 1.0f, 1.0f));
+                        if (ImGui::Selectable(label, selected, ImGuiSelectableFlags_AllowDoubleClick)) {
+                            fs::path new_dir = fs::path(browse_current_dir) / entry.name;
+                            browse_current_dir = new_dir.string();
+                            browse_needs_refresh = true;
+                            refresh_browse_entries();
+                        }
+                        ImGui::PopStyleColor();
+                    } else {
+                        if (ImGui::Selectable(label, selected, ImGuiSelectableFlags_AllowDoubleClick)) {
+                            browse_selected_idx = i;
+                            snprintf(browse_filename, sizeof(browse_filename), "%s", entry.name.c_str());
+
+                            if (!show_save_dialog && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                                fs::path full = fs::path(browse_current_dir) / entry.name;
+                                snprintf(save_filename, sizeof(save_filename), "%s", full.string().c_str());
+                                if (show_molecule_import_dialog) {
+                                    request_molecule_import = true;
+                                    show_molecule_import_dialog = false;
+                                } else if (show_import_dialog) {
+                                    request_import = true;
+                                    show_import_dialog = false;
+                                }
+                            }
+                        }
+
+                        std::string sz = format_file_size(entry.size);
+                        float text_w = ImGui::CalcTextSize(sz.c_str()).x;
+                        float avail = ImGui::GetContentRegionAvail().x;
+                        ImGui::SameLine(avail - text_w + ImGui::GetCursorPosX() - 8);
+                        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "%s", sz.c_str());
+                    }
+                    ImGui::PopID();
+                }
+
+                if (browse_entries.empty()) {
+                    const char* ext_hint = show_molecule_import_dialog ? ".ppmol" : ".ppel";
+                    ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.7f),
+                        "  No %s files in this directory", ext_hint);
+                }
             }
+            ImGui::EndChild();
         }
-        ImGui::EndChild();
 
         // ── Filename input + action buttons ──────────────────────────────
         ImGui::Separator();
@@ -6262,11 +6615,9 @@ void PhysicsInterface::draw_save_load_dialog() {
         float btn_w = 80.0f;
         if (show_save_dialog) {
             if (ImGui::Button("Save", ImVec2(btn_w, 28))) {
-                // Ensure .ppsg extension
                 std::string fname = browse_filename;
                 if (fname.size() < 5 || fname.substr(fname.size() - 5) != ".ppsg")
                     fname += ".ppsg";
-                // Create saves dir if saving to it
                 std::error_code ec;
                 fs::create_directories(browse_current_dir, ec);
                 fs::path full = fs::path(browse_current_dir) / fname;
@@ -6274,6 +6625,7 @@ void PhysicsInterface::draw_save_load_dialog() {
                 request_save = true;
                 show_save_dialog = false;
                 browse_needs_refresh = true;
+                free_thumbnails();
             }
         } else if (show_molecule_import_dialog) {
             bool can_import = (browse_selected_idx >= 0 &&
@@ -6302,16 +6654,29 @@ void PhysicsInterface::draw_save_load_dialog() {
             }
             if (!can_import) ImGui::EndDisabled();
         } else {
-            bool can_load = (browse_selected_idx >= 0 &&
-                             browse_selected_idx < (int)browse_entries.size() &&
-                             !browse_entries[browse_selected_idx].is_dir);
+            // Load button (thumbnail mode uses thumbnail_entries_ index)
+            bool can_load = false;
+            if (use_thumbnails) {
+                can_load = (browse_selected_idx >= 0 &&
+                            browse_selected_idx < (int)thumbnail_entries_.size());
+            } else {
+                can_load = (browse_selected_idx >= 0 &&
+                            browse_selected_idx < (int)browse_entries.size() &&
+                            !browse_entries[browse_selected_idx].is_dir);
+            }
             if (!can_load) ImGui::BeginDisabled();
             if (ImGui::Button("Load", ImVec2(btn_w, 28))) {
-                fs::path full = fs::path(browse_current_dir) / browse_entries[browse_selected_idx].name;
-                snprintf(save_filename, sizeof(save_filename), "%s", full.string().c_str());
+                if (use_thumbnails && browse_selected_idx < (int)thumbnail_entries_.size()) {
+                    snprintf(save_filename, sizeof(save_filename), "%s",
+                        thumbnail_entries_[browse_selected_idx].filepath.c_str());
+                } else {
+                    fs::path full = fs::path(browse_current_dir) / browse_entries[browse_selected_idx].name;
+                    snprintf(save_filename, sizeof(save_filename), "%s", full.string().c_str());
+                }
                 request_load = true;
                 show_load_dialog = false;
                 browse_needs_refresh = true;
+                free_thumbnails();
             }
             if (!can_load) ImGui::EndDisabled();
         }
@@ -6321,6 +6686,7 @@ void PhysicsInterface::draw_save_load_dialog() {
             show_load_dialog = false;
             show_import_dialog = false;
             show_molecule_import_dialog = false;
+            free_thumbnails();
         }
 
         // Escape to close
@@ -6329,6 +6695,7 @@ void PhysicsInterface::draw_save_load_dialog() {
             show_load_dialog = false;
             show_import_dialog = false;
             show_molecule_import_dialog = false;
+            free_thumbnails();
         }
     }
 
@@ -6337,6 +6704,7 @@ void PhysicsInterface::draw_save_load_dialog() {
         show_load_dialog = false;
         show_import_dialog = false;
         show_molecule_import_dialog = false;
+        free_thumbnails();
     }
 
     ImGui::End();

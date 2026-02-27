@@ -9,7 +9,8 @@ const char* ACHIEVEMENT_CATEGORY_NAMES[ACAT_COUNT] = {
     "Element Creation",
     "Particle Zoo",
     "Thermodynamics",
-    "Milestones"
+    "Milestones",
+    "Chemistry"
 };
 
 const AchievementDef ACHIEVEMENT_DEFS[ACH_COUNT] = {
@@ -74,6 +75,24 @@ const AchievementDef ACHIEVEMENT_DEFS[ACH_COUNT] = {
     { ACH_NUCLEAR_DECAYS_50,   ACAT_MILESTONES,"Radioactive",           "Witness 50 nuclear decay events",                    "[ND]"},
     { ACH_ANTIMATTER_ELEMENT,  ACAT_MILESTONES,"Antimatter Atom",       "Create an antimatter element",                       "[~E]"},
     { ACH_TRY_ALL_ENVIRONMENTS,ACAT_MILESTONES,"Explorer",              "Try all 12 environment presets",                     "[!]" },
+
+    // ── Chemistry & Bonds ──────────────────────────────────────────────────
+    { ACH_FIRST_BOND,          ACAT_CHEMISTRY, "Chemical Bond",         "Form your first covalent bond",                      "[==]"},
+    { ACH_FIRST_MOLECULE,      ACAT_CHEMISTRY, "Molecular!",            "Create a molecule with bonded atoms",                "[M]" },
+    { ACH_MOLECULE_5_ATOMS,    ACAT_CHEMISTRY, "Complex Chemistry",     "Create a molecule with 5+ atoms",                    "[M5]"},
+
+    // ── Advanced Physics ──────────────────────────────────────────────────
+    { ACH_FIRST_VIRTUAL_PAIR,  ACAT_PARTICLES, "Vacuum Fluctuation",    "Observe virtual particle pair creation",              "[VP]"},
+    { ACH_FIRST_PION_DECAY,    ACAT_NUCLEAR,   "Pion Cascade",          "Observe pion decay",                                  "[pi]"},
+    { ACH_COSMIC_RAY,          ACAT_MILESTONES,"Cosmic Ray",            "Fire a particle at maximum speed",                    "[CR]"},
+    { ACH_PHOTON_EMISSION,     ACAT_NUCLEAR,   "Let There Be Light",    "Observe photon emission from a decay",                "[hv]"},
+
+    // ── Exploration ───────────────────────────────────────────────────────
+    { ACH_FIRST_MOLECULE_EXPORT,ACAT_MILESTONES,"Molecule Exporter",    "Export a molecule to a .ppmol file",                  "[Mx]"},
+    { ACH_SPEED_DEMON,         ACAT_MILESTONES,"Speed Demon",           "Set simulation speed to maximum",                     "[>>]"},
+    { ACH_HUNDRED_ELEMENTS,    ACAT_ELEMENTS,  "Centurion",             "Discover 100 distinct elements",                      "[100]"},
+    { ACH_GRAVITON_OBSERVED,   ACAT_PARTICLES, "Gravity's Messenger",   "Observe a graviton particle",                         "[Gr]"},
+    { ACH_LONG_PLAY,           ACAT_MILESTONES,"Dedicated Physicist",   "Run a simulation for 10+ minutes",                    "[10m]"},
 };
 
 // ── AchievementManager implementation ───────────────────────────────────────

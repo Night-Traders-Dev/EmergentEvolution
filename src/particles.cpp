@@ -311,6 +311,7 @@ void Particles::gen_particles(const SimConfig& cfg) {
         birth_frames.assign(pool, 0u);
         orbital_parent.assign(pool, -1);
         entangled_partner.assign(pool, 0xFFFFFFFFu);
+        cascade_tag.assign(pool, 0u);
         genomes.assign(pool * GENOME_SIZE, 0.0f);
         // Stamp H atom genome defaults
         for (uint32_t i = 0; i < pool; ++i) {
@@ -333,6 +334,7 @@ void Particles::gen_particles(const SimConfig& cfg) {
         birth_frames.assign(2, 0u);
         orbital_parent.assign(2, -1);
         entangled_partner.assign(2, 0xFFFFFFFFu);
+        cascade_tag.assign(2, 0u);
         genomes.assign(2 * GENOME_SIZE, 0.0f);
         // H defaults
         genomes[0] =  0.3f; genomes[1] = 0.6f; genomes[2] = 1.0f; genomes[3] = 0.3f;
@@ -466,6 +468,7 @@ void Particles::gen_particles(const SimConfig& cfg) {
     birth_frames.assign(cfg.particle_count, 0u);
     orbital_parent.assign(cfg.particle_count, -1);
     entangled_partner.assign(cfg.particle_count, 0xFFFFFFFFu);
+    cascade_tag.assign(cfg.particle_count, 0u);
 
     // ── Chemistry genome defaults ─────────────────────────────────────────────
     // Per atom: [0]=charge [1]=electronegativity [2]=reactivity [3]=bond_strength

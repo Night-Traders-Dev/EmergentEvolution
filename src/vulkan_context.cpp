@@ -536,18 +536,43 @@ void VulkanContext::end_single_command(VkCommandBuffer cmd) {
 
 VkShaderModule VulkanContext::create_shader_module(const std::string& path) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file.is_open())
-        throw std::runtime_error("Failed to open shader: " + path);
+    if (file.is_open()) {
+        size_t size = static_cast<size_t>(file.tellg());
+        file.seekg(0);
+        std::vector<char> code(size);
+        file.read(code.data(), size);
 
-    size_t size = static_cast<size_t>(file.tellg());
-    file.seekg(0);
-    std::vector<char> code(size);
-    file.read(code.data(), size);
+        VkShaderModuleCreateInfo ci{};
+        ci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        ci.codeSize = size;
+        ci.pCode    = reinterpret_cast<const uint32_t*>(code.data());
 
+        VkShaderModule mod;
+        VK_CHECK(vkCreateShaderModule(device, &ci, nullptr, &mod));
+        return mod;
+    }
+
+    // File not found — try embedded fallback
+    for (int i = 0; i < embedded_count_; ++i) {
+        if (path == embedded_[i].path)
+            return create_shader_module(embedded_[i].data, embedded_[i].size);
+    }
+
+    throw std::runtime_error("Failed to open shader: " + path);
+}
+
+void VulkanContext::register_embedded_shader(const char* path,
+                                             const unsigned char* data,
+                                             size_t size) {
+    if (embedded_count_ < MAX_EMBEDDED)
+        embedded_[embedded_count_++] = { path, data, size };
+}
+
+VkShaderModule VulkanContext::create_shader_module(const unsigned char* data, size_t size) {
     VkShaderModuleCreateInfo ci{};
     ci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
     ci.codeSize = size;
-    ci.pCode    = reinterpret_cast<const uint32_t*>(code.data());
+    ci.pCode    = reinterpret_cast<const uint32_t*>(data);
 
     VkShaderModule mod;
     VK_CHECK(vkCreateShaderModule(device, &ci, nullptr, &mod));
@@ -559,8 +584,8 @@ VkShaderModule VulkanContext::create_shader_module(const std::string& path) {
 VkSampler VulkanContext::create_sampler_nearest() {
     VkSamplerCreateInfo ci{};
     ci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    ci.magFilter    = VK_FILTER_NEAREST;
-    ci.minFilter    = VK_FILTER_NEAREST;
+    ci.magFilter    = VK_FILTER_LINEAR;
+    ci.minFilter    = VK_FILTER_LINEAR;
     ci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     ci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     ci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;

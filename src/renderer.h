@@ -43,6 +43,9 @@ public:
     // Called when framebuffer is resized
     void on_resize(VulkanContext& ctx, GLFWwindow* window, ComputePipeline& compute);
 
+    // Re-bind quad descriptor set to updated compute texture (after supersampling resize)
+    void update_texture_binding(VulkanContext& ctx, ComputePipeline& compute);
+
 private:
     VkRenderPass              render_pass_          = VK_NULL_HANDLE;
     std::vector<VkFramebuffer> framebuffers_;

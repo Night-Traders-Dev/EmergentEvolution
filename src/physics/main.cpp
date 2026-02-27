@@ -9,6 +9,12 @@
 #ifdef HAS_OPENMP
 #include <omp.h>
 #endif
+#ifdef PORTABLE_BUILD
+#include "embedded_resources.h"
+#endif
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 static PhysicsSimulation* g_sim_resize = nullptr;
 
@@ -18,6 +24,18 @@ static void framebuffer_resize_callback(GLFWwindow*, int, int) {
 }
 
 int main() {
+#ifdef _WIN32
+    // Set CWD to the executable's directory so relative paths (saves/, assets/) work
+    // regardless of how the exe was launched (double-click, shortcut, cmd, etc.)
+    {
+        char exe_path[MAX_PATH];
+        if (GetModuleFileNameA(nullptr, exe_path, MAX_PATH)) {
+            char* last_sep = strrchr(exe_path, '\\');
+            if (last_sep) { *last_sep = '\0'; SetCurrentDirectoryA(exe_path); }
+        }
+    }
+#endif
+
 #ifdef HAS_OPENMP
     omp_set_num_threads(omp_get_max_threads());  // initial default; updated by settings after prefs load
 #endif
@@ -51,12 +69,18 @@ int main() {
     }
 
     // Set window icon — multiple sizes for best quality
+    // Try files first, fall back to embedded data (portable build)
     {
         GLFWimage icons[3];
         int w32, h32, c32, w64, h64, c64, w256, h256, c256;
         unsigned char* p32  = stbi_load("assets/icon_32.png",  &w32,  &h32,  &c32,  4);
         unsigned char* p64  = stbi_load("assets/icon_64.png",  &w64,  &h64,  &c64,  4);
         unsigned char* p256 = stbi_load("assets/icon_256.png", &w256, &h256, &c256, 4);
+#ifdef PORTABLE_BUILD
+        if (!p32)  p32  = stbi_load_from_memory(icon_32_png_data,  (int)icon_32_png_size,  &w32,  &h32,  &c32,  4);
+        if (!p64)  p64  = stbi_load_from_memory(icon_64_png_data,  (int)icon_64_png_size,  &w64,  &h64,  &c64,  4);
+        if (!p256) p256 = stbi_load_from_memory(icon_256_png_data, (int)icon_256_png_size, &w256, &h256, &c256, 4);
+#endif
         int count = 0;
         if (p32)  { icons[count++] = { w32,  h32,  p32  }; }
         if (p64)  { icons[count++] = { w64,  h64,  p64  }; }

@@ -20,9 +20,17 @@ public:
 
     int tick = 0;
 
+    // Render texture dimensions (may differ from REGION_W/H with supersampling)
+    uint32_t render_w = REGION_W;
+    uint32_t render_h = REGION_H;
+
     // ── Lifecycle ──────────────────────────────────────────────────────────────
     void init(VulkanContext& ctx, const std::string& shader_spv_path);
     void destroy(VulkanContext& ctx);
+
+    // Recreate render texture at new dimensions (for supersampling).
+    // Queue must be idle. Updates compute + renderer descriptor sets.
+    void resize_render_texture(VulkanContext& ctx, uint32_t w, uint32_t h);
 
     // Create / destroy particle buffers (called on reset)
     void create_buffers(VulkanContext& ctx, const Particles& particles);

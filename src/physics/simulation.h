@@ -137,6 +137,7 @@ private:
     void check_fusion();
     void check_fission();
     void check_decay();
+    void check_pion_decay();
     void check_virtual_pairs();
     void update_entanglement();
     void update_orbitals();
@@ -155,4 +156,8 @@ private:
     void do_accelerator_fire(glm::vec2 aim_world_pos);
     void check_achievements();
     void try_unlock(AchievementID id);
+
+    // Capture current render texture as a PNG thumbnail
+    bool capture_thumbnail(const std::string& png_path,
+                           uint32_t thumb_w = 320, uint32_t thumb_h = 180);
 };

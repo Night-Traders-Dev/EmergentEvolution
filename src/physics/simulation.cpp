@@ -2,6 +2,7 @@
 #include "physics/phys_particles.h"
 #include "physics/molecules.h"
 #include "physics/save_load.h"
+#include "stb_image_write.h"
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -16,6 +17,9 @@
 #include <unordered_map>
 #ifdef HAS_OPENMP
 #include <omp.h>
+#endif
+#ifdef PORTABLE_BUILD
+#include "embedded_resources.h"
 #endif
 
 namespace fs = std::filesystem;
@@ -114,8 +118,19 @@ void PhysicsSimulation::init(GLFWwindow* window) {
     achievements.load("saves/achievements.ppach");
 
     vk.init(window);
+
+#ifdef PORTABLE_BUILD
+    // Register embedded shaders so file-based loading falls back to built-in data
+    vk.register_embedded_shader(COMPUTE_SPV, physics_spv_data, physics_spv_size);
+    vk.register_embedded_shader(VERT_SPV,    fullscreen_vert_spv_data, fullscreen_vert_spv_size);
+    vk.register_embedded_shader(FRAG_SPV,    fullscreen_frag_spv_data, fullscreen_frag_spv_size);
+#endif
+
     compute.init(vk, COMPUTE_SPV);
     renderer.init(vk, window, compute);
+
+    // Give interface a pointer to VulkanContext for thumbnail loading
+    iface.set_vk_ctx(&vk);
 
     // Background music — try multiple paths (CWD may be project root or build/)
     if (!audio.init("assets/sound.mp3"))
@@ -685,6 +700,8 @@ void PhysicsSimulation::do_accelerator_fire(glm::vec2 aim_world_pos) {
         compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
         compute.upload_dynamic_data(vk, particles);
         try_unlock(ACH_FIRST_ACCELERATOR);
+        // Cosmic ray: fire at near-lightspeed
+        if (speed >= 295.0f) try_unlock(ACH_COSMIC_RAY);
     }
 }
 
@@ -2407,6 +2424,7 @@ void PhysicsSimulation::update_bonds() {
                 current_bonds_a++;
                 new_bonds++;
                 any_changed = true;
+                try_unlock(ACH_FIRST_BOND);
                 {
                     char desc[128], detail[384];
                     int A_a = nuc.Z + nuc.N, A_b = nuc_b.Z + nuc_b.N;
@@ -2762,6 +2780,7 @@ void PhysicsSimulation::check_decay() {
                         readback_energies_[p2_slot] = mev_to_ebuf(E_photon);
                     }
                     iface.push_notification("Decay: H \xe2\x86\x92 \xce\xb3 + \xce\xb3", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                    try_unlock(ACH_PHOTON_EMISSION);
                     {
                         char detail[512];
                         snprintf(detail, sizeof(detail),
@@ -3031,6 +3050,8 @@ void PhysicsSimulation::check_decay() {
                 float KE_e = Q_mu * 0.33f;   // electron gets ~1/3
                 float KE_nu1 = Q_mu * 0.33f;  // νμ
                 float KE_nu2 = Q_mu * 0.34f;  // ν̄e
+                // Check cascade chain before overwriting type
+                bool from_cascade = (i < particles.cascade_tag.size() && particles.cascade_tag[i] == 3);
                 write_spawn_genome(particles, i, ELECTRON_TYPE_PHYS, rng, frame_counter_);
                 readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[ELECTRON_TYPE_PHYS] + KE_e);
                 readback_velocities_[i] = dir * ke_to_speed(KE_e, ELECTRON_TYPE_PHYS);
@@ -3046,14 +3067,27 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[nu2] = -dir * C_SIM * 0.9999f;
                     readback_energies_[nu2] = mev_to_ebuf(KE_nu2);
                 }
-                iface.push_notification("Decay: \xce\xbc\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xce\xbc + \xce\xbd\xcc\x84" "e", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                // Clear cascade tag — chain complete
+                if (i < particles.cascade_tag.size()) particles.cascade_tag[i] = 0;
+                if (from_cascade) {
+                    iface.push_notification("Cascade: \xCE\xB3+N \xE2\x86\x92 \xCF\x80 \xE2\x86\x92 \xCE\xBC\xE2\x81\xBB \xE2\x86\x92 e\xE2\x81\xBB", ImVec4(0.3f, 1.0f, 0.6f, 1.0f));
+                } else {
+                    iface.push_notification("Decay: \xce\xbc\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xce\xbc + \xce\xbd\xcc\x84" "e", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                }
                 {
                     char detail[512];
-                    snprintf(detail, sizeof(detail),
-                        "Parent: muon- #%u (M=%.3f MeV)\nQ=%.3f MeV\ne- #%u KE: %.3f MeV\nnu_mu #%u E: %.3f MeV\nnu-bar_e #%u E: %.3f MeV",
+                    int len = snprintf(detail, sizeof(detail),
+                        "Parent: \xCE\xBC\xE2\x81\xBB #%u (M=%.3f MeV)\nQ=%.3f MeV\ne\xE2\x81\xBB #%u KE: %.3f MeV\n\xCE\xBD\xCE\xBC #%u E: %.3f MeV\n\xCE\xBD\xCC\x84" "e #%u E: %.3f MeV",
                         i, PHYS_REST_MASS_MEV[MUON_TYPE_PHYS], Q_mu,
                         i, KE_e, nu1, KE_nu1, nu2, KE_nu2);
-                    iface.push_decay_event("\xce\xbc\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xce\xbc + \xce\xbd\xcc\x84" "e", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                    if (from_cascade)
+                        snprintf(detail + len, sizeof(detail) - len,
+                            "\n\xE2\x94\x80 CASCADE COMPLETE: \xCE\xB3+N \xE2\x86\x92 \xCF\x80\xE2\x81\xBB \xE2\x86\x92 \xCE\xBC\xE2\x81\xBB \xE2\x86\x92 e\xE2\x81\xBB+\xCE\xBD\xCE\xBC+\xCE\xBD\xCC\x84" "e");
+                    iface.push_decay_event(
+                        from_cascade
+                            ? "\xCE\xBC\xE2\x81\xBB \xE2\x86\x92 e\xE2\x81\xBB (cascade)"
+                            : "\xce\xbc\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xce\xbc + \xce\xbd\xcc\x84" "e",
+                        PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
                 }
                 break;
             }
@@ -3064,6 +3098,8 @@ void PhysicsSimulation::check_decay() {
                 float KE_e = Q_mu * 0.33f;
                 float KE_nu1 = Q_mu * 0.33f;
                 float KE_nu2 = Q_mu * 0.34f;
+                // Check cascade chain before overwriting type
+                bool from_cascade = (i < particles.cascade_tag.size() && particles.cascade_tag[i] == 3);
                 write_spawn_genome(particles, i, POSITRON_TYPE_PHYS, rng, frame_counter_);
                 readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[POSITRON_TYPE_PHYS] + KE_e);
                 readback_velocities_[i] = dir * ke_to_speed(KE_e, POSITRON_TYPE_PHYS);
@@ -3079,14 +3115,27 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[nu2] = -dir * C_SIM * 0.9999f;
                     readback_energies_[nu2] = mev_to_ebuf(KE_nu2);
                 }
-                iface.push_notification("Decay: \xce\xbc\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xce\xbc + \xce\xbd" "e", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                // Clear cascade tag — chain complete
+                if (i < particles.cascade_tag.size()) particles.cascade_tag[i] = 0;
+                if (from_cascade) {
+                    iface.push_notification("Cascade: \xCE\xB3+N \xE2\x86\x92 \xCF\x80 \xE2\x86\x92 \xCE\xBC\xE2\x81\xBA \xE2\x86\x92 e\xE2\x81\xBA", ImVec4(0.3f, 1.0f, 0.6f, 1.0f));
+                } else {
+                    iface.push_notification("Decay: \xce\xbc\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xce\xbc + \xce\xbd" "e", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                }
                 {
                     char detail[512];
-                    snprintf(detail, sizeof(detail),
-                        "Parent: muon+ #%u (M=%.3f MeV)\nQ=%.3f MeV\ne+ #%u KE: %.3f MeV\nnu_mu #%u E: %.3f MeV\nnu_e #%u E: %.3f MeV",
+                    int len = snprintf(detail, sizeof(detail),
+                        "Parent: \xCE\xBC\xE2\x81\xBA #%u (M=%.3f MeV)\nQ=%.3f MeV\ne\xE2\x81\xBA #%u KE: %.3f MeV\n\xCE\xBD\xCE\xBC #%u E: %.3f MeV\n\xCE\xBD" "e #%u E: %.3f MeV",
                         i, PHYS_REST_MASS_MEV[ANTIMUON_TYPE_PHYS], Q_mu,
                         i, KE_e, nu1, KE_nu1, nu2, KE_nu2);
-                    iface.push_decay_event("\xce\xbc\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xce\xbc + \xce\xbd" "e", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                    if (from_cascade)
+                        snprintf(detail + len, sizeof(detail) - len,
+                            "\n\xE2\x94\x80 CASCADE COMPLETE: \xCE\xB3+N \xE2\x86\x92 \xCF\x80\xE2\x81\xBA \xE2\x86\x92 \xCE\xBC\xE2\x81\xBA \xE2\x86\x92 e\xE2\x81\xBA+\xCE\xBD\xCE\xBC+\xCE\xBD" "e");
+                    iface.push_decay_event(
+                        from_cascade
+                            ? "\xCE\xBC\xE2\x81\xBA \xE2\x86\x92 e\xE2\x81\xBA (cascade)"
+                            : "\xce\xbc\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd\xce\xbc + \xce\xbd" "e",
+                        PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
                 }
                 break;
             }
@@ -4234,6 +4283,221 @@ void PhysicsSimulation::check_photoelectric() {
     }
 }
 
+// ── Pion decay ─────────────────────────────────────────────────────────────
+// Detects quark-antiquark meson pairs linked via entangled_partner and
+// decays them:  π⁺(ud̄) → μ⁺ + νμ,  π⁻(ūd) → μ⁻ + νμ,  π⁰(uū/dd̄) → γγ
+// Completes the spallation cascade: spallation → pion → muon → electron
+
+void PhysicsSimulation::check_pion_decay() {
+    if (readback_positions_.empty()) return;
+    const uint32_t n = cfg.particle_count;
+    if (n == 0) return;
+
+    std::mt19937 rng(frame_counter_ * 1737350767u);
+    std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+
+    constexpr float PION_CHARGED_MASS = 139.6f;   // MeV
+    constexpr float PION_NEUTRAL_MASS = 135.0f;    // MeV
+    constexpr float MUON_MASS         = 105.658f;  // MeV
+    constexpr float CONFINEMENT_RADIUS = 25.0f;    // px — max distance for bound pair
+    constexpr float CONFINEMENT_R2     = CONFINEMENT_RADIUS * CONFINEMENT_RADIUS;
+    constexpr uint32_t MIN_AGE_FRAMES  = 8;        // let QCD bind them first
+    constexpr float CHARGED_DECAY_PROB = 0.03f;    // ~30 frame mean lifetime
+    constexpr float NEUTRAL_DECAY_PROB = 0.15f;    // ~6 frame mean lifetime
+
+    // Cascade tag meanings:
+    // 0 = no cascade, 1 = photopion origin, 2 = VMD origin, 3 = pion decay product
+    auto cascade_origin_label = [&](uint32_t slot) -> const char* {
+        if (slot >= particles.cascade_tag.size()) return "";
+        switch (particles.cascade_tag[slot]) {
+            case 1: return "photopion";
+            case 2: return "VMD";
+            default: return "";
+        }
+    };
+
+    int decays = 0;
+
+    for (uint32_t i = 0; i < n && decays < 4; ++i) {
+        if (i >= particles.entangled_partner.size()) break;
+        uint32_t j = particles.entangled_partner[i];
+        if (j == UINT32_MAX || j >= n) continue;
+        if (i > j) continue;  // process each pair once (lower index only)
+
+        // Validate reciprocal link
+        if (j >= particles.entangled_partner.size()) continue;
+        if (particles.entangled_partner[j] != i) continue;
+
+        // Both must be alive
+        if (readback_energies_[i] < 0.01f || readback_energies_[j] < 0.01f) continue;
+
+        uint32_t ti = particles.types[i];
+        uint32_t tj = particles.types[j];
+
+        // Identify pion flavor from quark content
+        // π⁺ = u(13) + d̄(20),  π⁻ = ū(19) + d(14)
+        // π⁰ = u(13) + ū(19)  or  d(14) + d̄(20)
+        enum PionType { PION_NONE, PION_PLUS, PION_MINUS, PION_ZERO };
+        PionType pion = PION_NONE;
+
+        if ((ti == UP_QUARK_TYPE && tj == ANTI_DOWN_TYPE) ||
+            (tj == UP_QUARK_TYPE && ti == ANTI_DOWN_TYPE))
+            pion = PION_PLUS;
+        else if ((ti == ANTI_UP_TYPE && tj == DOWN_QUARK_TYPE) ||
+                 (tj == ANTI_UP_TYPE && ti == DOWN_QUARK_TYPE))
+            pion = PION_MINUS;
+        else if ((ti == UP_QUARK_TYPE && tj == ANTI_UP_TYPE) ||
+                 (tj == UP_QUARK_TYPE && ti == ANTI_UP_TYPE) ||
+                 (ti == DOWN_QUARK_TYPE && tj == ANTI_DOWN_TYPE) ||
+                 (tj == DOWN_QUARK_TYPE && ti == ANTI_DOWN_TYPE))
+            pion = PION_ZERO;
+
+        if (pion == PION_NONE) continue;
+
+        // Check proximity (must be within confinement radius)
+        glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
+        float d2 = delta.x * delta.x + delta.y * delta.y;
+        if (d2 > CONFINEMENT_R2) continue;
+
+        // Check minimum age
+        if (i < particles.birth_frames.size() &&
+            (frame_counter_ - particles.birth_frames[i]) < MIN_AGE_FRAMES) continue;
+        if (j < particles.birth_frames.size() &&
+            (frame_counter_ - particles.birth_frames[j]) < MIN_AGE_FRAMES) continue;
+
+        // Stochastic decay probability
+        float prob = (pion == PION_ZERO) ? NEUTRAL_DECAY_PROB : CHARGED_DECAY_PROB;
+        if (unit(rng) > prob) continue;
+
+        // ── Decay! ──
+        glm::vec2 cm_pos = (readback_positions_[i] + readback_positions_[j]) * 0.5f;
+
+        // Random decay direction
+        float angle = unit(rng) * 6.2831853f;
+        glm::vec2 decay_dir(std::cos(angle), std::sin(angle));
+
+        // Cascade chain context from quark origin
+        const char* origin = cascade_origin_label(i);
+        bool has_origin = (origin[0] != '\0');
+
+        if (pion == PION_PLUS) {
+            // π⁺ → μ⁺ + νμ
+            float p_dec = two_body_decay_momentum(PION_CHARGED_MASS, MUON_MASS, 0.0f);
+            float KE_mu = std::sqrt(p_dec * p_dec + MUON_MASS * MUON_MASS) - MUON_MASS;
+            float KE_nu = p_dec;  // massless neutrino: E = pc
+
+            write_spawn_genome(particles, i, ANTIMUON_TYPE_PHYS, rng, frame_counter_);
+            readback_positions_[i] = cm_pos;
+            readback_energies_[i] = mev_to_ebuf(MUON_MASS + KE_mu);
+            readback_velocities_[i] = decay_dir * ke_to_speed(KE_mu, ANTIMUON_TYPE_PHYS);
+
+            write_spawn_genome(particles, j, MU_NEUTRINO_TYPE_PHYS, rng, frame_counter_);
+            readback_positions_[j] = cm_pos;
+            readback_energies_[j] = mev_to_ebuf(KE_nu);
+            readback_velocities_[j] = -decay_dir * C_SIM * 0.9999f;
+
+            // Propagate cascade tag to muon product (step 2: pion decay)
+            if (i < particles.cascade_tag.size() && particles.cascade_tag[i] != 0)
+                particles.cascade_tag[i] = 3;  // pion decay product
+            if (j < particles.cascade_tag.size())
+                particles.cascade_tag[j] = 0;  // neutrino — end of tracking
+
+            iface.push_notification("Decay: \xCF\x80\xE2\x81\xBA \xE2\x86\x92 \xCE\xBC\xE2\x81\xBA + \xCE\xBD\xCE\xBC",
+                                    ImVec4(1.0f, 0.6f, 0.3f, 1.0f));
+            {
+                char detail[512];
+                int len = snprintf(detail, sizeof(detail),
+                    "Pion+ (#%u,#%u) M=%.1f MeV\np_dec=%.1f MeV/c\n\xCE\xBC\xE2\x81\xBA #%u KE: %.1f MeV\n\xCE\xBD\xCE\xBC #%u E: %.1f MeV",
+                    i, j, PION_CHARGED_MASS, p_dec, i, KE_mu, j, KE_nu);
+                if (has_origin)
+                    snprintf(detail + len, sizeof(detail) - len,
+                        "\n\xE2\x94\x80 Cascade [%s]: \xCE\xB3+N \xE2\x86\x92 \xCF\x80\xE2\x81\xBA(ud\xCC\x84) \xE2\x86\x92 \xCE\xBC\xE2\x81\xBA+\xCE\xBD\xCE\xBC \xE2\x86\x92 e\xE2\x81\xBA+\xCE\xBD+\xCE\xBD\xCC\x84",
+                        origin);
+                iface.push_decay_event("\xCF\x80\xE2\x81\xBA \xE2\x86\x92 \xCE\xBC\xE2\x81\xBA + \xCE\xBD\xCE\xBC",
+                    PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.6f, 0.3f, 1.0f), std::string(detail));
+            }
+
+        } else if (pion == PION_MINUS) {
+            // π⁻ → μ⁻ + ν̄μ
+            float p_dec = two_body_decay_momentum(PION_CHARGED_MASS, MUON_MASS, 0.0f);
+            float KE_mu = std::sqrt(p_dec * p_dec + MUON_MASS * MUON_MASS) - MUON_MASS;
+            float KE_nu = p_dec;
+
+            write_spawn_genome(particles, i, MUON_TYPE_PHYS, rng, frame_counter_);
+            readback_positions_[i] = cm_pos;
+            readback_energies_[i] = mev_to_ebuf(MUON_MASS + KE_mu);
+            readback_velocities_[i] = decay_dir * ke_to_speed(KE_mu, MUON_TYPE_PHYS);
+
+            write_spawn_genome(particles, j, MU_NEUTRINO_TYPE_PHYS, rng, frame_counter_);
+            readback_positions_[j] = cm_pos;
+            readback_energies_[j] = mev_to_ebuf(KE_nu);
+            readback_velocities_[j] = -decay_dir * C_SIM * 0.9999f;
+
+            // Propagate cascade tag to muon product
+            if (i < particles.cascade_tag.size() && particles.cascade_tag[i] != 0)
+                particles.cascade_tag[i] = 3;
+            if (j < particles.cascade_tag.size())
+                particles.cascade_tag[j] = 0;
+
+            iface.push_notification("Decay: \xCF\x80\xE2\x81\xBB \xE2\x86\x92 \xCE\xBC\xE2\x81\xBB + \xCE\xBD\xCC\x84\xCE\xBC",
+                                    ImVec4(1.0f, 0.6f, 0.3f, 1.0f));
+            {
+                char detail[512];
+                int len = snprintf(detail, sizeof(detail),
+                    "Pion- (#%u,#%u) M=%.1f MeV\np_dec=%.1f MeV/c\n\xCE\xBC\xE2\x81\xBB #%u KE: %.1f MeV\n\xCE\xBD\xCC\x84\xCE\xBC #%u E: %.1f MeV",
+                    i, j, PION_CHARGED_MASS, p_dec, i, KE_mu, j, KE_nu);
+                if (has_origin)
+                    snprintf(detail + len, sizeof(detail) - len,
+                        "\n\xE2\x94\x80 Cascade [%s]: \xCE\xB3+N \xE2\x86\x92 \xCF\x80\xE2\x81\xBB(\xC5\xAB" "d) \xE2\x86\x92 \xCE\xBC\xE2\x81\xBB+\xCE\xBD\xCC\x84\xCE\xBC \xE2\x86\x92 e\xE2\x81\xBB+\xCE\xBD+\xCE\xBD\xCC\x84",
+                        origin);
+                iface.push_decay_event("\xCF\x80\xE2\x81\xBB \xE2\x86\x92 \xCE\xBC\xE2\x81\xBB + \xCE\xBD\xCC\x84\xCE\xBC",
+                    PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.6f, 0.3f, 1.0f), std::string(detail));
+            }
+
+        } else {
+            // π⁰ → γ + γ  (back-to-back photons, each ~67.5 MeV)
+            float E_gamma = PION_NEUTRAL_MASS * 0.5f;
+
+            write_spawn_genome(particles, i, PHOTON_TYPE_PHYS, rng, frame_counter_);
+            readback_positions_[i] = cm_pos;
+            readback_energies_[i] = mev_to_ebuf(E_gamma);
+            readback_velocities_[i] = decay_dir * C_SIM;
+
+            write_spawn_genome(particles, j, PHOTON_TYPE_PHYS, rng, frame_counter_);
+            readback_positions_[j] = cm_pos;
+            readback_energies_[j] = mev_to_ebuf(E_gamma);
+            readback_velocities_[j] = -decay_dir * C_SIM;
+
+            // Clear cascade tags — photons are terminal
+            if (i < particles.cascade_tag.size()) particles.cascade_tag[i] = 0;
+            if (j < particles.cascade_tag.size()) particles.cascade_tag[j] = 0;
+
+            iface.push_notification("Decay: \xCF\x80\xE2\x81\xB0 \xE2\x86\x92 \xCE\xB3 + \xCE\xB3",
+                                    ImVec4(1.0f, 0.9f, 0.3f, 1.0f));
+            try_unlock(ACH_PHOTON_EMISSION);
+            {
+                char detail[512];
+                int len = snprintf(detail, sizeof(detail),
+                    "Pion0 (#%u,#%u) M=%.1f MeV\n\xCE\xB3 #%u E: %.1f MeV\n\xCE\xB3 #%u E: %.1f MeV",
+                    i, j, PION_NEUTRAL_MASS, i, E_gamma, j, E_gamma);
+                if (has_origin)
+                    snprintf(detail + len, sizeof(detail) - len,
+                        "\n\xE2\x94\x80 Cascade [%s]: \xCE\xB3+N \xE2\x86\x92 \xCF\x80\xE2\x81\xB0(q\xC4\x81) \xE2\x86\x92 \xCE\xB3+\xCE\xB3",
+                        origin);
+                iface.push_decay_event("\xCF\x80\xE2\x81\xB0 \xE2\x86\x92 \xCE\xB3 + \xCE\xB3",
+                    PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.9f, 0.3f, 1.0f), std::string(detail));
+            }
+        }
+
+        // Clear meson link — products are independent particles now
+        particles.entangled_partner[i] = UINT32_MAX;
+        particles.entangled_partner[j] = UINT32_MAX;
+        cpu_particles_dirty_ = true;
+        ++decays;
+        try_unlock(ACH_FIRST_PION_DECAY);
+    }
+}
+
 // ── Nuclear spallation ──────────────────────────────────────────────────────
 // When a high-energy particle (any massive particle) strikes a nucleus with
 // sufficient kinetic energy, the nucleus shatters into individual nucleon
@@ -4536,6 +4800,13 @@ void PhysicsSimulation::check_spallation() {
                     readback_velocities_[qbar_slot] = -q_dir * 180.0f;
                     readback_energies_[qbar_slot] = ph_energy * 0.3f;
                     used[qbar_slot] = true;
+
+                    // Link quark pair as meson for decay tracking
+                    particles.entangled_partner[q_slot] = qbar_slot;
+                    particles.entangled_partner[qbar_slot] = q_slot;
+                    // Tag as VMD cascade origin
+                    if (q_slot < particles.cascade_tag.size()) particles.cascade_tag[q_slot] = 2;
+                    if (qbar_slot < particles.cascade_tag.size()) particles.cascade_tag[qbar_slot] = 2;
                 }
 
                 // Scatter bound leptons
@@ -4560,7 +4831,8 @@ void PhysicsSimulation::check_spallation() {
                 {
                     char vmd_detail[512];
                     snprintf(vmd_detail, sizeof(vmd_detail),
-                        "Photon #%u E: %.4f (>=0.85 threshold)\nTarget nucleus: rep #%u Z=%d N=%d\nNucleons ejected: %d\nqqbar pair: slots %u, %u\nSim: gamma->rho0->hadronic shower",
+                        "Photon #%u E: %.4f (>=0.85 threshold)\nTarget nucleus: rep #%u Z=%d N=%d\nNucleons ejected: %d\nq\xC4\x81 pair: q=#%u q\xCC\x84=#%u"
+                        "\n\xE2\x94\x80 CASCADE START: \xCE\xB3 \xE2\x86\x92 \xCF\x81\xE2\x81\xB0 \xE2\x86\x92 q\xC4\x81 \xE2\x86\x92 \xCF\x80 \xE2\x86\x92 \xCE\xBC+\xCE\xBD \xE2\x86\x92 e+\xCE\xBD+\xCE\xBD\xCC\x84",
                         i, ph_energy,
                         nuc.rep, nuc.Z + ejected, total_nucleons - ejected,
                         ejected, q_slot, qbar_slot);
@@ -4640,6 +4912,13 @@ void PhysicsSimulation::check_spallation() {
                     readback_velocities_[qbar_slot] = pion_dir * 200.0f + rand_dir() * 20.0f;
                     readback_energies_[qbar_slot] = ph_energy * 0.35f;
                     used[qbar_slot] = true;
+
+                    // Link quark pair as pion meson for decay tracking
+                    particles.entangled_partner[q_slot] = qbar_slot;
+                    particles.entangled_partner[qbar_slot] = q_slot;
+                    // Tag as photopion cascade origin
+                    if (q_slot < particles.cascade_tag.size()) particles.cascade_tag[q_slot] = 1;
+                    if (qbar_slot < particles.cascade_tag.size()) particles.cascade_tag[qbar_slot] = 1;
                 }
 
                 // Recoil on remaining nucleus
@@ -4662,12 +4941,16 @@ void PhysicsSimulation::check_spallation() {
                 {
                     char pion_detail[512];
                     snprintf(pion_detail, sizeof(pion_detail),
-                        "Photon #%u E: %.4f (>=0.80 threshold)\nTarget nucleus: rep #%u Z=%d\nTarget nucleon #%u (%s)\nIsospin flip: %s->%s\nPion (%s): q=%u qbar=%u",
+                        "Photon #%u E: %.4f (>=0.80 threshold)\nTarget nucleus: rep #%u Z=%d\nTarget nucleon #%u (%s)\nIsospin flip: %s->%s\nPion (%s): q=#%u q\xCC\x84=#%u"
+                        "\n\xE2\x94\x80 CASCADE START: \xCE\xB3+%s \xE2\x86\x92 %s+%s \xE2\x86\x92 \xCE\xBC+\xCE\xBD \xE2\x86\x92 e+\xCE\xBD+\xCE\xBD\xCC\x84",
                         i, ph_energy,
                         nuc.rep, nuc.Z,
                         target_idx, used_proton ? "proton" : "neutron",
                         used_proton ? "p" : "n", used_proton ? "n" : "p",
-                        used_proton ? "pi+" : "pi-", q_slot, qbar_slot);
+                        used_proton ? "\xCF\x80\xE2\x81\xBA" : "\xCF\x80\xE2\x81\xBB", q_slot, qbar_slot,
+                        used_proton ? "p" : "n",
+                        used_proton ? "n" : "p",
+                        used_proton ? "\xCF\x80\xE2\x81\xBA" : "\xCF\x80\xE2\x81\xBB");
                     iface.push_decay_event(msg, PhysicsInterface::DEVT_PION_PRODUCTION, ImVec4(0.4f, 0.9f, 0.6f, 1.0f), std::string(pion_detail));
                 }
                 break;
@@ -4980,6 +5263,7 @@ void PhysicsSimulation::check_virtual_pairs() {
 
     if (any_spawned) {
         cpu_particles_dirty_ = true;
+        try_unlock(ACH_FIRST_VIRTUAL_PAIR);
     }
 }
 
@@ -5094,6 +5378,10 @@ void PhysicsSimulation::check_hadronization() {
                 readback_velocities_[i]      += dir * 30.0f;
                 readback_velocities_[best_j] -= dir * 30.0f;
             }
+            // Link quark pair as meson for decay tracking
+            particles.entangled_partner[i] = best_j;
+            particles.entangled_partner[best_j] = i;
+
             consumed[i] = true;
             consumed[best_j] = true;
             any_changed = true;
@@ -5782,6 +6070,54 @@ void PhysicsSimulation::check_achievements() {
         if (all_tried) try_unlock(ACH_TRY_ALL_ENVIRONMENTS);
     }
 
+    // ── Molecule checks (bonded atom groups) ─────────────────────────────
+    if (!bond_data_.empty() && !detected_nuclei_.empty()) {
+        for (const auto& nuc : detected_nuclei_) {
+            if (nuc.Z == 0) continue;
+            uint32_t rep = nuc.rep;
+            if (rep >= cfg.particle_count) continue;
+            uint32_t base = rep * MAX_BONDS_PER_PARTICLE;
+            for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+                if (base + s < bond_data_.size() && bond_data_[base + s] != 0xFFFFFFFFu) {
+                    try_unlock(ACH_FIRST_MOLECULE);
+                    // BFS to count bonded atoms for 5-atom check
+                    if (!achievements.is_unlocked(ACH_MOLECULE_5_ATOMS)) {
+                        std::vector<uint32_t> visited;
+                        std::vector<uint32_t> stack = {rep};
+                        while (!stack.empty() && visited.size() < 6) {
+                            uint32_t cur = stack.back(); stack.pop_back();
+                            bool found = false;
+                            for (auto v : visited) if (v == cur) { found = true; break; }
+                            if (found) continue;
+                            visited.push_back(cur);
+                            uint32_t b = cur * MAX_BONDS_PER_PARTICLE;
+                            for (uint32_t ss = 0; ss < MAX_BONDS_PER_PARTICLE; ++ss) {
+                                if (b + ss < bond_data_.size() && bond_data_[b + ss] != 0xFFFFFFFFu)
+                                    stack.push_back(bond_data_[b + ss]);
+                            }
+                        }
+                        if (visited.size() >= 5) try_unlock(ACH_MOLECULE_5_ATOMS);
+                    }
+                    goto done_molecule_check;  // only need to find one bonded nucleus
+                }
+            }
+        }
+        done_molecule_check:;
+    }
+
+    // ── Graviton observed ────────────────────────────────────────────────
+    if (tc[GRAVITON_TYPE_PHYS] > 0) try_unlock(ACH_GRAVITON_OBSERVED);
+
+    // ── Element count milestones ─────────────────────────────────────────
+    if (achievements.distinct_elements_count >= 100) try_unlock(ACH_HUNDRED_ELEMENTS);
+
+    // ── Speed demon: time_scale at max ───────────────────────────────────
+    if (cfg.time_scale >= 4.9f) try_unlock(ACH_SPEED_DEMON);
+
+    // ── Long play: 10+ minutes ───────────────────────────────────────────
+    achievements.session_time_ += ImGui::GetIO().DeltaTime;
+    if (achievements.session_time_ >= 600.0f) try_unlock(ACH_LONG_PLAY);
+
     // ── Fission chain reaction window (60 frame window) ─────────────────
     if (frame_counter_ - achievements.fission_window_start > 60) {
         achievements.fission_recent_count = 0;
@@ -5917,6 +6253,8 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 check_fission();
             if (quality >= 2 || (quality == 1) || (quality == 0 && frame2))
                 check_decay();
+            if (quality >= 2 || (quality == 1) || (quality == 0 && frame2))
+                check_pion_decay();
             if (quality >= 2 || (quality == 1 && frame2) || (quality == 0 && frame4))
                 check_hadronization();
 
@@ -6735,7 +7073,12 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         std::memset(iface.save_load_message, 0, sizeof(iface.save_load_message));
         strncpy(iface.save_load_message, result.message.c_str(), sizeof(iface.save_load_message) - 1);
         iface.save_load_msg_timer = 3.0f;
-        if (result.success) try_unlock(ACH_FIRST_SAVE);
+        if (result.success) {
+            try_unlock(ACH_FIRST_SAVE);
+            // Capture thumbnail alongside save file
+            std::string thumb_path = std::string(iface.save_filename) + ".thumb.png";
+            capture_thumbnail(thumb_path);
+        }
     }
 
     // ── Load request ─────────────────────────────────────────────────────────
@@ -7038,6 +7381,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             snprintf(fname, sizeof(fname), "saves/%s.ppmol", formula.c_str());
 
             auto result = export_molecule(fname, formula, atom_data, bond_list);
+            if (result.success) try_unlock(ACH_FIRST_MOLECULE_EXPORT);
             iface.push_notification(
                 result.success ? "Molecule exported!" : "Export failed",
                 result.success ? ImVec4(0.2f, 0.9f, 0.4f, 1.0f) : ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
@@ -7212,6 +7556,17 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
 
     ImGui::Render();
 
+    // Handle render scale change (supersampling)
+    {
+        int scale = std::max(1, std::min(2, iface.prefs.render_scale));
+        uint32_t want_w = REGION_W * static_cast<uint32_t>(scale);
+        uint32_t want_h = REGION_H * static_cast<uint32_t>(scale);
+        if (want_w != compute.render_w || want_h != compute.render_h) {
+            compute.resize_render_texture(vk, want_w, want_h);
+            renderer.update_texture_binding(vk, compute);
+        }
+    }
+
     // Handle swapchain resize
     if (renderer.swapchain_dirty) {
         renderer.on_resize(vk, window, compute);
@@ -7225,4 +7580,99 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     if (is_active) {
         vkQueueWaitIdle(vk.queue);
     }
+}
+
+// ── Screenshot capture for save thumbnails ──────────────────────────────────
+
+bool PhysicsSimulation::capture_thumbnail(const std::string& png_path,
+                                          uint32_t thumb_w, uint32_t thumb_h) {
+    if (!compute.is_ready()) return false;
+
+    vkDeviceWaitIdle(vk.device);
+
+    uint32_t src_w = compute.render_w;
+    uint32_t src_h = compute.render_h;
+    VkDeviceSize full_size = static_cast<VkDeviceSize>(src_w) * src_h * 4 * sizeof(float);
+
+    // Create staging buffer (HOST_VISIBLE) to receive the image data
+    Buffer staging = vk.create_buffer(
+        full_size,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    // Copy image to staging buffer
+    VkCommandBuffer cmd = vk.begin_single_command();
+
+    // Transition GENERAL -> TRANSFER_SRC_OPTIMAL
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = compute.particle_texture.handle;
+    barrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    VkBufferImageCopy region{};
+    region.bufferOffset = 0;
+    region.bufferRowLength = 0;
+    region.bufferImageHeight = 0;
+    region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    region.imageOffset = { 0, 0, 0 };
+    region.imageExtent = { src_w, src_h, 1 };
+    vkCmdCopyImageToBuffer(cmd, compute.particle_texture.handle,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging.handle, 1, &region);
+
+    // Transition back TRANSFER_SRC_OPTIMAL -> GENERAL
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    vk.end_single_command(cmd);
+
+    // Map staging buffer and downsample to thumbnail
+    void* mapped = nullptr;
+    vkMapMemory(vk.device, staging.memory, 0, full_size, 0, &mapped);
+    const float* src_pixels = reinterpret_cast<const float*>(mapped);
+
+    std::vector<uint8_t> thumb(thumb_w * thumb_h * 4);
+
+    // Nearest-neighbor downsample RGBA32F -> RGBA8
+    for (uint32_t ty = 0; ty < thumb_h; ++ty) {
+        uint32_t sy = ty * src_h / thumb_h;
+        for (uint32_t tx = 0; tx < thumb_w; ++tx) {
+            uint32_t sx = tx * src_w / thumb_w;
+            uint32_t src_idx = (sy * src_w + sx) * 4;
+            uint32_t dst_idx = (ty * thumb_w + tx) * 4;
+            auto f2b = [](float f) -> uint8_t {
+                if (f <= 0.0f) return 0;
+                if (f >= 1.0f) return 255;
+                return static_cast<uint8_t>(f * 255.0f + 0.5f);
+            };
+            thumb[dst_idx + 0] = f2b(src_pixels[src_idx + 0]);
+            thumb[dst_idx + 1] = f2b(src_pixels[src_idx + 1]);
+            thumb[dst_idx + 2] = f2b(src_pixels[src_idx + 2]);
+            thumb[dst_idx + 3] = 255;  // opaque
+        }
+    }
+
+    vkUnmapMemory(vk.device, staging.memory);
+    vk.destroy_buffer(staging);
+
+    // Write PNG
+    int result = stbi_write_png(png_path.c_str(), static_cast<int>(thumb_w),
+                                static_cast<int>(thumb_h), 4, thumb.data(),
+                                static_cast<int>(thumb_w * 4));
+    return result != 0;
 }

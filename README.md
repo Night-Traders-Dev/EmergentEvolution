@@ -4,7 +4,7 @@
 
 **A GPU-accelerated quantum particle physics sandbox**
 
-Standard Model + Beyond + 34 Hypothetical Particles · Nuclear fusion & fission · Covalent Bonds & Molecules · Molecule Spawn by Formula · Hadronization & Color Confinement · Gluon Interactions · Photon-matter interactions · Orbital mechanics · Emergent thermodynamics · Vacuum fluctuations & Casimir effect · Quantum entanglement · Wave-particle duality · Magnetic field visualization · Achievements · Tools · Save/Load
+Standard Model + Beyond + 34 Hypothetical Particles · Nuclear fusion & fission · Covalent Bonds & Molecules · Molecule Spawn by Formula · Hadronization & Color Confinement · Gluon Interactions · Photon-matter interactions · Orbital mechanics · Emergent thermodynamics · Vacuum fluctuations & Casimir effect · Quantum entanglement · Wave-particle duality · Magnetic field visualization · 64 Achievements · Tools · Thumbnail Save/Load
 
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
 [![Vulkan](https://img.shields.io/badge/Vulkan-1.3-red.svg)](https://www.vulkan.org/)
@@ -31,10 +31,12 @@ detection, electron cloud visualization, a persistent event log, an achievement 
 measurement tools (thermometer, velocity meter, ruler with nanometer scale, density counter),
 visualization overlays (energy heatmap, velocity field, magnetic field, trajectory tracer,
 force vectors, atom grid, wave-particle duality mode), interactive tools
-(particle accelerator, mirrors), 8 UI themes, 13 environment presets, element export/import, six
-per-force multiplier knobs, relativistic energy readouts in electronvolts (PDG rest masses,
-E = γm₀c²), a browsable particle list and element list with live molecular formula grouping
-and energy/age tracking, and an animated particle splash screen.
+(particle accelerator, mirrors), 8 UI themes, 13 environment presets, element export/import,
+molecule export/import (.ppmol), six per-force multiplier knobs, relativistic energy readouts
+in electronvolts (PDG rest masses, E = γm₀c²), a browsable particle list and element list
+with live molecular formula grouping and energy/age tracking, a thumbnail save/load UI with
+screenshot capture (card grid browser with PNG previews), 64 achievements across 6 categories,
+and an HD animated particle splash screen.
 
 Simulates up to **100,000 particles** in real time in an open infinite world with no boundaries.
 GPU compute shaders handle O(n^2) pairwise forces; CPU-side physics uses a **spatial acceleration
@@ -615,7 +617,7 @@ timeout and fade-out (max 8 visible).
 
 **Decay / Event Log** — Click the **"Events: N"** counter in the bottom bar to open a
 persistent, scrollable log of all physics events. The log tracks up to **10,000** entries
-across 11 event categories, each stamped with a wall-clock timestamp (`HH:MM:SS`).
+across 13 event categories, each stamped with a wall-clock timestamp (`HH:MM:SS`).
 
 <details>
 <summary><b>Event categories</b> (click to expand)</summary>
@@ -633,6 +635,8 @@ across 11 event categories, each stamped with a wall-clock timestamp (`HH:MM:SS`
 | **Pion Production** | &gamma; + p &rarr; n + &pi;&#8314; | Green |
 | **Vector Meson Dominance** | &rho;&#8304; meson shower | Magenta |
 | **Photodisintegration** | &gamma; ejected nucleon from nucleus | Purple |
+| **Bond Formed** | Covalent bond created between atoms | Green |
+| **Bond Broken** | Covalent bond broken by stretching | Red |
 
 </details>
 
@@ -1023,7 +1027,7 @@ Element import available from **Menu > File > Import Element**.
 
 ## Achievements
 
-An achievement system tracks **52 milestones** across 5 categories. Achievements persist across
+An achievement system tracks **64 milestones** across 6 categories. Achievements persist across
 sessions via a `.ppach` save file. Open the achievements panel from **Menu > Achievements**.
 
 <details>
@@ -1031,11 +1035,12 @@ sessions via a `.ppach` save file. Open the achievements panel from **Menu > Ach
 
 | Category | # | Examples |
 |---|---|---|
-| **Nuclear Physics** | 11 | First Fusion, First Fission, First Annihilation, Chain Reaction, 100 Fusions, Nuclear Demolition (spallation), Einstein's Nobel (photoelectric), Something from Nothing (pair production) |
-| **Element Creation** | 11 | Create Hydrogen, Helium, Lithium, Carbon, Oxygen, Iron (peak binding energy), Gold, Uranium; 10/25 distinct elements |
-| **Particle Zoo** | 9 | First Positron, First Neutrino, First Muon, First Tau, First Antiproton, First Quark, First Boson, Dark Matter, All 33 types simultaneously |
+| **Nuclear Physics** | 13 | First Fusion, First Fission, First Annihilation, Chain Reaction, 100 Fusions, Nuclear Demolition (spallation), Einstein's Nobel (photoelectric), Something from Nothing (pair production), Pion Cascade, Let There Be Light (photon emission) |
+| **Element Creation** | 12 | Create Hydrogen, Helium, Lithium, Carbon, Oxygen, Iron (peak binding energy), Gold, Uranium; 10/25/100 distinct elements |
+| **Particle Zoo** | 11 | First Positron, First Neutrino, First Muon, First Tau, First Antiproton, First Quark, First Boson, Dark Matter, All 33 types simultaneously, Vacuum Fluctuation (virtual pair), Gravity's Messenger (graviton) |
 | **Thermodynamics** | 5 | Reach 1,000 K, 1 MK, 1 GK, 10 GK (Quark Epoch); Cool below 2 K |
-| **Milestones** | 16 | 1000/5000/10000 particles, Entangled Pairs, First Force Object, First Mirror, CERN at Home (accelerator), First Save/Load, Element Export/Import, 100 Annihilations, 50 Nuclear Decays, Antimatter Atom, Try All 12 Environments |
+| **Milestones** | 20 | 1000/5000/10000 particles, Entangled Pairs, First Force Object, First Mirror, CERN at Home (accelerator), Cosmic Ray (max speed), First Save/Load, Element Export/Import, Molecule Export, 100 Annihilations, 50 Nuclear Decays, Antimatter Atom, Try All 12 Environments, Speed Demon (max time scale), Dedicated Physicist (10+ minutes) |
+| **Chemistry** | 3 | Chemical Bond (first covalent bond), Molecular! (first molecule), Complex Chemistry (5+ atom molecule) |
 
 </details>
 
@@ -1046,7 +1051,7 @@ with unlocked/locked status and descriptions for each achievement.
 
 ## Save / Load
 
-Simulation state can be saved and loaded in two binary formats.
+Simulation state can be saved and loaded in three binary formats.
 
 ### Simulation Files (.ppsg)
 
@@ -1056,7 +1061,8 @@ Simulation state can be saved and loaded in two binary formats.
 | **UI** | Save/Load buttons in bottom bar, pause menu, and Tools popup |
 | **Format** | Binary `.ppsg` (magic `0x47535050`, version 5, backward-compatible with v1-v4) |
 | **Contents** | Full SimConfig, particle positions/velocities/energies/types/angles/genomes, per-type data (forces, colors, behavior flags), force objects, UI field state |
-| **File browser** | Built-in file browser with directory navigation, file size display, and path editing |
+| **Thumbnails** | Saving automatically captures a 320&times;180 PNG screenshot of the render texture, stored alongside the save as `{filename}.thumb.png` |
+| **Card grid browser** | Load dialog displays saves as a thumbnail card grid (Universe Sandbox-style) showing preview images, save names, dates, and file sizes. Double-click to load, single-click to select. Saves without thumbnails show a "No Preview" placeholder |
 
 ### Element Files (.ppel)
 
@@ -1067,6 +1073,16 @@ Simulation state can be saved and loaded in two binary formats.
 | **Format** | Binary `.ppel` (magic `0x4C455050`, version 1) |
 | **Contents** | Z, N, electron count, all constituent particles with positions (relative to nucleus center), velocities, energies, types, genomes |
 | **Portability** | Positions stored as offsets from centroid — elements can be imported into any simulation at any location |
+
+### Molecule Files (.ppmol)
+
+| Feature | Detail |
+|---|---|
+| **Export** | From Molecule Detail Card > Export button |
+| **Import** | From Menu > Tools > Import Molecule |
+| **Format** | Binary `.ppmol` with molecular formula as filename |
+| **Contents** | Molecular formula, constituent atoms (Z, N, position offsets), covalent bond list |
+| **Portability** | Atom positions stored relative to molecule center of mass |
 
 ---
 
@@ -1210,14 +1226,16 @@ EmergentEvolution/
 │   ├── vulkan_context.h/.cpp    # Vulkan instance, device, swapchain, buffer helpers
 │   ├── compute_pipeline.h/.cpp  # 18-binding descriptor layout, buffer lifecycle, readback
 │   ├── renderer.h/.cpp          # Fullscreen-quad pipeline, ImGui integration
-│   ├── stb_image.h              # Single-header image loading (window icon)
-│   └── stb_image_impl.cpp       # stb_image implementation unit
+│   ├── stb_image.h              # Single-header image loading (window icon, thumbnails)
+│   ├── stb_image_impl.cpp       # stb_image implementation unit
+│   ├── stb_image_write.h        # Single-header image writing (PNG thumbnail capture)
+│   └── stb_image_write_impl.cpp # stb_image_write implementation unit
 ├── src/physics/
 │   ├── phys_particles.h/.cpp    # 33 particle types, masses, charges, decay rates, isotope table, environments
-│   ├── interface.h/.cpp         # ImGui: animated splash screen, spawn picker, molecule spawn UI, force multipliers, element cards, molecule cards, bond overlay, tools, event log, achievements
-│   ├── simulation.h/.cpp        # Main loop: fusion, fission, decay, orbitals, covalent bonds, molecule detection, molecule spawn, entanglement, photoelectric, spallation, hadronization, gluon interactions, spatial grid
+│   ├── interface.h/.cpp         # ImGui: HD animated splash screen, spawn picker, molecule spawn UI, force multipliers, element cards, molecule cards, bond overlay, tools, event log, achievements, thumbnail card grid save/load UI
+│   ├── simulation.h/.cpp        # Main loop: fusion, fission, decay, orbitals, covalent bonds, molecule detection, molecule spawn, entanglement, photoelectric, spallation, hadronization, gluon interactions, spatial grid, thumbnail capture
 │   ├── molecules.h              # ~50 molecule templates with 2D geometry, formula parser, database lookup
-│   ├── achievements.h/.cpp      # 52 achievements across 5 categories with persistence
+│   ├── achievements.h/.cpp      # 64 achievements across 6 categories with persistence
 │   ├── audio.h                  # Background music playback via miniaudio (MP3 looping)
 │   ├── save_load.h/.cpp         # Binary .ppsg/.ppel save/load/export/import serialization
 │   └── main.cpp                 # Entry point (borderless maximized, window icon from assets/)

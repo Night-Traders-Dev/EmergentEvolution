@@ -6,11 +6,15 @@
 // ── Init / Destroy ────────────────────────────────────────────────────────────
 
 void ComputePipeline::init(VulkanContext& ctx, const std::string& shader_spv_path) {
-    // Create the render texture (REGION_W × REGION_H, rgba32f)
+    render_w = REGION_W;
+    render_h = REGION_H;
+
+    // Create the render texture (render_w × render_h, rgba32f)
     particle_texture = ctx.create_image(
-        REGION_W, REGION_H,
+        render_w, render_h,
         VK_FORMAT_R32G32B32A32_SFLOAT,
-        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
+            | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
     particle_texture.view = ctx.create_image_view(
@@ -43,6 +47,56 @@ void ComputePipeline::destroy(VulkanContext& ctx) {
     if (desc_set_layout_ != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(ctx.device, desc_set_layout_, nullptr);
     if (sampler          != VK_NULL_HANDLE) vkDestroySampler(ctx.device, sampler, nullptr);
     ctx.destroy_image(particle_texture);
+}
+
+// ── Resize render texture ─────────────────────────────────────────────────────
+
+void ComputePipeline::resize_render_texture(VulkanContext& ctx, uint32_t w, uint32_t h) {
+    if (w == render_w && h == render_h) return;
+
+    vkDeviceWaitIdle(ctx.device);
+
+    // Destroy old texture
+    ctx.destroy_image(particle_texture);
+
+    render_w = w;
+    render_h = h;
+
+    // Create new texture at requested size
+    particle_texture = ctx.create_image(
+        render_w, render_h,
+        VK_FORMAT_R32G32B32A32_SFLOAT,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
+            | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    particle_texture.view = ctx.create_image_view(
+        particle_texture.handle,
+        VK_FORMAT_R32G32B32A32_SFLOAT,
+        VK_IMAGE_ASPECT_COLOR_BIT);
+
+    ctx.transition_image_layout(
+        particle_texture.handle,
+        VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_GENERAL);
+
+    particle_texture_view = particle_texture.view;
+
+    // Update binding 7 (storage image) in both descriptor sets
+    if (desc_set_a_ != VK_NULL_HANDLE) {
+        VkDescriptorImageInfo img_info{ VK_NULL_HANDLE, particle_texture.view, VK_IMAGE_LAYOUT_GENERAL };
+
+        VkWriteDescriptorSet writes[2]{};
+        for (int i = 0; i < 2; ++i) {
+            writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet          = (i == 0) ? desc_set_a_ : desc_set_b_;
+            writes[i].dstBinding      = 7;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[i].pImageInfo      = &img_info;
+        }
+        vkUpdateDescriptorSets(ctx.device, 2, writes, 0, nullptr);
+    }
 }
 
 // ── Descriptor set layout ─────────────────────────────────────────────────────
@@ -590,7 +644,11 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     VkDescriptorSet active_set = (tick % 2 == 0) ? desc_set_a_ : desc_set_b_;
     uint32_t particle_count    = live_particle_count_;
 
+    // Supersampling scale: render texture may be larger than REGION_W/H
+    float rscale = static_cast<float>(render_w) / static_cast<float>(REGION_W);
+
     PushConstants pc{};
+    // Physics step uses base world-space region; render steps use scaled texture size
     pc.region_size = {
         static_cast<float>(REGION_W) + cfg.radius * 2.0f,
         static_cast<float>(REGION_H) + cfg.radius * 2.0f
@@ -642,6 +700,13 @@ void ComputePipeline::record(VkCommandBuffer cmd,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         0, 1, &mem_barrier, 0, nullptr, 0, nullptr);
 
+    // Switch to render-space coordinates for all texture operations
+    pc.region_size = {
+        static_cast<float>(render_w) + cfg.radius * rscale * 2.0f,
+        static_cast<float>(render_h) + cfg.radius * rscale * 2.0f
+    };
+    pc.camera_zoom = cfg.current_camera_zoom * rscale;
+
     // ── Clear or fade render texture ────────────────────────────────────────────
     VkImageSubresourceRange range{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
 
@@ -649,7 +714,7 @@ void ComputePipeline::record(VkCommandBuffer cmd,
         // Trail mode: fade existing pixels via compute pass (step=3)
         PushConstants fade_pc = pc;
         fade_pc.step = 3;
-        uint32_t pixel_count = REGION_W * REGION_H;
+        uint32_t pixel_count = render_w * render_h;
         uint32_t fade_groups = pixel_count / 256 + 1;
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeline_layout_, 0, 1, &active_set, 0, nullptr);

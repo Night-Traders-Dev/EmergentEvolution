@@ -418,6 +418,22 @@ void Renderer::on_resize(VulkanContext& ctx, GLFWwindow* window, ComputePipeline
     swapchain_dirty = false;
 }
 
+void Renderer::update_texture_binding(VulkanContext& ctx, ComputePipeline& compute) {
+    VkDescriptorImageInfo img_info{};
+    img_info.sampler     = compute.sampler;
+    img_info.imageView   = compute.particle_texture.view;
+    img_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    VkWriteDescriptorSet write{};
+    write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet          = quad_desc_set_;
+    write.dstBinding      = 0;
+    write.descriptorCount = 1;
+    write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo      = &img_info;
+    vkUpdateDescriptorSets(ctx.device, 1, &write, 0, nullptr);
+}
+
 // ── Command buffer recording ──────────────────────────────────────────────────
 
 void Renderer::record_command_buffer(VkCommandBuffer cmd,

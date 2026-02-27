@@ -4,11 +4,14 @@
 #include "types.h"
 #include "particles.h"
 #include "physics/achievements.h"
+#include <vulkan/vulkan.h>
 #include <cstdint>
 #include <ctime>
 #include <vector>
 #include <string>
 #include <glm/glm.hpp>
+
+class VulkanContext;  // forward declare
 
 // ── User preferences (settings menu) ─────────────────────────────────────────
 struct UserPrefs {
@@ -23,6 +26,7 @@ struct UserPrefs {
     bool  spatial_grid    = true;  // use spatial grid for neighbor queries
     float music_volume    = 0.5f;  // 0.0-1.0 background music volume
     bool  music_muted     = false; // mute toggle
+    int   render_scale    = 1;     // 1=native, 2=2x supersampling
 };
 
 // ── Group template for spawning composite structures ─────────────────────────
@@ -392,6 +396,7 @@ public:
     void render_imgui(SimConfig& cfg, Particles& particles, ForceObject* force_objects, bool& request_reset);
     void save_prefs();
     void load_prefs();
+    void set_vk_ctx(VulkanContext* ctx) { vk_ctx_ = ctx; }
 
 private:
     void push_theme();
@@ -431,9 +436,33 @@ private:
         ImU32 color, glow_color;
         bool  orbit;
         float orbit_r, orbit_speed, phase, cx, cy, tilt_x, tilt_y;
+        float base_r;         // original radius for pulsing
+        float pulse_phase;    // per-particle pulse offset
+        int   type_idx;       // index into type table
     };
     std::vector<SplashParticle> splash_particles_;
     std::vector<std::vector<ImVec2>> splash_trails_;
     float splash_time_ = 0.0f;
     bool  splash_inited_ = false;
+
+    // Thumbnail cache for save/load dialog
+    struct ThumbnailEntry {
+        std::string filepath;       // full .ppsg path
+        std::string name;           // stem (no extension)
+        std::string date_str;       // "2026-02-27 14:30"
+        uintmax_t   size = 0;
+        VkImage       thumb_image  = VK_NULL_HANDLE;
+        VkDeviceMemory thumb_memory = VK_NULL_HANDLE;
+        VkImageView   thumb_view   = VK_NULL_HANDLE;
+        ImTextureID   imgui_tex    = nullptr;
+        bool          has_thumbnail = false;
+    };
+    std::vector<ThumbnailEntry> thumbnail_entries_;
+    bool thumbnails_dirty_ = true;
+
+    VulkanContext* vk_ctx_ = nullptr;    // set by simulation during init
+    VkSampler thumb_sampler_ = VK_NULL_HANDLE;
+
+    void load_thumbnails();
+    void free_thumbnails();
 };

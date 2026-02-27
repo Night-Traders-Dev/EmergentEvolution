@@ -73,8 +73,28 @@ enum AchievementID : uint32_t {
     // ── Environment Presets ─────────────────────────────────────────────────
     ACH_TRY_ALL_ENVIRONMENTS,   // Try all 12 environment presets
 
+    // ── Chemistry & Bonds ─────────────────────────────────────────────────
+    ACH_FIRST_BOND,             // Form your first covalent bond
+    ACH_FIRST_MOLECULE,         // Create a molecule with bonded atoms
+    ACH_MOLECULE_5_ATOMS,       // Create a molecule with 5+ atoms
+
+    // ── Advanced Physics ──────────────────────────────────────────────────
+    ACH_FIRST_VIRTUAL_PAIR,     // Observe virtual particle pair creation
+    ACH_FIRST_PION_DECAY,       // Observe pion decay
+    ACH_COSMIC_RAY,             // Accelerate particle to maximum speed
+    ACH_PHOTON_EMISSION,        // Observe photon emission from decay
+
+    // ── Exploration ───────────────────────────────────────────────────────
+    ACH_FIRST_MOLECULE_EXPORT,  // Export a molecule to .ppmol
+    ACH_SPEED_DEMON,            // Set simulation speed to maximum
+    ACH_HUNDRED_ELEMENTS,       // Discover 100 distinct elements
+    ACH_GRAVITON_OBSERVED,      // Observe a graviton
+    ACH_LONG_PLAY,              // Run simulation for 10+ minutes
+
     ACH_COUNT                   // Total number of achievements
 };
+
+static_assert(ACH_COUNT <= 64, "Achievement count exceeds uint64_t bitfield capacity");
 
 // ── Achievement metadata ────────────────────────────────────────────────────
 
@@ -84,6 +104,7 @@ enum AchievementCategory : uint8_t {
     ACAT_PARTICLES,
     ACAT_THERMO,
     ACAT_MILESTONES,
+    ACAT_CHEMISTRY,
     ACAT_COUNT
 };
 
@@ -141,6 +162,9 @@ public:
     float    peak_temperature     = 0.0f;
     uint32_t peak_active_particles = 0;
     uint32_t peak_entangled_pairs = 0;
+
+    // Session time tracking (for ACH_LONG_PLAY)
+    float session_time_ = 0.0f;
 
 private:
     // Bitfield for unlocked achievements (ACH_COUNT < 64, fits in 2 uint32s)

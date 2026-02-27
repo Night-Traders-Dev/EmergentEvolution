@@ -99,6 +99,10 @@ public:
 
     // ── Shader helpers ────────────────────────────────────────────────────────
     VkShaderModule create_shader_module(const std::string& path);
+    VkShaderModule create_shader_module(const unsigned char* data, size_t size);
+
+    // Register embedded shader data as fallback when file is missing (portable build)
+    void register_embedded_shader(const char* path, const unsigned char* data, size_t size);
 
     // ── Sampler helpers ───────────────────────────────────────────────────────
     VkSampler create_sampler_nearest();
@@ -108,6 +112,12 @@ public:
 
 private:
     VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
+
+    // Embedded shader fallback table (PORTABLE_BUILD)
+    struct EmbeddedShader { const char* path; const unsigned char* data; size_t size; };
+    static constexpr int MAX_EMBEDDED = 4;
+    EmbeddedShader embedded_[MAX_EMBEDDED]{};
+    int            embedded_count_ = 0;
 
     void create_instance();
     void setup_debug_messenger();
