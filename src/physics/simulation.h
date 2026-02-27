@@ -86,6 +86,22 @@ private:
     float emergent_temperature_ = 1.0f;   // EMA of kinetic temperature (Kelvin)
     float emergent_bfield_      = 0.0f;   // EMA of emergent B-field magnitude
 
+    // ── Thermodynamic tracking (First Law: energy conservation) ─────────
+    float prev_total_ke_        = 0.0f;
+    float prev_total_pe_        = 0.0f;
+    float prev_total_energy_    = 0.0f;
+    float initial_total_energy_ = -1.0f;  // first-frame snapshot (set once)
+    float energy_injected_rate_ = 0.0f;   // EMA of energy input per frame
+    float energy_dissipated_rate_ = 0.0f; // EMA of energy loss per frame
+    float energy_conservation_ratio_ = 1.0f;
+    float energy_drift_rate_    = 0.0f;   // dE/dt (positive=gain, negative=loss)
+
+    // ── Thermodynamic tracking (Second Law: entropy) ────────────────────
+    float system_entropy_       = 0.0f;
+    float prev_entropy_         = 0.0f;
+    int   entropy_trend_        = 0;      // +1 increasing, 0 stable, -1 decreasing
+    float entropy_trend_ema_    = 0.0f;
+
     // Detected nuclei (populated by update_orbitals each frame)
     struct NucleusInfo {
         glm::vec2 center;
@@ -125,6 +141,7 @@ private:
     void check_spallation();
     void check_hadronization();
 
+    void spawn_atom_at(glm::vec2 pos, int Z, int N, std::mt19937& rng, uint32_t& search_start);
     void place_force_object(glm::vec2 world_pos, ForceObjectType type);
     void place_mirror(glm::vec2 endpoint1, glm::vec2 endpoint2);
     int  hit_test_force_objects(glm::vec2 world_pos, float snap_radius);

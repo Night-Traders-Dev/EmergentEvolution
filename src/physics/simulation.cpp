@@ -1,5 +1,6 @@
 #include "physics/simulation.h"
 #include "physics/phys_particles.h"
+#include "physics/molecules.h"
 #include "physics/save_load.h"
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -132,6 +133,18 @@ void PhysicsSimulation::reset() {
     frame_counter_ = 0;
     emergent_temperature_ = 1.0f;
     emergent_bfield_ = 0.0f;
+    prev_total_ke_ = 0.0f;
+    prev_total_pe_ = 0.0f;
+    prev_total_energy_ = 0.0f;
+    initial_total_energy_ = -1.0f;
+    energy_injected_rate_ = 0.0f;
+    energy_dissipated_rate_ = 0.0f;
+    energy_conservation_ratio_ = 1.0f;
+    energy_drift_rate_ = 0.0f;
+    system_entropy_ = 0.0f;
+    prev_entropy_ = 0.0f;
+    entropy_trend_ = 0;
+    entropy_trend_ema_ = 0.0f;
 
     // Clear force objects
     force_object_count_ = 0;
@@ -291,9 +304,12 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
     // 4. Particle spawn  5. Select force obj or particle
     if (lmb && !lmb_down_ && !ImGui::GetIO().WantCaptureMouse) {
         int win_w, win_h;
-        glfwGetWindowSize(window, &win_w, &win_h);
+        glfwGetFramebufferSize(window, &win_w, &win_h);
+        // Scale from screen coords to render texture coords (render texture is REGION_W × REGION_H)
+        float sx = static_cast<float>(REGION_W) / static_cast<float>(win_w);
+        float sy = static_cast<float>(REGION_H) / static_cast<float>(win_h);
         glm::vec2 world_pos = cfg.camera_origin
-            + (mouse_pos - glm::vec2(win_w * 0.5f, win_h * 0.5f)) / cfg.current_camera_zoom;
+            + (mouse_pos - glm::vec2(win_w * 0.5f, win_h * 0.5f)) * glm::vec2(sx, sy) / cfg.current_camera_zoom;
 
         if (iface.force_obj_move_mode && iface.selected_force_obj_idx >= 0) {
             // 1. Reposition selected force object
@@ -485,9 +501,11 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
             glfwGetCursorPos(window, &mx, &my);
             int ww, wh;
             glfwGetFramebufferSize(window, &ww, &wh);
+            float asx = static_cast<float>(REGION_W) / static_cast<float>(ww);
+            float asy = static_cast<float>(REGION_H) / static_cast<float>(wh);
             glm::vec2 aim_world = cfg.camera_origin +
                 (glm::vec2(static_cast<float>(mx), static_cast<float>(my))
-                 - glm::vec2(ww * 0.5f, wh * 0.5f)) / cfg.current_camera_zoom;
+                 - glm::vec2(ww * 0.5f, wh * 0.5f)) * glm::vec2(asx, asy) / cfg.current_camera_zoom;
             do_accelerator_fire(aim_world);
         }
     }
@@ -659,6 +677,140 @@ void PhysicsSimulation::do_accelerator_fire(glm::vec2 aim_world_pos) {
     }
 }
 
+// ── Spawn a single atom (nucleus + electrons) at world position ──────────────
+
+void PhysicsSimulation::spawn_atom_at(glm::vec2 pos, int Z, int N,
+                                       std::mt19937& rng, uint32_t& search_start) {
+    uint32_t n = cfg.particle_count;
+
+    auto find_dormant = [&](uint32_t start_from) -> uint32_t {
+        for (uint32_t i = start_from; i < n; ++i) {
+            if (readback_energies_[i] < 0.01f) return i;
+        }
+        return UINT32_MAX;
+    };
+
+    float rw = static_cast<float>(REGION_W);
+    float rh = static_cast<float>(REGION_H);
+    auto wrap_pos = [&](glm::vec2 p) -> glm::vec2 {
+        p.x = std::fmod(p.x + rw, rw);
+        p.y = std::fmod(p.y + rh, rh);
+        return p;
+    };
+
+    const float R_BOHR_SPAWN = 15.0f;
+    const float K_COULOMB_SPAWN = 1200.0f;
+    const float SOFTEN_SQ_SPAWN = 64.0f;
+    const int SHELL_CAP_SPAWN[] = {2, 8, 18};
+
+    if (N < 0) N = Z;
+    int A = Z + N;
+
+    const float NUC_SPACING = 3.8f;
+
+    struct NucPos { float x, y; };
+    std::vector<NucPos> nuc_positions;
+    nuc_positions.reserve(A);
+
+    nuc_positions.push_back({0.0f, 0.0f});
+    int ring = 1;
+    while (static_cast<int>(nuc_positions.size()) < A) {
+        for (int side = 0; side < 6 && static_cast<int>(nuc_positions.size()) < A; ++side) {
+            for (int step = 0; step < ring && static_cast<int>(nuc_positions.size()) < A; ++step) {
+                float angle0 = 3.14159265f / 3.0f * side + 3.14159265f / 2.0f;
+                float angle1 = 3.14159265f / 3.0f * (side + 1) + 3.14159265f / 2.0f;
+                float t = static_cast<float>(step) / static_cast<float>(ring);
+                float px = ring * NUC_SPACING * std::cos(angle0) * (1.0f - t)
+                         + ring * NUC_SPACING * std::cos(angle1) * t;
+                float py = ring * NUC_SPACING * std::sin(angle0) * (1.0f - t)
+                         + ring * NUC_SPACING * std::sin(angle1) * t;
+                nuc_positions.push_back({px, py});
+            }
+        }
+        ++ring;
+    }
+
+    std::vector<uint32_t> nuc_types;
+    nuc_types.reserve(A);
+    int p_left = Z, n_left = N;
+    for (int k = 0; k < A; ++k) {
+        if (k % 2 == 0) {
+            if (p_left > 0) { nuc_types.push_back(PROTON_TYPE); --p_left; }
+            else            { nuc_types.push_back(NEUTRON_TYPE); --n_left; }
+        } else {
+            if (n_left > 0) { nuc_types.push_back(NEUTRON_TYPE); --n_left; }
+            else            { nuc_types.push_back(PROTON_TYPE); --p_left; }
+        }
+    }
+
+    float nuc_extent = 0.0f;
+    for (int k = 0; k < A; ++k) {
+        float r2 = nuc_positions[k].x * nuc_positions[k].x
+                  + nuc_positions[k].y * nuc_positions[k].y;
+        nuc_extent = std::max(nuc_extent, std::sqrt(r2));
+    }
+    nuc_extent += NUC_SPACING * 0.5f;
+
+    for (int k = 0; k < A; ++k) {
+        uint32_t slot = find_dormant(search_start);
+        if (slot == UINT32_MAX) break;
+        search_start = slot + 1;
+
+        readback_positions_[slot] = wrap_pos(pos + glm::vec2(nuc_positions[k].x, nuc_positions[k].y));
+        readback_velocities_[slot] = glm::vec2(0.0f);
+        readback_energies_[slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[nuc_types[k]]);
+
+        write_spawn_genome(particles, slot, nuc_types[k], rng, frame_counter_);
+    }
+
+    const float NUC_CLEAR = nuc_extent + 4.0f;
+
+    int electrons_left = Z;
+    int shell_fill_spawn[3] = {0, 0, 0};
+    for (int shell = 0; shell < 3 && electrons_left > 0; ++shell) {
+        int cap = std::min(SHELL_CAP_SPAWN[shell], electrons_left);
+        float n_shell = static_cast<float>(shell + 1);
+
+        int inner_e = 0;
+        for (int s = 0; s < shell; ++s)
+            inner_e += shell_fill_spawn[s];
+
+        float Z_eff = std::max(1.0f, static_cast<float>(Z) - static_cast<float>(inner_e));
+        float R_bohr = n_shell * n_shell * R_BOHR_SPAWN / Z_eff;
+        float R_target = std::max(R_bohr, 8.0f);
+        R_target = std::max(R_target, NUC_CLEAR + shell * 8.0f);
+
+        float R3 = R_target * R_target * R_target;
+        float R2_soft = R_target * R_target + SOFTEN_SQ_SPAWN;
+        float L_ground = std::sqrt(Z_eff * K_COULOMB_SPAWN * R3 / R2_soft);
+        float v_orbital = L_ground / R_target;
+
+        for (int e = 0; e < cap; ++e) {
+            uint32_t slot = find_dormant(search_start);
+            if (slot == UINT32_MAX) break;
+            search_start = slot + 1;
+
+            float angle = 2.0f * 3.14159265f * static_cast<float>(e) / static_cast<float>(cap);
+            glm::vec2 offset(R_target * std::cos(angle), R_target * std::sin(angle));
+            glm::vec2 tangent(-std::sin(angle), std::cos(angle));
+
+            readback_positions_[slot] = wrap_pos(pos + offset);
+            readback_velocities_[slot] = tangent * v_orbital;
+
+            float e_speed = glm::length(tangent * v_orbital);
+            float e_beta = std::min(e_speed / C_SIM, 0.9999f);
+            float e_gamma = 1.0f / std::sqrt(1.0f - e_beta * e_beta);
+            readback_energies_[slot] = mev_to_ebuf(e_gamma * PHYS_REST_MASS_MEV[ELECTRON_TYPE_PHYS]);
+
+            write_spawn_genome(particles, slot, ELECTRON_TYPE_PHYS, rng, frame_counter_);
+            particles.genomes[slot * GENOME_SIZE + 2] = L_ground;
+        }
+
+        shell_fill_spawn[shell] = cap;
+        electrons_left -= cap;
+    }
+}
+
 // ── Spawn at world position ──────────────────────────────────────────────────
 
 void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
@@ -677,14 +829,6 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
     std::mt19937 rng(static_cast<uint32_t>(world_pos.x * 1000.0f + world_pos.y));
     std::normal_distribution<float> gauss(0.0f, 1.0f);
 
-    // ── Helper: find a dormant particle slot ────────────────────────────────
-    auto find_dormant = [&](uint32_t start_from) -> uint32_t {
-        for (uint32_t i = start_from; i < n; ++i) {
-            if (readback_energies_[i] < 0.01f) return i;
-        }
-        return UINT32_MAX;
-    };
-
     // ── Helper: wrap position into toroidal world ─────────────────────────
     float rw = static_cast<float>(REGION_W);
     float rh = static_cast<float>(REGION_H);
@@ -700,139 +844,24 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
     const float SOFTEN_SQ_SPAWN = 64.0f;
     const int SHELL_CAP_SPAWN[] = {2, 8, 18};
 
-    // ── Dynamic atom spawn (periodic table) ───────────────────────────────
-    if (iface.spawn_atom_Z > 0) {
-        int Z = iface.spawn_atom_Z;
-        int N = iface.spawn_atom_N;
-        if (N < 0) N = Z;  // fallback: equal protons and neutrons
-        int A = Z + N;
-
-        // ── Generate nucleon positions: hexagonal close-packing ──────────
-        // Equilibrium spacing ~3.8px (Yukawa attraction balances Pauli repulsion).
-        // Must keep all nucleons within 10px of a neighbor for BFS clustering
-        // in update_orbitals (NUCLEAR_CLUSTER_RADIUS = 10px).
-        const float NUC_SPACING = 3.8f;
-
-        // Pre-generate centered hexagonal positions for A nucleons
-        struct NucPos { float x, y; };
-        std::vector<NucPos> nuc_positions;
-        nuc_positions.reserve(A);
-
-        // Spiral outward from center in hex rings for compact packing
-        nuc_positions.push_back({0.0f, 0.0f});
-        int ring = 1;
-        while (static_cast<int>(nuc_positions.size()) < A) {
-            // Each ring has 6*ring positions
-            for (int side = 0; side < 6 && static_cast<int>(nuc_positions.size()) < A; ++side) {
-                for (int step = 0; step < ring && static_cast<int>(nuc_positions.size()) < A; ++step) {
-                    // Start at top of ring, walk 6 sides
-                    float angle0 = 3.14159265f / 3.0f * side + 3.14159265f / 2.0f;
-                    float angle1 = 3.14159265f / 3.0f * (side + 1) + 3.14159265f / 2.0f;
-                    float t = static_cast<float>(step) / static_cast<float>(ring);
-                    float px = ring * NUC_SPACING * std::cos(angle0) * (1.0f - t)
-                             + ring * NUC_SPACING * std::cos(angle1) * t;
-                    float py = ring * NUC_SPACING * std::sin(angle0) * (1.0f - t)
-                             + ring * NUC_SPACING * std::sin(angle1) * t;
-                    nuc_positions.push_back({px, py});
-                }
-            }
-            ++ring;
-        }
-
-        // Interleave protons and neutrons: alternate p, n, p, n, ...
-        // This distributes charge evenly throughout the nucleus.
-        std::vector<uint32_t> nuc_types;
-        nuc_types.reserve(A);
-        int p_left = Z, n_left = N;
-        for (int k = 0; k < A; ++k) {
-            if (k % 2 == 0) {
-                if (p_left > 0) { nuc_types.push_back(PROTON_TYPE); --p_left; }
-                else            { nuc_types.push_back(NEUTRON_TYPE); --n_left; }
-            } else {
-                if (n_left > 0) { nuc_types.push_back(NEUTRON_TYPE); --n_left; }
-                else            { nuc_types.push_back(PROTON_TYPE); --p_left; }
-            }
-        }
-
+    // ── Molecule spawn ───────────────────────────────────────────────────
+    if (iface.spawn_molecule_idx >= 0 &&
+        iface.spawn_molecule_idx < MOLECULE_TEMPLATE_COUNT) {
+        const auto& mol = MOLECULE_TEMPLATES[iface.spawn_molecule_idx];
         uint32_t search_start = 0;
-        std::vector<uint32_t> spawned_slots;
-
-        // Compute nucleus extent (max radial distance of any nucleon from center)
-        float nuc_extent = 0.0f;
-        for (int k = 0; k < A; ++k) {
-            float r2 = nuc_positions[k].x * nuc_positions[k].x
-                      + nuc_positions[k].y * nuc_positions[k].y;
-            nuc_extent = std::max(nuc_extent, std::sqrt(r2));
+        for (uint32_t ai = 0; ai < mol.atom_count; ++ai) {
+            int Z = mol.atoms[ai].Z;
+            int N = default_neutron_count(Z);
+            glm::vec2 atom_pos = wrap_pos(world_pos + glm::vec2(mol.atoms[ai].dx, mol.atoms[ai].dy));
+            spawn_atom_at(atom_pos, Z, N, rng, search_start);
         }
-        nuc_extent += NUC_SPACING * 0.5f;
+        iface.spawn_molecule_idx = -1;
+    }
 
-        for (int k = 0; k < A; ++k) {
-            uint32_t slot = find_dormant(search_start);
-            if (slot == UINT32_MAX) break;
-            search_start = slot + 1;
-
-            readback_positions_[slot] = wrap_pos(world_pos + glm::vec2(nuc_positions[k].x, nuc_positions[k].y));
-            readback_velocities_[slot] = glm::vec2(0.0f);  // nucleons stay bound in nucleus
-            readback_energies_[slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[nuc_types[k]]);
-
-            write_spawn_genome(particles, slot, nuc_types[k], rng, frame_counter_);
-            spawned_slots.push_back(slot);
-        }
-
-        // ── Place electrons in orbital shells ────────────────────────────
-        // Use exact same formula as update_orbitals (R_BOHR, SOFTEN_SQ, no MIN_INNER)
-        // with a floor to stay clear of nucleus surface.
-        const float NUC_CLEAR = nuc_extent + 4.0f;  // minimum clearance from nucleus edge
-
-        int electrons_left = Z;
-        int shell_fill_spawn[3] = {0, 0, 0};
-        for (int shell = 0; shell < 3 && electrons_left > 0; ++shell) {
-            int cap = std::min(SHELL_CAP_SPAWN[shell], electrons_left);
-            float n_shell = static_cast<float>(shell + 1);
-
-            // Count inner electrons (same as update_orbitals)
-            int inner_e = 0;
-            for (int s = 0; s < shell; ++s)
-                inner_e += shell_fill_spawn[s];
-
-            float Z_eff = std::max(1.0f, static_cast<float>(Z) - static_cast<float>(inner_e));
-            float R_bohr = n_shell * n_shell * R_BOHR_SPAWN / Z_eff;
-            // Match update_orbitals: floor at 8px, then also ensure outside nucleus
-            float R_target = std::max(R_bohr, 8.0f);
-            R_target = std::max(R_target, NUC_CLEAR + shell * 8.0f);
-
-            // Compute L_ground (same formula as update_orbitals)
-            float R3 = R_target * R_target * R_target;
-            float R2_soft = R_target * R_target + SOFTEN_SQ_SPAWN;
-            float L_ground = std::sqrt(Z_eff * K_COULOMB_SPAWN * R3 / R2_soft);
-            float v_orbital = L_ground / R_target;
-
-            for (int e = 0; e < cap; ++e) {
-                uint32_t slot = find_dormant(search_start);
-                if (slot == UINT32_MAX) break;
-                search_start = slot + 1;
-
-                float angle = 2.0f * 3.14159265f * static_cast<float>(e) / static_cast<float>(cap);
-                glm::vec2 offset(R_target * std::cos(angle), R_target * std::sin(angle));
-                glm::vec2 tangent(-std::sin(angle), std::cos(angle));
-
-                readback_positions_[slot] = wrap_pos(world_pos + offset);
-                readback_velocities_[slot] = tangent * v_orbital;
-
-                // Electron energy: rest mass + orbital KE
-                float e_speed = glm::length(tangent * v_orbital);
-                float e_beta = std::min(e_speed / C_SIM, 0.9999f);
-                float e_gamma = 1.0f / std::sqrt(1.0f - e_beta * e_beta);
-                readback_energies_[slot] = mev_to_ebuf(e_gamma * PHYS_REST_MASS_MEV[ELECTRON_TYPE_PHYS]);
-
-                write_spawn_genome(particles, slot, ELECTRON_TYPE_PHYS, rng, frame_counter_);
-                particles.genomes[slot * GENOME_SIZE + 2] = L_ground;
-                spawned_slots.push_back(slot);
-            }
-
-            shell_fill_spawn[shell] = cap;
-            electrons_left -= cap;
-        }
+    // ── Dynamic atom spawn (periodic table) ───────────────────────────────
+    else if (iface.spawn_atom_Z > 0) {
+        uint32_t search_start = 0;
+        spawn_atom_at(world_pos, iface.spawn_atom_Z, iface.spawn_atom_N, rng, search_start);
     }
 
     // ── Group template spawn ──────────────────────────────────────────────
@@ -4741,10 +4770,12 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             double mx, my;
             glfwGetCursorPos(window, &mx, &my);
             int win_w, win_h;
-            glfwGetWindowSize(window, &win_w, &win_h);
+            glfwGetFramebufferSize(window, &win_w, &win_h);
+            float hsx = static_cast<float>(REGION_W) / static_cast<float>(win_w);
+            float hsy = static_cast<float>(REGION_H) / static_cast<float>(win_h);
             glm::vec2 mw = cfg.camera_origin
                 + (glm::vec2(float(mx), float(my)) - glm::vec2(win_w * 0.5f, win_h * 0.5f))
-                / cfg.current_camera_zoom;
+                * glm::vec2(hsx, hsy) / cfg.current_camera_zoom;
 
             float snap_r = std::max(cfg.radius * 3.0f + 4.0f, 15.0f / cfg.current_camera_zoom);
             float min_d2 = snap_r * snap_r;
@@ -5098,6 +5129,86 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             float measured_bfield = avg_current * 0.02f;
             emergent_bfield_ = emergent_bfield_ * 0.98f + measured_bfield * 0.02f;
             iface.emergent_bfield_display = emergent_bfield_;
+
+            // ── First Law: Energy conservation ledger ─────────────────────
+            {
+                float current_ke = total_ke * 0.1f;   // same scale as emergent temp
+                float current_pe = total_energy;       // energy buffer sum
+                float current_total = current_ke + current_pe;
+
+                if (initial_total_energy_ < 0.0f && current_total > 0.01f)
+                    initial_total_energy_ = current_total;
+
+                // Estimate injection from thermal noise: N × temperature² × 2
+                float noise_power = cfg.temperature * cfg.temperature * 2.0f * active;
+                // Estimate dissipation from damping: KE × (1 - dampening²)
+                float damp_loss = current_ke * (1.0f - cfg.dampening * cfg.dampening);
+
+                energy_injected_rate_ = energy_injected_rate_ * 0.98f + noise_power * 0.02f;
+                energy_dissipated_rate_ = energy_dissipated_rate_ * 0.98f + damp_loss * 0.02f;
+
+                if (initial_total_energy_ > 0.01f)
+                    energy_conservation_ratio_ = current_total / initial_total_energy_;
+
+                float delta_e = current_total - prev_total_energy_;
+                energy_drift_rate_ = energy_drift_rate_ * 0.95f + delta_e * 0.05f;
+
+                prev_total_ke_ = current_ke;
+                prev_total_pe_ = current_pe;
+                prev_total_energy_ = current_total;
+
+                iface.energy_kinetic_display = current_ke;
+                iface.energy_potential_display = current_pe;
+                iface.energy_conservation_ratio_display = energy_conservation_ratio_;
+                iface.energy_injected_rate_display = energy_injected_rate_;
+                iface.energy_dissipated_rate_display = energy_dissipated_rate_;
+                iface.energy_drift_rate_display = energy_drift_rate_;
+            }
+
+            // ── Second Law: Entropy calculation (2D Sackur-Tetrode) ───────
+            {
+                constexpr uint32_t E_GRID_W = 16;
+                constexpr uint32_t E_GRID_H = 9;
+                constexpr uint32_t E_CELLS = E_GRID_W * E_GRID_H;
+                float cell_w = static_cast<float>(REGION_W) / E_GRID_W;
+                float cell_h = static_cast<float>(REGION_H) / E_GRID_H;
+                float cell_area = cell_w * cell_h;
+
+                float cell_ke[E_CELLS] = {};
+                uint32_t cell_count[E_CELLS] = {};
+
+                for (uint32_t i = 0; i < n; ++i) {
+                    if (readback_energies_[i] < 0.01f) continue;
+                    int gx = std::clamp(static_cast<int>(readback_positions_[i].x / cell_w),
+                                        0, static_cast<int>(E_GRID_W) - 1);
+                    int gy = std::clamp(static_cast<int>(readback_positions_[i].y / cell_h),
+                                        0, static_cast<int>(E_GRID_H) - 1);
+                    int idx = gy * E_GRID_W + gx;
+                    cell_ke[idx] += 0.5f * glm::dot(readback_velocities_[i], readback_velocities_[i]);
+                    cell_count[idx]++;
+                }
+
+                float S = 0.0f;
+                for (uint32_t c = 0; c < E_CELLS; ++c) {
+                    if (cell_count[c] < 2) continue;
+                    float N_cell = static_cast<float>(cell_count[c]);
+                    float T_cell = cell_ke[c] / N_cell;
+                    if (T_cell < 1e-6f) continue;
+                    S += N_cell * (1.0f + std::log(cell_area / N_cell) + std::log(T_cell));
+                }
+
+                prev_entropy_ = system_entropy_;
+                system_entropy_ = S;
+
+                float dS = system_entropy_ - prev_entropy_;
+                entropy_trend_ema_ = entropy_trend_ema_ * 0.95f + dS * 0.05f;
+                if (entropy_trend_ema_ > 0.1f) entropy_trend_ = 1;
+                else if (entropy_trend_ema_ < -0.1f) entropy_trend_ = -1;
+                else entropy_trend_ = 0;
+
+                iface.system_entropy_display = system_entropy_;
+                iface.entropy_trend_display = entropy_trend_;
+            }
         }
     }
 

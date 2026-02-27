@@ -1,4 +1,5 @@
 #include "physics/interface.h"
+#include "physics/molecules.h"
 #include "physics/phys_particles.h"
 #include <imgui.h>
 #include <cmath>
@@ -816,11 +817,13 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         ImGuiIO& io = ImGui::GetIO();
         float win_w = io.DisplaySize.x;
         float win_h = io.DisplaySize.y;
+        float scx = win_w / static_cast<float>(REGION_W);
+        float scy = win_h / static_cast<float>(REGION_H);
 
         // World-to-screen
         auto w2s = [&](glm::vec2 w) -> ImVec2 {
             glm::vec2 s = glm::vec2(win_w, win_h) * 0.5f
-                        + (w - cfg.camera_origin) * cfg.current_camera_zoom;
+                        + (w - cfg.camera_origin) * cfg.current_camera_zoom * glm::vec2(scx, scy);
             return ImVec2(s.x, s.y);
         };
 
@@ -896,9 +899,11 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         ImGuiIO& mio = ImGui::GetIO();
         float win_w = mio.DisplaySize.x;
         float win_h = mio.DisplaySize.y;
+        float scx = win_w / static_cast<float>(REGION_W);
+        float scy = win_h / static_cast<float>(REGION_H);
         auto w2s = [&](glm::vec2 w) -> ImVec2 {
             glm::vec2 s = glm::vec2(win_w, win_h) * 0.5f
-                        + (w - cfg.camera_origin) * cfg.current_camera_zoom;
+                        + (w - cfg.camera_origin) * cfg.current_camera_zoom * glm::vec2(scx, scy);
             return ImVec2(s.x, s.y);
         };
         ImVec2 p1 = w2s(mirror_endpoint1);
@@ -925,9 +930,11 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     if (show_electron_cloud && !nucleus_clouds.empty()) {
         ImGuiIO& cio = ImGui::GetIO();
         float win_w = cio.DisplaySize.x, win_h = cio.DisplaySize.y;
+        float scx = win_w / static_cast<float>(REGION_W);
+        float scy = win_h / static_cast<float>(REGION_H);
         auto w2s_cloud = [&](glm::vec2 w) -> ImVec2 {
             glm::vec2 s = glm::vec2(win_w, win_h) * 0.5f
-                        + (w - cfg.camera_origin) * cfg.current_camera_zoom;
+                        + (w - cfg.camera_origin) * cfg.current_camera_zoom * glm::vec2(scx, scy);
             return ImVec2(s.x, s.y);
         };
 
@@ -949,12 +956,12 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
             ImVec2 center = w2s_cloud(cloud.center);
 
             // Cull offscreen nuclei (generous margin for large shells)
-            float max_r = cloud.shell_radii[2] * cfg.current_camera_zoom;
+            float max_r = cloud.shell_radii[2] * cfg.current_camera_zoom * scx;
             if (center.x < -max_r || center.x > win_w + max_r ||
                 center.y < -max_r || center.y > win_h + max_r) continue;
 
             // Skip if rings would be too tiny to see
-            float min_r_px = cloud.shell_radii[0] * cfg.current_camera_zoom;
+            float min_r_px = cloud.shell_radii[0] * cfg.current_camera_zoom * scx;
             if (min_r_px < 2.0f) continue;
 
             const ImVec4* shell_colors = cloud.is_anti ? SHELL_COLORS_ANTI : SHELL_COLORS_MATTER;
@@ -962,7 +969,7 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
             for (int s = 0; s < 3; ++s) {
                 if (cloud.shell_cap[s] == 0) continue;  // shouldn't happen
 
-                float r_px = cloud.shell_radii[s] * cfg.current_camera_zoom;
+                float r_px = cloud.shell_radii[s] * cfg.current_camera_zoom * scx;
                 if (r_px < 1.5f) continue;
 
                 float fill_frac = static_cast<float>(cloud.shell_fill[s])
@@ -1044,7 +1051,7 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
             }
 
             // Element symbol at nucleus center (if zoomed in enough)
-            float inner_r_px = cloud.shell_radii[0] * cfg.current_camera_zoom;
+            float inner_r_px = cloud.shell_radii[0] * cfg.current_camera_zoom * scx;
             if (inner_r_px > 10.0f && cloud.Z >= 1 && cloud.Z <= FULL_ELEMENT_COUNT) {
                 const char* sym = ELEMENT_SYMBOLS[cloud.Z];
                 char label[16];
@@ -1066,9 +1073,11 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         && readback_count > 0) {
         ImGuiIO& eio = ImGui::GetIO();
         float win_w = eio.DisplaySize.x, win_h = eio.DisplaySize.y;
+        float scx = win_w / static_cast<float>(REGION_W);
+        float scy = win_h / static_cast<float>(REGION_H);
         auto w2s_ent = [&](glm::vec2 w) -> ImVec2 {
             glm::vec2 s = glm::vec2(win_w, win_h) * 0.5f
-                        + (w - cfg.camera_origin) * cfg.current_camera_zoom;
+                        + (w - cfg.camera_origin) * cfg.current_camera_zoom * glm::vec2(scx, scy);
             return ImVec2(s.x, s.y);
         };
 
@@ -1113,9 +1122,11 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     if (cfg.bonds_enabled && bond_data_ptr && readback_positions_ptr && readback_count > 0) {
         ImGuiIO& bio = ImGui::GetIO();
         float bwin_w = bio.DisplaySize.x, bwin_h = bio.DisplaySize.y;
+        float scx = bwin_w / static_cast<float>(REGION_W);
+        float scy = bwin_h / static_cast<float>(REGION_H);
         auto w2s_bond = [&](glm::vec2 w) -> ImVec2 {
             glm::vec2 s = glm::vec2(bwin_w, bwin_h) * 0.5f
-                        + (w - cfg.camera_origin) * cfg.current_camera_zoom;
+                        + (w - cfg.camera_origin) * cfg.current_camera_zoom * glm::vec2(scx, scy);
             return ImVec2(s.x, s.y);
         };
 
@@ -1474,7 +1485,7 @@ void PhysicsInterface::draw_splash_screen() {
         // Subtitle
         ImGui::SetCursorPos(ImVec2(left_margin, title_y + 40.0f * scale));
         ImGui::TextColored(ImVec4(0.0f, 0.78f, 1.0f, 0.7f),
-            "Standard Model  \xe2\x80\xa2  Fusion  \xe2\x80\xa2  Fission  \xe2\x80\xa2  33 Particle Types");
+            "Standard Model  |  Fusion  |  Fission  |  33 Particle Types");
 
         // Top-right badge "QUANTUM PHYSICS SANDBOX"
         {
@@ -2031,6 +2042,19 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
             float total_MeV = total_energy_display * E_SCALE_MEV;
             fmt_energy_ev(ebuf, sizeof(ebuf), total_MeV);
             ImGui::Text("E: %s", ebuf);
+        }
+
+        // Entropy trend indicator
+        {
+            ImGui::SameLine(0, 8);
+            const char* s_arrow = (entropy_trend_display > 0) ? "S^" :
+                                   (entropy_trend_display < 0) ? "Sv" : "S=";
+            ImVec4 s_color = (entropy_trend_display >= 0)
+                ? ImVec4(0.5f, 0.8f, 0.5f, 1.0f)
+                : ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
+            ImGui::TextColored(s_color, "%s", s_arrow);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Entropy trend\nS^ = increasing (2nd law)\nS= = equilibrium\nSv = decreasing (external work)");
         }
 
         // Nuclear decays (clickable — opens decay log)
@@ -2618,6 +2642,65 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
         }
     }
 
+    // ── Thermodynamics ───────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Thermodynamics")) {
+        // First Law: Energy conservation
+        ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "1st Law: Energy Conservation");
+
+        char ebuf_ke[32], ebuf_pe[32], ebuf_tot[32];
+        fmt_energy_ev(ebuf_ke, sizeof(ebuf_ke), energy_kinetic_display * E_SCALE_MEV);
+        fmt_energy_ev(ebuf_pe, sizeof(ebuf_pe), energy_potential_display * E_SCALE_MEV);
+        float total_disp = (energy_kinetic_display + energy_potential_display) * E_SCALE_MEV;
+        fmt_energy_ev(ebuf_tot, sizeof(ebuf_tot), total_disp);
+
+        ImGui::Text("  KE: %s   PE: %s", ebuf_ke, ebuf_pe);
+        ImGui::Text("  Total: %s", ebuf_tot);
+
+        float ratio = energy_conservation_ratio_display;
+        ImVec4 ratio_color;
+        if (ratio > 0.95f && ratio < 1.05f)
+            ratio_color = ImVec4(0.3f, 0.9f, 0.4f, 1.0f);
+        else if (ratio > 0.80f && ratio < 1.20f)
+            ratio_color = ImVec4(1.0f, 0.8f, 0.2f, 1.0f);
+        else
+            ratio_color = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+        ImGui::TextColored(ratio_color, "  Conservation: %.1f%%", ratio * 100.0f);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("E_now / E_initial\n100%% = perfect conservation\n"
+                "Sources: thermal noise, vacuum energy\n"
+                "Sinks: damping, photon/neutrino drain, synchrotron");
+
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f),
+            "  In: %.2f/f  Out: %.2f/f  Drift: %+.3f/f",
+            energy_injected_rate_display, energy_dissipated_rate_display,
+            energy_drift_rate_display);
+
+        ImGui::Spacing();
+
+        // Second Law: Entropy
+        ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "2nd Law: Entropy");
+        const char* trend_icon = (entropy_trend_display > 0) ? "^" :
+                                  (entropy_trend_display < 0) ? "v" : "=";
+        ImVec4 trend_color = (entropy_trend_display >= 0)
+            ? ImVec4(0.3f, 0.9f, 0.4f, 1.0f)
+            : ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+        ImGui::TextColored(trend_color, "  S = %.1f  %s", system_entropy_display, trend_icon);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Boltzmann entropy from velocity distribution\n"
+                "S = sum[ N * (1 + ln(A/N) + ln(T)) ]\n"
+                "^ = increasing (normal)\n"
+                "= = equilibrium\n"
+                "v = decreasing (external work/cooling)");
+
+        ImGui::Spacing();
+
+        // Zeroth + Third Law notes
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f),
+            "0th Law: Thermal conduction (30px range)");
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f),
+            "3rd Law: Zero-point energy per particle type");
+    }
+
     // ── Fundamental Forces ───────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Fundamental Forces", ImGuiTreeNodeFlags_DefaultOpen)) {
         // Electromagnetic
@@ -2946,6 +3029,136 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
         ImGui::NewLine();
     }
 
+    // ── Molecules ────────────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Molecules")) {
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Type a formula:");
+
+        bool enter_pressed = ImGui::InputText("##mol_formula", molecule_formula_buf, 64,
+            ImGuiInputTextFlags_EnterReturnsTrue);
+
+        // Live search: find exact and prefix matches
+        molecule_match_idx = -1;
+        int match_count = 0;
+        int match_indices[8] = {-1,-1,-1,-1,-1,-1,-1,-1};
+
+        if (molecule_formula_buf[0] != '\0') {
+            // Exact match first
+            molecule_match_idx = find_molecule_template(molecule_formula_buf);
+
+            // Prefix/substring matches for autocomplete
+            size_t buf_len = strlen(molecule_formula_buf);
+            for (int mi = 0; mi < MOLECULE_TEMPLATE_COUNT && match_count < 8; ++mi) {
+                // Check formula prefix
+                if (strncmp(MOLECULE_TEMPLATES[mi].formula, molecule_formula_buf, buf_len) == 0) {
+                    match_indices[match_count++] = mi;
+                    continue;
+                }
+                // Check name substring (case-insensitive)
+                const char* name = MOLECULE_TEMPLATES[mi].name;
+                const char* buf = molecule_formula_buf;
+                bool name_match = false;
+                for (size_t ni = 0; name[ni] && !name_match; ++ni) {
+                    bool ok = true;
+                    for (size_t bi = 0; bi < buf_len && ok; ++bi) {
+                        char nc = name[ni + bi];
+                        char bc = buf[bi];
+                        if (nc >= 'A' && nc <= 'Z') nc += 32;
+                        if (bc >= 'A' && bc <= 'Z') bc += 32;
+                        if (nc != bc) ok = false;
+                    }
+                    if (ok) name_match = true;
+                }
+                if (name_match) {
+                    match_indices[match_count++] = mi;
+                }
+            }
+        }
+
+        // Show match status
+        ImGui::SameLine();
+        if (molecule_match_idx >= 0) {
+            ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.3f, 1.0f), "%s",
+                MOLECULE_TEMPLATES[molecule_match_idx].name);
+        } else if (molecule_formula_buf[0] != '\0') {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "?");
+        }
+
+        // Spawn button (or Enter)
+        if (molecule_match_idx >= 0) {
+            if (enter_pressed || ImGui::Button("Spawn##mol_spawn")) {
+                spawn_molecule_idx = molecule_match_idx;
+                spawn_atom_Z = -1;
+                spawn_group = -1;
+                pending_spawn = true;
+            }
+        }
+
+        // Autocomplete list
+        if (match_count > 0 && molecule_formula_buf[0] != '\0') {
+            for (int mi = 0; mi < match_count; ++mi) {
+                int idx = match_indices[mi];
+                char label[128];
+                snprintf(label, sizeof(label), "%s  (%s)##mol_%d",
+                    MOLECULE_TEMPLATES[idx].formula,
+                    MOLECULE_TEMPLATES[idx].name, idx);
+                if (ImGui::Selectable(label)) {
+                    snprintf(molecule_formula_buf, 64, "%s", MOLECULE_TEMPLATES[idx].formula);
+                    spawn_molecule_idx = idx;
+                    spawn_atom_Z = -1;
+                    spawn_group = -1;
+                    pending_spawn = true;
+                }
+            }
+        }
+
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Quick:");
+
+        struct QuickMol { const char* formula; const char* label; };
+        static const QuickMol quick[] = {
+            {"H2O",   "H\xe2\x82\x82O"},
+            {"CO2",   "CO\xe2\x82\x82"},
+            {"NH3",   "NH\xe2\x82\x83"},
+            {"CH4",   "CH\xe2\x82\x84"},
+            {"NaCl",  "NaCl"},
+            {"C2H5OH","EtOH"},
+            {"C6H6",  "C\xe2\x82\x86H\xe2\x82\x86"},
+            {"C6H12O6","Glucose"},
+        };
+
+        for (int qi = 0; qi < 8; ++qi) {
+            int idx = find_molecule_template(quick[qi].formula);
+            if (idx < 0) continue;
+            if (qi > 0) ImGui::SameLine();
+
+            bool sel = (spawn_molecule_idx == idx && pending_spawn);
+            if (sel) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.45f, 0.60f, 0.90f));
+                ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.302f, 0.749f, 0.953f, 1.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
+            }
+
+            char qid[32];
+            snprintf(qid, sizeof(qid), "%s##qm%d", quick[qi].label, qi);
+            if (ImGui::Button(qid, ImVec2(0, 24))) {
+                snprintf(molecule_formula_buf, 64, "%s", quick[qi].formula);
+                spawn_molecule_idx = idx;
+                molecule_match_idx = idx;
+                spawn_atom_Z = -1;
+                spawn_group = -1;
+                pending_spawn = true;
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s (%s, %u atoms)", MOLECULE_TEMPLATES[idx].name,
+                    MOLECULE_TEMPLATES[idx].formula, MOLECULE_TEMPLATES[idx].atom_count);
+
+            if (sel) {
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor(2);
+            }
+        }
+    }
+
     // ── Leptons ──────────────────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Leptons")) {
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Generation 1:");
@@ -3247,7 +3460,11 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
     // Status text
     if (pending_spawn) {
         ImGui::Spacing();
-        if (spawn_atom_Z > 0) {
+        if (spawn_molecule_idx >= 0 && spawn_molecule_idx < MOLECULE_TEMPLATE_COUNT) {
+            ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f),
+                "Click to place %s (%s)", MOLECULE_TEMPLATES[spawn_molecule_idx].name,
+                MOLECULE_TEMPLATES[spawn_molecule_idx].formula);
+        } else if (spawn_atom_Z > 0) {
             const char* elem_name = "?";
             for (int ei = 0; ei < ELEMENT_COUNT; ++ei) {
                 if (ELEMENTS[ei].Z == spawn_atom_Z) { elem_name = ELEMENTS[ei].name; break; }
@@ -5617,17 +5834,19 @@ void PhysicsInterface::draw_measurement_overlays(const SimConfig& cfg) {
     ImGuiIO& io = ImGui::GetIO();
     ImDrawList* fg = ImGui::GetForegroundDrawList();
     float ww = io.DisplaySize.x, wh = io.DisplaySize.y;
+    float scx = ww / static_cast<float>(REGION_W);
+    float scy = wh / static_cast<float>(REGION_H);
 
     auto w2s = [&](glm::vec2 w) -> ImVec2 {
         glm::vec2 s = glm::vec2(ww, wh) * 0.5f
-                    + (w - cfg.camera_origin) * cfg.current_camera_zoom;
+                    + (w - cfg.camera_origin) * cfg.current_camera_zoom * glm::vec2(scx, scy);
         return ImVec2(s.x, s.y);
     };
 
     // ── Thermometer probes ───────────────────────────────────────────────
     for (auto& probe : thermo_probes) {
         ImVec2 center = w2s(probe.world_pos);
-        float screen_r = probe.radius * cfg.current_camera_zoom;
+        float screen_r = probe.radius * cfg.current_camera_zoom * scx;
         if (center.x < -screen_r || center.x > ww + screen_r ||
             center.y < -screen_r || center.y > wh + screen_r) continue;
 
@@ -5661,7 +5880,7 @@ void PhysicsInterface::draw_measurement_overlays(const SimConfig& cfg) {
             // Arrow
             if (speed > 0.1f) {
                 glm::vec2 dir = vel / speed;
-                float arrow_len = std::min(speed * 0.5f, 80.0f) * cfg.current_camera_zoom;
+                float arrow_len = std::min(speed * 0.5f, 80.0f) * cfg.current_camera_zoom * scx;
                 ImVec2 tip = ImVec2(scr.x + dir.x * arrow_len, scr.y + dir.y * arrow_len);
                 fg->AddLine(scr, tip, IM_COL32(80, 255, 130, 200), 2.0f);
                 // Arrowhead
@@ -5728,7 +5947,7 @@ void PhysicsInterface::draw_measurement_overlays(const SimConfig& cfg) {
     // ── Density counters ─────────────────────────────────────────────────
     for (auto& dc : density_counters) {
         ImVec2 center = w2s(dc.world_pos);
-        float screen_r = dc.radius * cfg.current_camera_zoom;
+        float screen_r = dc.radius * cfg.current_camera_zoom * scx;
         if (center.x < -screen_r || center.x > ww + screen_r ||
             center.y < -screen_r || center.y > wh + screen_r) continue;
 
@@ -5764,6 +5983,8 @@ void PhysicsInterface::draw_energy_heatmap(const SimConfig& cfg) {
     ImGuiIO& io = ImGui::GetIO();
     ImDrawList* fg = ImGui::GetForegroundDrawList();
     float ww = io.DisplaySize.x, wh = io.DisplaySize.y;
+    float scx = ww / static_cast<float>(REGION_W);
+    float scy = wh / static_cast<float>(REGION_H);
 
     float cell_w = static_cast<float>(REGION_W) / VIS_GRID_W;
     float cell_h = static_cast<float>(REGION_H) / VIS_GRID_H;
@@ -5780,7 +6001,7 @@ void PhysicsInterface::draw_energy_heatmap(const SimConfig& cfg) {
 
     auto w2s = [&](glm::vec2 w) -> ImVec2 {
         glm::vec2 s = glm::vec2(ww, wh) * 0.5f
-                    + (w - cfg.camera_origin) * cfg.current_camera_zoom;
+                    + (w - cfg.camera_origin) * cfg.current_camera_zoom * glm::vec2(scx, scy);
         return ImVec2(s.x, s.y);
     };
 
@@ -5827,13 +6048,15 @@ void PhysicsInterface::draw_velocity_field(const SimConfig& cfg) {
     ImGuiIO& io = ImGui::GetIO();
     ImDrawList* fg = ImGui::GetForegroundDrawList();
     float ww = io.DisplaySize.x, wh = io.DisplaySize.y;
+    float scx = ww / static_cast<float>(REGION_W);
+    float scy = wh / static_cast<float>(REGION_H);
 
     float cell_w = static_cast<float>(REGION_W) / VIS_GRID_W;
     float cell_h = static_cast<float>(REGION_H) / VIS_GRID_H;
 
     auto w2s = [&](glm::vec2 w) -> ImVec2 {
         glm::vec2 s = glm::vec2(ww, wh) * 0.5f
-                    + (w - cfg.camera_origin) * cfg.current_camera_zoom;
+                    + (w - cfg.camera_origin) * cfg.current_camera_zoom * glm::vec2(scx, scy);
         return ImVec2(s.x, s.y);
     };
 
@@ -5865,7 +6088,7 @@ void PhysicsInterface::draw_velocity_field(const SimConfig& cfg) {
 
             // Arrow length proportional to speed, scaled by zoom and user scale
             float norm_spd = spd / max_speed;
-            float arrow_len = norm_spd * cell_w * 0.4f * cfg.current_camera_zoom * velocity_field_scale;
+            float arrow_len = norm_spd * cell_w * 0.4f * cfg.current_camera_zoom * scx * velocity_field_scale;
             arrow_len = std::clamp(arrow_len, 3.0f, 40.0f);
 
             float dx = vx / spd, dy = vy / spd;
@@ -5894,10 +6117,12 @@ void PhysicsInterface::draw_trajectory_traces(const SimConfig& cfg) {
     ImGuiIO& io = ImGui::GetIO();
     ImDrawList* fg = ImGui::GetForegroundDrawList();
     float ww = io.DisplaySize.x, wh = io.DisplaySize.y;
+    float scx = ww / static_cast<float>(REGION_W);
+    float scy = wh / static_cast<float>(REGION_H);
 
     auto w2s = [&](glm::vec2 w) -> ImVec2 {
         glm::vec2 s = glm::vec2(ww, wh) * 0.5f
-                    + (w - cfg.camera_origin) * cfg.current_camera_zoom;
+                    + (w - cfg.camera_origin) * cfg.current_camera_zoom * glm::vec2(scx, scy);
         return ImVec2(s.x, s.y);
     };
 
@@ -5946,9 +6171,11 @@ void PhysicsInterface::draw_force_vectors_overlay(const SimConfig& cfg) {
     ImGuiIO& io = ImGui::GetIO();
     ImDrawList* fg = ImGui::GetForegroundDrawList();
     float ww = io.DisplaySize.x, wh = io.DisplaySize.y;
+    float scx = ww / static_cast<float>(REGION_W);
+    float scy = wh / static_cast<float>(REGION_H);
 
     glm::vec2 pos = readback_positions_ptr[selected_particle_idx];
-    glm::vec2 scr_v = glm::vec2(ww, wh) * 0.5f + (pos - cfg.camera_origin) * cfg.current_camera_zoom;
+    glm::vec2 scr_v = glm::vec2(ww, wh) * 0.5f + (pos - cfg.camera_origin) * cfg.current_camera_zoom * glm::vec2(scx, scy);
     ImVec2 origin(scr_v.x, scr_v.y);
 
     // Find max magnitude for scaling
@@ -6109,10 +6336,12 @@ void PhysicsInterface::draw_atom_grid(const SimConfig& cfg) {
     ImGuiIO& io = ImGui::GetIO();
     ImDrawList* fg = ImGui::GetForegroundDrawList();
     float ww = io.DisplaySize.x, wh = io.DisplaySize.y;
+    float scx = ww / static_cast<float>(REGION_W);
+    float scy = wh / static_cast<float>(REGION_H);
     float zoom = cfg.current_camera_zoom;
 
     // Cell size in screen pixels
-    float cell_px = H_ATOM_DIAMETER * zoom;
+    float cell_px = H_ATOM_DIAMETER * zoom * scx;
 
     // Don't draw if cells are too small to see
     if (cell_px < 4.0f) return;
@@ -6126,7 +6355,7 @@ void PhysicsInterface::draw_atom_grid(const SimConfig& cfg) {
     ImU32 col_major = IM_COL32(100, 180, 255, alpha_major);
 
     // Camera offset: top-left of screen in world coords
-    glm::vec2 screen_tl_world = cfg.camera_origin - glm::vec2(ww, wh) * 0.5f / zoom;
+    glm::vec2 screen_tl_world = cfg.camera_origin - glm::vec2(ww, wh) * 0.5f / (zoom * glm::vec2(scx, scy));
 
     // First grid line positions (snap to grid)
     float x_start = std::floor(screen_tl_world.x / H_ATOM_DIAMETER) * H_ATOM_DIAMETER;
@@ -6137,10 +6366,10 @@ void PhysicsInterface::draw_atom_grid(const SimConfig& cfg) {
     int iy_off = static_cast<int>(std::floor(screen_tl_world.y / H_ATOM_DIAMETER));
 
     auto w2s_x = [&](float wx) -> float {
-        return ww * 0.5f + (wx - cfg.camera_origin.x) * zoom;
+        return ww * 0.5f + (wx - cfg.camera_origin.x) * zoom * scx;
     };
     auto w2s_y = [&](float wy) -> float {
-        return wh * 0.5f + (wy - cfg.camera_origin.y) * zoom;
+        return wh * 0.5f + (wy - cfg.camera_origin.y) * zoom * scy;
     };
 
     // Vertical lines

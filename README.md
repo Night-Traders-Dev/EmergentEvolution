@@ -4,7 +4,7 @@
 
 **A GPU-accelerated quantum particle physics sandbox**
 
-Standard Model + Beyond · Nuclear fusion & fission · Covalent Bonds & Molecules · Hadronization & Color Confinement · Gluon Interactions · Photon-matter interactions · Orbital mechanics · Emergent thermodynamics · Quantum entanglement · Wave-particle duality · Achievements · Tools · Save/Load
+Standard Model + Beyond · Nuclear fusion & fission · Covalent Bonds & Molecules · Molecule Spawn by Formula · Hadronization & Color Confinement · Gluon Interactions · Photon-matter interactions · Orbital mechanics · Emergent thermodynamics · Quantum entanglement · Wave-particle duality · Achievements · Tools · Save/Load
 
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
 [![Vulkan](https://img.shields.io/badge/Vulkan-1.3-red.svg)](https://www.vulkan.org/)
@@ -21,7 +21,8 @@ forces: Coulomb + Yukawa + QCD + weak, with centrifugal barrier orbitals, nuclea
 radioactive decay with realistic isotope half-lives, photoelectric effect, Compton scattering,
 nuclear spallation, photodisintegration, pair production, pion production, vector meson dominance,
 hard-sphere collisions, covalent bonds with spring forces and molecular detection (Hill system
-formulas, molecule detail cards), hadronization & color confinement (meson formation, baryon
+formulas, molecule detail cards), molecule spawn by formula (type "H2O" or "CH4" and click to
+place complete molecules with correct geometry — bonds auto-form), hadronization & color confinement (meson formation, baryon
 condensation, vacuum instability, string breaking), gluon interactions (quark absorption,
 self-coupling, confinement splitting), emergent thermodynamics, virtual particle pair creation,
 quantum entanglement, antimatter element detection, electron cloud visualization, a persistent
@@ -228,6 +229,19 @@ An ImGui overlay also draws solid blue lines for bonds visible on screen.
 Bonded atoms are grouped into molecules using a **Union-Find** algorithm each frame. Molecules
 are displayed with **Hill system molecular formulas** (C first, H second, rest alphabetical) in
 the Element List and bottom bar. Each molecule tracks total energy, age, and net ionic charge.
+
+### Molecule Spawn by Formula
+
+Type a molecular formula in the **Molecules** section of the Spawn Picker and click in the world
+to place a complete molecule with atoms at correct geometry. A database of **~50 common molecules**
+covers diatomics through glucose (C₆H₁₂O₆):
+
+- **Text input** with Enter-to-spawn and live formula/name matching
+- **Autocomplete** dropdown showing up to 8 matching molecules (prefix + substring search)
+- **Quick-access buttons**: H₂O, CO₂, NH₃, CH₄, NaCl, EtOH, C₆H₆, Glucose
+- **Geometry**: atoms placed at bond-rest-length spacing (22px) with correct angles — tetrahedral
+  (CH₄, 90° cross), trigonal planar (BF₃, 120°), bent (H₂O, 104.5°), linear (CO₂), ring (C₆H₆)
+- **Auto-bonding**: bonds form within 2-4 frames via existing `update_bonds()` — no special wiring needed
 
 ### Tuning (Nuclear Debug Window)
 
@@ -707,6 +721,19 @@ counts and orbital velocities:
 | **Pion-** &pi;- | d + u&#773; | 2 |
 | **Kaon+** K+ | u + s&#773; | 2 |
 
+### Molecules
+
+Type a molecular formula to spawn a complete molecule with correct 2D geometry. A database of
+~50 templates covers common molecules from H₂ through C₆H₁₂O₆ (glucose). Live autocomplete
+matches by formula prefix and name substring. Quick-access buttons provide one-click spawn for
+H₂O, CO₂, NH₃, CH₄, NaCl, EtOH, C₆H₆, and Glucose. Atoms are placed at bond-rest-length
+spacing (22px) and auto-bond within a few frames.
+
+### Periodic Table
+
+26 elements (H through Fe) can be spawned as complete atoms with hexagonal close-packed nuclei
+and Bohr-model electron shells. Select an element, then click in the world to place.
+
 Each section has configurable count (1-100), energy (0.1-1.0), and scatter radius (1-100px).
 The **energy slider** directly affects spawn velocity: electron orbital speeds and single
 particle thermal velocities scale as √E, so low-energy spawns produce visibly slower particles.
@@ -1053,8 +1080,9 @@ EmergentEvolution/
 │   └── stb_image_impl.cpp       # stb_image implementation unit
 ├── src/physics/
 │   ├── phys_particles.h/.cpp    # 33 particle types, masses, charges, decay rates, isotope table, environments
-│   ├── interface.h/.cpp         # ImGui: animated splash screen, spawn picker, force multipliers, element cards, molecule cards, bond overlay, tools, event log, achievements
-│   ├── simulation.h/.cpp        # Main loop: fusion, fission, decay, orbitals, covalent bonds, molecule detection, entanglement, photoelectric, spallation, hadronization, spatial grid
+│   ├── interface.h/.cpp         # ImGui: animated splash screen, spawn picker, molecule spawn UI, force multipliers, element cards, molecule cards, bond overlay, tools, event log, achievements
+│   ├── simulation.h/.cpp        # Main loop: fusion, fission, decay, orbitals, covalent bonds, molecule detection, molecule spawn, entanglement, photoelectric, spallation, hadronization, spatial grid
+│   ├── molecules.h              # ~50 molecule templates with 2D geometry, formula parser, database lookup
 │   ├── achievements.h/.cpp      # 36 achievements across 5 categories with persistence
 │   ├── save_load.h/.cpp         # Binary .ppsg/.ppel save/load/export/import serialization
 │   └── main.cpp                 # Entry point (borderless maximized, window icon from assets/)

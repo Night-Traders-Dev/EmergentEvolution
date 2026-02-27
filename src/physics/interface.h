@@ -133,6 +133,11 @@ public:
     int   spawn_atom_Z  = -1;    // -1=not spawning atom, >0=atomic number
     int   spawn_atom_N  = -1;    // neutron count for spawn_atom_Z
 
+    // Molecule spawn
+    int   spawn_molecule_idx = -1;        // index into MOLECULE_TEMPLATES (-1 = not spawning molecule)
+    char  molecule_formula_buf[64] = {};   // text input buffer
+    int   molecule_match_idx = -1;         // current exact match (-1 = no match)
+
     // Hover / selected particle inspection
     int32_t hover_particle_idx    = -1;
     int32_t selected_particle_idx = -1;  // pinned particle for info card (-1=hover mode)
@@ -232,11 +237,11 @@ public:
     bool  wave_mode = false;
 
     // Field visualization (5 independent toggles)
-    bool  field_em      = true;
-    bool  field_strong  = true;
-    bool  field_weak    = true;
-    bool  field_gravity = true;
-    bool  field_higgs   = true;
+    bool  field_em      = false;
+    bool  field_strong  = false;
+    bool  field_weak    = false;
+    bool  field_gravity = false;
+    bool  field_higgs   = false;
     float field_intensity = 0.5f;
     bool  show_collision_radii = false;
 
@@ -245,6 +250,18 @@ public:
     float emergent_bfield_display = 0.0f;
     uint32_t nuclear_decay_count_display = 0;
     uint32_t entangled_pair_count_display = 0;
+
+    // Thermodynamics display (First Law: energy conservation)
+    float energy_kinetic_display              = 0.0f;
+    float energy_potential_display            = 0.0f;
+    float energy_conservation_ratio_display   = 1.0f;
+    float energy_injected_rate_display        = 0.0f;
+    float energy_dissipated_rate_display      = 0.0f;
+    float energy_drift_rate_display           = 0.0f;
+
+    // Thermodynamics display (Second Law: entropy)
+    float system_entropy_display              = 0.0f;
+    int   entropy_trend_display               = 0;  // +1 up, 0 stable, -1 down
 
     // Readback data pointers for entanglement visualization
     const glm::vec2*  readback_positions_ptr = nullptr;

@@ -240,7 +240,7 @@ struct SimConfig {
     int      max_spallations_per_frame = 3;
 
     // Annihilation
-    float    annihilation_radius       = 5.0f;    // contact distance (px)
+    float    annihilation_radius       = 1.0f;    // contact distance (px)
 
     // Virtual particle pair creation
     bool     virtual_pairs_enabled     = true;

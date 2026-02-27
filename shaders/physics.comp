@@ -224,6 +224,18 @@ float get_mass(uint type) {
     return (inv > 0.001) ? 1.0 / inv : 1000.0;
 }
 
+// Zero-point energy floor per particle type (Third Law of Thermodynamics)
+// Massive particles retain a minimum energy proportional to rest mass.
+// Massless particles (photon, gluon, graviton, neutrino, DE) can drain to zero.
+float get_zpe(uint type) {
+    if (type == PHOTON_TYPE || type == GLUON_TYPE || type == GRAVITON_TYPE
+        || type == DARK_ENERGY_TYPE) return 0.0;
+    if (type == NEUTRINO_E_TYPE || type == NEUTRINO_MU_TYPE
+        || type == NEUTRINO_TAU_TYPE) return 0.0;
+    float mass = get_mass(type);
+    return clamp(mass * 0.0001, 0.0, 0.05);
+}
+
 // Color interaction factor between two colored particles
 float color_factor(float ca, float cb) {
     // Quark-antiquark: same abs color → strong attraction (meson)
@@ -434,6 +446,17 @@ void apply_physics(uint i) {
         }
 
         local_density += exp(-dist / (MAX_RADIUS * 0.5));
+
+        // ── 0. Zeroth Law: Thermal conduction (velocity exchange) ────────────
+        // Close particles exchange momentum toward thermal equilibrium.
+        // Hot regions cool, cold regions warm — heat flows naturally.
+        if (dist < 30.0 && !dm_interaction) {
+            vec2 vel_b = in_vel_buffer.data[j];
+            vec2 dv = vel_b - vel_a;
+            float cond_coupling = 0.0005 / (dist + 1.0);
+            float mass_factor = sqrt(mass_inv_a * get_mass_inv(type_b));
+            total_force += dv * cond_coupling * mass_factor;
+        }
 
         // ── 1. Soft-body repulsion (universal, skip for DM-normal interactions) ─
         if (dist < params.repulsion_radius && !dm_interaction) {
@@ -754,7 +777,9 @@ void apply_physics(uint i) {
             delta_e -= decay_rate * params.dt;
         }
 
-        energy = clamp(energy + delta_e, 0.0, 1.0);
+        // Third Law: enforce per-type zero-point energy floor
+        float zpe = get_zpe(type_a);
+        energy = clamp(energy + delta_e, zpe, 1.0);
     }
     out_energy_buffer.data[i] = energy;
 
@@ -837,6 +862,7 @@ void apply_physics(uint i) {
     }
 
     // ── Mirror reflection (post-integration) ─────────────────────────────
+    vec2 pre_pos = in_pos_buffer.data[i];  // position before this frame's integration
     for (uint mfo = 0u; mfo < params.force_object_count; mfo++) {
         if (force_objects.data[mfo].is_active == 0u) continue;
         if (force_objects.data[mfo].force_type != 5u) continue;
@@ -850,21 +876,42 @@ void apply_physics(uint i) {
         float seg_len2 = dot(seg, seg);
         if (seg_len2 < 0.001) continue;
 
-        float t = clamp(dot(pos_a - m_a, seg) / seg_len2, 0.0, 1.0);
-        vec2  closest = m_a + t * seg;
+        vec2 seg_dir = normalize(seg);
+        vec2 normal = vec2(-seg_dir.y, seg_dir.x);
+
+        // Proximity test: particle currently within mirror thickness
+        float t_proj = clamp(dot(pos_a - m_a, seg) / seg_len2, 0.0, 1.0);
+        vec2  closest = m_a + t_proj * seg;
         vec2  delta = pos_a - closest;
         float dist = length(delta);
 
+        bool hit = false;
         if (dist < thickness && dist > 0.001) {
-            vec2 seg_dir = normalize(seg);
-            vec2 normal = vec2(-seg_dir.y, seg_dir.x);
             if (dot(normal, delta) < 0.0) normal = -normal;
-
-            float vn = dot(vel_a, normal);
-            if (vn < 0.0) {
-                vel_a -= (1.0 + elasticity) * vn * normal;
-                pos_a = closest + normal * (thickness + 0.1);
+            hit = (dot(vel_a, normal) < 0.0);
+        } else {
+            // Swept collision: check if path (pre_pos → pos_a) crossed mirror segment
+            // Handles fast particles (photons, bosons) that tunnel through in one frame
+            vec2 d_path = pos_a - pre_pos;
+            float cross_denom = d_path.x * seg.y - d_path.y * seg.x;
+            if (abs(cross_denom) > 0.0001) {
+                vec2 d_orig = m_a - pre_pos;
+                float t1 = (d_orig.x * seg.y - d_orig.y * seg.x) / cross_denom;
+                float t2 = (d_orig.x * d_path.y - d_orig.y * d_path.x) / cross_denom;
+                if (t1 > 0.0 && t1 <= 1.0 && t2 >= 0.0 && t2 <= 1.0) {
+                    // Path crossed mirror — orient normal against velocity
+                    if (dot(normal, vel_a) > 0.0) normal = -normal;
+                    hit = true;
+                }
             }
+        }
+
+        if (hit) {
+            float vn = dot(vel_a, normal);
+            vel_a -= (1.0 + elasticity) * vn * normal;
+            t_proj = clamp(dot(pos_a - m_a, seg) / seg_len2, 0.0, 1.0);
+            closest = m_a + t_proj * seg;
+            pos_a = closest + normal * (thickness + 0.1);
         }
     }
 
@@ -1161,13 +1208,13 @@ void render_particle(uint i) {
     // Size by particle type
     float base_radius = params.radius * params.camera_zoom;
     float render_radius;
-    if (is_photon_p)        render_radius = max(base_radius * 4.0, 5.0);
-    else if (is_neutrino_p) render_radius = max(base_radius * 2.0, 3.0);
+    if (is_photon_p)        render_radius = base_radius * 0.25;      // massless: smaller than electron
+    else if (is_neutrino_p) render_radius = base_radius * 0.2;       // nearly massless: smallest
     else if (is_dark_matter) render_radius = max(base_radius * 3.0, 4.0);  // diffuse halo
     else if (is_dark_energy) render_radius = max(base_radius * 5.0, 6.0);  // wide field
     else if (is_nucleon)    render_radius = base_radius * 0.7;
     else if (is_quark_p)    render_radius = base_radius * 0.45;
-    else if (is_boson_heavy) render_radius = max(base_radius * 3.0, 4.0);
+    else if (is_boson_heavy) render_radius = base_radius * 0.35;     // massive bosons: slightly smaller than electron
     else if (type == MUON_TYPE || type == ANTIMUON_TYPE) render_radius = base_radius * 0.5;
     else if (type == TAU_TYPE || type == ANTITAU_TYPE) render_radius = base_radius * 0.55;
     else                    render_radius = base_radius * 0.4;
