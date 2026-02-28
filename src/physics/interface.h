@@ -27,6 +27,8 @@ struct UserPrefs {
     float music_volume    = 0.5f;  // 0.0-1.0 background music volume
     bool  music_muted     = false; // mute toggle
     int   render_scale    = 1;     // 1=native, 2=2x supersampling
+    bool  event_log_limit = true;  // true=cap at 10k entries, false=unlimited
+    bool  event_log_save  = false; // true=append events to saves/event_log.txt
 };
 
 // ── Group template for spawning composite structures ─────────────────────────
@@ -93,9 +95,10 @@ public:
     bool show_splash = true;
     bool show_pause_menu = false;
     bool show_settings_menu = false;
+    int  settings_tab = 0;  // 0=Display, 1=Performance, 2=Theme, 3=Audio & Log
     bool request_quit = false;
     UserPrefs prefs;
-    bool settings_visible = true;
+    bool settings_visible = false;
     bool spawn_menu_visible = true;
     bool pending_spawn = false;
     bool sim_running = true;
@@ -226,6 +229,20 @@ public:
 
     bool  show_magnetic_field  = false;
     float magnetic_field_opacity = 0.35f;
+
+    bool  show_orbit_paths    = false;
+
+    // Orbit path data (populated by simulation each tick)
+    struct OrbitPath {
+        glm::vec2 center;       // nucleus center (world space)
+        float semi_major;       // semi-major axis a
+        float semi_minor;       // semi-minor axis b
+        float orientation;      // angle of periapsis (radians)
+        float eccentricity;     // orbit eccentricity
+        int   shell;            // shell index for coloring
+        bool  is_anti;          // antimatter flag
+    };
+    std::vector<OrbitPath> orbit_paths;
 
     // ── Visualization Data (populated by simulation each tick) ───────────────
     VisGrid vis_grid;
@@ -385,6 +402,7 @@ public:
     static constexpr int DECAY_LOG_MAX = 10000;
     std::vector<DecayLogEntry> decay_log;
     bool show_decay_log = false;
+    void save_event_to_disk(const char* desc, DecayEventType type);
     bool show_nuclear_debug = false;
     int32_t expanded_event_idx = -1;  // which event is expanded in log
     bool event_filter[DEVT_COUNT] = {true,true,true,true,true,true,true,true,true,true,true,true,true};
@@ -428,6 +446,7 @@ private:
     void draw_trajectory_traces(const SimConfig& cfg);
     void draw_force_vectors_overlay(const SimConfig& cfg);
     void draw_atom_grid(const SimConfig& cfg);
+    void draw_orbit_paths(const SimConfig& cfg);
     void draw_measurement_panel();
 
     // Splash animation state

@@ -7218,6 +7218,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     // Populate element list and electron cloud data for UI
     iface.element_list.clear();
     iface.nucleus_clouds.clear();
+    iface.orbit_paths.clear();
     for (auto& nuc : detected_nuclei_) {
         if (nuc.Z <= 0) continue;
         int bound_leptons = 0;
@@ -7288,6 +7289,104 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             }
 
             iface.nucleus_clouds.push_back(cloud);
+        }
+    }
+
+    // ── Compute orbit paths for bound electrons ─────────────────────────────
+    if (iface.show_orbit_paths && !detected_nuclei_.empty()) {
+        constexpr float K_COULOMB_ORB = 1200.0f;
+        constexpr int MAX_ORBIT_PATHS = 300;
+        const int SHELL_CAP_ORB[] = {2, 8, 18, 32};
+
+        // Build map: nucleus rep → NucleusInfo index
+        std::unordered_map<uint32_t, uint32_t> rep_to_nuc;
+        rep_to_nuc.reserve(detected_nuclei_.size());
+        for (uint32_t ni = 0; ni < detected_nuclei_.size(); ++ni)
+            rep_to_nuc[detected_nuclei_[ni].rep] = ni;
+
+        int orbit_count = 0;
+        for (uint32_t i = 0; i < cfg.particle_count && orbit_count < MAX_ORBIT_PATHS; ++i) {
+            if (particles.types[i] != ELECTRON_TYPE_PHYS &&
+                particles.types[i] != POSITRON_TYPE_PHYS) continue;
+            if (particles.orbital_parent[i] < 0) continue;  // unbound
+
+            uint32_t parent = static_cast<uint32_t>(particles.orbital_parent[i]);
+            auto it = rep_to_nuc.find(parent);
+            if (it == rep_to_nuc.end()) continue;
+            const auto& nuc = detected_nuclei_[it->second];
+
+            int shell = (i < particles.orbital_shell.size())
+                      ? static_cast<int>(particles.orbital_shell[i]) : -1;
+            if (shell < 0 || shell > 3) continue;
+
+            // Compute effective nuclear charge with Slater screening
+            float screening = 0.0f;
+            if (shell == 1) screening = static_cast<float>(SHELL_CAP_ORB[0]) * 0.85f;
+            else if (shell == 2) screening = static_cast<float>(SHELL_CAP_ORB[0]) * 1.0f
+                                           + static_cast<float>(SHELL_CAP_ORB[1]) * 0.85f;
+            else if (shell == 3) screening = static_cast<float>(SHELL_CAP_ORB[0]) * 1.0f
+                                           + static_cast<float>(SHELL_CAP_ORB[1]) * 1.0f
+                                           + static_cast<float>(SHELL_CAP_ORB[2]) * 0.85f;
+            float Z_eff = std::max(1.0f, static_cast<float>(nuc.Z) - screening);
+
+            // Relative position and velocity
+            glm::vec2 r_vec = readback_positions_[i] - nuc.center;
+            glm::vec2 v_vec = readback_velocities_[i];
+            // Subtract nucleus velocity (avg of protons) for better accuracy
+            if (parent < readback_velocities_.size())
+                v_vec -= readback_velocities_[parent];
+
+            float r = glm::length(r_vec);
+            if (r < 1.0f) continue;  // too close to center
+
+            float v_sq = glm::dot(v_vec, v_vec);
+            float K_eff = K_COULOMB_ORB * Z_eff;  // effective force constant
+
+            // Angular momentum (scalar in 2D): L = r x v
+            float L = r_vec.x * v_vec.y - r_vec.y * v_vec.x;
+
+            // Total energy: E = ½v² - K/r  (mass=1 in simulation units)
+            float E = 0.5f * v_sq - K_eff / r;
+
+            // Only draw bound orbits (E < 0)
+            if (E >= 0.0f) continue;
+
+            // Keplerian orbit parameters
+            float L_sq = L * L;
+            float p = L_sq / K_eff;           // semi-latus rectum
+            float e_sq = 1.0f + 2.0f * E * L_sq / (K_eff * K_eff);
+            float ecc = (e_sq > 0.0f) ? std::sqrt(e_sq) : 0.0f;
+
+            if (ecc >= 1.0f) continue;  // not a bound ellipse
+
+            float a = p / (1.0f - ecc * ecc);  // semi-major axis
+            float b = a * std::sqrt(1.0f - ecc * ecc);  // semi-minor axis
+
+            // Sanity: skip degenerate orbits
+            if (a < 2.0f || b < 1.0f || a > 500.0f) continue;
+
+            // Orientation: angle of periapsis from Runge-Lenz vector
+            //   A = v x L - K * r_hat
+            float r_inv = 1.0f / r;
+            float A_x = v_vec.y * L - K_eff * r_vec.x * r_inv;
+            float A_y = -v_vec.x * L - K_eff * r_vec.y * r_inv;
+            float orientation = std::atan2(A_y, A_x);
+
+            // The ellipse center is offset from the focus (nucleus) by a*e along orientation
+            glm::vec2 center_offset(std::cos(orientation) * a * ecc,
+                                    std::sin(orientation) * a * ecc);
+            glm::vec2 ellipse_center = nuc.center + center_offset;
+
+            PhysicsInterface::OrbitPath path{};
+            path.center = ellipse_center;
+            path.semi_major = a;
+            path.semi_minor = b;
+            path.orientation = orientation;
+            path.eccentricity = ecc;
+            path.shell = shell;
+            path.is_anti = nuc.is_anti;
+            iface.orbit_paths.push_back(path);
+            ++orbit_count;
         }
     }
 

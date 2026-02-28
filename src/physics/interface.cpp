@@ -93,17 +93,19 @@ static void fmt_energy_ev(char* buf, size_t sz, float MeV) {
 // Forward declarations for helpers defined later in file
 static std::string build_molecular_formula(const std::vector<PhysicsInterface::ElementSummary>& elems,
                                             const std::vector<uint32_t>& atom_indices);
+static void scan_theme_directory();
 
 void PhysicsInterface::init() {
     std::random_device rd;
     seed_value = static_cast<int>(rd() % 100000);
     load_prefs();
+    scan_theme_directory();
 }
 
 // ── Settings persistence ────────────────────────────────────────────────────
 
 static constexpr uint32_t PPCFG_MAGIC   = 0x47464350;  // "PCFG" little-endian
-static constexpr uint32_t PPCFG_VERSION = 1;
+static constexpr uint32_t PPCFG_VERSION = 2;
 
 void PhysicsInterface::save_prefs() {
     std::error_code ec;
@@ -667,17 +669,114 @@ static const ThemeColors THEMES[] = {
       {0.720f,0.560f,0.900f,1.0f},  {0.820f,0.680f,1.000f,1.0f},
       {0.200f,0.170f,0.260f,0.50f}, {0.105f,0.090f,0.140f,0.65f}, {0.148f,0.130f,0.200f,0.70f},
       {0.910f,0.880f,0.940f,1.0f},  {0.500f,0.470f,0.560f,1.0f} },
+    // 12: Universe Sandbox — deep space black with teal-blue accents
+    { {0.025f,0.028f,0.050f,0.80f}, {0.015f,0.018f,0.035f,0.85f},
+      {0.180f,0.580f,0.880f,1.0f},  {0.280f,0.680f,1.000f,1.0f},
+      {0.080f,0.120f,0.220f,0.50f}, {0.040f,0.055f,0.100f,0.70f}, {0.065f,0.090f,0.160f,0.75f},
+      {0.820f,0.860f,0.930f,1.0f},  {0.380f,0.420f,0.520f,1.0f} },
+    // 13: Ubuntu Yaru — aubergine background with orange accents
+    { {0.090f,0.020f,0.065f,0.80f}, {0.065f,0.015f,0.048f,0.85f},
+      {0.910f,0.330f,0.125f,1.0f},  {1.000f,0.450f,0.220f,1.0f},
+      {0.240f,0.080f,0.170f,0.50f}, {0.130f,0.035f,0.090f,0.70f}, {0.180f,0.055f,0.130f,0.75f},
+      {0.920f,0.880f,0.900f,1.0f},  {0.530f,0.430f,0.470f,1.0f} },
 };
-static constexpr int THEME_COUNT = 12;
-static const char* THEME_NAMES[] = {
+static constexpr int BUILTIN_THEME_COUNT = 14;
+static const char* BUILTIN_THEME_NAMES[] = {
     "Dark Navy", "Midnight", "Slate", "Ember",
     "Synthwave", "Forest", "Arctic", "Solar",
-    "Crimson", "Ocean", "Neon", "Lavender"
+    "Crimson", "Ocean", "Neon", "Lavender",
+    "Universe Sandbox", "Ubuntu"
 };
 
+// ── Custom (imported) themes ─────────────────────────────────────────────────
+struct CustomTheme {
+    std::string name;
+    ThemeColors colors;
+};
+static std::vector<CustomTheme> custom_themes;
+
+static int total_theme_count() { return BUILTIN_THEME_COUNT + static_cast<int>(custom_themes.size()); }
+
+static const ThemeColors& get_theme(int idx) {
+    if (idx < BUILTIN_THEME_COUNT) return THEMES[idx];
+    int ci = idx - BUILTIN_THEME_COUNT;
+    if (ci >= 0 && ci < static_cast<int>(custom_themes.size())) return custom_themes[ci].colors;
+    return THEMES[0];
+}
+
+static const char* get_theme_name(int idx) {
+    if (idx < BUILTIN_THEME_COUNT) return BUILTIN_THEME_NAMES[idx];
+    int ci = idx - BUILTIN_THEME_COUNT;
+    if (ci >= 0 && ci < static_cast<int>(custom_themes.size())) return custom_themes[ci].name.c_str();
+    return "Unknown";
+}
+
+// Parse a .pptheme file (INI-like: name=..., bg=r,g,b,a, accent=r,g,b,a, ...)
+static bool load_theme_file(const std::string& path, CustomTheme& out) {
+    std::ifstream f(path);
+    if (!f.is_open()) return false;
+
+    // Start with Dark Navy as base so missing fields have sane defaults
+    out.colors = THEMES[0];
+    out.name = "Imported";
+
+    auto parse_vec4 = [](const std::string& s, ImVec4& v) {
+        float r, g, b, a;
+        if (std::sscanf(s.c_str(), "%f,%f,%f,%f", &r, &g, &b, &a) == 4)
+            v = ImVec4(r, g, b, a);
+    };
+
+    std::string line;
+    while (std::getline(f, line)) {
+        // Strip leading whitespace
+        size_t start = line.find_first_not_of(" \t\r\n");
+        if (start == std::string::npos || line[start] == '#') continue;
+        line = line.substr(start);
+
+        auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        std::string key = line.substr(0, eq);
+        std::string val = line.substr(eq + 1);
+
+        // Trim key/val
+        while (!key.empty() && key.back() == ' ') key.pop_back();
+        size_t vs = val.find_first_not_of(" \t");
+        if (vs != std::string::npos) val = val.substr(vs);
+
+        if      (key == "name")         out.name = val;
+        else if (key == "bg")           parse_vec4(val, out.colors.bg);
+        else if (key == "bg_dim")       parse_vec4(val, out.colors.bg_dim);
+        else if (key == "accent")       parse_vec4(val, out.colors.accent);
+        else if (key == "accent_bright") parse_vec4(val, out.colors.accent_bright);
+        else if (key == "border")       parse_vec4(val, out.colors.border);
+        else if (key == "frame")        parse_vec4(val, out.colors.frame);
+        else if (key == "frame_hover")  parse_vec4(val, out.colors.frame_hover);
+        else if (key == "text")         parse_vec4(val, out.colors.text);
+        else if (key == "text_dim")     parse_vec4(val, out.colors.text_dim);
+    }
+    return true;
+}
+
+static void scan_theme_directory() {
+    namespace fs = std::filesystem;
+    custom_themes.clear();
+    std::error_code ec;
+    if (!fs::is_directory("themes", ec)) return;
+    for (auto& entry : fs::directory_iterator("themes", ec)) {
+        if (!entry.is_regular_file()) continue;
+        if (entry.path().extension() != ".pptheme") continue;
+        CustomTheme ct;
+        if (load_theme_file(entry.path().string(), ct))
+            custom_themes.push_back(std::move(ct));
+    }
+    // Sort by name for stable ordering
+    std::sort(custom_themes.begin(), custom_themes.end(),
+              [](const CustomTheme& a, const CustomTheme& b) { return a.name < b.name; });
+}
+
 void PhysicsInterface::push_theme() {
-    int t = std::clamp(prefs.theme, 0, THEME_COUNT - 1);
-    const auto& c = THEMES[t];
+    int t = std::clamp(prefs.theme, 0, total_theme_count() - 1);
+    const auto& c = get_theme(t);
 
     // Direct style assignment — avoids per-frame push/pop stack overhead
     ImGuiStyle& s = ImGui::GetStyle();
@@ -1245,6 +1344,7 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     if (show_trajectory_tracer) draw_trajectory_traces(cfg);
     if (show_force_vectors)     draw_force_vectors_overlay(cfg);
     if (show_atom_grid)         draw_atom_grid(cfg);
+    if (show_orbit_paths)       draw_orbit_paths(cfg);
 
     // ── Measurement overlays ─────────────────────────────────────────────────
     if (!thermo_probes.empty() || !velocity_meters.empty() ||
@@ -1825,6 +1925,7 @@ void PhysicsInterface::draw_settings_menu() {
     if (ImGui::Begin("##SettingsOverlay", nullptr, overlay_flags)) {
         float cx = io.DisplaySize.x * 0.5f;
         float cy = io.DisplaySize.y * 0.5f;
+        const auto& tc = get_theme(std::clamp(prefs.theme, 0, total_theme_count() - 1));
 
         // Title
         float old_scale = ImGui::GetFont()->Scale;
@@ -1832,142 +1933,222 @@ void PhysicsInterface::draw_settings_menu() {
         ImGui::PushFont(ImGui::GetFont());
         const char* title = "SETTINGS";
         ImVec2 title_size = ImGui::CalcTextSize(title);
-        ImGui::SetCursorPos(ImVec2(cx - title_size.x * 0.5f, cy - 290.0f));
-
-        const auto& tc = THEMES[std::clamp(prefs.theme, 0, THEME_COUNT - 1)];
+        ImGui::SetCursorPos(ImVec2(cx - title_size.x * 0.5f, cy - 310.0f));
         ImGui::TextColored(tc.accent, "%s", title);
         ImGui::GetFont()->Scale = old_scale;
         ImGui::PopFont();
 
-        // Settings panel (centered, scrollable)
-        float panel_w = 420.0f;
+        // ── Tab bar ──────────────────────────────────────────────────────
+        float panel_w = 460.0f;
         float panel_x = cx - panel_w * 0.5f;
-        float panel_top = cy - 240.0f;
-        float panel_bottom = cy + 220.0f;
+        float tab_top = cy - 260.0f;
+        float panel_top = tab_top + 36.0f;
+        float panel_bottom = cy + 230.0f;
         float panel_h = panel_bottom - panel_top;
 
+        static const char* TAB_LABELS[] = { "Display", "Performance", "Theme", "Audio & Log" };
+        static constexpr int TAB_COUNT = 4;
+        float tab_w = panel_w / TAB_COUNT;
+
+        ImGui::SetCursorPos(ImVec2(panel_x, tab_top));
+
+        // Draw tab buttons
+        for (int t = 0; t < TAB_COUNT; t++) {
+            if (t > 0) ImGui::SameLine(0, 0);
+            bool active = (settings_tab == t);
+
+            ImVec4 btn_bg    = active ? ImVec4(tc.accent.x * 0.15f, tc.accent.y * 0.15f, tc.accent.z * 0.15f, 0.9f)
+                                      : ImVec4(0.06f, 0.07f, 0.10f, 0.7f);
+            ImVec4 btn_hover = ImVec4(tc.accent.x * 0.10f, tc.accent.y * 0.10f, tc.accent.z * 0.10f, 0.8f);
+
+            ImGui::PushStyleColor(ImGuiCol_Button, btn_bg);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, btn_hover);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, btn_bg);
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
+
+            if (ImGui::Button(TAB_LABELS[t], ImVec2(tab_w, 30.0f)))
+                settings_tab = t;
+
+            ImGui::PopStyleVar();
+            ImGui::PopStyleColor(3);
+
+            // Active tab underline
+            if (active) {
+                ImVec2 p = ImGui::GetItemRectMin();
+                ImVec2 q = ImGui::GetItemRectMax();
+                ImGui::GetWindowDrawList()->AddRectFilled(
+                    ImVec2(p.x, q.y - 2.0f), ImVec2(q.x, q.y),
+                    ImGui::ColorConvertFloat4ToU32(tc.accent));
+            }
+        }
+
+        // ── Tab content area ─────────────────────────────────────────────
         ImGui::SetCursorPos(ImVec2(panel_x, panel_top));
-        ImGui::BeginChild("##SettingsScroll", ImVec2(panel_w, panel_h), false, ImGuiWindowFlags_NoBackground);
+        ImGui::BeginChild("##SettingsContent", ImVec2(panel_w, panel_h), false, ImGuiWindowFlags_NoBackground);
         ImGui::PushItemWidth(panel_w - 40.0f);
 
-        // ── Display ──────────────────────────────────────────────────────
-        ImGui::TextColored(tc.accent, "Display");
-        ImGui::Separator();
+        settings_tab = std::clamp(settings_tab, 0, TAB_COUNT - 1);
 
-        ImGui::Text("Temperature Units");
-        ImGui::RadioButton("Kelvin",     &prefs.temp_unit, 0); ImGui::SameLine();
-        ImGui::RadioButton("Celsius",    &prefs.temp_unit, 1); ImGui::SameLine();
-        ImGui::RadioButton("Fahrenheit", &prefs.temp_unit, 2);
+        // ── Tab 0: Display ───────────────────────────────────────────────
+        if (settings_tab == 0) {
+            ImGui::Dummy(ImVec2(0, 6));
 
-        ImGui::Checkbox("Show FPS", &prefs.show_fps);
+            ImGui::Text("Temperature Units");
+            ImGui::RadioButton("Kelvin",     &prefs.temp_unit, 0); ImGui::SameLine();
+            ImGui::RadioButton("Celsius",    &prefs.temp_unit, 1); ImGui::SameLine();
+            ImGui::RadioButton("Fahrenheit", &prefs.temp_unit, 2);
 
-        ImGui::SliderFloat("UI Scale", &prefs.ui_scale, 0.8f, 1.5f, "%.1fx");
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Scale all UI elements (requires restart)");
+            ImGui::Dummy(ImVec2(0, 8));
+            ImGui::Checkbox("Show FPS", &prefs.show_fps);
 
-        ImGui::Dummy(ImVec2(0, 10));
+            ImGui::Dummy(ImVec2(0, 8));
+            ImGui::SliderFloat("UI Scale", &prefs.ui_scale, 0.8f, 1.5f, "%.1fx");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Scale all UI elements (requires restart)");
 
-        // ── Performance ──────────────────────────────────────────────────
-        ImGui::TextColored(tc.accent, "Performance");
-        ImGui::Separator();
+            ImGui::Dummy(ImVec2(0, 8));
+            const char* render_labels[] = { "Native (1x)", "Supersampled (2x)" };
+            int render_idx = prefs.render_scale - 1;
+            if (ImGui::Combo("Render Quality", &render_idx, render_labels, 2))
+                prefs.render_scale = render_idx + 1;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Native: render at base resolution\nSupersampled: 2x resolution, downsampled\nHigher quality but uses more GPU memory");
+        }
+
+        // ── Tab 1: Performance ───────────────────────────────────────────
+        else if (settings_tab == 1) {
+            ImGui::Dummy(ImVec2(0, 6));
 
 #ifdef HAS_OPENMP
-        int sys_max = omp_get_max_threads();
-        if (prefs.max_threads <= 0) prefs.max_threads = sys_max;
-        prefs.max_threads = std::clamp(prefs.max_threads, 1, sys_max);
-        ImGui::SliderInt("CPU Threads", &prefs.max_threads, 1, sys_max);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("OpenMP thread count for physics\nSystem max: %d", sys_max);
+            int sys_max = omp_get_max_threads();
+            if (prefs.max_threads <= 0) prefs.max_threads = sys_max;
+            prefs.max_threads = std::clamp(prefs.max_threads, 1, sys_max);
+            ImGui::SliderInt("CPU Threads", &prefs.max_threads, 1, sys_max);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("OpenMP thread count for physics\nSystem max: %d", sys_max);
 #else
-        ImGui::TextDisabled("CPU Threads: single-threaded (no OpenMP)");
+            ImGui::TextDisabled("CPU Threads: single-threaded (no OpenMP)");
 #endif
 
-        const char* fps_labels[] = { "Uncapped", "30", "60", "120", "144", "240" };
-        const int   fps_values[] = { 0, 30, 60, 120, 144, 240 };
-        int fps_idx = 0;
-        for (int i = 0; i < 6; i++) {
-            if (fps_values[i] == prefs.fps_cap) { fps_idx = i; break; }
-        }
-        if (ImGui::Combo("FPS Cap", &fps_idx, fps_labels, 6))
-            prefs.fps_cap = fps_values[fps_idx];
-
-        const char* quality_labels[] = { "Low", "Medium", "High" };
-        ImGui::Combo("Physics Quality", &prefs.physics_quality, quality_labels, 3);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Low: essential physics, skip expensive checks\nMedium: most interactions at reduced rate\nHigh: full simulation fidelity every frame");
-
-        ImGui::SliderInt("Physics Skip", &prefs.physics_skip, 0, 4);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Run CPU physics every (N+1) frames\n0 = every frame (best quality)\nHigher = better FPS, less accurate");
-
-        ImGui::Checkbox("Spatial Grid", &prefs.spatial_grid);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Use spatial acceleration grid for neighbor searches\nGreatly improves CPU physics performance\nDisable only for debugging");
-
-        const char* render_labels[] = { "Native (1x)", "Supersampled (2x)" };
-        int render_idx = prefs.render_scale - 1;
-        if (ImGui::Combo("Render Quality", &render_idx, render_labels, 2))
-            prefs.render_scale = render_idx + 1;
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Native: render at base resolution (2560x1440)\nSupersampled: render at 2x resolution and downsample\nHigher quality but uses more GPU memory");
-
-        ImGui::Dummy(ImVec2(0, 10));
-
-        // ── Theme ────────────────────────────────────────────────────────
-        ImGui::TextColored(tc.accent, "Theme");
-        ImGui::Separator();
-
-        for (int i = 0; i < THEME_COUNT; i++) {
-            const auto& th = THEMES[i];
-            bool selected = (prefs.theme == i);
-
-            // Color swatch + name as selectable
-            ImVec2 pos = ImGui::GetCursorScreenPos();
-            float swatch_sz = 20.0f;
-
-            if (ImGui::Selectable(("##theme_" + std::to_string(i)).c_str(), selected, 0, ImVec2(panel_w - 20.0f, 28.0f))) {
-                prefs.theme = i;
+            ImGui::Dummy(ImVec2(0, 8));
+            const char* fps_labels[] = { "Uncapped", "30", "60", "120", "144", "240" };
+            const int   fps_values[] = { 0, 30, 60, 120, 144, 240 };
+            int fps_idx = 0;
+            for (int i = 0; i < 6; i++) {
+                if (fps_values[i] == prefs.fps_cap) { fps_idx = i; break; }
             }
+            if (ImGui::Combo("FPS Cap", &fps_idx, fps_labels, 6))
+                prefs.fps_cap = fps_values[fps_idx];
 
-            // Draw color swatches over the selectable
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            float sx = pos.x + 4.0f;
-            float sy = pos.y + 4.0f;
-            dl->AddRectFilled(ImVec2(sx, sy), ImVec2(sx + swatch_sz, sy + swatch_sz),
-                ImGui::ColorConvertFloat4ToU32(th.bg));
-            dl->AddRectFilled(ImVec2(sx + swatch_sz + 3, sy), ImVec2(sx + swatch_sz * 2 + 3, sy + swatch_sz),
-                ImGui::ColorConvertFloat4ToU32(th.accent));
-            dl->AddRectFilled(ImVec2(sx + swatch_sz * 2 + 6, sy), ImVec2(sx + swatch_sz * 3 + 6, sy + swatch_sz),
-                ImGui::ColorConvertFloat4ToU32(th.frame));
+            ImGui::Dummy(ImVec2(0, 8));
+            const char* quality_labels[] = { "Low", "Medium", "High" };
+            ImGui::Combo("Physics Quality", &prefs.physics_quality, quality_labels, 3);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Low: essential physics, skip expensive checks\nMedium: most interactions at reduced rate\nHigh: full simulation fidelity every frame");
 
-            // Label
-            ImGui::SameLine(swatch_sz * 3 + 20.0f);
-            ImGui::SetCursorPosY(pos.y - ImGui::GetWindowPos().y + 4.0f);
-            if (selected)
-                ImGui::TextColored(th.accent, "%s", THEME_NAMES[i]);
-            else
-                ImGui::Text("%s", THEME_NAMES[i]);
+            ImGui::Dummy(ImVec2(0, 8));
+            ImGui::SliderInt("Physics Skip", &prefs.physics_skip, 0, 4);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Run CPU physics every (N+1) frames\n0 = every frame (best quality)\nHigher = better FPS, less accurate");
+
+            ImGui::Dummy(ImVec2(0, 8));
+            ImGui::Checkbox("Spatial Grid", &prefs.spatial_grid);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Use spatial acceleration grid for neighbor searches\nGreatly improves CPU physics performance\nDisable only for debugging");
         }
 
-        ImGui::Dummy(ImVec2(0, 10));
+        // ── Tab 2: Theme ─────────────────────────────────────────────────
+        else if (settings_tab == 2) {
+            ImGui::Dummy(ImVec2(0, 6));
 
-        // ── Audio ───────────────────────────────────────────────────────
-        ImGui::TextColored(tc.accent, "Audio");
-        ImGui::Separator();
+            int count = total_theme_count();
+            float swatch_sz = 14.0f;
+            float row_h = 26.0f;
+            float swatch_total = swatch_sz * 3 + 8.0f;
 
-        if (ImGui::Checkbox("Mute Music", &prefs.music_muted)) {
-            if (audio_ptr) {
-                if (prefs.music_muted) audio_ptr->pause();
-                else                   audio_ptr->resume();
+            for (int i = 0; i < count; i++) {
+                const auto& th = get_theme(i);
+                const char* name = get_theme_name(i);
+                bool selected = (prefs.theme == i);
+
+                ImGui::PushID(i);
+
+                ImVec2 row_pos = ImGui::GetCursorScreenPos();
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+
+                if (ImGui::Selectable("##t", selected, 0, ImVec2(panel_w - 20.0f, row_h)))
+                    prefs.theme = i;
+
+                float sx = row_pos.x + 6.0f;
+                float sy = row_pos.y + (row_h - swatch_sz) * 0.5f;
+                dl->AddRectFilled(ImVec2(sx, sy), ImVec2(sx + swatch_sz, sy + swatch_sz),
+                    ImGui::ColorConvertFloat4ToU32(th.bg));
+                dl->AddRectFilled(ImVec2(sx + swatch_sz + 2, sy), ImVec2(sx + swatch_sz * 2 + 2, sy + swatch_sz),
+                    ImGui::ColorConvertFloat4ToU32(th.accent));
+                dl->AddRectFilled(ImVec2(sx + swatch_sz * 2 + 4, sy), ImVec2(sx + swatch_sz * 3 + 4, sy + swatch_sz),
+                    ImGui::ColorConvertFloat4ToU32(th.frame));
+
+                ImVec4 label_col = selected ? th.accent : ImVec4(0.85f, 0.85f, 0.85f, 1.0f);
+                float tx = row_pos.x + swatch_total + 12.0f;
+                float ty = row_pos.y + (row_h - ImGui::GetTextLineHeight()) * 0.5f;
+                dl->AddText(ImVec2(tx, ty), ImGui::ColorConvertFloat4ToU32(label_col), name);
+
+                if (i >= BUILTIN_THEME_COUNT) {
+                    float name_w = ImGui::CalcTextSize(name).x;
+                    dl->AddText(ImVec2(tx + name_w + 6.0f, ty),
+                        ImGui::ColorConvertFloat4ToU32(ImVec4(0.5f, 0.5f, 0.5f, 0.7f)), "(imported)");
+                }
+
+                ImGui::PopID();
             }
+
+            ImGui::Spacing();
+
+            if (ImGui::Button("Import Theme (.pptheme)", ImVec2(panel_w - 20.0f, 0))) {
+                scan_theme_directory();
+                char msg[128];
+                snprintf(msg, sizeof(msg), "Scanned themes/ — found %d custom theme(s)", static_cast<int>(custom_themes.size()));
+                push_notification(msg, tc.accent);
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Place .pptheme files in the themes/ directory.\nClick to scan and load them.\n\nFormat (one field per line):\n  name=My Theme\n  bg=0.05,0.05,0.08,0.75\n  accent=0.3,0.7,0.9,1.0\n  ...");
         }
 
-        if (!prefs.music_muted) {
-            float vol_pct = prefs.music_volume * 100.0f;
-            if (ImGui::SliderFloat("Music Volume", &vol_pct, 0.0f, 100.0f, "%.0f%%")) {
-                prefs.music_volume = vol_pct / 100.0f;
-                if (audio_ptr) audio_ptr->set_volume(prefs.music_volume);
+        // ── Tab 3: Audio & Log ───────────────────────────────────────────
+        else if (settings_tab == 3) {
+            ImGui::Dummy(ImVec2(0, 6));
+
+            ImGui::TextColored(tc.accent, "Music");
+            ImGui::Separator();
+
+            if (ImGui::Checkbox("Mute Music", &prefs.music_muted)) {
+                if (audio_ptr) {
+                    if (prefs.music_muted) audio_ptr->pause();
+                    else                   audio_ptr->resume();
+                }
             }
+
+            if (!prefs.music_muted) {
+                float vol_pct = prefs.music_volume * 100.0f;
+                if (ImGui::SliderFloat("Music Volume", &vol_pct, 0.0f, 100.0f, "%.0f%%")) {
+                    prefs.music_volume = vol_pct / 100.0f;
+                    if (audio_ptr) audio_ptr->set_volume(prefs.music_volume);
+                }
+            }
+
+            ImGui::Dummy(ImVec2(0, 14));
+
+            ImGui::TextColored(tc.accent, "Event Log");
+            ImGui::Separator();
+
+            ImGui::Checkbox("Limit to 10,000 entries", &prefs.event_log_limit);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("When enabled, the event log keeps the most recent 10,000 entries.\nDisable for unlimited history (uses more memory).");
+
+            ImGui::Dummy(ImVec2(0, 4));
+            ImGui::Checkbox("Save events to disk", &prefs.event_log_save);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Append all physics events to saves/event_log.txt\nas they occur (timestamped, one per line).");
         }
 
         ImGui::PopItemWidth();
@@ -2220,14 +2401,6 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
             ImGui::Text("%.0f fps", fps_display);
         }
 
-        // Active / Dormant
-        ImGui::SameLine(0, 20);
-        ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
-        ImGui::SameLine(0, 10);
-        ImGui::Text("Active: %u", active_particle_display);
-        ImGui::SameLine(0, 10);
-        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Dormant: %u", dormant_particle_display);
-
         // Energy
         ImGui::SameLine(0, 20);
         ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
@@ -2269,22 +2442,6 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
             ImGui::PopStyleColor(4);
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Click to open decay/interaction event log");
-        }
-
-        // Nuclear debug (clickable)
-        {
-            ImGui::SameLine(0, 20);
-            ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
-            ImGui::SameLine(0, 10);
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.15f, 0.05f, 0.5f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.2f, 0.1f, 0.02f, 0.7f));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.15f, 1.0f));
-            if (ImGui::SmallButton("Nuclear###NucDbgBtn"))
-                show_nuclear_debug = !show_nuclear_debug;
-            ImGui::PopStyleColor(4);
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Nuclear reactions debug — tune thresholds and rates");
         }
 
         // Particle count (clickable)
@@ -2329,50 +2486,6 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                 ImGui::SetTooltip("Click to show element list");
         }
 
-        // Type counts (inline colored) — show only active ones
-        ImGui::SameLine(0, 20);
-        ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
-        ImGui::SameLine(0, 10);
-
-        // Nucleons
-        if (type_counts_display[PROTON_TYPE])
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[PROTON_TYPE], "p:%u", type_counts_display[PROTON_TYPE]); ImGui::SameLine(0, 6); }
-        if (type_counts_display[NEUTRON_TYPE])
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[NEUTRON_TYPE], "n:%u", type_counts_display[NEUTRON_TYPE]); ImGui::SameLine(0, 6); }
-        if (type_counts_display[ELECTRON_TYPE_PHYS])
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[ELECTRON_TYPE_PHYS], "e-:%u", type_counts_display[ELECTRON_TYPE_PHYS]); ImGui::SameLine(0, 6); }
-        if (type_counts_display[PHOTON_TYPE_PHYS])
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[PHOTON_TYPE_PHYS], "y:%u", type_counts_display[PHOTON_TYPE_PHYS]); ImGui::SameLine(0, 6); }
-        if (type_counts_display[POSITRON_TYPE_PHYS])
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[POSITRON_TYPE_PHYS], "e+:%u", type_counts_display[POSITRON_TYPE_PHYS]); ImGui::SameLine(0, 6); }
-        if (type_counts_display[ANTIPROTON_TYPE_PHYS])
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[ANTIPROTON_TYPE_PHYS], "p-:%u", type_counts_display[ANTIPROTON_TYPE_PHYS]); ImGui::SameLine(0, 6); }
-        // Neutrinos
-        if (type_counts_display[NEUTRINO_TYPE_PHYS])
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[NEUTRINO_TYPE_PHYS], "ve:%u", type_counts_display[NEUTRINO_TYPE_PHYS]); ImGui::SameLine(0, 6); }
-        // Quarks (just show total if any)
-        uint32_t quark_total = 0;
-        for (uint32_t t = UP_QUARK_TYPE; t <= ANTI_BOTTOM_TYPE; ++t)
-            quark_total += type_counts_display[t];
-        if (quark_total)
-            { ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.2f, 1.0f), "q:%u", quark_total); ImGui::SameLine(0, 6); }
-        // Bosons (excluding photon, already shown)
-        uint32_t boson_total = type_counts_display[GLUON_TYPE_PHYS]
-            + type_counts_display[W_PLUS_TYPE_PHYS] + type_counts_display[W_MINUS_TYPE_PHYS]
-            + type_counts_display[Z_BOSON_TYPE_PHYS] + type_counts_display[HIGGS_TYPE_PHYS];
-        if (boson_total)
-            { ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "B:%u", boson_total); ImGui::SameLine(0, 6); }
-        // Hypothetical
-        if (type_counts_display[GRAVITON_TYPE_PHYS])
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[GRAVITON_TYPE_PHYS], "G:%u", type_counts_display[GRAVITON_TYPE_PHYS]); ImGui::SameLine(0, 6); }
-        if (type_counts_display[DARK_MATTER_TYPE_PHYS])
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[DARK_MATTER_TYPE_PHYS], "DM:%u", type_counts_display[DARK_MATTER_TYPE_PHYS]); ImGui::SameLine(0, 6); }
-        if (type_counts_display[DARK_ENERGY_TYPE_PHYS])
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[DARK_ENERGY_TYPE_PHYS], "DE:%u", type_counts_display[DARK_ENERGY_TYPE_PHYS]); ImGui::SameLine(0, 6); }
-        { uint32_t hyp_count = 0;
-          for (uint32_t t = AXINO_TYPE_PHYS; t <= DYN_AXION_QP_TYPE_PHYS; t++) hyp_count += type_counts_display[t];
-          if (hyp_count) { ImGui::TextColored(ImVec4(0.7f,0.5f,1.0f,1.0f), "Hyp:%u", hyp_count); ImGui::SameLine(0, 6); } }
-
         // Status indicators
         if (select_mode) {
             ImGui::SameLine(0, 12);
@@ -2406,8 +2519,8 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
 
         // Menu popup (rendered above the button)
         if (show_tools_popup) {
-            float popup_w = 220.0f;
-            float popup_h = 500.0f;
+            float popup_w = 230.0f;
+            float popup_h = 540.0f;
             float popup_x = display_w - 12.0f - popup_w;
             float popup_y = display_h - bar_h - popup_h - 4.0f;
             ImGui::SetNextWindowPos(ImVec2(popup_x, popup_y));
@@ -2421,12 +2534,19 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
 
                 // ── Simulation ──
                 if (ImGui::TreeNodeEx("Simulation", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    if (ImGui::MenuItem(sim_running ? "Pause (Space)" : "Resume (Space)")) {
+                        sim_running = !sim_running;
+                    }
                     if (ImGui::MenuItem("Spawn (F3)", nullptr, spawn_menu_visible)) {
                         spawn_menu_visible = !spawn_menu_visible;
                     }
                     if (ImGui::MenuItem("Select (F4)", nullptr, select_mode)) {
                         select_mode = !select_mode;
                         if (select_mode) { pending_spawn = false; force_obj_placement_mode = false; }
+                    }
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Settings", nullptr, show_settings_menu)) {
+                        show_settings_menu = !show_settings_menu;
                     }
                     if (ImGui::MenuItem("Reset (F2)")) {
                         request_reset = true;
@@ -2438,7 +2558,7 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                 ImGui::Spacing();
 
                 // ── File ──
-                if (ImGui::TreeNodeEx("File", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (ImGui::TreeNodeEx("File")) {
                     if (ImGui::MenuItem("Save (Ctrl+S)")) {
                         show_save_dialog = true;
                         show_tools_popup = false;
@@ -2465,9 +2585,38 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
 
                 ImGui::Spacing();
 
-                // ── Tools ──
+                // ── View ─────────────────────────────────────────────────────
+                if (ImGui::TreeNodeEx("View", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::MenuItem("Event Log", nullptr, &show_decay_log);
+                    ImGui::MenuItem("Particle List", nullptr, &show_particle_list);
+                    ImGui::MenuItem("Element List", nullptr, &show_element_list);
+                    ImGui::MenuItem("Achievements", nullptr, &show_achievements_panel);
+                    ImGui::TreePop();
+                }
+
+                ImGui::Spacing();
+
+                // ── Visualization ───────────────────────────────────────────
+                if (ImGui::TreeNodeEx("Visualization")) {
+                    ImGui::MenuItem("Show Trails", nullptr, &cfg.show_trails);
+                    ImGui::MenuItem("Electron Cloud", nullptr, &show_electron_cloud);
+                    ImGui::MenuItem("Orbit Paths", nullptr, &show_orbit_paths);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Show predicted Keplerian orbits\nfor bound electrons around nuclei");
+                    ImGui::MenuItem("Trajectory Tracer", nullptr, &show_trajectory_tracer);
+                    ImGui::MenuItem("Energy Heatmap", nullptr, &show_energy_heatmap);
+                    ImGui::MenuItem("Velocity Field", nullptr, &show_velocity_field);
+                    ImGui::MenuItem("Magnetic Field", nullptr, &show_magnetic_field);
+                    ImGui::MenuItem("Force Vectors", nullptr, &show_force_vectors);
+                    ImGui::MenuItem("Wave Mode", nullptr, &wave_mode);
+                    ImGui::MenuItem("Atom Grid", nullptr, &show_atom_grid);
+                    ImGui::TreePop();
+                }
+
+                ImGui::Spacing();
+
                 // ── Measurement ──────────────────────────────────────────────
-                if (ImGui::TreeNodeEx("Measurement", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (ImGui::TreeNodeEx("Measurement")) {
                     auto enter_meas_mode = [&]() {
                         pending_spawn = false;
                         select_mode = false;
@@ -2480,24 +2629,18 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                         density_counter_placement_mode = false;
                     };
 
-                    if (ImGui::MenuItem("Thermometer Probe", nullptr, thermo_probe_placement_mode)) {
+                    if (ImGui::MenuItem("Thermometer", nullptr, thermo_probe_placement_mode)) {
                         bool was = thermo_probe_placement_mode;
                         enter_meas_mode();
                         thermo_probe_placement_mode = !was;
                         show_tools_popup = false;
                     }
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Click to place a temperature probe\nShows local avg kinetic energy within radius");
-
                     if (ImGui::MenuItem("Velocity Meter", nullptr, velocity_meter_mode)) {
                         bool was = velocity_meter_mode;
                         enter_meas_mode();
                         velocity_meter_mode = !was;
                         show_tools_popup = false;
                     }
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Click a particle to track its velocity\nShows speed, direction arrow, and kinetic energy");
-
                     if (ImGui::MenuItem("Distance Ruler", nullptr, ruler_placement_mode)) {
                         bool was = ruler_placement_mode;
                         enter_meas_mode();
@@ -2505,75 +2648,27 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                         ruler_placement_phase = 0;
                         show_tools_popup = false;
                     }
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Click two points to measure distance\nDisplays world-space distance between points");
-
                     if (ImGui::MenuItem("Density Counter", nullptr, density_counter_placement_mode)) {
                         bool was = density_counter_placement_mode;
                         enter_meas_mode();
                         density_counter_placement_mode = !was;
                         show_tools_popup = false;
                     }
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Click to place a density counter\nShows particle count and density within radius");
-
                     ImGui::Separator();
-                    if (ImGui::MenuItem("Clear All Measurements")) {
+                    if (ImGui::MenuItem("Clear All")) {
                         thermo_probes.clear();
                         velocity_meters.clear();
                         distance_rulers.clear();
                         density_counters.clear();
                         show_tools_popup = false;
                     }
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Remove all placed measurement tools");
-
                     ImGui::TreePop();
                 }
 
-                // ── Visualization ───────────────────────────────────────────
-                if (ImGui::TreeNodeEx("Visualization", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    ImGui::MenuItem("Show Trails", nullptr, &cfg.show_trails);
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Draw particle paths (fade effect)");
-
-                    ImGui::MenuItem("Electron Cloud", nullptr, &show_electron_cloud);
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Show orbital shell rings around nuclei\nDisplays expected electron shells and occupancy");
-
-                    ImGui::MenuItem("Trajectory Tracer", nullptr, &show_trajectory_tracer);
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Record and draw recent particle paths\nFading polylines colored by particle type");
-
-                    ImGui::MenuItem("Energy Heatmap", nullptr, &show_energy_heatmap);
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Overlay grid showing kinetic energy density\nBlue = low, Red = high");
-
-                    ImGui::MenuItem("Velocity Field", nullptr, &show_velocity_field);
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Overlay arrow grid showing average\nvelocity direction and magnitude");
-
-                    ImGui::MenuItem("Magnetic Field", nullptr, &show_magnetic_field);
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Overlay grid showing magnetic field Bz\nBlue = B<0, Red = B>0\nIncludes Biot-Savart + nucleon dipoles");
-
-                    ImGui::MenuItem("Force Vectors", nullptr, &show_force_vectors);
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Show force breakdown on selected particle\nCoulomb (red), Yukawa (green), Gravity (blue)");
-
-                    ImGui::MenuItem("Wave Mode", nullptr, &wave_mode);
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Toggle wave-particle duality\nRender all particles as de Broglie wave packets\nWavelength inversely proportional to momentum");
-
-                    ImGui::MenuItem("Atom Grid", nullptr, &show_atom_grid);
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Overlay grid where each cell = hydrogen atom diameter\n(2 Bohr radii = 0.106 nm)");
-
-                    ImGui::TreePop();
-                }
+                ImGui::Spacing();
 
                 // ── Tools ───────────────────────────────────────────────────
-                if (ImGui::TreeNodeEx("Tools", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (ImGui::TreeNodeEx("Tools")) {
                     if (ImGui::MenuItem("Accelerator", nullptr, accel_mode)) {
                         accel_mode = !accel_mode;
                         if (accel_mode) {
@@ -2589,9 +2684,6 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                         }
                         show_tools_popup = false;
                     }
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Particle accelerator tool\nSelect a target and fire particles at it");
-
                     if (ImGui::MenuItem("Mirror", nullptr, mirror_placement_mode)) {
                         mirror_placement_mode = !mirror_placement_mode;
                         if (mirror_placement_mode) {
@@ -2607,31 +2699,22 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                         }
                         show_tools_popup = false;
                     }
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Reflective mirror tool\nTwo clicks define a line segment\nParticles bounce off reflectively");
-
+                    if (ImGui::MenuItem("Nuclear Debug", nullptr, show_nuclear_debug)) {
+                        show_nuclear_debug = !show_nuclear_debug;
+                    }
                     ImGui::Separator();
                     if (ImGui::MenuItem("Halt Velocities")) {
                         request_halt_velocities = true;
                         show_tools_popup = false;
                     }
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Set all particle velocities to zero");
-
                     if (ImGui::MenuItem("Remove Massless")) {
                         request_remove_massless = true;
                         show_tools_popup = false;
                     }
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Remove all massless particles\n(photons, gluons, gravitons, neutrinos)");
-
                     if (ImGui::MenuItem("Remove Massive")) {
                         request_remove_massive = true;
                         show_tools_popup = false;
                     }
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Remove all massive particles\n(everything except photons, gluons, etc.)");
-
                     ImGui::TreePop();
                 }
             }
@@ -3909,15 +3992,15 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
     }
 
     ImGuiIO& io = ImGui::GetIO();
-    // Bottom-right, notification style — pivot (0,1) anchors bottom edge, grows upward
+    // Bottom-right default position — user can drag elsewhere
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 260, io.DisplaySize.y - 60),
-                            ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+                            ImGuiCond_Appearing, ImVec2(0.0f, 1.0f));
 
-    ImGuiWindowFlags card_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
-        | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize
+    ImGuiWindowFlags card_flags = ImGuiWindowFlags_NoTitleBar
+        | ImGuiWindowFlags_AlwaysAutoResize
         | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
 
-    ImGui::SetNextWindowSize(ImVec2(250, 0));
+    ImGui::SetNextWindowSize(ImVec2(250, 0), ImGuiCond_Appearing);
 
     if (ImGui::Begin("##InfoCard", nullptr, card_flags)) {
         // Particle name with color
@@ -4418,10 +4501,10 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
     // Window — bottom-right, to the left of info card
     ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 590, io.DisplaySize.y - 60),
-                            ImGuiCond_Always, ImVec2(0.0f, 1.0f));
-    ImGui::SetNextWindowSize(ImVec2(320, 0));
+                            ImGuiCond_Appearing, ImVec2(0.0f, 1.0f));
+    ImGui::SetNextWindowSize(ImVec2(320, 0), ImGuiCond_Appearing);
 
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize
+    ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize
         | ImGuiWindowFlags_NoNav;
 
     bool open = true;
@@ -4803,10 +4886,10 @@ void PhysicsInterface::draw_molecule_card(const Particles& particles) {
     // Window position — next to element card position
     ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 590, io.DisplaySize.y - 60),
-                            ImGuiCond_Always, ImVec2(0.0f, 1.0f));
-    ImGui::SetNextWindowSize(ImVec2(340, 0));
+                            ImGuiCond_Appearing, ImVec2(0.0f, 1.0f));
+    ImGui::SetNextWindowSize(ImVec2(340, 0), ImGuiCond_Appearing);
 
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize
+    ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize
         | ImGuiWindowFlags_NoNav;
 
     bool open = true;
@@ -6059,16 +6142,41 @@ void PhysicsInterface::push_decay_event(const char* desc, DecayEventType type, I
 }
 
 void PhysicsInterface::push_decay_event(const char* desc, DecayEventType type, ImVec4 color, const std::string& details) {
-    if (static_cast<int>(decay_log.size()) >= DECAY_LOG_MAX) {
+    if (prefs.event_log_limit && static_cast<int>(decay_log.size()) >= DECAY_LOG_MAX) {
         decay_log.erase(decay_log.begin());
         if (expanded_event_idx > 0) expanded_event_idx--;
         else if (expanded_event_idx == 0) expanded_event_idx = -1;
     }
     decay_log.push_back({std::string(desc), details, type, color, frame_counter_display, std::time(nullptr)});
+    if (prefs.event_log_save) save_event_to_disk(desc, type);
+}
+
+void PhysicsInterface::save_event_to_disk(const char* desc, DecayEventType type) {
+    namespace fs = std::filesystem;
+    static const char* TYPE_TAGS[] = {
+        "DECAY", "NUCLEAR", "FUSION", "FISSION", "ANNIHILATION",
+        "PHOTOELECTRIC", "SPALLATION", "PAIR_PROD", "PION_PROD",
+        "VMD", "PHOTODISINT", "BOND_FORM", "BOND_BREAK"
+    };
+    std::error_code ec;
+    fs::create_directories("saves", ec);
+    std::ofstream f("saves/event_log.txt", std::ios::app);
+    if (!f.is_open()) return;
+    auto now = std::time(nullptr);
+    auto* tm = std::localtime(&now);
+    char ts[32];
+    std::strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm);
+    const char* tag = (static_cast<int>(type) < DEVT_COUNT) ? TYPE_TAGS[static_cast<int>(type)] : "UNKNOWN";
+    f << "[" << ts << "] [" << tag << "] " << desc << "\n";
 }
 
 void PhysicsInterface::draw_notifications() {
     if (notifications.empty()) return;
+    // Don't draw toasts when the event log is already visible
+    if (show_decay_log) {
+        notifications.clear();
+        return;
+    }
 
     float dt = ImGui::GetIO().DeltaTime;
     ImGuiIO& io = ImGui::GetIO();
@@ -6151,11 +6259,11 @@ void PhysicsInterface::draw_force_object_panel(ForceObject* objects) {
     ImVec4 type_color = (obj.force_type < FORCE_OBJ_COUNT) ? fo_type_colors[obj.force_type] : ImVec4(1,1,1,1);
 
     ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 260, 10));
-    ImGui::SetNextWindowSize(ImVec2(250, 0));
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 260, 10), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(250, 0), ImGuiCond_Appearing);
 
-    ImGuiWindowFlags panel_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
-        | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize
+    ImGuiWindowFlags panel_flags = ImGuiWindowFlags_NoTitleBar
+        | ImGuiWindowFlags_AlwaysAutoResize
         | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
 
     if (ImGui::Begin("##ForceObjPanel", nullptr, panel_flags)) {
@@ -7272,12 +7380,11 @@ void PhysicsInterface::draw_measurement_panel() {
     float panel_w = 280.0f;
     float max_h = io.DisplaySize.y - 64.0f;
 
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - panel_w - 10, 10), ImGuiCond_Always);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(panel_w, 80), ImVec2(panel_w, max_h));
-    ImGui::SetNextWindowSize(ImVec2(panel_w, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - panel_w - 10, 10), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(200, 80), ImVec2(400, max_h));
+    ImGui::SetNextWindowSize(ImVec2(panel_w, 0), ImGuiCond_Appearing);
 
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize
-                           | ImGuiWindowFlags_AlwaysAutoResize;
+    ImGuiWindowFlags flags = ImGuiWindowFlags_None;
     if (!ImGui::Begin("Measurements", nullptr, flags)) {
         ImGui::End();
         return;
@@ -7454,4 +7561,77 @@ void PhysicsInterface::draw_atom_grid(const SimConfig& cfg) {
     fg->AddRectFilled(ImVec2(lx - 4, ly - 2), ImVec2(lx + ts.x + 4, ly + ts.y + 2),
                       IM_COL32(0, 0, 0, 180), 3.0f);
     fg->AddText(ImVec2(lx, ly), IM_COL32(100, 180, 255, 220), label);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Orbit Paths Overlay ─────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_orbit_paths(const SimConfig& cfg) {
+    if (orbit_paths.empty()) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    float win_w = io.DisplaySize.x, win_h = io.DisplaySize.y;
+    float scx = win_w / static_cast<float>(REGION_W);
+    float scy = win_h / static_cast<float>(REGION_H);
+
+    auto w2s = [&](glm::vec2 w) -> ImVec2 {
+        glm::vec2 s = glm::vec2(win_w, win_h) * 0.5f
+                    + (w - cfg.camera_origin) * cfg.current_camera_zoom * glm::vec2(scx, scy);
+        return ImVec2(s.x, s.y);
+    };
+
+    ImDrawList* fg = ImGui::GetForegroundDrawList();
+
+    // Shell colors (same palette as electron cloud)
+    const ImVec4 SHELL_COLORS_M[] = {
+        ImVec4(0.3f, 0.6f, 1.0f, 1.0f),   // shell 0: blue
+        ImVec4(0.3f, 0.9f, 0.5f, 1.0f),   // shell 1: green
+        ImVec4(0.9f, 0.7f, 0.2f, 1.0f),   // shell 2: gold
+        ImVec4(0.95f, 0.35f, 0.3f, 1.0f),  // shell 3: red
+    };
+    const ImVec4 SHELL_COLORS_A[] = {
+        ImVec4(0.0f, 0.85f, 0.95f, 1.0f),
+        ImVec4(0.6f, 0.3f, 0.95f, 1.0f),
+        ImVec4(0.95f, 0.4f, 0.6f, 1.0f),
+        ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
+    };
+
+    constexpr int SEGMENTS = 48;  // points per ellipse
+
+    for (const auto& orb : orbit_paths) {
+        // Screen-space center and radii
+        ImVec2 center_s = w2s(orb.center);
+
+        float a_px = orb.semi_major * cfg.current_camera_zoom * scx;
+        float b_px = orb.semi_minor * cfg.current_camera_zoom * scy;
+
+        // Cull: skip tiny or offscreen orbits
+        float max_r = std::max(a_px, b_px);
+        if (max_r < 3.0f) continue;
+        if (center_s.x < -max_r || center_s.x > win_w + max_r ||
+            center_s.y < -max_r || center_s.y > win_h + max_r) continue;
+
+        // Color from shell
+        int si = std::clamp(orb.shell, 0, 3);
+        const ImVec4& sc = orb.is_anti ? SHELL_COLORS_A[si] : SHELL_COLORS_M[si];
+        float alpha = 0.35f;
+        ImU32 col = ImGui::ColorConvertFloat4ToU32(ImVec4(sc.x, sc.y, sc.z, alpha));
+
+        // Draw rotated ellipse as polyline
+        float cos_o = std::cos(orb.orientation);
+        float sin_o = std::sin(orb.orientation);
+
+        ImVec2 pts[SEGMENTS + 1];
+        for (int k = 0; k <= SEGMENTS; ++k) {
+            float theta = static_cast<float>(k) * 2.0f * 3.14159265f / static_cast<float>(SEGMENTS);
+            float ex = a_px * std::cos(theta);
+            float ey = b_px * std::sin(theta);
+            // Rotate by orientation
+            float rx = ex * cos_o - ey * sin_o;
+            float ry = ex * sin_o + ey * cos_o;
+            pts[k] = ImVec2(center_s.x + rx, center_s.y + ry);
+        }
+        fg->AddPolyline(pts, SEGMENTS + 1, col, ImDrawFlags_None, 1.0f);
+    }
 }

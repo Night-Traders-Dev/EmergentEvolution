@@ -461,19 +461,22 @@ formula, bond count, and clickable constituent atoms.
 
 ### Particle & Element Lists
 
-Bottom bar counters (Particles, Atoms, Molecules, Events) each open scrollable windows.
-Particles are grouped by type with per-particle speed, energy, and age. Elements show stability
-indicators and isotope info. Molecules display Hill formulas. The event log tracks up to 10,000
-entries across 13 categories with timestamps.
+Bottom bar shows simulation state, timescale, temperature, B-field, FPS, energy, and entropy.
+Clickable counters (Events, Particles, Atoms/Molecules) open scrollable windows. The **Menu**
+popup organizes commands into Simulation, File, View, Visualization, Measurement, and Tools
+sections. Particle and element lists are accessible from **Menu > View**. The event log tracks
+up to 10,000 entries across 13 categories with timestamps (configurable limit and disk logging
+in Settings).
 
 ### Visualization Overlays
 
-Nine independent overlays toggled from **Menu > Visualization**:
+Ten independent overlays toggled from **Menu > Visualization**:
 
 | Overlay | Description |
 |---|---|
 | **Trails** | GPU-side particle path fade |
 | **Electron Cloud** | Bohr-model shell rings with fill indicators and element labels |
+| **Orbit Paths** | Predicted Keplerian ellipses for bound electrons, computed from angular momentum, energy, and Runge-Lenz vector |
 | **Magnetic Field** | B-field heatmap from Biot-Savart + nucleon dipoles (32&times;18 grid, OpenMP) |
 | **Wave Mode** | de Broglie wave packets (&lambda; = h/p) with Gaussian envelope |
 | **Atom Grid** | Hydrogen-diameter grid (2 &times; Bohr radius = 0.106 nm per cell) |
@@ -497,6 +500,7 @@ velocity meter (tracks single particle), distance ruler (nanometer scale), densi
 
 - **Particle Accelerator**: fire projectiles at a target (single, triple, stream modes)
 - **Mirror**: reflective line segments with configurable elasticity (GPU-side reflection)
+- **Nuclear Debug**: tune reaction thresholds and rates in real time
 - **Halt Velocities / Remove Massless / Remove Massive**: utility actions
 
 ### Spawn Picker (F3)
@@ -507,8 +511,10 @@ by formula. Configurable count, energy, and scatter radius.
 
 ### Themes
 
-Eight color themes (Dark Navy, Midnight, Slate, Ember, Synthwave, Forest, Arctic, Solar).
-User preferences persist across sessions.
+14 built-in color themes (Dark Navy, Midnight, Slate, Ember, Synthwave, Forest, Arctic, Solar,
+High Contrast, Solarized Dark, Dracula, Monokai, Universe Sandbox, Ubuntu Yaru) plus custom
+theme import via `.pptheme` files in the `themes/` directory. Settings are organized into four
+tabs: Display, Performance, Theme, and Audio & Log. User preferences persist across sessions.
 
 ### Achievements
 
