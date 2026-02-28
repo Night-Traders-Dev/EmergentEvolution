@@ -100,6 +100,8 @@ void PhysicsInterface::init() {
     seed_value = static_cast<int>(rd() % 100000);
     load_prefs();
     scan_theme_directory();
+    for (uint32_t i = 0; i < PHYS_PARTICLE_TYPES; ++i)
+        particle_type_filter[i] = true;
 }
 
 // ── Settings persistence ────────────────────────────────────────────────────
@@ -939,8 +941,9 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         return;
     }
 
-    // Draw bottom bar (always visible)
+    // Draw bottom bar (auto-hides) and top stats bar
     draw_bottom_bar(cfg, request_reset);
+    draw_top_bar(cfg);
 
     // Draw settings panel
     if (settings_visible)
@@ -1248,7 +1251,8 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     }
 
     // ── Entanglement visualization overlay ──
-    if (cfg.entanglement_enabled && readback_positions_ptr && entangled_partners_ptr
+    if (cfg.entanglement_enabled && !hide_entanglement_lines
+        && readback_positions_ptr && entangled_partners_ptr
         && readback_count > 0) {
         ImGuiIO& eio = ImGui::GetIO();
         float win_w = eio.DisplaySize.x, win_h = eio.DisplaySize.y;
@@ -1298,7 +1302,7 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     }
 
     // ── Covalent bond overlay ──────────────────────────────────────────────
-    if (cfg.bonds_enabled && bond_data_ptr && readback_positions_ptr && readback_count > 0) {
+    if (cfg.bonds_enabled && !hide_bond_visuals && bond_data_ptr && readback_positions_ptr && readback_count > 0) {
         ImGuiIO& bio = ImGui::GetIO();
         float bwin_w = bio.DisplaySize.x, bwin_h = bio.DisplaySize.y;
         float scx = bwin_w / static_cast<float>(REGION_W);
@@ -1341,6 +1345,8 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     if (show_energy_heatmap)    draw_energy_heatmap(cfg);
     if (show_velocity_field)    draw_velocity_field(cfg);
     if (show_magnetic_field)    draw_magnetic_field(cfg);
+    if (show_gravity_map)       draw_gravity_map(cfg);
+    if (show_grav_waves)        draw_grav_waves(cfg);
     if (show_trajectory_tracer) draw_trajectory_traces(cfg);
     if (show_force_vectors)     draw_force_vectors_overlay(cfg);
     if (show_atom_grid)         draw_atom_grid(cfg);
@@ -1407,21 +1413,21 @@ static void draw_radial_glow(ImDrawList* dl, float cx, float cy, float radius,
 }
 
 static void draw_vignette(ImDrawList* dl, float W, float H) {
-    // Top fade
-    for (int i = 0; i < 20; ++i) {
-        float t = (float)i / 20.0f;
-        int a = (int)((1.0f - t) * 0.8f * 255);
-        dl->AddRectFilled(ImVec2(0, i * (H / 80.0f)), ImVec2(W, (i+1) * (H / 80.0f)),
-                          IM_COL32(2, 8, 16, a));
-    }
-    // Bottom fade
-    for (int i = 0; i < 30; ++i) {
-        float t = (float)i / 30.0f;
-        float band = H / 60.0f;
-        float y = H - (30 - i) * band;
-        int a = (int)((1.0f - t) * 0.95f * 255);
-        dl->AddRectFilled(ImVec2(0, y), ImVec2(W, y + band),
-                          IM_COL32(2, 8, 16, a));
+    // Smooth edge vignette — darkens edges/corners, no hard boundary
+    constexpr int BANDS = 32;
+    float band_h = H / static_cast<float>(BANDS);
+    for (int i = 0; i < BANDS; ++i) {
+        float y_center = (static_cast<float>(i) + 0.5f) / static_cast<float>(BANDS);
+        // Distance from vertical center (0 at middle, 1 at edges)
+        float edge_dist = std::abs(y_center - 0.5f) * 2.0f;
+        // Smooth cubic falloff: only darken near edges
+        float vignette = edge_dist * edge_dist * edge_dist;
+        // Stronger at top (0.7) and bottom (0.9)
+        float strength = (y_center < 0.5f) ? 0.7f : 0.9f;
+        int a = static_cast<int>(vignette * strength * 255.0f);
+        if (a < 1) continue;
+        dl->AddRectFilled(ImVec2(0, i * band_h), ImVec2(W, (i + 1) * band_h),
+                          IM_COL32(2, 8, 16, std::min(a, 255)));
     }
 }
 
@@ -1858,45 +1864,11 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         ImGui::PopStyleColor(3);
         ImGui::PopStyleVar();
 
-        // ── Music volume control ─────────────────────────────────────
-        float vol_y = btn_y + btn_spacing * 8 + 10.0f;
-        float vol_w = btn_w;
-        ImGui::SetCursorPos(ImVec2(btn_x, vol_y));
-        ImGui::PushItemWidth(vol_w - 40.0f);
-
-        // Mute button + volume slider on one line
-        bool muted = prefs.music_muted;
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.14f, 0.22f, 0.60f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.25f, 0.40f, 0.80f));
-        if (ImGui::Button(muted ? "X##mute" : "♪##mute", ImVec2(30.0f, 24.0f))) {
-            prefs.music_muted = !prefs.music_muted;
-            if (audio_ptr) {
-                if (prefs.music_muted) audio_ptr->pause();
-                else                   audio_ptr->resume();
-            }
-        }
-        ImGui::PopStyleColor(2);
-        ImGui::SameLine();
-
-        if (!prefs.music_muted) {
-            float vol_pct = prefs.music_volume * 100.0f;
-            ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.302f, 0.749f, 0.953f, 0.8f));
-            ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.10f, 0.12f, 0.18f, 0.8f));
-            if (ImGui::SliderFloat("##pausevol", &vol_pct, 0.0f, 100.0f, "%.0f%%")) {
-                prefs.music_volume = vol_pct / 100.0f;
-                if (audio_ptr) audio_ptr->set_volume(prefs.music_volume);
-            }
-            ImGui::PopStyleColor(2);
-        } else {
-            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.5f), "Music muted");
-        }
-
-        ImGui::PopItemWidth();
-
         // Hint text
+        float hint_y = btn_y + btn_spacing * 8 + 10.0f;
         const char* hint = "Press Escape to resume";
         ImVec2 hint_size = ImGui::CalcTextSize(hint);
-        ImGui::SetCursorPos(ImVec2(cx - hint_size.x * 0.5f, vol_y + 40.0f));
+        ImGui::SetCursorPos(ImVec2(cx - hint_size.x * 0.5f, hint_y));
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.6f), "%s", hint);
     }
     ImGui::End();
@@ -2007,12 +1979,34 @@ void PhysicsInterface::draw_settings_menu() {
                 ImGui::SetTooltip("Scale all UI elements (requires restart)");
 
             ImGui::Dummy(ImVec2(0, 8));
-            const char* render_labels[] = { "Native (1x)", "Supersampled (2x)" };
-            int render_idx = prefs.render_scale - 1;
-            if (ImGui::Combo("Render Quality", &render_idx, render_labels, 2))
+            const char* render_labels[] = { "Native (1x)", "Supersampled (2x)", "Supersampled (3x)", "Supersampled (4x)" };
+            int render_idx = std::clamp(prefs.render_scale - 1, 0, 3);
+            if (ImGui::Combo("Render Quality", &render_idx, render_labels, 4))
                 prefs.render_scale = render_idx + 1;
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Native: render at base resolution\nSupersampled: 2x resolution, downsampled\nHigher quality but uses more GPU memory");
+                ImGui::SetTooltip("Native: render at base resolution\n2x/3x/4x: higher resolution, downsampled\nHigher quality but uses more GPU memory");
+
+            ImGui::Dummy(ImVec2(0, 12));
+            ImGui::SeparatorText("Visual Overlays");
+            {
+                bool show_bonds = !hide_bond_visuals;
+                if (ImGui::Checkbox("Show Bond Lines", &show_bonds))
+                    hide_bond_visuals = !show_bonds;
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Toggle covalent bond line rendering\nPhysics (spring forces) still active when hidden");
+
+                bool show_virtual = !hide_virtual_trails;
+                if (ImGui::Checkbox("Show Virtual Particles", &show_virtual))
+                    hide_virtual_trails = !show_virtual;
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Toggle virtual particle rendering\nCasimir forces still active when hidden");
+
+                bool show_entangle = !hide_entanglement_lines;
+                if (ImGui::Checkbox("Show Entanglement Lines", &show_entangle))
+                    hide_entanglement_lines = !show_entangle;
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Toggle entanglement dashed line overlay\nVelocity coupling still active when hidden");
+            }
         }
 
         // ── Tab 1: Performance ───────────────────────────────────────────
@@ -2334,6 +2328,98 @@ void PhysicsInterface::draw_achievements_panel() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// ── Top Stats Bar ───────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_top_bar(const SimConfig& cfg) {
+    (void)cfg;
+    ImGuiIO& io = ImGui::GetIO();
+    float bar_h = 24.0f;
+    float display_w = io.DisplaySize.x;
+
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(display_w, bar_h));
+
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
+        | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoCollapse
+        | ImGuiWindowFlags_NoBringToFrontOnFocus;
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.03f, 0.04f, 0.07f, 0.65f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 4.0f));
+
+    if (ImGui::Begin("##TopBar", nullptr, flags)) {
+        // Nucleons
+        if (type_counts_display[PROTON_TYPE])
+            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[PROTON_TYPE], "p:%u", type_counts_display[PROTON_TYPE]); ImGui::SameLine(0, 8); }
+        if (type_counts_display[NEUTRON_TYPE])
+            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[NEUTRON_TYPE], "n:%u", type_counts_display[NEUTRON_TYPE]); ImGui::SameLine(0, 8); }
+        // Leptons
+        if (type_counts_display[ELECTRON_TYPE_PHYS])
+            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[ELECTRON_TYPE_PHYS], "e-:%u", type_counts_display[ELECTRON_TYPE_PHYS]); ImGui::SameLine(0, 8); }
+        if (type_counts_display[PHOTON_TYPE_PHYS])
+            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[PHOTON_TYPE_PHYS], "y:%u", type_counts_display[PHOTON_TYPE_PHYS]); ImGui::SameLine(0, 8); }
+        if (type_counts_display[POSITRON_TYPE_PHYS])
+            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[POSITRON_TYPE_PHYS], "e+:%u", type_counts_display[POSITRON_TYPE_PHYS]); ImGui::SameLine(0, 8); }
+        if (type_counts_display[ANTIPROTON_TYPE_PHYS])
+            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[ANTIPROTON_TYPE_PHYS], "p-:%u", type_counts_display[ANTIPROTON_TYPE_PHYS]); ImGui::SameLine(0, 8); }
+        if (type_counts_display[NEUTRINO_TYPE_PHYS])
+            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[NEUTRINO_TYPE_PHYS], "ve:%u", type_counts_display[NEUTRINO_TYPE_PHYS]); ImGui::SameLine(0, 8); }
+        // Muons/Taus
+        uint32_t muon_total = type_counts_display[MUON_TYPE_PHYS] + type_counts_display[ANTIMUON_TYPE_PHYS];
+        if (muon_total)
+            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[MUON_TYPE_PHYS], "u:%u", muon_total); ImGui::SameLine(0, 8); }
+        uint32_t tau_total = type_counts_display[TAU_TYPE_PHYS] + type_counts_display[ANTITAU_TYPE_PHYS];
+        if (tau_total)
+            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[TAU_TYPE_PHYS], "t:%u", tau_total); ImGui::SameLine(0, 8); }
+
+        // Separator
+        ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.60f), "|");
+        ImGui::SameLine(0, 8);
+
+        // Quarks (total)
+        uint32_t quark_total = 0;
+        for (uint32_t t = UP_QUARK_TYPE; t <= ANTI_BOTTOM_TYPE; ++t)
+            quark_total += type_counts_display[t];
+        if (quark_total)
+            { ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.2f, 1.0f), "q:%u", quark_total); ImGui::SameLine(0, 8); }
+        // Bosons (excl photon)
+        uint32_t boson_total = type_counts_display[GLUON_TYPE_PHYS]
+            + type_counts_display[W_PLUS_TYPE_PHYS] + type_counts_display[W_MINUS_TYPE_PHYS]
+            + type_counts_display[Z_BOSON_TYPE_PHYS] + type_counts_display[HIGGS_TYPE_PHYS];
+        if (boson_total)
+            { ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "B:%u", boson_total); ImGui::SameLine(0, 8); }
+
+        // Separator
+        ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.60f), "|");
+        ImGui::SameLine(0, 8);
+
+        // BSM
+        if (type_counts_display[GRAVITON_TYPE_PHYS])
+            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[GRAVITON_TYPE_PHYS], "G:%u", type_counts_display[GRAVITON_TYPE_PHYS]); ImGui::SameLine(0, 8); }
+        if (type_counts_display[DARK_MATTER_TYPE_PHYS])
+            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[DARK_MATTER_TYPE_PHYS], "DM:%u", type_counts_display[DARK_MATTER_TYPE_PHYS]); ImGui::SameLine(0, 8); }
+        if (type_counts_display[DARK_ENERGY_TYPE_PHYS])
+            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[DARK_ENERGY_TYPE_PHYS], "DE:%u", type_counts_display[DARK_ENERGY_TYPE_PHYS]); ImGui::SameLine(0, 8); }
+        // Hypothetical total
+        { uint32_t hyp_count = 0;
+          for (uint32_t t = AXINO_TYPE_PHYS; t <= DYN_AXION_QP_TYPE_PHYS; t++) hyp_count += type_counts_display[t];
+          if (hyp_count) { ImGui::TextColored(ImVec4(0.7f, 0.5f, 1.0f, 1.0f), "Hyp:%u", hyp_count); ImGui::SameLine(0, 8); } }
+
+        // Right-aligned total
+        char total_buf[32];
+        snprintf(total_buf, sizeof(total_buf), "Total: %u", active_particle_display);
+        float tw = ImGui::CalcTextSize(total_buf).x;
+        ImGui::SameLine(display_w - 10.0f - tw);
+        ImGui::TextColored(ImVec4(0.6f, 0.65f, 0.75f, 1.0f), "%s", total_buf);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // ── Bottom Bar ──────────────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -2342,8 +2428,22 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
     float bar_h = 42.0f;
     float display_w = io.DisplaySize.x;
     float display_h = io.DisplaySize.y;
+    float dt = io.DeltaTime;
 
-    ImGui::SetNextWindowPos(ImVec2(0, display_h - bar_h));
+    // ── Auto-hide animation ─────────────────────────────────────────────────
+    bool mouse_near_bottom = (io.MousePos.y > display_h - 8.0f);
+    float current_bar_y = display_h - bar_h + bottom_bar_offset * (bar_h + 4.0f);
+    bool mouse_over_bar = (io.MousePos.y > current_bar_y && bottom_bar_offset < 0.5f);
+    bool keep_visible = show_tools_popup || show_pause_menu || show_settings_menu
+                     || show_save_dialog || show_load_dialog;
+    float target = (mouse_near_bottom || mouse_over_bar || keep_visible) ? 0.0f : 1.0f;
+    bottom_bar_offset += (target - bottom_bar_offset) * std::min(1.0f, 8.0f * dt);
+    if (bottom_bar_offset < 0.005f) bottom_bar_offset = 0.0f;
+    if (bottom_bar_offset > 0.995f) bottom_bar_offset = 1.0f;
+
+    float bar_y = display_h - bar_h + bottom_bar_offset * (bar_h + 4.0f);
+
+    ImGui::SetNextWindowPos(ImVec2(0, bar_y));
     ImGui::SetNextWindowSize(ImVec2(display_w, bar_h));
 
     ImGuiWindowFlags bar_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
@@ -2522,7 +2622,7 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
             float popup_w = 230.0f;
             float popup_h = 540.0f;
             float popup_x = display_w - 12.0f - popup_w;
-            float popup_y = display_h - bar_h - popup_h - 4.0f;
+            float popup_y = bar_y - popup_h - 4.0f;
             ImGui::SetNextWindowPos(ImVec2(popup_x, popup_y));
             ImGui::SetNextWindowSize(ImVec2(popup_w, popup_h));
             ImGuiWindowFlags popup_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
@@ -2607,6 +2707,13 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                     ImGui::MenuItem("Energy Heatmap", nullptr, &show_energy_heatmap);
                     ImGui::MenuItem("Velocity Field", nullptr, &show_velocity_field);
                     ImGui::MenuItem("Magnetic Field", nullptr, &show_magnetic_field);
+                    ImGui::MenuItem("Gravity Map", nullptr, &show_gravity_map);
+                    ImGui::Separator();
+                    ImGui::MenuItem("Mass-Energy Gravity (E=mc²)", nullptr, &gr_mass_energy);
+                    ImGui::MenuItem("Frame Dragging (Spin)", nullptr, &gr_frame_dragging);
+                    ImGui::MenuItem("Gravitational Waves", nullptr, &gr_grav_waves);
+                    ImGui::MenuItem("GW Ripples", nullptr, &show_grav_waves);
+                    ImGui::Separator();
                     ImGui::MenuItem("Force Vectors", nullptr, &show_force_vectors);
                     ImGui::MenuItem("Wave Mode", nullptr, &wave_mode);
                     ImGui::MenuItem("Atom Grid", nullptr, &show_atom_grid);
@@ -2875,6 +2982,22 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.string_tension = 50.0f;
                     cfg.time_scale = 3.0f;
                     particle_count_slider = 60.0f;
+                    break;
+                case 13:  // Big Bang
+                    cfg.start_empty = false;
+                    cfg.temperature_kelvin = 2e15f;
+                    cfg.dampening = 0.96f;
+                    cfg.repulsion_radius = 2.0f;
+                    cfg.pressure_resistance = 30.0f;
+                    cfg.interaction_radius = 100.0f;
+                    cfg.gravity_strength = 2.0f;
+                    cfg.lorentz_strength = 1.0f;
+                    cfg.weak_coupling = 1.0f;
+                    cfg.string_tension = 10.0f;
+                    cfg.hadronization_enabled = false;
+                    cfg.viscosity_strength = 0.1f;
+                    cfg.time_scale = 1.0f;
+                    particle_count_slider = 150.0f;
                     break;
             }
             log_temperature = std::log10(std::max(1.0f, cfg.temperature_kelvin));
@@ -3175,7 +3298,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
         }
     }
 
-    // ── Virtual Particles / Casimir ─────────────────────────────────────────────
+    // ── Virtual Particles ──────────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Virtual Particles")) {
         ImGui::Checkbox("Enable Virtual Pairs", &cfg.virtual_pairs_enabled);
         if (ImGui::IsItemHovered())
@@ -3186,27 +3309,8 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
             ImGui::SetTooltip("Hide virtual particle rendering\nwhile keeping the physics active");
 
         if (cfg.virtual_pairs_enabled) {
-            ImGui::SliderFloat("Vacuum Energy", &cfg.vacuum_energy, 0.0f, 2.0f, "%.2f");
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Vacuum fluctuation rate.\nHigher = more spontaneous pairs.\n0 = vacuum off. Default: 0.5");
-
-            int max_pairs = static_cast<int>(cfg.virtual_pair_max_per_tick);
-            ImGui::SliderInt("Max Pairs/Tick", &max_pairs, 1, 16);
-            cfg.virtual_pair_max_per_tick = static_cast<uint32_t>(max_pairs);
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Maximum virtual pairs spawned per frame\nHigher = more quantum foam activity");
-
-            ImGui::SliderFloat("Casimir Radius (px)", &cfg.casimir_radius, 5.0f, 60.0f, "%.0f px");
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Detection range for Casimir force.\nDefault: 30 px");
-
-            ImGui::SliderFloat("Casimir Strength", &cfg.casimir_strength, 0.0f, 2.0f, "%.2f");
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Casimir attractive force scaling.\n0 = no Casimir effect.\nDefault: 0.5");
-
-            ImGui::SliderFloat("Pair Scatter (px)", &cfg.virtual_pair_scatter, 1.0f, 10.0f, "%.1f px");
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Spawn separation of virtual pair.\nDefault: 3.0 px");
+            ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f),
+                "Tune parameters in Nuclear Debug");
         }
     }
 
@@ -5085,7 +5189,7 @@ void PhysicsInterface::draw_decay_log() {
     static const char* TYPE_LABELS[] = {
         "Decay", "Nuclear", "Fusion", "Fission", "Annihil.",
         "Photo-e", "Spall.", "Pair", "Pion", "VMD", "Photodis.",
-        "Bond+", "Bond-"
+        "Bond+", "Bond-", "Brems.", "Neutrino", "Weak"
     };
     static const ImVec4 TYPE_COLORS[] = {
         ImVec4(1.0f, 0.8f, 0.5f, 1.0f),   // PARTICLE_DECAY — warm yellow
@@ -5101,6 +5205,9 @@ void PhysicsInterface::draw_decay_log() {
         ImVec4(0.8f, 0.6f, 1.0f, 1.0f),   // PHOTODISINTEGRATION — purple
         ImVec4(0.3f, 0.85f, 0.5f, 1.0f),  // BOND_FORMED — teal-green
         ImVec4(0.9f, 0.45f, 0.3f, 1.0f),  // BOND_BROKEN — warm red
+        ImVec4(0.8f, 0.8f, 1.0f, 1.0f),   // BREMSSTRAHLUNG — pale blue
+        ImVec4(0.5f, 1.0f, 0.8f, 1.0f),   // NEUTRINO — mint green
+        ImVec4(0.7f, 0.8f, 1.0f, 1.0f),   // WEAK_SCATTER — light blue
     };
 
     // Summary counts by type
@@ -5758,31 +5865,38 @@ void PhysicsInterface::draw_element_list() {
     if (!show_element_list || element_list.empty()) return;
 
     ImGuiIO& io = ImGui::GetIO();
-    float win_w = 360.0f;
+    float win_w = 420.0f;
     float max_h = io.DisplaySize.y - 120.0f;
 
-    // Count display rows: molecules if available, else individual atoms
-    size_t display_count = molecule_list.empty() ? element_list.size() : molecule_list.size();
-    float win_h = std::min(40.0f + static_cast<float>(display_count) * 28.0f + 40.0f, max_h);
-
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
-                                    io.DisplaySize.y * 0.5f - win_h * 0.5f),
+                                    io.DisplaySize.y * 0.5f - max_h * 0.35f),
                             ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(win_w, win_h), ImGuiCond_Appearing);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(340, 120), ImVec2(520, max_h));
+    ImGui::SetNextWindowSize(ImVec2(win_w, max_h * 0.7f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(380, 150), ImVec2(560, max_h));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.05f, 0.09f, 0.95f));
     ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.08f, 0.06f, 0.03f, 0.95f));
     ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.14f, 0.10f, 0.04f, 0.95f));
 
-    // Count molecules vs free atoms
+    // Count categories
     int mol_count = 0, free_count = 0;
+    int stable_count = 0, unstable_count = 0, anti_count = 0;
     for (auto& mol : molecule_list) {
         if (mol.atom_indices.size() > 1) mol_count++;
         else free_count++;
     }
+    for (auto& elem : element_list) {
+        if (elem.is_anti) { anti_count++; continue; }
+        const IsotopeDecayEntry* decay = lookup_isotope_decay(elem.Z, elem.N);
+        float hl = 0.0f;
+        NuclearDecayMode dmode = NDECAY_NONE;
+        if (decay) { dmode = decay->mode; hl = decay->half_life_frames; }
+        else { dmode = general_stability_rule(elem.Z, elem.N, hl); }
+        if (dmode == NDECAY_NONE) stable_count++;
+        else unstable_count++;
+    }
 
-    char title[64];
+    char title[96];
     if (mol_count > 0)
         snprintf(title, sizeof(title), "Elements (%d) + Molecules (%d)###ElementList",
                  static_cast<int>(element_list.size()), mol_count);
@@ -5796,9 +5910,70 @@ void PhysicsInterface::draw_element_list() {
         return;
     }
 
-    // Use molecule_list if available (always populated when bonds_enabled)
+    // ── Filter buttons ──
+    struct FilterDef { const char* label; int mode; ImVec4 col; int count; };
+    FilterDef filters[] = {
+        { "All",       0, ImVec4(0.7f, 0.7f, 0.8f, 1.0f), static_cast<int>(molecule_list.empty() ? element_list.size() : molecule_list.size()) },
+        { "Stable",    1, ImVec4(0.3f, 0.9f, 0.4f, 1.0f), stable_count },
+        { "Unstable",  2, ImVec4(1.0f, 0.5f, 0.2f, 1.0f), unstable_count },
+        { "Antimatter",3, ImVec4(0.5f, 0.8f, 1.0f, 1.0f), anti_count },
+        { "Molecules", 4, ImVec4(0.4f, 0.65f, 1.0f, 1.0f), mol_count },
+    };
+    for (int f = 0; f < 5; ++f) {
+        if (f > 0) ImGui::SameLine(0, 3);
+        ImVec4 col = filters[f].col;
+        bool active = (element_filter_mode == filters[f].mode);
+        if (!active) col = ImVec4(col.x * 0.4f, col.y * 0.4f, col.z * 0.4f, 0.6f);
+        char flabel[32];
+        snprintf(flabel, sizeof(flabel), "%s:%d###ef%d", filters[f].label, filters[f].count, f);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(col.x * 0.2f, col.y * 0.2f, col.z * 0.2f, 0.6f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(col.x * 0.35f, col.y * 0.35f, col.z * 0.35f, 0.8f));
+        ImGui::PushStyleColor(ImGuiCol_Text, col);
+        if (ImGui::SmallButton(flabel))
+            element_filter_mode = filters[f].mode;
+        ImGui::PopStyleColor(3);
+    }
+    ImGui::Separator();
+
+    // Helper lambda: check if element passes the filter
+    auto elem_passes_filter = [&](const ElementSummary& elem) -> bool {
+        if (element_filter_mode == 0) return true;
+        if (element_filter_mode == 3) return elem.is_anti;
+        if (elem.is_anti) return element_filter_mode == 0;
+        const IsotopeDecayEntry* decay = lookup_isotope_decay(elem.Z, elem.N);
+        float hl = 0.0f;
+        NuclearDecayMode dmode = NDECAY_NONE;
+        if (decay) { dmode = decay->mode; hl = decay->half_life_frames; }
+        else { dmode = general_stability_rule(elem.Z, elem.N, hl); }
+        if (element_filter_mode == 1) return dmode == NDECAY_NONE;
+        if (element_filter_mode == 2) return dmode != NDECAY_NONE;
+        return true;
+    };
+
+    // Helper: compute nuclear mass and magnetic moment for a nucleus
+    auto compute_nuclear_props = [](int Z, int N, bool is_anti) -> std::pair<float, float> {
+        float mass = Z * PHYS_REST_MASS_MEV[PROTON_TYPE] + N * PHYS_REST_MASS_MEV[NEUTRON_TYPE];
+        // Simple shell model: unpaired nucleons contribute
+        // Even-even = 0, odd-A = single particle contribution
+        float mu = 0.0f;
+        int A = Z + N;
+        if (A == 1 && N == 0)      mu = 2.793f;   // proton
+        else if (A == 1 && Z == 0) mu = -1.913f;   // neutron
+        else if (A == 2 && Z == 1) mu = 0.857f;    // deuteron
+        else if (A == 3 && Z == 2) mu = -2.128f;   // He-3
+        else if (A == 3 && Z == 1) mu = 2.979f;    // H-3
+        else if (A == 4 && Z == 2) mu = 0.0f;      // He-4 (even-even)
+        else {
+            // Rough: odd protons contribute ~2.793, odd neutrons ~-1.913
+            if (Z % 2 != 0) mu += 2.793f;
+            if (N % 2 != 0) mu -= 1.913f;
+        }
+        if (is_anti) mu = -mu;
+        return { mass, mu };
+    };
+
+    // Use molecule_list if available
     if (!molecule_list.empty()) {
-        // Column headers
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "  %-14s %4s %10s %6s",
                            "Formula", "Q", "Energy", "Age");
         ImGui::Separator();
@@ -5809,27 +5984,37 @@ void PhysicsInterface::draw_element_list() {
             auto& mol = molecule_list[mi];
             bool is_molecule = mol.atom_indices.size() > 1;
 
-            // Build formula
+            // Apply filters
+            if (element_filter_mode == 4 && !is_molecule) continue;
+            if (element_filter_mode != 0 && element_filter_mode != 4 && !is_molecule) {
+                if (!elem_passes_filter(element_list[mol.atom_indices[0]])) continue;
+            }
+            if (element_filter_mode != 0 && element_filter_mode != 4 && is_molecule) {
+                // For molecules in stability filter: show if any atom matches
+                bool any_match = false;
+                for (uint32_t ei : mol.atom_indices) {
+                    if (elem_passes_filter(element_list[ei])) { any_match = true; break; }
+                }
+                if (!any_match) continue;
+            }
+
             std::string formula = build_molecular_formula(element_list, mol.atom_indices);
 
-            // Charge string
             char charge_str[16];
             if (mol.total_charge == 0) snprintf(charge_str, sizeof(charge_str), "0");
             else if (mol.total_charge > 0) snprintf(charge_str, sizeof(charge_str), "+%d", mol.total_charge);
             else snprintf(charge_str, sizeof(charge_str), "%d", mol.total_charge);
 
-            // Energy and age
             char energy_str[32], age_str[16];
             format_energy_str(energy_str, sizeof(energy_str), mol.total_energy_MeV);
             format_age_str(age_str, sizeof(age_str), mol.oldest_birth, frame_counter_display);
 
             ImGui::PushID(static_cast<int>(mi + 10000));
 
-            // Color dot: blue for molecules, stability color for single atoms
             ImVec2 cursor = ImGui::GetCursorScreenPos();
             ImVec4 dot_col;
             if (is_molecule) {
-                dot_col = ImVec4(0.4f, 0.65f, 1.0f, 1.0f);  // bond blue
+                dot_col = ImVec4(0.4f, 0.65f, 1.0f, 1.0f);
             } else {
                 auto& elem = element_list[mol.atom_indices[0]];
                 const IsotopeDecayEntry* decay = elem.is_anti ? nullptr : lookup_isotope_decay(elem.Z, elem.N);
@@ -5848,7 +6033,6 @@ void PhysicsInterface::draw_element_list() {
                 ImVec2(cursor.x + 5.0f, cursor.y + 10.0f), 4.0f,
                 ImGui::ColorConvertFloat4ToU32(dot_col));
 
-            // Selectable row (no cursor shift — Selectable spans full width)
             uint32_t first_rep = element_list[mol.atom_indices[0]].rep;
             bool is_selected_mol = (molecule_card_atom_rep == static_cast<int32_t>(first_rep));
             bool is_selected_elem = !is_molecule && (element_card_nucleus_rep == static_cast<int32_t>(first_rep));
@@ -5860,35 +6044,49 @@ void PhysicsInterface::draw_element_list() {
                                   ImGuiSelectableFlags_None, ImVec2(0, 22))) {
                 if (is_molecule) {
                     molecule_card_atom_rep = static_cast<int32_t>(first_rep);
-                    element_card_nucleus_rep = -1;  // close atom card
+                    element_card_nucleus_rep = -1;
                 } else {
                     element_card_nucleus_rep = static_cast<int32_t>(first_rep);
-                    molecule_card_atom_rep = -1;  // close molecule card
+                    molecule_card_atom_rep = -1;
                 }
                 navigate_to_particle = static_cast<int32_t>(first_rep);
             }
 
-            // Tooltip
+            // Tooltip with physics properties
             if (ImGui::IsItemHovered()) {
                 ImGui::BeginTooltip();
                 if (is_molecule) {
                     ImGui::TextColored(ImVec4(0.4f, 0.65f, 1.0f, 1.0f), "Molecule: %s", formula.c_str());
                     ImGui::Text("Atoms: %d  Charge: %s", static_cast<int>(mol.atom_indices.size()), charge_str);
                     ImGui::Separator();
+                    float total_mass = 0.0f, total_mu = 0.0f;
                     for (uint32_t ei : mol.atom_indices) {
                         auto& elem = element_list[ei];
                         const char* sym = (elem.Z >= 1 && elem.Z <= FULL_ELEMENT_COUNT) ? ELEMENT_SYMBOLS[elem.Z] : "?";
+                        auto [mass, mu] = compute_nuclear_props(elem.Z, elem.N, elem.is_anti);
+                        total_mass += mass;
+                        total_mu += mu;
                         ImGui::Text("  %s-%d (Z=%d N=%d)", sym, elem.Z + elem.N, elem.Z, elem.N);
                     }
+                    ImGui::Separator();
+                    ImGui::Text("Total mass: %.1f MeV/c2", total_mass);
+                    if (std::fabs(total_mu) > 0.001f)
+                        ImGui::Text("Net magnetic moment: %.3f uN", total_mu);
                 } else {
                     auto& elem = element_list[mol.atom_indices[0]];
-                    int Z = elem.Z;
-                    int A = Z + elem.N;
+                    int Z = elem.Z, A = Z + elem.N;
                     const char* sym = (Z >= 1 && Z <= FULL_ELEMENT_COUNT) ? ELEMENT_SYMBOLS[Z] : "?";
                     const char* name = (Z >= 1 && Z <= FULL_ELEMENT_COUNT) ? ELEMENT_NAMES[Z] : "Unknown";
                     ImGui::TextColored(ImVec4(0.9f, 0.85f, 0.6f, 1.0f), "%s-%d %s", sym, A, name);
                     const char* lep = elem.is_anti ? "e+" : "e-";
                     ImGui::Text("Z=%d  N=%d  %s=%d", Z, elem.N, lep, elem.electrons);
+                    auto [mass, mu] = compute_nuclear_props(Z, elem.N, elem.is_anti);
+                    ImGui::Separator();
+                    ImGui::Text("Mass: %.1f MeV/c2  Spin: %s", mass,
+                                (A % 2 == 0) ? "integer" : "half-integer");
+                    ImGui::Text("Charge: %s", charge_str);
+                    if (std::fabs(mu) > 0.001f)
+                        ImGui::Text("Magnetic moment: %.3f uN", mu);
                 }
                 ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "Click to inspect");
                 ImGui::EndTooltip();
@@ -5899,7 +6097,7 @@ void PhysicsInterface::draw_element_list() {
 
         ImGui::EndChild();
     } else {
-        // Fallback: original atom-by-atom display (no bonds)
+        // Fallback: atom-by-atom display (no bonds)
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "%-6s %-12s %3s %3s %10s %6s",
                            "Sym", "Name", "A", "Q", "Energy", "Age");
         ImGui::Separator();
@@ -5908,6 +6106,8 @@ void PhysicsInterface::draw_element_list() {
 
         for (size_t i = 0; i < element_list.size(); ++i) {
             auto& elem = element_list[i];
+            if (!elem_passes_filter(elem)) continue;
+
             int Z = elem.Z;
             int A = elem.Z + elem.N;
             int net_charge = Z - elem.electrons;
@@ -5969,6 +6169,13 @@ void PhysicsInterface::draw_element_list() {
                                    "%s-%d%s", sym, A, elem.is_anti ? " (antimatter)" : "");
                 const char* lep = elem.is_anti ? "e+" : "e-";
                 ImGui::Text("Z=%d  N=%d  %s=%d", Z, elem.N, lep, elem.electrons);
+                auto [mass, mu] = compute_nuclear_props(Z, elem.N, elem.is_anti);
+                ImGui::Separator();
+                ImGui::Text("Mass: %.1f MeV/c2  Spin: %s", mass,
+                            (A % 2 == 0) ? "integer" : "half-integer");
+                ImGui::Text("Charge: %s", charge_str);
+                if (std::fabs(mu) > 0.001f)
+                    ImGui::Text("Magnetic moment: %.3f uN", mu);
                 if (elem.is_anti) {
                     ImGui::TextColored(stab_col, "Antimatter");
                 } else if (dmode == NDECAY_NONE) {
@@ -6007,14 +6214,14 @@ void PhysicsInterface::draw_particle_list(const Particles& particles) {
     if (!show_particle_list || active_particle_display == 0) return;
 
     ImGuiIO& io = ImGui::GetIO();
-    float win_w = 460.0f;
+    float win_w = 500.0f;
     float max_h = io.DisplaySize.y - 120.0f;
 
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
                                     io.DisplaySize.y * 0.5f - max_h * 0.35f),
                             ImGuiCond_Appearing);
     ImGui::SetNextWindowSize(ImVec2(win_w, max_h * 0.7f), ImGuiCond_Appearing);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(420, 150), ImVec2(580, max_h));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(460, 150), ImVec2(620, max_h));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.05f, 0.09f, 0.95f));
     ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.03f, 0.06f, 0.10f, 0.95f));
@@ -6029,6 +6236,43 @@ void PhysicsInterface::draw_particle_list(const Particles& particles) {
         return;
     }
 
+    // ── Type filter buttons (same pattern as event log) ──
+    float wrap_x = ImGui::GetContentRegionAvail().x - 10.0f;
+    float cur_x = 0.0f;
+    int active_filter_count = 0;
+    for (uint32_t t = 0; t < PHYS_PARTICLE_TYPES; ++t) {
+        if (type_counts_display[t] == 0) continue;
+        active_filter_count++;
+        char tag_label[48];
+        snprintf(tag_label, sizeof(tag_label), "%s:%u###pf%u",
+                 PHYS_TYPE_NAMES[t], type_counts_display[t], t);
+        float btn_w = ImGui::CalcTextSize(tag_label).x + 10.0f;
+        if (cur_x + btn_w > wrap_x && cur_x > 0.0f) {
+            cur_x = 0.0f;
+        } else if (cur_x > 0.0f) {
+            ImGui::SameLine(0, 3);
+        }
+        ImVec4 col = PHYS_TYPE_UI_COLORS[t];
+        if (!particle_type_filter[t])
+            col = ImVec4(col.x * 0.3f, col.y * 0.3f, col.z * 0.3f, 0.5f);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(col.x * 0.2f, col.y * 0.2f, col.z * 0.2f, 0.6f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(col.x * 0.35f, col.y * 0.35f, col.z * 0.35f, 0.8f));
+        ImGui::PushStyleColor(ImGuiCol_Text, col);
+        if (ImGui::SmallButton(tag_label))
+            particle_type_filter[t] = !particle_type_filter[t];
+        ImGui::PopStyleColor(3);
+        cur_x += btn_w + 3.0f;
+    }
+    if (active_filter_count > 1) {
+        ImGui::SameLine(0, 8);
+        if (ImGui::SmallButton("All"))
+            for (uint32_t i = 0; i < PHYS_PARTICLE_TYPES; ++i) particle_type_filter[i] = true;
+        ImGui::SameLine(0, 3);
+        if (ImGui::SmallButton("None"))
+            for (uint32_t i = 0; i < PHYS_PARTICLE_TYPES; ++i) particle_type_filter[i] = false;
+    }
+    ImGui::Separator();
+
     // Column headers
     ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), " %-4s %-12s %12s  %10s %6s",
                        "ID", "Type", "Speed", "Energy", "Age");
@@ -6042,18 +6286,44 @@ void PhysicsInterface::draw_particle_list(const Particles& particles) {
     // Iterate by type group for organization
     for (uint32_t t = 0; t < PHYS_PARTICLE_TYPES; ++t) {
         if (type_counts_display[t] == 0) continue;
+        if (!particle_type_filter[t]) continue;
 
         // Type group header
-        const char* tname = (t < PHYS_PARTICLE_TYPES) ? PHYS_TYPE_NAMES[t] : "Unknown";
-        ImVec4 tcol = (t < PHYS_PARTICLE_TYPES) ? PHYS_TYPE_UI_COLORS[t] : ImVec4(1,1,1,1);
+        const char* tname = PHYS_TYPE_NAMES[t];
+        ImVec4 tcol = PHYS_TYPE_UI_COLORS[t];
+        float m0 = rest_mass_MeV(t);
+        float charge = PHYS_CHARGE[t];
+        float spin = PHYS_SPIN[t];
+
+        // Magnetic moment (nuclear magnetons for baryons, Bohr magnetons for leptons)
+        float mu = 0.0f;
+        const char* mu_unit = "";
+        if (t == PROTON_TYPE)            { mu = 2.793f;  mu_unit = " uN"; }
+        else if (t == NEUTRON_TYPE)      { mu = -1.913f; mu_unit = " uN"; }
+        else if (t == ANTIPROTON_TYPE_PHYS) { mu = -2.793f; mu_unit = " uN"; }
+        else if (spin > 0.01f && std::fabs(charge) > 0.01f) {
+            // Dirac magnetic moment: mu = q * spin (in natural units)
+            mu = charge * spin;
+            mu_unit = (m0 > 100.0f) ? " uN" : " uB";  // baryons: nuclear, leptons: Bohr
+        }
 
         ImGui::PushID(static_cast<int>(t + 1000));
+
+        // Format mass string for header
+        char mass_str[32];
+        if (m0 < 0.001f)           snprintf(mass_str, sizeof(mass_str), "massless");
+        else if (m0 < 1.0f)        snprintf(mass_str, sizeof(mass_str), "%.1f keV", m0 * 1000.0f);
+        else if (m0 < 1000.0f)     snprintf(mass_str, sizeof(mass_str), "%.1f MeV", m0);
+        else if (m0 < 1.0e6f)      snprintf(mass_str, sizeof(mass_str), "%.1f GeV", m0 / 1000.0f);
+        else if (m0 < 1.0e9f)      snprintf(mass_str, sizeof(mass_str), "%.1f TeV", m0 / 1.0e6f);
+        else                        snprintf(mass_str, sizeof(mass_str), "%.0e MeV", m0);
+
         bool header_open = ImGui::TreeNodeEx(tname,
             ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth,
-            "%s (%u)", tname, type_counts_display[t]);
+            "%s (%u)  [%s  q=%.2g  s=%.2g]", tname, type_counts_display[t],
+            mass_str, charge, spin);
 
         if (header_open) {
-            float m0 = rest_mass_MeV(t);
             bool massless = (m0 < 0.001f);
 
             for (uint32_t i = 0; i < n; ++i) {
@@ -6067,7 +6337,7 @@ void PhysicsInterface::draw_particle_list(const Particles& particles) {
                     speed = glm::length(readback_velocities[i]);
                     float beta = std::min(speed / C_SIM, 0.9999f);
                     if (massless) {
-                        KE_MeV = beta * 1.0f;  // all kinetic for massless
+                        KE_MeV = beta * 1.0f;
                     } else {
                         float gamma = 1.0f / std::sqrt(1.0f - beta * beta);
                         KE_MeV = (gamma - 1.0f) * m0;
@@ -6077,7 +6347,6 @@ void PhysicsInterface::draw_particle_list(const Particles& particles) {
                 char energy_str[32];
                 fmt_energy_ev(energy_str, sizeof(energy_str), KE_MeV);
 
-                // Speed in real-world units
                 char speed_str[32];
                 fmt_speed(speed_str, sizeof(speed_str), speed);
 
@@ -6115,6 +6384,10 @@ void PhysicsInterface::draw_particle_list(const Particles& particles) {
                     ImGui::BeginTooltip();
                     ImGui::TextColored(tcol, "%s #%u", tname, i);
                     ImGui::Text("Speed: %s  Energy: %s  Age: %s", speed_str, energy_str, age_str);
+                    ImGui::Separator();
+                    ImGui::Text("Mass: %s  Charge: %.3g  Spin: %.2g", mass_str, charge, spin);
+                    if (std::fabs(mu) > 0.001f)
+                        ImGui::Text("Magnetic moment: %.3f%s", mu, mu_unit);
                     ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "Click to inspect & navigate");
                     ImGui::EndTooltip();
                 }
@@ -7048,20 +7321,71 @@ void PhysicsInterface::draw_measurement_overlays(const SimConfig& cfg) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 void PhysicsInterface::draw_energy_heatmap(const SimConfig& cfg) {
+    if (!readback_positions_ptr || !readback_velocities || readback_count == 0) return;
+
     ImGuiIO& io = ImGui::GetIO();
     ImDrawList* fg = ImGui::GetForegroundDrawList();
     float ww = io.DisplaySize.x, wh = io.DisplaySize.y;
     float scx = ww / static_cast<float>(REGION_W);
     float scy = wh / static_cast<float>(REGION_H);
+    float zoom = cfg.current_camera_zoom;
 
-    float cell_w = static_cast<float>(REGION_W) / VIS_GRID_W;
-    float cell_h = static_cast<float>(REGION_H) / VIS_GRID_H;
+    // Use atom grid cells (H_ATOM_DIAMETER spacing) for the heatmap
+    float cell = H_ATOM_DIAMETER;
+    float cell_px = cell * zoom * scx;
 
-    // Find max avg energy for normalization
+    // Don't draw if cells are too small to see
+    if (cell_px < 2.0f) return;
+
+    // Camera: top-left of screen in world coords
+    glm::vec2 screen_tl = cfg.camera_origin - glm::vec2(ww, wh) * 0.5f / (zoom * glm::vec2(scx, scy));
+    glm::vec2 screen_br = cfg.camera_origin + glm::vec2(ww, wh) * 0.5f / (zoom * glm::vec2(scx, scy));
+
+    // Grid range visible on screen
+    int gx_min = static_cast<int>(std::floor(screen_tl.x / cell)) - 1;
+    int gy_min = static_cast<int>(std::floor(screen_tl.y / cell)) - 1;
+    int gx_max = static_cast<int>(std::ceil(screen_br.x / cell)) + 1;
+    int gy_max = static_cast<int>(std::ceil(screen_br.y / cell)) + 1;
+
+    // Clamp to world bounds
+    int world_gx_max = static_cast<int>(WORLD_W / cell);
+    int world_gy_max = static_cast<int>(WORLD_H / cell);
+    gx_min = std::max(gx_min, 0);
+    gy_min = std::max(gy_min, 0);
+    gx_max = std::min(gx_max, world_gx_max);
+    gy_max = std::min(gy_max, world_gy_max);
+
+    int grid_w = gx_max - gx_min;
+    int grid_h = gy_max - gy_min;
+    if (grid_w <= 0 || grid_h <= 0) return;
+
+    // Cap grid resolution for performance
+    constexpr int MAX_CELLS = 8000;
+    if (grid_w * grid_h > MAX_CELLS) return;
+
+    // Accumulate kinetic energy per cell
+    std::vector<float> cell_energy(grid_w * grid_h, 0.0f);
+    std::vector<uint32_t> cell_count(grid_w * grid_h, 0);
+
+    for (uint32_t i = 0; i < readback_count; ++i) {
+        if (readback_energies_ptr && readback_energies_ptr[i] <= 0.0f) continue;
+        glm::vec2 pos = readback_positions_ptr[i];
+        int gx = static_cast<int>(pos.x / cell) - gx_min;
+        int gy = static_cast<int>(pos.y / cell) - gy_min;
+        if (gx < 0 || gx >= grid_w || gy < 0 || gy >= grid_h) continue;
+
+        glm::vec2 v = readback_velocities[i];
+        float ke = 0.5f * glm::dot(v, v);
+        int idx = gy * grid_w + gx;
+        cell_energy[idx] += ke;
+        cell_count[idx]++;
+    }
+
+    // Find max average energy for normalization
     float max_avg = 0.0f;
-    for (uint32_t i = 0; i < VIS_GRID_CELLS; ++i) {
-        if (vis_grid.count[i] > 0) {
-            float avg = vis_grid.energy[i] / vis_grid.count[i];
+    for (int i = 0; i < grid_w * grid_h; ++i) {
+        if (cell_count[i] > 0) {
+            float avg = cell_energy[i] / static_cast<float>(cell_count[i]);
             if (avg > max_avg) max_avg = avg;
         }
     }
@@ -7069,19 +7393,20 @@ void PhysicsInterface::draw_energy_heatmap(const SimConfig& cfg) {
 
     auto w2s = [&](glm::vec2 w) -> ImVec2 {
         glm::vec2 s = glm::vec2(ww, wh) * 0.5f
-                    + (w - cfg.camera_origin) * cfg.current_camera_zoom * glm::vec2(scx, scy);
+                    + (w - cfg.camera_origin) * zoom * glm::vec2(scx, scy);
         return ImVec2(s.x, s.y);
     };
 
     uint8_t alpha = static_cast<uint8_t>(heatmap_opacity * 255);
 
-    for (uint32_t gy = 0; gy < VIS_GRID_H; ++gy) {
-        for (uint32_t gx = 0; gx < VIS_GRID_W; ++gx) {
-            uint32_t idx = gy * VIS_GRID_W + gx;
-            if (vis_grid.count[idx] == 0) continue;
+    for (int gy = 0; gy < grid_h; ++gy) {
+        for (int gx = 0; gx < grid_w; ++gx) {
+            int idx = gy * grid_w + gx;
+            if (cell_count[idx] == 0) continue;
 
-            float t = (vis_grid.energy[idx] / vis_grid.count[idx]) / max_avg;
+            float t = (cell_energy[idx] / static_cast<float>(cell_count[idx])) / max_avg;
             t = std::clamp(t, 0.0f, 1.0f);
+            if (t < 0.02f) continue;
 
             // Blue → Cyan → Green → Yellow → Red
             uint8_t r, g, b;
@@ -7099,11 +7424,14 @@ void PhysicsInterface::draw_energy_heatmap(const SimConfig& cfg) {
                 r = 255; g = static_cast<uint8_t>((1.0f - s) * 255); b = 0;
             }
 
-            glm::vec2 tl(gx * cell_w, gy * cell_h);
-            glm::vec2 br((gx + 1) * cell_w, (gy + 1) * cell_h);
-            ImVec2 stl = w2s(tl), sbr = w2s(br);
+            uint8_t cell_alpha = static_cast<uint8_t>(alpha * std::min(t + 0.3f, 1.0f));
 
-            fg->AddRectFilled(stl, sbr, IM_COL32(r, g, b, alpha));
+            float wx = static_cast<float>(gx + gx_min) * cell;
+            float wy = static_cast<float>(gy + gy_min) * cell;
+            ImVec2 tl = w2s(glm::vec2(wx, wy));
+            ImVec2 br = w2s(glm::vec2(wx + cell, wy + cell));
+
+            fg->AddRectFilled(tl, br, IM_COL32(r, g, b, cell_alpha));
         }
     }
 }
@@ -7119,8 +7447,8 @@ void PhysicsInterface::draw_velocity_field(const SimConfig& cfg) {
     float scx = ww / static_cast<float>(REGION_W);
     float scy = wh / static_cast<float>(REGION_H);
 
-    float cell_w = static_cast<float>(REGION_W) / VIS_GRID_W;
-    float cell_h = static_cast<float>(REGION_H) / VIS_GRID_H;
+    float cell_w = static_cast<float>(WORLD_W) / VIS_GRID_W;
+    float cell_h = static_cast<float>(WORLD_H) / VIS_GRID_H;
 
     auto w2s = [&](glm::vec2 w) -> ImVec2 {
         glm::vec2 s = glm::vec2(ww, wh) * 0.5f
@@ -7182,22 +7510,13 @@ void PhysicsInterface::draw_velocity_field(const SimConfig& cfg) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 void PhysicsInterface::draw_magnetic_field(const SimConfig& cfg) {
+    if (magnetic_sources.empty()) return;
+
     ImGuiIO& io = ImGui::GetIO();
     ImDrawList* fg = ImGui::GetForegroundDrawList();
     float ww = io.DisplaySize.x, wh = io.DisplaySize.y;
     float scx = ww / static_cast<float>(REGION_W);
     float scy = wh / static_cast<float>(REGION_H);
-
-    float cell_w = static_cast<float>(REGION_W) / VIS_GRID_W;
-    float cell_h = static_cast<float>(REGION_H) / VIS_GRID_H;
-
-    // Find max |Bz| for normalization
-    float max_bz = 0.0f;
-    for (uint32_t i = 0; i < VIS_GRID_CELLS; ++i) {
-        float abz = std::abs(vis_grid.bfield_z[i]);
-        if (abz > max_bz) max_bz = abz;
-    }
-    if (max_bz < 0.0001f) return;
 
     auto w2s = [&](glm::vec2 w) -> ImVec2 {
         glm::vec2 s = glm::vec2(ww, wh) * 0.5f
@@ -7205,57 +7524,173 @@ void PhysicsInterface::draw_magnetic_field(const SimConfig& cfg) {
         return ImVec2(s.x, s.y);
     };
 
-    uint8_t alpha = static_cast<uint8_t>(magnetic_field_opacity * 255);
+    // ── Per-particle dipole field lines (Earth-like loops, multi-source) ──
+    // Field lines emerge from the north magnetic pole and loop back to the south pole.
+    // We seed near the north pole and trace along B; the dipole field naturally curves
+    // the lines around to the south pole, forming closed loops.
+    // Adapt detail based on source count: fewer lines per particle when many visible
+    int src_count = static_cast<int>(magnetic_sources.size());
+    int lines_per_pole = (src_count <= 10) ? 6 :
+                         (src_count <= 30) ? 4 :
+                         (src_count <= 80) ? 3 : 2;
+    int line_steps     = (src_count <= 30) ? 64 :
+                         (src_count <= 80) ? 40 : 24;
+    constexpr int MAX_LINE_STEPS = 64;  // fixed-size arrays
+    constexpr float STEP_SIZE    = 6.0f;
+    constexpr float SEED_R       = 5.0f;  // small ring near pole
+    // Match the shader's interaction_radius — field lines shouldn't extend
+    // beyond where the particle's magnetic force actually reaches
+    const float MAX_RANGE = cfg.interaction_radius;
 
-    for (uint32_t gy = 0; gy < VIS_GRID_H; ++gy) {
-        for (uint32_t gx = 0; gx < VIS_GRID_W; ++gx) {
-            uint32_t idx = gy * VIS_GRID_W + gx;
-            float bz = vis_grid.bfield_z[idx];
-            if (std::abs(bz) < max_bz * 0.01f) continue;
+    // Helper: compute total B-field at a world position from all sources.
+    // Two physically distinct contributions:
+    //   1. Intrinsic dipole (spin): B ∝ μ/r³  (Earth-like field lines)
+    //   2. Biot-Savart (moving charge / momentum): B ∝ q·(v×r̂)/r²  (azimuthal)
+    // These superpose to give realistic stacking for elements/compounds.
+    auto compute_B = [&](glm::vec2 pos) -> glm::vec2 {
+        glm::vec2 B_total(0.0f);
+        for (size_t sj = 0; sj < magnetic_sources.size(); ++sj) {
+            const auto& s = magnetic_sources[sj];
+            glm::vec2 dr = pos - s.pos;
+            float r = glm::length(dr);
+            if (r < 1.0f || r > MAX_RANGE) continue;
 
-            float t = bz / max_bz;  // -1 to +1
-            t = std::clamp(t, -1.0f, 1.0f);
+            float inv_r = 1.0f / r;
+            glm::vec2 r_hat = dr * inv_r;
+            glm::vec2 t_hat(-r_hat.y, r_hat.x);  // azimuthal unit vector
 
-            // Diverging color map: Blue (B<0) → Black (B=0) → Red (B>0)
-            uint8_t r, g, b;
-            if (t > 0.0f) {
-                // Positive Bz: black → red → yellow
-                if (t < 0.5f) {
-                    float s = t / 0.5f;
-                    r = static_cast<uint8_t>(s * 255);
-                    g = 0;
-                    b = 0;
-                } else {
-                    float s = (t - 0.5f) / 0.5f;
-                    r = 255;
-                    g = static_cast<uint8_t>(s * 200);
-                    b = 0;
-                }
-            } else {
-                // Negative Bz: black → blue → cyan
-                float at = -t;
-                if (at < 0.5f) {
-                    float s = at / 0.5f;
-                    r = 0;
-                    g = 0;
-                    b = static_cast<uint8_t>(s * 255);
-                } else {
-                    float s = (at - 0.5f) / 0.5f;
-                    r = 0;
-                    g = static_cast<uint8_t>(s * 200);
-                    b = 255;
-                }
+            // ── 1. Intrinsic spin dipole (1/r³ falloff) ──
+            // Dipole axis: perpendicular to velocity (magnetic moment from spin),
+            // or vertical if stationary
+            if (std::abs(s.intrinsic_moment) > 0.001f) {
+                float s_spd = glm::length(s.vel);
+                glm::vec2 s_axis;
+                if (s_spd > 1.0f)
+                    s_axis = glm::vec2(-s.vel.y, s.vel.x) / s_spd;
+                else
+                    s_axis = glm::vec2(0.0f, 1.0f);
+
+                float cos_a = glm::dot(r_hat, s_axis);
+                float sin_a = r_hat.x * s_axis.y - r_hat.y * s_axis.x;
+
+                float r3_inv = inv_r * inv_r * inv_r;
+                float B_r = 2.0f * s.intrinsic_moment * cos_a * r3_inv;
+                float B_t = s.intrinsic_moment * sin_a * r3_inv;
+
+                B_total += r_hat * B_r + t_hat * B_t;
             }
 
-            // Scale alpha by magnitude
-            uint8_t cell_alpha = static_cast<uint8_t>(alpha * std::abs(t));
-            if (cell_alpha < 4) continue;
+            // ── 2. Biot-Savart from moving charge (1/r² falloff) ──
+            // B = (K/r²) · q · (v × r̂)   — azimuthal field from current
+            // Momentum p = m·v determines field strength, so faster & heavier = stronger
+            // The cross product v × r̂ gives direction-dependent magnitude
+            if (std::abs(s.charge) > 0.01f) {
+                float spd = glm::length(s.vel);
+                if (spd > 0.5f) {
+                    // 2D cross: v × r̂ = vx·ry - vy·rx  (scalar, out-of-plane component)
+                    float cross_vr = s.vel.x * r_hat.y - s.vel.y * r_hat.x;
+                    // Scale by momentum: p = m·v, but we use charge·v with mass-dependent
+                    // scaling. Heavier particles carry more current at same speed.
+                    float momentum_scale = std::sqrt(s.mass_mev / 0.511f);  // relative to electron
+                    float B_bs = 0.5f * s.charge * cross_vr * momentum_scale
+                               * inv_r * inv_r;
+                    // Biot-Savart B is azimuthal (tangential to r̂)
+                    B_total += t_hat * B_bs;
+                }
+            }
+        }
+        return B_total;
+    };
 
-            glm::vec2 tl(gx * cell_w, gy * cell_h);
-            glm::vec2 br((gx + 1) * cell_w, (gy + 1) * cell_h);
-            ImVec2 stl = w2s(tl), sbr = w2s(br);
+    // Helper: trace a field line from a seed point in a given direction
+    // dir_sign = +1 traces along B, -1 traces against B
+    // max_range limits how far from origin the line extends
+    auto trace_line = [&](glm::vec2 seed, glm::vec2 origin, float dir_sign,
+                          float max_range, ImVec2* pts, int& out_steps) {
+        pts[0] = w2s(seed);
+        glm::vec2 cur = seed;
+        out_steps = 0;
 
-            fg->AddRectFilled(stl, sbr, IM_COL32(r, g, b, cell_alpha));
+        for (int step = 0; step < line_steps; ++step) {
+            glm::vec2 B = compute_B(cur);
+            float B_mag = glm::length(B);
+            if (B_mag < 1e-7f) break;
+
+            cur += (B / B_mag) * (STEP_SIZE * dir_sign);
+            out_steps++;
+            pts[step + 1] = w2s(cur);
+
+            // Stop if returned very close to origin (loop completed)
+            float d = glm::length(cur - origin);
+            if (d < SEED_R * 0.8f && step > 4) break;
+
+            // Stop if too far away
+            if (d > max_range) break;
+        }
+    };
+
+    for (size_t si = 0; si < magnetic_sources.size(); ++si) {
+        const auto& src = magnetic_sources[si];
+        float abs_mu = std::abs(src.intrinsic_moment);
+        float spd = glm::length(src.vel);
+        // Effective field strength: intrinsic dipole + Biot-Savart from momentum
+        float bs_strength = std::abs(src.charge) * spd * std::sqrt(src.mass_mev / 0.511f) * 0.5f;
+        float effective_strength = abs_mu + bs_strength * 0.1f;  // BS is 1/r² so weaker close-in
+
+        // Per-particle effective range: stronger fields reach farther
+        // Dipole ∝ μ/r³ → range ∝ cbrt(μ), BS ∝ q·v/r² → range ∝ sqrt(q·v)
+        float dipole_range = std::cbrt(std::max(abs_mu, 0.01f) * 1e4f) * 12.0f;
+        float bs_range = std::sqrt(std::max(bs_strength, 0.01f)) * 30.0f;
+        float src_range = std::min(MAX_RANGE, std::max(20.0f, std::max(dipole_range, bs_range)));
+
+        // Dipole axis (perpendicular to velocity, or vertical if stationary)
+        glm::vec2 axis;
+        if (spd > 1.0f)
+            axis = glm::vec2(-src.vel.y, src.vel.x) / spd;
+        else
+            axis = glm::vec2(0.0f, 1.0f);
+        glm::vec2 perp(-axis.y, axis.x);  // perpendicular to axis
+
+        uint8_t line_alpha = static_cast<uint8_t>(
+            magnetic_field_opacity * 200.0f * std::min(effective_strength * 0.5f, 1.0f));
+        if (line_alpha < 8) continue;
+
+        // North pole color (red/warm), south pole color (blue/cool)
+        ImU32 col_north = IM_COL32(220, 80, 60, line_alpha);
+        ImU32 col_south = IM_COL32(60, 100, 220, line_alpha);
+
+        // Seed lines near the north pole: small offsets perpendicular to the axis
+        // Use intrinsic moment sign if present, else charge sign for Biot-Savart
+        float dominant_sign = (abs_mu > 0.01f) ? src.intrinsic_moment : src.charge;
+        float pole_sign = (dominant_sign > 0) ? 1.0f : -1.0f;
+        glm::vec2 north_pole = src.pos + axis * (SEED_R * pole_sign);
+
+        for (int li = 0; li < lines_per_pole; ++li) {
+            // Spread seeds in a small fan around the north pole
+            float frac = (static_cast<float>(li) / static_cast<float>(lines_per_pole - 1)) - 0.5f;
+            float spread = frac * SEED_R * 1.6f;  // lateral spread
+            glm::vec2 seed = north_pole + perp * spread;
+
+            // Trace forward (along B): lines arc outward from north pole to south pole
+            ImVec2 pts_fwd[MAX_LINE_STEPS + 1];
+            int steps_fwd = 0;
+            trace_line(seed, src.pos, 1.0f, src_range, pts_fwd, steps_fwd);
+
+            if (steps_fwd >= 3) {
+                fg->AddPolyline(pts_fwd, steps_fwd + 1, col_north,
+                                ImDrawFlags_None, 1.3f);
+            }
+
+            // Trace backward (against B): from same seed back toward the source
+            // This completes the other half of the loop
+            ImVec2 pts_bwd[MAX_LINE_STEPS + 1];
+            int steps_bwd = 0;
+            trace_line(seed, src.pos, -1.0f, src_range, pts_bwd, steps_bwd);
+
+            if (steps_bwd >= 3) {
+                fg->AddPolyline(pts_bwd, steps_bwd + 1, col_south,
+                                ImDrawFlags_None, 1.3f);
+            }
         }
     }
 
@@ -7264,6 +7699,162 @@ void PhysicsInterface::draw_magnetic_field(const SimConfig& cfg) {
     fg->AddText(legend_pos, IM_COL32(100, 100, 255, 200), "B<0");
     fg->AddText(ImVec2(legend_pos.x + 40, legend_pos.y), IM_COL32(180, 180, 180, 200), "|");
     fg->AddText(ImVec2(legend_pos.x + 52, legend_pos.y), IM_COL32(255, 100, 100, 200), "B>0");
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Gravity Map ──────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_gravity_map(const SimConfig& cfg) {
+    if (!readback_positions_ptr || !readback_types_ptr || readback_count == 0) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    ImDrawList* fg = ImGui::GetForegroundDrawList();
+    float ww = io.DisplaySize.x, wh = io.DisplaySize.y;
+    float scx = ww / static_cast<float>(REGION_W);
+    float scy = wh / static_cast<float>(REGION_H);
+
+    auto w2s = [&](glm::vec2 w) -> ImVec2 {
+        glm::vec2 s = glm::vec2(ww, wh) * 0.5f
+                    + (w - cfg.camera_origin) * cfg.current_camera_zoom * glm::vec2(scx, scy);
+        return ImVec2(s.x, s.y);
+    };
+
+    constexpr float MARGIN = 60.0f;
+    int drawn = 0;
+    constexpr int MAX_SPLATS = 500;
+
+    for (uint32_t i = 0; i < readback_count && drawn < MAX_SPLATS; ++i) {
+        if (readback_energies_ptr && readback_energies_ptr[i] <= 0.0f) continue;
+
+        uint32_t pt = readback_types_ptr[i];
+        if (pt >= PHYS_PARTICLE_TYPES) continue;
+
+        float mass = PHYS_REST_MASS_MEV[pt];
+        if (mass < 0.01f) continue;  // skip massless (photons, gluons, gravitons)
+
+        // When mass-energy equivalence is on, use relativistic mass: m × γ
+        if (gr_mass_energy && readback_velocities) {
+            constexpr float C_SIM = 300.0f;
+            float v = glm::length(readback_velocities[i]);
+            float beta = std::min(v / C_SIM, 0.999f);
+            float gamma = 1.0f / std::sqrt(std::max(1.0f - beta * beta, 0.0001f));
+            mass *= gamma;
+        }
+
+        glm::vec2 pos = readback_positions_ptr[i];
+        ImVec2 sp = w2s(pos);
+
+        if (sp.x < -MARGIN || sp.x > ww + MARGIN ||
+            sp.y < -MARGIN || sp.y > wh + MARGIN) continue;
+
+        // Splat radius: heavier particles → larger wells
+        float log_mass = std::log(1.0f + mass / 100.0f);
+        float radius = 8.0f + log_mass * 12.0f;
+        radius = std::clamp(radius, 4.0f, 50.0f);
+
+        // Color: deep purple → blue → cyan gradient based on mass
+        // mass ranges: electron ~0.511, proton ~938, W/Z ~80-91k, Higgs ~125k, top ~173k
+        float t = std::clamp(log_mass / 4.0f, 0.0f, 1.0f);  // log(1+938/100)≈2.3, log(1+173000/100)≈7.5
+
+        uint8_t r, g, b;
+        if (t < 0.33f) {
+            // Deep purple → blue
+            float s = t / 0.33f;
+            r = static_cast<uint8_t>(80 * (1.0f - s));
+            g = 0;
+            b = static_cast<uint8_t>(120 + s * 135);
+        } else if (t < 0.66f) {
+            // Blue → cyan
+            float s = (t - 0.33f) / 0.33f;
+            r = 0;
+            g = static_cast<uint8_t>(s * 220);
+            b = 255;
+        } else {
+            // Cyan → white-cyan (heaviest)
+            float s = (t - 0.66f) / 0.34f;
+            r = static_cast<uint8_t>(s * 120);
+            g = static_cast<uint8_t>(220 + s * 35);
+            b = 255;
+        }
+
+        uint8_t a = static_cast<uint8_t>(38 + t * 30);  // ~0.15-0.27 alpha
+
+        fg->AddCircleFilled(sp, radius, IM_COL32(r, g, b, a), 16);
+        drawn++;
+    }
+
+    // Legend — bottom-left corner
+    ImVec2 legend_pos(10, wh - 50);
+    fg->AddCircleFilled(ImVec2(legend_pos.x + 6, legend_pos.y + 6), 4, IM_COL32(80, 0, 120, 180));
+    fg->AddText(ImVec2(legend_pos.x + 14, legend_pos.y), IM_COL32(180, 140, 255, 200), "Light");
+    fg->AddCircleFilled(ImVec2(legend_pos.x + 66, legend_pos.y + 6), 6, IM_COL32(0, 220, 255, 180));
+    fg->AddText(ImVec2(legend_pos.x + 76, legend_pos.y), IM_COL32(100, 230, 255, 200), "Heavy");
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Gravitational Wave Ripples ──────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_grav_waves(const SimConfig& cfg) {
+    if (gw_rings.empty()) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    ImDrawList* fg = ImGui::GetForegroundDrawList();
+    float ww = io.DisplaySize.x, wh = io.DisplaySize.y;
+    float scx = ww / static_cast<float>(REGION_W);
+    float scy = wh / static_cast<float>(REGION_H);
+
+    auto w2s = [&](glm::vec2 w) -> ImVec2 {
+        glm::vec2 s = glm::vec2(ww, wh) * 0.5f
+                    + (w - cfg.camera_origin) * cfg.current_camera_zoom * glm::vec2(scx, scy);
+        return ImVec2(s.x, s.y);
+    };
+
+    for (const auto& ring : gw_rings) {
+        ImVec2 center = w2s(ring.origin);
+        float screen_r = ring.radius * cfg.current_camera_zoom * scx;
+
+        // Skip tiny or huge rings
+        if (screen_r < 1.0f || screen_r > ww * 3.0f) continue;
+
+        // GW amplitude falls off as 1/r (strain h ∝ 1/r in 3D, ∝ 1/√r in 2D)
+        float effective_amp = ring.amplitude / std::max(1.0f, ring.radius * 0.005f);
+        float alpha_f = std::clamp(effective_amp * 100.0f, 0.0f, 180.0f);
+        if (alpha_f < 3.0f) continue;
+
+        uint8_t alpha = static_cast<uint8_t>(alpha_f);
+
+        // Color: gold near source → violet at distance (absolute radius, not life fraction)
+        float color_frac = std::clamp(ring.radius / 1500.0f, 0.0f, 1.0f);
+        uint8_t r, g, b;
+        if (color_frac < 0.4f) {
+            // Gold/amber (fresh wave)
+            r = 255; g = static_cast<uint8_t>(180 - color_frac * 200); b = 40;
+        } else if (color_frac < 0.7f) {
+            // Transition to violet
+            float s = (color_frac - 0.4f) / 0.3f;
+            r = static_cast<uint8_t>(255 * (1.0f - s) + 140 * s);
+            g = static_cast<uint8_t>(100 * (1.0f - s) + 80 * s);
+            b = static_cast<uint8_t>(40 * (1.0f - s) + 220 * s);
+        } else {
+            // Deep violet (distant wave)
+            float s = (color_frac - 0.7f) / 0.3f;
+            r = static_cast<uint8_t>(140 * (1.0f - s) + 60 * s);
+            g = static_cast<uint8_t>(80 * (1.0f - s) + 40 * s);
+            b = static_cast<uint8_t>(220 + s * 35);
+        }
+
+        // Draw ring — thickness fades with distance
+        float thickness = std::max(1.0f, 2.5f / std::max(1.0f, ring.radius * 0.002f));
+        fg->AddCircle(center, screen_r, IM_COL32(r, g, b, alpha), 48, thickness);
+
+        // Second fainter ring slightly inside (wavefront has width)
+        if (screen_r > 4.0f) {
+            uint8_t a2 = static_cast<uint8_t>(alpha_f * 0.3f);
+            fg->AddCircle(center, screen_r * 0.92f, IM_COL32(r, g, b, a2), 48, 1.0f);
+        }
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

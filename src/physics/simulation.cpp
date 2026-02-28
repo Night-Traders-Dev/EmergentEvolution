@@ -24,6 +24,24 @@
 
 namespace fs = std::filesystem;
 
+// ── Orbital constants (single source of truth — must match shader K_COULOMB, SOFTEN_MIN²) ──
+static constexpr float R_BOHR      = 15.0f;   // base Bohr radius (hydrogen ground state in px)
+static constexpr float K_COULOMB_O = 1200.0f;  // Coulomb constant (px-based units)
+static constexpr float SOFTEN_SQ_O = 64.0f;    // softening = SOFTEN_MIN² = 8²
+static constexpr int   SHELL_CAP_O[] = {2, 8, 18, 32};
+static constexpr int   NUM_SHELLS_O  = 4;
+
+// ── SM particle labels (for notifications & event log) ──────────────────────
+static const char* const SM_LABELS[] = {
+    "p","n","e\xe2\x81\xbb","\xce\xb3","e\xe2\x81\xba","p\xcc\x84",
+    "\xce\xbd" "e","\xce\xbc\xe2\x81\xbb","\xce\xbc\xe2\x81\xba",
+    "\xcf\x84\xe2\x81\xbb","\xcf\x84\xe2\x81\xba","\xce\xbd\xce\xbc","\xce\xbd\xcf\x84",
+    "u","d","s","c","t","b",
+    "u\xcc\x84","d\xcc\x84","s\xcc\x84","c\xcc\x84","t\xcc\x84","b\xcc\x84",
+    "g","W\xe2\x81\xba","W\xe2\x81\xbb","Z\xe2\x81\xb0","H",
+    "G","DM","DE"
+};
+
 // ── Scroll callback ──────────────────────────────────────────────────────────
 
 static PhysicsSimulation* g_phys_sim = nullptr;
@@ -198,6 +216,8 @@ void PhysicsSimulation::reset() {
     iface.density_counters.clear();
     iface.trajectory_history.clear();
     iface.force_contributions.clear();
+    iface.gw_rings.clear();
+    prev_velocities_.clear();
     iface.show_trajectory_tracer = false;
     iface.show_energy_heatmap = false;
     iface.show_velocity_field = false;
@@ -593,6 +613,11 @@ static void write_spawn_genome(Particles& particles, uint32_t slot, uint32_t typ
     } else if (type >= ANTI_UP_TYPE && type <= ANTI_BOTTOM_TYPE) {
         std::uniform_int_distribution<int> rgb(1, 3);
         color = static_cast<float>(-rgb(rng)); // -1, -2, -3
+    } else if (type == GLUON_TYPE_PHYS) {
+        // SU(3) octet: encode as (color*10 + anticolor), e.g. 1.2 = red-antigreen
+        static const float GLUON_COLORS[8] = {1.2f,1.3f,2.1f,2.3f,3.1f,3.2f,1.1f,2.2f};
+        std::uniform_int_distribution<int> oct(0, 7);
+        color = GLUON_COLORS[oct(rng)];
     }
 
     particles.types[slot] = type;
@@ -726,11 +751,6 @@ uint32_t PhysicsSimulation::spawn_atom_at(glm::vec2 pos, int Z, int N,
         return p;
     };
 
-    const float R_BOHR_SPAWN = 15.0f;
-    const float K_COULOMB_SPAWN = 1200.0f;
-    const float SOFTEN_SQ_SPAWN = 64.0f;
-    const int SHELL_CAP_SPAWN[] = {2, 8, 18, 32};
-
     if (N < 0) N = Z;
     int A = Z + N;
 
@@ -800,7 +820,7 @@ uint32_t PhysicsSimulation::spawn_atom_at(glm::vec2 pos, int Z, int N,
     int electrons_left = Z;
     int shell_fill_spawn[4] = {0, 0, 0, 0};
     for (int shell = 0; shell < 4 && electrons_left > 0; ++shell) {
-        int cap = std::min(SHELL_CAP_SPAWN[shell], electrons_left);
+        int cap = std::min(SHELL_CAP_O[shell], electrons_left);
         float n_shell = static_cast<float>(shell + 1);
 
         int inner_e = 0;
@@ -808,13 +828,13 @@ uint32_t PhysicsSimulation::spawn_atom_at(glm::vec2 pos, int Z, int N,
             inner_e += shell_fill_spawn[s];
 
         float Z_eff = std::max(1.0f, static_cast<float>(Z) - static_cast<float>(inner_e));
-        float R_bohr = n_shell * n_shell * R_BOHR_SPAWN / Z_eff;
+        float R_bohr = n_shell * n_shell * R_BOHR / Z_eff;
         float R_target = std::max(R_bohr, 8.0f);
         R_target = std::max(R_target, NUC_CLEAR + shell * 8.0f);
 
         float R3 = R_target * R_target * R_target;
-        float R2_soft = R_target * R_target + SOFTEN_SQ_SPAWN;
-        float L_ground = std::sqrt(Z_eff * K_COULOMB_SPAWN * R3 / R2_soft);
+        float R2_soft = R_target * R_target + SOFTEN_SQ_O;
+        float L_ground = std::sqrt(Z_eff * K_COULOMB_O * R3 / R2_soft);
 
         // Per-shell boost from SimConfig
         float orbit_boost = cfg.orbit_boost[shell];
@@ -884,12 +904,6 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
         p.y = std::fmod(p.y + rh, rh);
         return p;
     };
-
-    // ── Orbital constants (must match shader + update_orbitals) ────────────
-    const float R_BOHR_SPAWN = 15.0f;
-    const float K_COULOMB_SPAWN = 1200.0f;
-    const float SOFTEN_SQ_SPAWN = 64.0f;
-    const int SHELL_CAP_SPAWN[] = {2, 8, 18, 32};
 
     // ── Molecule spawn ───────────────────────────────────────────────────
     if (iface.spawn_molecule_idx >= 0 &&
@@ -1073,7 +1087,7 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
         for (size_t ei = 0; ei < electron_entries.size(); ++ei) {
             int shell = -1;
             for (int s = 0; s < 4; ++s) {
-                if (shell_fill[s] < SHELL_CAP_SPAWN[s]) { shell = s; break; }
+                if (shell_fill[s] < SHELL_CAP_O[s]) { shell = s; break; }
             }
             if (shell < 0) {
                 electron_shells.push_back({120.0f, 0, cfg.orbit_boost[0]});
@@ -1084,11 +1098,11 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
             for (int s = 0; s < shell; ++s) inner += shell_fill[s];
             float Z_eff = std::max(1.0f, static_cast<float>(template_Z - inner));
             float n_shell = static_cast<float>(shell + 1);
-            float R_target = n_shell * n_shell * R_BOHR_SPAWN / Z_eff;
+            float R_target = n_shell * n_shell * R_BOHR / Z_eff;
             R_target = std::max(R_target, 8.0f);
             float R3 = R_target * R_target * R_target;
-            float R2_soft = R_target * R_target + SOFTEN_SQ_SPAWN;
-            float L_ground = std::sqrt(Z_eff * K_COULOMB_SPAWN * R3 / R2_soft);
+            float R2_soft = R_target * R_target + SOFTEN_SQ_O;
+            float L_ground = std::sqrt(Z_eff * K_COULOMB_O * R3 / R2_soft);
             electron_shells.push_back({L_ground, shell, cfg.orbit_boost[shell]});
         }
 
@@ -1282,15 +1296,6 @@ void PhysicsSimulation::check_annihilation() {
         achievements.total_annihilations++;
         try_unlock(ACH_FIRST_ANNIHILATION);
         {
-            static const char* const SM_LABELS[] = {
-                "p","n","e\xe2\x81\xbb","\xce\xb3","e\xe2\x81\xba","p\xcc\x84",
-                "\xce\xbd" "e","\xce\xbc\xe2\x81\xbb","\xce\xbc\xe2\x81\xba",
-                "\xcf\x84\xe2\x81\xbb","\xcf\x84\xe2\x81\xba","\xce\xbd\xce\xbc","\xce\xbd\xcf\x84",
-                "u","d","s","c","t","b",
-                "u\xcc\x84","d\xcc\x84","s\xcc\x84","c\xcc\x84","t\xcc\x84","b\xcc\x84",
-                "g","W\xe2\x81\xba","W\xe2\x81\xbb","Z\xe2\x81\xb0","H",
-                "G","DM","DE"
-            };
             const char* name_i = (type_i < PHYS_PARTICLE_TYPES) ? SM_LABELS[type_i] : "?";
             const char* name_j = (target_type < PHYS_PARTICLE_TYPES) ? SM_LABELS[target_type] : "?";
             char amsg[128], adetail[384];
@@ -1305,19 +1310,53 @@ void PhysicsSimulation::check_annihilation() {
                      name_j, best_j, readback_energies_[best_j], spd_j / C_SIM,
                      (type_i < PHYS_PARTICLE_TYPES ? PHYS_REST_MASS_MEV[type_i] : 0.0f) +
                      (target_type < PHYS_PARTICLE_TYPES ? PHYS_REST_MASS_MEV[target_type] : 0.0f));
+            iface.push_notification(amsg, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
             iface.push_decay_event(amsg, PhysicsInterface::DEVT_ANNIHILATION,
                 ImVec4(1.0f, 0.3f, 0.3f, 1.0f), std::string(adetail));
         }
 
         glm::vec2 mid = (readback_positions_[i] + readback_positions_[best_j]) * 0.5f;
-        float angle = static_cast<float>(i * 1664525u + best_j * 1013904223u) * (6.2831853f / 4294967296.0f);
-        glm::vec2 dir1(std::cos(angle), std::sin(angle));
-        glm::vec2 dir2 = -dir1;
 
-        // E=mc²: total relativistic energy of the pair → photon products
-        float E_total = total_rel_energy(type_i, readback_velocities_[i])
-                      + total_rel_energy(target_type, readback_velocities_[best_j]);
-        float E_per_photon = E_total * 0.5f;
+        // COM frame kinematics for back-to-back photon emission
+        float m_i = (type_i < PHYS_PARTICLE_TYPES) ? PHYS_REST_MASS_MEV[type_i] : 0.0f;
+        float m_j = (target_type < PHYS_PARTICLE_TYPES) ? PHYS_REST_MASS_MEV[target_type] : 0.0f;
+        float gamma_i = compute_gamma(readback_velocities_[i]);
+        float gamma_j = compute_gamma(readback_velocities_[best_j]);
+        glm::vec2 p_i = readback_velocities_[i] * (gamma_i * m_i / (C_SIM * C_SIM));
+        glm::vec2 p_j = readback_velocities_[best_j] * (gamma_j * m_j / (C_SIM * C_SIM));
+        glm::vec2 p_total = p_i + p_j;
+        float E_total = gamma_i * m_i + gamma_j * m_j;
+
+        // COM velocity (β_cm = p_total c / E_total)
+        glm::vec2 v_cm = (E_total > 0.001f) ? p_total * (C_SIM * C_SIM / E_total) : glm::vec2(0.0f);
+        float beta_cm = std::min(glm::length(v_cm) / C_SIM, 0.9999f);
+        float gamma_cm = 1.0f / std::sqrt(1.0f - beta_cm * beta_cm);
+
+        // Random isotropic direction in COM frame
+        std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
+        float angle = angle_dist(rng);
+        glm::vec2 dir_com(std::cos(angle), std::sin(angle));
+
+        // Boost photon directions from COM to lab frame
+        glm::vec2 dir1, dir2;
+        if (beta_cm > 0.001f) {
+            glm::vec2 beta_hat = glm::normalize(v_cm);
+            float cos_com = glm::dot(dir_com, beta_hat);
+            // Aberration formula: tan(θ_lab) = sin(θ_com) / (γ(cos(θ_com) + β))
+            float denom1 = gamma_cm * (cos_com + beta_cm);
+            dir1 = glm::normalize(beta_hat * denom1 + (dir_com - beta_hat * cos_com));
+            float denom2 = gamma_cm * (-cos_com + beta_cm);
+            dir2 = glm::normalize(beta_hat * denom2 - (dir_com - beta_hat * cos_com));
+        } else {
+            dir1 = dir_com;
+            dir2 = -dir_com;
+        }
+
+        // Doppler-shifted photon energies
+        float E_com_half = E_total / (2.0f * gamma_cm);
+        float cos_theta = (beta_cm > 0.001f) ? glm::dot(dir_com, glm::normalize(v_cm)) : 0.0f;
+        float E_photon1 = E_com_half * gamma_cm * (1.0f + beta_cm * cos_theta);
+        float E_photon2 = E_total - E_photon1;
 
         // All annihilation → 2 photons (+ optional neutrino for baryon pairs)
         particles.types[i] = PHOTON_TYPE_PHYS;
@@ -1327,7 +1366,7 @@ void PhysicsSimulation::check_annihilation() {
         particles.genomes[i * GENOME_SIZE + 3] = 0.0f;
         readback_positions_[i] = mid;
         readback_velocities_[i] = dir1 * C_SIM;
-        readback_energies_[i] = mev_to_ebuf(E_per_photon);
+        readback_energies_[i] = mev_to_ebuf(E_photon1);
 
         particles.types[best_j] = PHOTON_TYPE_PHYS;
         particles.genomes[best_j * GENOME_SIZE + 0] = 0.0f;
@@ -1336,7 +1375,7 @@ void PhysicsSimulation::check_annihilation() {
         particles.genomes[best_j * GENOME_SIZE + 3] = 0.0f;
         readback_positions_[best_j] = mid;
         readback_velocities_[best_j] = dir2 * C_SIM;
-        readback_energies_[best_j] = mev_to_ebuf(E_per_photon);
+        readback_energies_[best_j] = mev_to_ebuf(E_photon2);
 
         // Baryon annihilation produces extra neutrino (carries ~5% of energy)
         if (type_i == ANTIPROTON_TYPE_PHYS) {
@@ -1786,13 +1825,6 @@ void PhysicsSimulation::update_orbitals() {
     const float CROSS_ATOM_CLUSTER_RADIUS = 3.0f;
     const float CROSS_ATOM_CLUSTER_RADIUS_SQ = CROSS_ATOM_CLUSTER_RADIUS * CROSS_ATOM_CLUSTER_RADIUS;
     const float BINDING_RADIUS = cfg.orbital_binding_radius;
-    const float R_BOHR = 15.0f;        // base Bohr radius (hydrogen ground state in px)
-    const float K_COULOMB_F = 1200.0f;  // must match shader K_COULOMB
-    const float SOFTEN_SQ = 64.0f;      // must match shader SOFTEN_MIN² (8²)
-
-    // Shell capacities: 1s=2, 2s2p=8, 3s3p3d=18, 4s4p4d4f=32
-    static const int SHELL_CAP[] = {2, 8, 18, 32};
-    static const int NUM_SHELLS = 4;
     static const int MAX_ELECTRONS = 2 + 8 + 18 + 32;  // 60
 
     // Save previous orbital_parent before clearing (used to detect cross-atom clustering)
@@ -1990,29 +2022,36 @@ void PhysicsSimulation::update_orbitals() {
         if (readback_energies_[i] < 0.01f) continue;
         uint32_t t = particles.types[i];
 
-        // Bind positrons to antinuclei
-        if (t == POSITRON_TYPE_PHYS && !antinuclei.empty()) {
-            float best_d_sq = BINDING_RADIUS * BINDING_RADIUS;
-            int best_anuc = -1;
-            for (int ai = 0; ai < static_cast<int>(antinuclei.size()); ++ai) {
-                glm::vec2 d = readback_positions_[i] - antinuclei[ai].center;
-                float d_sq = glm::dot(d, d);
-                if (d_sq < best_d_sq) {
-                    best_d_sq = d_sq;
-                    best_anuc = ai;
+        // Positrons orbit antinuclei only (antimatter counterpart of electrons→protons)
+        if (t == POSITRON_TYPE_PHYS) {
+            if (!antinuclei.empty()) {
+                float best_d_sq = BINDING_RADIUS * BINDING_RADIUS;
+                int best_anuc = -1;
+                for (int ai = 0; ai < static_cast<int>(antinuclei.size()); ++ai) {
+                    glm::vec2 d = readback_positions_[i] - antinuclei[ai].center;
+                    float d_sq = glm::dot(d, d);
+                    if (d_sq < best_d_sq) {
+                        best_d_sq = d_sq;
+                        best_anuc = ai;
+                    }
+                }
+                if (best_anuc >= 0) {
+                    anti_bindings.push_back({i, best_anuc, std::sqrt(best_d_sq)});
+                    particles.orbital_parent[i] = static_cast<int32_t>(antinuclei[best_anuc].rep);
+                    continue;
                 }
             }
-            if (best_anuc >= 0) {
-                anti_bindings.push_back({i, best_anuc, std::sqrt(best_d_sq)});
-                particles.orbital_parent[i] = static_cast<int32_t>(antinuclei[best_anuc].rep);
-            }
+            // Free positron (no antinucleus nearby) — clear orbital data
+            particles.genomes[i * GENOME_SIZE + 2] = 0.0f;
+            particles.orbital_shell[i] = -1;
+            particles.excitation_timer[i] = 0;
             continue;
         }
 
-        // Only bind electrons to proton-nuclei
+        // Only electrons orbit proton-nuclei (no e-e orbiting)
         if (t != ELECTRON_TYPE_PHYS) {
             // Clear orbital data for non-electrons that might have stale genome[2]
-            if (t == POSITRON_TYPE_PHYS || t == MUON_TYPE_PHYS || t == ANTIMUON_TYPE_PHYS ||
+            if (t == MUON_TYPE_PHYS || t == ANTIMUON_TYPE_PHYS ||
                 t == TAU_TYPE_PHYS || t == ANTITAU_TYPE_PHYS) {
                 particles.genomes[i * GENOME_SIZE + 2] = 0.0f;
             }
@@ -2049,21 +2088,21 @@ void PhysicsSimulation::update_orbitals() {
     // ── Step 3: Assign orbital shells and compute L_ground ──────────────
     // Two-pass approach: first retain electrons in their previous shells,
     // then assign newly-captured electrons to available slots.
-    // shell_fill[nuc_idx * NUM_SHELLS + shell] = count of electrons in that shell
-    std::vector<int> shell_fill(nuclei.size() * NUM_SHELLS, 0);
+    // shell_fill[nuc_idx * NUM_SHELLS_O + shell] = count of electrons in that shell
+    std::vector<int> shell_fill(nuclei.size() * NUM_SHELLS_O, 0);
 
     // Helper: compute and write L_ground + boost for an electron in a given shell
     auto write_orbital_params = [&](uint32_t idx, int nuc_idx, int shell) {
         int Z = nuclei[nuc_idx].Z;
         int inner_electrons = 0;
         for (int s = 0; s < shell; ++s)
-            inner_electrons += shell_fill[nuc_idx * NUM_SHELLS + s];
+            inner_electrons += shell_fill[nuc_idx * NUM_SHELLS_O + s];
         float Z_eff = std::max(1.0f, static_cast<float>(Z - inner_electrons));
         float n_shell = static_cast<float>(shell + 1);
         float R_target = std::max(n_shell * n_shell * R_BOHR / Z_eff, 8.0f);
         float R3 = R_target * R_target * R_target;
-        float R2_soft = R_target * R_target + SOFTEN_SQ;
-        float L_ground = std::sqrt(Z_eff * K_COULOMB_F * R3 / R2_soft);
+        float R2_soft = R_target * R_target + SOFTEN_SQ_O;
+        float L_ground = std::sqrt(Z_eff * K_COULOMB_O * R3 / R2_soft);
         particles.genomes[idx * GENOME_SIZE + 2] = L_ground;
         particles.genomes[idx * GENOME_SIZE + 3] = cfg.orbit_boost[shell];
         particles.orbital_shell[idx] = static_cast<int8_t>(shell);
@@ -2076,18 +2115,18 @@ void PhysicsSimulation::update_orbitals() {
         int32_t prev_parent = (b.idx < prev_orbital_parent.size()) ? prev_orbital_parent[b.idx] : -1;
         bool was_bound_here = (prev_parent >= 0 &&
                                prev_parent == static_cast<int32_t>(nuclei[b.nuc_idx].rep) &&
-                               prev_shell >= 0 && prev_shell < NUM_SHELLS);
+                               prev_shell >= 0 && prev_shell < NUM_SHELLS_O);
         if (!was_bound_here) continue;
 
         // Check capacity: total assigned to this nucleus vs max allowed
         int total_assigned = 0;
-        for (int s = 0; s < NUM_SHELLS; ++s)
-            total_assigned += shell_fill[b.nuc_idx * NUM_SHELLS + s];
+        for (int s = 0; s < NUM_SHELLS_O; ++s)
+            total_assigned += shell_fill[b.nuc_idx * NUM_SHELLS_O + s];
         if (total_assigned >= std::min(Z, MAX_ELECTRONS)) continue;
 
         // Try to keep in same shell
-        int offset = b.nuc_idx * NUM_SHELLS + prev_shell;
-        if (shell_fill[offset] < SHELL_CAP[prev_shell]) {
+        int offset = b.nuc_idx * NUM_SHELLS_O + prev_shell;
+        if (shell_fill[offset] < SHELL_CAP_O[prev_shell]) {
             shell_fill[offset]++;
             write_orbital_params(b.idx, b.nuc_idx, prev_shell);
             // Preserve excitation_timer — don't reset it
@@ -2101,8 +2140,8 @@ void PhysicsSimulation::update_orbitals() {
         int Z = nuclei[b.nuc_idx].Z;
 
         int total_assigned = 0;
-        for (int s = 0; s < NUM_SHELLS; ++s)
-            total_assigned += shell_fill[b.nuc_idx * NUM_SHELLS + s];
+        for (int s = 0; s < NUM_SHELLS_O; ++s)
+            total_assigned += shell_fill[b.nuc_idx * NUM_SHELLS_O + s];
 
         if (total_assigned >= std::min(Z, MAX_ELECTRONS)) {
             particles.genomes[b.idx * GENOME_SIZE + 2] = 0.0f;  // excess, free
@@ -2112,8 +2151,8 @@ void PhysicsSimulation::update_orbitals() {
 
         // Find first shell with room
         int shell = -1;
-        for (int s = 0; s < NUM_SHELLS; ++s) {
-            if (shell_fill[b.nuc_idx * NUM_SHELLS + s] < SHELL_CAP[s]) {
+        for (int s = 0; s < NUM_SHELLS_O; ++s) {
+            if (shell_fill[b.nuc_idx * NUM_SHELLS_O + s] < SHELL_CAP_O[s]) {
                 shell = s;
                 break;
             }
@@ -2124,15 +2163,15 @@ void PhysicsSimulation::update_orbitals() {
             continue;
         }
 
-        shell_fill[b.nuc_idx * NUM_SHELLS + shell]++;
+        shell_fill[b.nuc_idx * NUM_SHELLS_O + shell]++;
         write_orbital_params(b.idx, b.nuc_idx, shell);
         particles.excitation_timer[b.idx] = 0;  // newly captured = ground state
     }
 
     // Copy shell_fill into NucleusInfo for matter nuclei
     for (size_t ni = 0; ni < nuclei.size() && ni < detected_nuclei_.size(); ++ni) {
-        for (int s = 0; s < NUM_SHELLS; ++s)
-            detected_nuclei_[ni].shell_fill[s] = shell_fill[ni * NUM_SHELLS + s];
+        for (int s = 0; s < NUM_SHELLS_O; ++s)
+            detected_nuclei_[ni].shell_fill[s] = shell_fill[ni * NUM_SHELLS_O + s];
     }
 
     // ── Step 3b: Assign positron orbital shells around antinuclei ─────────
@@ -2142,20 +2181,20 @@ void PhysicsSimulation::update_orbitals() {
                       if (a.nuc_idx != b.nuc_idx) return a.nuc_idx < b.nuc_idx;
                       return a.dist < b.dist;
                   });
-        std::vector<int> anti_shell_fill(antinuclei.size() * NUM_SHELLS, 0);
+        std::vector<int> anti_shell_fill(antinuclei.size() * NUM_SHELLS_O, 0);
 
         // Helper for antinuclei orbital params
         auto write_anti_orbital_params = [&](uint32_t idx, int anuc_idx, int shell) {
             int Z = antinuclei[anuc_idx].Z;
             int inner = 0;
             for (int s = 0; s < shell; ++s)
-                inner += anti_shell_fill[anuc_idx * NUM_SHELLS + s];
+                inner += anti_shell_fill[anuc_idx * NUM_SHELLS_O + s];
             float Z_eff = std::max(1.0f, static_cast<float>(Z - inner));
             float n_shell = static_cast<float>(shell + 1);
             float R_target = std::max(n_shell * n_shell * R_BOHR / Z_eff, 8.0f);
             float R3 = R_target * R_target * R_target;
-            float R2_soft = R_target * R_target + SOFTEN_SQ;
-            float L_ground = std::sqrt(Z_eff * K_COULOMB_F * R3 / R2_soft);
+            float R2_soft = R_target * R_target + SOFTEN_SQ_O;
+            float L_ground = std::sqrt(Z_eff * K_COULOMB_O * R3 / R2_soft);
             particles.genomes[idx * GENOME_SIZE + 2] = L_ground;
             particles.genomes[idx * GENOME_SIZE + 3] = cfg.orbit_boost[shell];
             particles.orbital_shell[idx] = static_cast<int8_t>(shell);
@@ -2168,16 +2207,16 @@ void PhysicsSimulation::update_orbitals() {
             int32_t prev_parent = (b.idx < prev_orbital_parent.size()) ? prev_orbital_parent[b.idx] : -1;
             bool was_bound_here = (prev_parent >= 0 &&
                                    prev_parent == static_cast<int32_t>(antinuclei[b.nuc_idx].rep) &&
-                                   prev_shell >= 0 && prev_shell < NUM_SHELLS);
+                                   prev_shell >= 0 && prev_shell < NUM_SHELLS_O);
             if (!was_bound_here) continue;
 
             int total_assigned = 0;
-            for (int s = 0; s < NUM_SHELLS; ++s)
-                total_assigned += anti_shell_fill[b.nuc_idx * NUM_SHELLS + s];
+            for (int s = 0; s < NUM_SHELLS_O; ++s)
+                total_assigned += anti_shell_fill[b.nuc_idx * NUM_SHELLS_O + s];
             if (total_assigned >= std::min(Z, MAX_ELECTRONS)) continue;
 
-            int offset = b.nuc_idx * NUM_SHELLS + prev_shell;
-            if (anti_shell_fill[offset] < SHELL_CAP[prev_shell]) {
+            int offset = b.nuc_idx * NUM_SHELLS_O + prev_shell;
+            if (anti_shell_fill[offset] < SHELL_CAP_O[prev_shell]) {
                 anti_shell_fill[offset]++;
                 write_anti_orbital_params(b.idx, b.nuc_idx, prev_shell);
                 b.assigned = true;
@@ -2190,8 +2229,8 @@ void PhysicsSimulation::update_orbitals() {
             int Z = antinuclei[b.nuc_idx].Z;
 
             int total_assigned = 0;
-            for (int s = 0; s < NUM_SHELLS; ++s)
-                total_assigned += anti_shell_fill[b.nuc_idx * NUM_SHELLS + s];
+            for (int s = 0; s < NUM_SHELLS_O; ++s)
+                total_assigned += anti_shell_fill[b.nuc_idx * NUM_SHELLS_O + s];
 
             if (total_assigned >= std::min(Z, MAX_ELECTRONS)) {
                 particles.genomes[b.idx * GENOME_SIZE + 2] = 0.0f;
@@ -2200,8 +2239,8 @@ void PhysicsSimulation::update_orbitals() {
             }
 
             int shell = -1;
-            for (int s = 0; s < NUM_SHELLS; ++s) {
-                if (anti_shell_fill[b.nuc_idx * NUM_SHELLS + s] < SHELL_CAP[s]) {
+            for (int s = 0; s < NUM_SHELLS_O; ++s) {
+                if (anti_shell_fill[b.nuc_idx * NUM_SHELLS_O + s] < SHELL_CAP_O[s]) {
                     shell = s;
                     break;
                 }
@@ -2212,7 +2251,7 @@ void PhysicsSimulation::update_orbitals() {
                 continue;
             }
 
-            anti_shell_fill[b.nuc_idx * NUM_SHELLS + shell]++;
+            anti_shell_fill[b.nuc_idx * NUM_SHELLS_O + shell]++;
             write_anti_orbital_params(b.idx, b.nuc_idx, shell);
             particles.excitation_timer[b.idx] = 0;
         }
@@ -2221,8 +2260,8 @@ void PhysicsSimulation::update_orbitals() {
         for (size_t ai = 0; ai < antinuclei.size(); ++ai) {
             size_t di = anti_start_in_detected + ai;
             if (di < detected_nuclei_.size()) {
-                for (int s = 0; s < NUM_SHELLS; ++s)
-                    detected_nuclei_[di].shell_fill[s] = anti_shell_fill[ai * NUM_SHELLS + s];
+                for (int s = 0; s < NUM_SHELLS_O; ++s)
+                    detected_nuclei_[di].shell_fill[s] = anti_shell_fill[ai * NUM_SHELLS_O + s];
             }
         }
     }
@@ -2676,90 +2715,182 @@ void PhysicsSimulation::check_decay() {
                 break;
             }
 
-            // ── W+ → positron + neutrino ──
+            // ── W+ → hadronic (67%) or leptonic (33%) ──
             case W_PLUS_TYPE_PHYS: {
-                uint32_t nu_slot = find_dormant(i + 1);
-                // M=80379, m1=0.511(e+), m2≈0(ν) → nearly all energy to KE
+                uint32_t p2_slot = find_dormant(i + 1);
+                std::uniform_real_distribution<float> br(0.0f, 1.0f);
+                float roll = br(rng);
+                uint32_t type1, type2;
+                const char* notif_msg;
+                const char* event_msg;
+                if (roll < 0.32f) {
+                    type1 = UP_QUARK_TYPE; type2 = ANTI_DOWN_TYPE;
+                    notif_msg = "Decay: W\xe2\x81\xba \xe2\x86\x92 u + d\xcc\x84";
+                    event_msg = "W\xe2\x81\xba \xe2\x86\x92 u + d\xcc\x84";
+                } else if (roll < 0.335f) {
+                    type1 = UP_QUARK_TYPE; type2 = ANTI_STRANGE_TYPE;
+                    notif_msg = "Decay: W\xe2\x81\xba \xe2\x86\x92 u + s\xcc\x84";
+                    event_msg = "W\xe2\x81\xba \xe2\x86\x92 u + s\xcc\x84";
+                } else if (roll < 0.35f) {
+                    type1 = CHARM_QUARK_TYPE; type2 = ANTI_DOWN_TYPE;
+                    notif_msg = "Decay: W\xe2\x81\xba \xe2\x86\x92 c + d\xcc\x84";
+                    event_msg = "W\xe2\x81\xba \xe2\x86\x92 c + d\xcc\x84";
+                } else if (roll < 0.67f) {
+                    type1 = CHARM_QUARK_TYPE; type2 = ANTI_STRANGE_TYPE;
+                    notif_msg = "Decay: W\xe2\x81\xba \xe2\x86\x92 c + s\xcc\x84";
+                    event_msg = "W\xe2\x81\xba \xe2\x86\x92 c + s\xcc\x84";
+                } else if (roll < 0.78f) {
+                    type1 = POSITRON_TYPE_PHYS; type2 = NEUTRINO_TYPE_PHYS;
+                    notif_msg = "Decay: W\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd" "e";
+                    event_msg = "W\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd" "e";
+                } else if (roll < 0.89f) {
+                    type1 = ANTIMUON_TYPE_PHYS; type2 = MU_NEUTRINO_TYPE_PHYS;
+                    notif_msg = "Decay: W\xe2\x81\xba \xe2\x86\x92 \xce\xbc\xe2\x81\xba + \xce\xbd\xce\xbc";
+                    event_msg = "W\xe2\x81\xba \xe2\x86\x92 \xce\xbc\xe2\x81\xba + \xce\xbd\xce\xbc";
+                } else {
+                    type1 = ANTITAU_TYPE_PHYS; type2 = TAU_NEUTRINO_TYPE_PHYS;
+                    notif_msg = "Decay: W\xe2\x81\xba \xe2\x86\x92 \xcf\x84\xe2\x81\xba + \xce\xbd\xcf\x84";
+                    event_msg = "W\xe2\x81\xba \xe2\x86\x92 \xcf\x84\xe2\x81\xba + \xce\xbd\xcf\x84";
+                }
                 float p_dec = two_body_decay_momentum(PHYS_REST_MASS_MEV[W_PLUS_TYPE_PHYS],
-                    PHYS_REST_MASS_MEV[POSITRON_TYPE_PHYS], PHYS_REST_MASS_MEV[NEUTRINO_TYPE_PHYS]);
-                float KE_e = std::sqrt(p_dec * p_dec + PHYS_REST_MASS_MEV[POSITRON_TYPE_PHYS] * PHYS_REST_MASS_MEV[POSITRON_TYPE_PHYS]) - PHYS_REST_MASS_MEV[POSITRON_TYPE_PHYS];
-                write_spawn_genome(particles, i, POSITRON_TYPE_PHYS, rng, frame_counter_);
-                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[POSITRON_TYPE_PHYS] + KE_e);
-                readback_velocities_[i] = dir * ke_to_speed(KE_e, POSITRON_TYPE_PHYS);
-                if (nu_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, nu_slot, NEUTRINO_TYPE_PHYS, rng, frame_counter_);
-                    readback_positions_[nu_slot] = pos;
-                    readback_velocities_[nu_slot] = -dir * C_SIM * 0.9999f;
-                    readback_energies_[nu_slot] = mev_to_ebuf(p_dec);  // massless: E=p
+                    PHYS_REST_MASS_MEV[type1], PHYS_REST_MASS_MEV[type2]);
+                float KE_1 = std::sqrt(p_dec * p_dec + PHYS_REST_MASS_MEV[type1] * PHYS_REST_MASS_MEV[type1]) - PHYS_REST_MASS_MEV[type1];
+                float KE_2 = std::sqrt(p_dec * p_dec + PHYS_REST_MASS_MEV[type2] * PHYS_REST_MASS_MEV[type2]) - PHYS_REST_MASS_MEV[type2];
+                write_spawn_genome(particles, i, type1, rng, frame_counter_);
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[type1] + KE_1);
+                readback_velocities_[i] = dir * ke_to_speed(KE_1, type1);
+                if (p2_slot != UINT32_MAX) {
+                    write_spawn_genome(particles, p2_slot, type2, rng, frame_counter_);
+                    readback_positions_[p2_slot] = pos;
+                    readback_velocities_[p2_slot] = -dir * ke_to_speed(KE_2, type2);
+                    readback_energies_[p2_slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[type2] + KE_2);
                 }
-                iface.push_notification("Decay: W\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                iface.push_notification(notif_msg, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 {
                     char detail[512];
                     snprintf(detail, sizeof(detail),
-                        "Parent: W+ #%u (M=%.0f MeV)\nDecay momentum: %.2f MeV/c\nProduct e+ #%u KE: %.2f MeV\nProduct nu #%u E: %.2f MeV",
+                        "Parent: W+ #%u (M=%.0f MeV)\nBranch roll: %.3f\nDecay momentum: %.2f MeV/c\nProduct1 type=%u #%u KE: %.2f MeV\nProduct2 type=%u #%u KE: %.2f MeV",
                         i, PHYS_REST_MASS_MEV[W_PLUS_TYPE_PHYS],
-                        p_dec, i, KE_e, nu_slot, p_dec);
-                    iface.push_decay_event("W\xe2\x81\xba \xe2\x86\x92 e\xe2\x81\xba + \xce\xbd", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                        roll, p_dec,
+                        type1, i, KE_1,
+                        type2, p2_slot, KE_2);
+                    iface.push_decay_event(event_msg, PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
                 }
                 break;
             }
 
-            // ── W- → electron + neutrino ──
+            // ── W- → hadronic (67%) or leptonic (33%) ──
             case W_MINUS_TYPE_PHYS: {
-                uint32_t nu_slot = find_dormant(i + 1);
-                float p_dec = two_body_decay_momentum(PHYS_REST_MASS_MEV[W_MINUS_TYPE_PHYS],
-                    PHYS_REST_MASS_MEV[ELECTRON_TYPE_PHYS], PHYS_REST_MASS_MEV[NEUTRINO_TYPE_PHYS]);
-                float KE_e = std::sqrt(p_dec * p_dec + PHYS_REST_MASS_MEV[ELECTRON_TYPE_PHYS] * PHYS_REST_MASS_MEV[ELECTRON_TYPE_PHYS]) - PHYS_REST_MASS_MEV[ELECTRON_TYPE_PHYS];
-                write_spawn_genome(particles, i, ELECTRON_TYPE_PHYS, rng, frame_counter_);
-                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[ELECTRON_TYPE_PHYS] + KE_e);
-                readback_velocities_[i] = dir * ke_to_speed(KE_e, ELECTRON_TYPE_PHYS);
-                if (nu_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, nu_slot, NEUTRINO_TYPE_PHYS, rng, frame_counter_);
-                    readback_positions_[nu_slot] = pos;
-                    readback_velocities_[nu_slot] = -dir * C_SIM * 0.9999f;
-                    readback_energies_[nu_slot] = mev_to_ebuf(p_dec);
+                uint32_t p2_slot = find_dormant(i + 1);
+                std::uniform_real_distribution<float> br(0.0f, 1.0f);
+                float roll = br(rng);
+                uint32_t type1, type2;
+                const char* notif_msg;
+                const char* event_msg;
+                if (roll < 0.32f) {
+                    type1 = DOWN_QUARK_TYPE; type2 = ANTI_UP_TYPE;
+                    notif_msg = "Decay: W\xe2\x81\xbb \xe2\x86\x92 d + u\xcc\x84";
+                    event_msg = "W\xe2\x81\xbb \xe2\x86\x92 d + u\xcc\x84";
+                } else if (roll < 0.335f) {
+                    type1 = STRANGE_QUARK_TYPE; type2 = ANTI_UP_TYPE;
+                    notif_msg = "Decay: W\xe2\x81\xbb \xe2\x86\x92 s + u\xcc\x84";
+                    event_msg = "W\xe2\x81\xbb \xe2\x86\x92 s + u\xcc\x84";
+                } else if (roll < 0.35f) {
+                    type1 = DOWN_QUARK_TYPE; type2 = ANTI_CHARM_TYPE;
+                    notif_msg = "Decay: W\xe2\x81\xbb \xe2\x86\x92 d + c\xcc\x84";
+                    event_msg = "W\xe2\x81\xbb \xe2\x86\x92 d + c\xcc\x84";
+                } else if (roll < 0.67f) {
+                    type1 = STRANGE_QUARK_TYPE; type2 = ANTI_CHARM_TYPE;
+                    notif_msg = "Decay: W\xe2\x81\xbb \xe2\x86\x92 s + c\xcc\x84";
+                    event_msg = "W\xe2\x81\xbb \xe2\x86\x92 s + c\xcc\x84";
+                } else if (roll < 0.78f) {
+                    type1 = ELECTRON_TYPE_PHYS; type2 = NEUTRINO_TYPE_PHYS;
+                    notif_msg = "Decay: W\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xcc\x84" "e";
+                    event_msg = "W\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xcc\x84" "e";
+                } else if (roll < 0.89f) {
+                    type1 = MUON_TYPE_PHYS; type2 = MU_NEUTRINO_TYPE_PHYS;
+                    notif_msg = "Decay: W\xe2\x81\xbb \xe2\x86\x92 \xce\xbc\xe2\x81\xbb + \xce\xbd\xcc\x84\xce\xbc";
+                    event_msg = "W\xe2\x81\xbb \xe2\x86\x92 \xce\xbc\xe2\x81\xbb + \xce\xbd\xcc\x84\xce\xbc";
+                } else {
+                    type1 = TAU_TYPE_PHYS; type2 = TAU_NEUTRINO_TYPE_PHYS;
+                    notif_msg = "Decay: W\xe2\x81\xbb \xe2\x86\x92 \xcf\x84\xe2\x81\xbb + \xce\xbd\xcc\x84\xcf\x84";
+                    event_msg = "W\xe2\x81\xbb \xe2\x86\x92 \xcf\x84\xe2\x81\xbb + \xce\xbd\xcc\x84\xcf\x84";
                 }
-                iface.push_notification("Decay: W\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xcc\x84", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                float p_dec = two_body_decay_momentum(PHYS_REST_MASS_MEV[W_MINUS_TYPE_PHYS],
+                    PHYS_REST_MASS_MEV[type1], PHYS_REST_MASS_MEV[type2]);
+                float KE_1 = std::sqrt(p_dec * p_dec + PHYS_REST_MASS_MEV[type1] * PHYS_REST_MASS_MEV[type1]) - PHYS_REST_MASS_MEV[type1];
+                float KE_2 = std::sqrt(p_dec * p_dec + PHYS_REST_MASS_MEV[type2] * PHYS_REST_MASS_MEV[type2]) - PHYS_REST_MASS_MEV[type2];
+                write_spawn_genome(particles, i, type1, rng, frame_counter_);
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[type1] + KE_1);
+                readback_velocities_[i] = dir * ke_to_speed(KE_1, type1);
+                if (p2_slot != UINT32_MAX) {
+                    write_spawn_genome(particles, p2_slot, type2, rng, frame_counter_);
+                    readback_positions_[p2_slot] = pos;
+                    readback_velocities_[p2_slot] = -dir * ke_to_speed(KE_2, type2);
+                    readback_energies_[p2_slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[type2] + KE_2);
+                }
+                iface.push_notification(notif_msg, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 {
                     char detail[512];
                     snprintf(detail, sizeof(detail),
-                        "Parent: W- #%u (M=%.0f MeV)\nDecay momentum: %.2f MeV/c\nProduct e- #%u KE: %.2f MeV\nProduct nu-bar #%u E: %.2f MeV",
+                        "Parent: W- #%u (M=%.0f MeV)\nBranch roll: %.3f\nDecay momentum: %.2f MeV/c\nProduct1 type=%u #%u KE: %.2f MeV\nProduct2 type=%u #%u KE: %.2f MeV",
                         i, PHYS_REST_MASS_MEV[W_MINUS_TYPE_PHYS],
-                        p_dec, i, KE_e, nu_slot, p_dec);
-                    iface.push_decay_event("W\xe2\x81\xbb \xe2\x86\x92 e\xe2\x81\xbb + \xce\xbd\xcc\x84", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                        roll, p_dec,
+                        type1, i, KE_1,
+                        type2, p2_slot, KE_2);
+                    iface.push_decay_event(event_msg, PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
                 }
                 break;
             }
 
-            // ── Z0 → lepton pair (branching: e⁺e⁻, μ⁺μ⁻, τ⁺τ⁻, νν̄) ──
+            // ── Z0 → hadronic (70.7%) + leptonic (10.2%) + invisible (19.1%) ──
             case Z_BOSON_TYPE_PHYS: {
                 uint32_t p2_slot = find_dormant(i + 1);
                 std::uniform_real_distribution<float> br(0.0f, 1.0f);
                 float roll = br(rng);
-                // Branching ratios (leptonic only): ee 25%, μμ 25%, ττ 25%, νν 25%
                 uint32_t type1, type2;
                 const char* notif_msg;
                 const char* event_msg;
-                if (roll < 0.25f) {
+                if (roll < 0.156f) {
+                    type1 = UP_QUARK_TYPE; type2 = ANTI_UP_TYPE;
+                    notif_msg = "Decay: Z\xe2\x81\xb0 \xe2\x86\x92 u + u\xcc\x84";
+                    event_msg = "Z\xe2\x81\xb0 \xe2\x86\x92 u + u\xcc\x84";
+                } else if (roll < 0.312f) {
+                    type1 = DOWN_QUARK_TYPE; type2 = ANTI_DOWN_TYPE;
+                    notif_msg = "Decay: Z\xe2\x81\xb0 \xe2\x86\x92 d + d\xcc\x84";
+                    event_msg = "Z\xe2\x81\xb0 \xe2\x86\x92 d + d\xcc\x84";
+                } else if (roll < 0.434f) {
+                    type1 = STRANGE_QUARK_TYPE; type2 = ANTI_STRANGE_TYPE;
+                    notif_msg = "Decay: Z\xe2\x81\xb0 \xe2\x86\x92 s + s\xcc\x84";
+                    event_msg = "Z\xe2\x81\xb0 \xe2\x86\x92 s + s\xcc\x84";
+                } else if (roll < 0.556f) {
+                    type1 = CHARM_QUARK_TYPE; type2 = ANTI_CHARM_TYPE;
+                    notif_msg = "Decay: Z\xe2\x81\xb0 \xe2\x86\x92 c + c\xcc\x84";
+                    event_msg = "Z\xe2\x81\xb0 \xe2\x86\x92 c + c\xcc\x84";
+                } else if (roll < 0.707f) {
+                    type1 = BOTTOM_QUARK_TYPE; type2 = ANTI_BOTTOM_TYPE;
+                    notif_msg = "Decay: Z\xe2\x81\xb0 \xe2\x86\x92 b + b\xcc\x84";
+                    event_msg = "Z\xe2\x81\xb0 \xe2\x86\x92 b + b\xcc\x84";
+                } else if (roll < 0.741f) {
                     type1 = ELECTRON_TYPE_PHYS; type2 = POSITRON_TYPE_PHYS;
                     notif_msg = "Decay: Z\xe2\x81\xb0 \xe2\x86\x92 e\xe2\x81\xbb + e\xe2\x81\xba";
                     event_msg = "Z\xe2\x81\xb0 \xe2\x86\x92 e\xe2\x81\xbb + e\xe2\x81\xba";
-                } else if (roll < 0.50f) {
+                } else if (roll < 0.775f) {
                     type1 = MUON_TYPE_PHYS; type2 = ANTIMUON_TYPE_PHYS;
                     notif_msg = "Decay: Z\xe2\x81\xb0 \xe2\x86\x92 \xce\xbc\xe2\x81\xbb + \xce\xbc\xe2\x81\xba";
                     event_msg = "Z\xe2\x81\xb0 \xe2\x86\x92 \xce\xbc\xe2\x81\xbb + \xce\xbc\xe2\x81\xba";
-                } else if (roll < 0.75f) {
+                } else if (roll < 0.809f) {
                     type1 = TAU_TYPE_PHYS; type2 = ANTITAU_TYPE_PHYS;
                     notif_msg = "Decay: Z\xe2\x81\xb0 \xe2\x86\x92 \xcf\x84\xe2\x81\xbb + \xcf\x84\xe2\x81\xba";
                     event_msg = "Z\xe2\x81\xb0 \xe2\x86\x92 \xcf\x84\xe2\x81\xbb + \xcf\x84\xe2\x81\xba";
                 } else {
-                    // νν̄ — random flavor
+                    // νν̄ invisible (19.1%) — split 3 flavors
                     float nu_roll = br(rng);
-                    if (nu_roll < 0.33f) {
+                    if (nu_roll < 0.333f) {
                         type1 = NEUTRINO_TYPE_PHYS; type2 = NEUTRINO_TYPE_PHYS;
                         notif_msg = "Decay: Z\xe2\x81\xb0 \xe2\x86\x92 \xce\xbd" "e + \xce\xbd\xcc\x84" "e";
                         event_msg = "Z\xe2\x81\xb0 \xe2\x86\x92 \xce\xbd" "e\xce\xbd\xcc\x84" "e";
-                    } else if (nu_roll < 0.67f) {
+                    } else if (nu_roll < 0.667f) {
                         type1 = MU_NEUTRINO_TYPE_PHYS; type2 = MU_NEUTRINO_TYPE_PHYS;
                         notif_msg = "Decay: Z\xe2\x81\xb0 \xe2\x86\x92 \xce\xbd\xce\xbc + \xce\xbd\xcc\x84\xce\xbc";
                         event_msg = "Z\xe2\x81\xb0 \xe2\x86\x92 \xce\xbd\xce\xbc\xce\xbd\xcc\x84\xce\xbc";
@@ -3012,148 +3143,306 @@ void PhysicsSimulation::check_decay() {
                 break;
             }
 
-            // ── Bottom → charm + W ──
+            // ── Bottom → daughter + f f̄ (3-body via virtual W⁻*) ──
             case BOTTOM_QUARK_TYPE: {
-                uint32_t w_slot = find_dormant(i + 1);
-                // M=4180, m1=1270(c), m2=80379(W) — note: W is off-shell (virtual) since M < m2
-                // In reality b→c+W* with W* virtual. For sim: give products proportional KE
+                uint32_t slot1 = find_dormant(i + 1);
+                uint32_t slot2 = (slot1 != UINT32_MAX) ? find_dormant(slot1 + 1) : UINT32_MAX;
                 float M_b = PHYS_REST_MASS_MEV[BOTTOM_QUARK_TYPE];
-                float available_KE = M_b * 0.5f;  // approximate: half rest mass as KE
-                write_spawn_genome(particles, i, CHARM_QUARK_TYPE, rng, frame_counter_);
-                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[CHARM_QUARK_TYPE] + available_KE * 0.3f);
-                readback_velocities_[i] = dir * ke_to_speed(available_KE * 0.3f, CHARM_QUARK_TYPE);
-                if (w_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, w_slot, W_MINUS_TYPE_PHYS, rng, frame_counter_);
-                    readback_positions_[w_slot] = pos;
-                    readback_velocities_[w_slot] = -dir * ke_to_speed(available_KE * 0.7f, W_MINUS_TYPE_PHYS);
-                    readback_energies_[w_slot] = mev_to_ebuf(available_KE * 0.7f);
+                std::uniform_real_distribution<float> br(0.0f, 1.0f);
+                float ckm_roll = br(rng);
+                float norm = CKM_BR[0][2] + CKM_BR[1][2]; // Vub² + Vcb²
+                uint32_t daughter = (ckm_roll < CKM_BR[1][2] / norm) ? CHARM_QUARK_TYPE : UP_QUARK_TYPE;
+                const char* d_name = (daughter == CHARM_QUARK_TYPE) ? "c" : "u";
+                float Q = M_b - PHYS_REST_MASS_MEV[daughter];
+                float KE_each = Q / 3.0f;
+                // Virtual W⁻* products: hadronic (67%) d+ū, leptonic (33%) ℓ⁻+ν̄
+                uint32_t f1_type, f2_type;
+                const char* f1_name; const char* f2_name;
+                float wroll = br(rng);
+                if (wroll < 0.67f) {
+                    f1_type = DOWN_QUARK_TYPE;   f1_name = "d";
+                    f2_type = ANTI_UP_TYPE;      f2_name = "u\xcc\x84";
+                } else if (wroll < 0.89f) {
+                    f1_type = ELECTRON_TYPE_PHYS; f1_name = "e\xe2\x81\xbb";
+                    f2_type = NEUTRINO_TYPE_PHYS; f2_name = "\xce\xbd" "e";
+                } else {
+                    f1_type = MUON_TYPE_PHYS;        f1_name = "\xce\xbc\xe2\x81\xbb";
+                    f2_type = MU_NEUTRINO_TYPE_PHYS; f2_name = "\xce\xbd\xce\xbc";
                 }
-                iface.push_notification("Decay: b \xe2\x86\x92 c + W\xe2\x81\xbb", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                write_spawn_genome(particles, i, daughter, rng, frame_counter_);
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[daughter] + KE_each);
+                readback_velocities_[i] = dir * ke_to_speed(KE_each, daughter);
+                if (slot1 != UINT32_MAX) {
+                    write_spawn_genome(particles, slot1, f1_type, rng, frame_counter_);
+                    readback_positions_[slot1] = pos;
+                    readback_energies_[slot1] = mev_to_ebuf(PHYS_REST_MASS_MEV[f1_type] + KE_each);
+                    readback_velocities_[slot1] = glm::vec2(-dir.y, dir.x) * ke_to_speed(KE_each, f1_type);
+                }
+                if (slot2 != UINT32_MAX) {
+                    write_spawn_genome(particles, slot2, f2_type, rng, frame_counter_);
+                    readback_positions_[slot2] = pos;
+                    readback_energies_[slot2] = mev_to_ebuf(PHYS_REST_MASS_MEV[f2_type] + KE_each);
+                    readback_velocities_[slot2] = -dir * ke_to_speed(KE_each, f2_type);
+                }
+                char notif[128]; snprintf(notif, sizeof(notif), "Decay: b \xe2\x86\x92 %s + %s + %s", d_name, f1_name, f2_name);
+                iface.push_notification(notif, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 {
                     char detail[512];
                     snprintf(detail, sizeof(detail),
-                        "Parent: b quark #%u (M=%.0f MeV)\nAvailable KE: %.2f MeV\nc #%u KE: %.2f MeV\nW-* #%u KE: %.2f MeV (virtual/off-shell)",
-                        i, M_b, available_KE, i, available_KE * 0.3f, w_slot, available_KE * 0.7f);
-                    iface.push_decay_event("b \xe2\x86\x92 c + W\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                        "Parent: b quark #%u (M=%.0f MeV)\n3-body via virtual W*\nQ=%.1f MeV (KE ~%.1f each)\n%s #%u + %s #%u + %s #%u",
+                        i, M_b, Q, KE_each, d_name, i, f1_name, slot1, f2_name, slot2);
+                    char ev[64]; snprintf(ev, sizeof(ev), "b \xe2\x86\x92 %s %s%s", d_name, f1_name, f2_name);
+                    iface.push_decay_event(ev, PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
                 }
                 break;
             }
             case ANTI_BOTTOM_TYPE: {
-                uint32_t w_slot = find_dormant(i + 1);
+                uint32_t slot1 = find_dormant(i + 1);
+                uint32_t slot2 = (slot1 != UINT32_MAX) ? find_dormant(slot1 + 1) : UINT32_MAX;
                 float M_b = PHYS_REST_MASS_MEV[ANTI_BOTTOM_TYPE];
-                float available_KE = M_b * 0.5f;
-                write_spawn_genome(particles, i, ANTI_CHARM_TYPE, rng, frame_counter_);
-                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[ANTI_CHARM_TYPE] + available_KE * 0.3f);
-                readback_velocities_[i] = dir * ke_to_speed(available_KE * 0.3f, ANTI_CHARM_TYPE);
-                if (w_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, w_slot, W_PLUS_TYPE_PHYS, rng, frame_counter_);
-                    readback_positions_[w_slot] = pos;
-                    readback_velocities_[w_slot] = -dir * ke_to_speed(available_KE * 0.7f, W_PLUS_TYPE_PHYS);
-                    readback_energies_[w_slot] = mev_to_ebuf(available_KE * 0.7f);
+                std::uniform_real_distribution<float> br(0.0f, 1.0f);
+                float ckm_roll = br(rng);
+                float norm = CKM_BR[0][2] + CKM_BR[1][2];
+                uint32_t daughter = (ckm_roll < CKM_BR[1][2] / norm) ? ANTI_CHARM_TYPE : ANTI_UP_TYPE;
+                const char* d_name = (daughter == ANTI_CHARM_TYPE) ? "c\xcc\x84" : "u\xcc\x84";
+                float Q = M_b - PHYS_REST_MASS_MEV[daughter];
+                float KE_each = Q / 3.0f;
+                // Virtual W⁺* products: hadronic (67%) u+d̄, leptonic (33%) ℓ⁺+ν
+                uint32_t f1_type, f2_type;
+                const char* f1_name; const char* f2_name;
+                float wroll = br(rng);
+                if (wroll < 0.67f) {
+                    f1_type = UP_QUARK_TYPE;     f1_name = "u";
+                    f2_type = ANTI_DOWN_TYPE;    f2_name = "d\xcc\x84";
+                } else if (wroll < 0.89f) {
+                    f1_type = POSITRON_TYPE_PHYS; f1_name = "e\xe2\x81\xba";
+                    f2_type = NEUTRINO_TYPE_PHYS; f2_name = "\xce\xbd" "e";
+                } else {
+                    f1_type = ANTIMUON_TYPE_PHYS;    f1_name = "\xce\xbc\xe2\x81\xba";
+                    f2_type = MU_NEUTRINO_TYPE_PHYS; f2_name = "\xce\xbd\xce\xbc";
                 }
-                iface.push_notification("Decay: b\xcc\x84 \xe2\x86\x92 c\xcc\x84 + W\xe2\x81\xba", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                write_spawn_genome(particles, i, daughter, rng, frame_counter_);
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[daughter] + KE_each);
+                readback_velocities_[i] = dir * ke_to_speed(KE_each, daughter);
+                if (slot1 != UINT32_MAX) {
+                    write_spawn_genome(particles, slot1, f1_type, rng, frame_counter_);
+                    readback_positions_[slot1] = pos;
+                    readback_energies_[slot1] = mev_to_ebuf(PHYS_REST_MASS_MEV[f1_type] + KE_each);
+                    readback_velocities_[slot1] = glm::vec2(-dir.y, dir.x) * ke_to_speed(KE_each, f1_type);
+                }
+                if (slot2 != UINT32_MAX) {
+                    write_spawn_genome(particles, slot2, f2_type, rng, frame_counter_);
+                    readback_positions_[slot2] = pos;
+                    readback_energies_[slot2] = mev_to_ebuf(PHYS_REST_MASS_MEV[f2_type] + KE_each);
+                    readback_velocities_[slot2] = -dir * ke_to_speed(KE_each, f2_type);
+                }
+                char notif[128]; snprintf(notif, sizeof(notif), "Decay: b\xcc\x84 \xe2\x86\x92 %s + %s + %s", d_name, f1_name, f2_name);
+                iface.push_notification(notif, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 {
                     char detail[512];
                     snprintf(detail, sizeof(detail),
-                        "Parent: b-bar #%u (M=%.0f MeV)\nAvailable KE: %.2f MeV\nc-bar #%u KE: %.2f MeV\nW+* #%u KE: %.2f MeV (virtual/off-shell)",
-                        i, M_b, available_KE, i, available_KE * 0.3f, w_slot, available_KE * 0.7f);
-                    iface.push_decay_event("b\xcc\x84 \xe2\x86\x92 c\xcc\x84 + W\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                        "Parent: b-bar #%u (M=%.0f MeV)\n3-body via virtual W*\nQ=%.1f MeV (KE ~%.1f each)\n%s #%u + %s #%u + %s #%u",
+                        i, M_b, Q, KE_each, d_name, i, f1_name, slot1, f2_name, slot2);
+                    char ev[64]; snprintf(ev, sizeof(ev), "b\xcc\x84 \xe2\x86\x92 %s %s%s", d_name, f1_name, f2_name);
+                    iface.push_decay_event(ev, PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
                 }
                 break;
             }
 
-            // ── Charm → strange + W (virtual W*) ──
+            // ── Charm → daughter + f f̄ (3-body via virtual W⁺*) ──
+            // CKM: s (95.0%), d (5.0%) — b excluded (M_b > M_c)
             case CHARM_QUARK_TYPE: {
-                uint32_t w_slot = find_dormant(i + 1);
+                uint32_t slot1 = find_dormant(i + 1);
+                uint32_t slot2 = (slot1 != UINT32_MAX) ? find_dormant(slot1 + 1) : UINT32_MAX;
                 float M_c = PHYS_REST_MASS_MEV[CHARM_QUARK_TYPE];
-                float available_KE = M_c * 0.5f;
-                write_spawn_genome(particles, i, STRANGE_QUARK_TYPE, rng, frame_counter_);
-                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[STRANGE_QUARK_TYPE] + available_KE * 0.3f);
-                readback_velocities_[i] = dir * ke_to_speed(available_KE * 0.3f, STRANGE_QUARK_TYPE);
-                if (w_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, w_slot, W_PLUS_TYPE_PHYS, rng, frame_counter_);
-                    readback_positions_[w_slot] = pos;
-                    readback_velocities_[w_slot] = -dir * ke_to_speed(available_KE * 0.7f, W_PLUS_TYPE_PHYS);
-                    readback_energies_[w_slot] = mev_to_ebuf(available_KE * 0.7f);
+                std::uniform_real_distribution<float> br(0.0f, 1.0f);
+                float ckm_roll = br(rng);
+                float norm_ckm = CKM_BR[1][1] + CKM_BR[1][0]; // Vcs² + Vcd² (exclude Vcb — M_b > M_c)
+                uint32_t daughter = (ckm_roll < CKM_BR[1][1] / norm_ckm) ? STRANGE_QUARK_TYPE : DOWN_QUARK_TYPE;
+                const char* d_name = (daughter == STRANGE_QUARK_TYPE) ? "s" : "d";
+                float Q = M_c - PHYS_REST_MASS_MEV[daughter];
+                float KE_each = Q / 3.0f;
+                // Virtual W⁺* products: hadronic (67%) u+d̄, leptonic (33%) ℓ⁺+ν
+                uint32_t f1_type, f2_type;
+                const char* f1_name; const char* f2_name;
+                float wroll = br(rng);
+                if (wroll < 0.67f) {
+                    f1_type = UP_QUARK_TYPE;     f1_name = "u";
+                    f2_type = ANTI_DOWN_TYPE;    f2_name = "d\xcc\x84";
+                } else if (wroll < 0.89f) {
+                    f1_type = POSITRON_TYPE_PHYS; f1_name = "e\xe2\x81\xba";
+                    f2_type = NEUTRINO_TYPE_PHYS; f2_name = "\xce\xbd" "e";
+                } else {
+                    f1_type = ANTIMUON_TYPE_PHYS;    f1_name = "\xce\xbc\xe2\x81\xba";
+                    f2_type = MU_NEUTRINO_TYPE_PHYS; f2_name = "\xce\xbd\xce\xbc";
                 }
-                iface.push_notification("Decay: c \xe2\x86\x92 s + W\xe2\x81\xba", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                write_spawn_genome(particles, i, daughter, rng, frame_counter_);
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[daughter] + KE_each);
+                readback_velocities_[i] = dir * ke_to_speed(KE_each, daughter);
+                if (slot1 != UINT32_MAX) {
+                    write_spawn_genome(particles, slot1, f1_type, rng, frame_counter_);
+                    readback_positions_[slot1] = pos;
+                    readback_energies_[slot1] = mev_to_ebuf(PHYS_REST_MASS_MEV[f1_type] + KE_each);
+                    readback_velocities_[slot1] = glm::vec2(-dir.y, dir.x) * ke_to_speed(KE_each, f1_type);
+                }
+                if (slot2 != UINT32_MAX) {
+                    write_spawn_genome(particles, slot2, f2_type, rng, frame_counter_);
+                    readback_positions_[slot2] = pos;
+                    readback_energies_[slot2] = mev_to_ebuf(PHYS_REST_MASS_MEV[f2_type] + KE_each);
+                    readback_velocities_[slot2] = -dir * ke_to_speed(KE_each, f2_type);
+                }
+                char notif[128]; snprintf(notif, sizeof(notif), "Decay: c \xe2\x86\x92 %s + %s + %s", d_name, f1_name, f2_name);
+                iface.push_notification(notif, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 {
                     char detail[512];
                     snprintf(detail, sizeof(detail),
-                        "Parent: charm quark #%u (M=%.0f MeV)\nAvailable KE: %.2f MeV\ns #%u KE: %.2f MeV\nW+* #%u KE: %.2f MeV (virtual/off-shell)",
-                        i, M_c, available_KE, i, available_KE * 0.3f, w_slot, available_KE * 0.7f);
-                    iface.push_decay_event("c \xe2\x86\x92 s + W\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                        "Parent: charm #%u (M=%.0f MeV)\n3-body via virtual W*\nQ=%.1f MeV (KE ~%.1f each)\n%s #%u + %s #%u + %s #%u",
+                        i, M_c, Q, KE_each, d_name, i, f1_name, slot1, f2_name, slot2);
+                    char ev[64]; snprintf(ev, sizeof(ev), "c \xe2\x86\x92 %s %s%s", d_name, f1_name, f2_name);
+                    iface.push_decay_event(ev, PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
                 }
                 break;
             }
             case ANTI_CHARM_TYPE: {
-                uint32_t w_slot = find_dormant(i + 1);
+                uint32_t slot1 = find_dormant(i + 1);
+                uint32_t slot2 = (slot1 != UINT32_MAX) ? find_dormant(slot1 + 1) : UINT32_MAX;
                 float M_c = PHYS_REST_MASS_MEV[ANTI_CHARM_TYPE];
-                float available_KE = M_c * 0.5f;
-                write_spawn_genome(particles, i, ANTI_STRANGE_TYPE, rng, frame_counter_);
-                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[ANTI_STRANGE_TYPE] + available_KE * 0.3f);
-                readback_velocities_[i] = dir * ke_to_speed(available_KE * 0.3f, ANTI_STRANGE_TYPE);
-                if (w_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, w_slot, W_MINUS_TYPE_PHYS, rng, frame_counter_);
-                    readback_positions_[w_slot] = pos;
-                    readback_velocities_[w_slot] = -dir * ke_to_speed(available_KE * 0.7f, W_MINUS_TYPE_PHYS);
-                    readback_energies_[w_slot] = mev_to_ebuf(available_KE * 0.7f);
+                std::uniform_real_distribution<float> br(0.0f, 1.0f);
+                float ckm_roll = br(rng);
+                float norm_ckm = CKM_BR[1][1] + CKM_BR[1][0];
+                uint32_t daughter = (ckm_roll < CKM_BR[1][1] / norm_ckm) ? ANTI_STRANGE_TYPE : ANTI_DOWN_TYPE;
+                const char* d_name = (daughter == ANTI_STRANGE_TYPE) ? "s\xcc\x84" : "d\xcc\x84";
+                float Q = M_c - PHYS_REST_MASS_MEV[daughter];
+                float KE_each = Q / 3.0f;
+                // Virtual W⁻* products: hadronic (67%) d+ū, leptonic (33%) ℓ⁻+ν̄
+                uint32_t f1_type, f2_type;
+                const char* f1_name; const char* f2_name;
+                float wroll = br(rng);
+                if (wroll < 0.67f) {
+                    f1_type = DOWN_QUARK_TYPE;   f1_name = "d";
+                    f2_type = ANTI_UP_TYPE;      f2_name = "u\xcc\x84";
+                } else if (wroll < 0.89f) {
+                    f1_type = ELECTRON_TYPE_PHYS; f1_name = "e\xe2\x81\xbb";
+                    f2_type = NEUTRINO_TYPE_PHYS; f2_name = "\xce\xbd" "e";
+                } else {
+                    f1_type = MUON_TYPE_PHYS;        f1_name = "\xce\xbc\xe2\x81\xbb";
+                    f2_type = MU_NEUTRINO_TYPE_PHYS; f2_name = "\xce\xbd\xce\xbc";
                 }
-                iface.push_notification("Decay: c\xcc\x84 \xe2\x86\x92 s\xcc\x84 + W\xe2\x81\xbb", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                write_spawn_genome(particles, i, daughter, rng, frame_counter_);
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[daughter] + KE_each);
+                readback_velocities_[i] = dir * ke_to_speed(KE_each, daughter);
+                if (slot1 != UINT32_MAX) {
+                    write_spawn_genome(particles, slot1, f1_type, rng, frame_counter_);
+                    readback_positions_[slot1] = pos;
+                    readback_energies_[slot1] = mev_to_ebuf(PHYS_REST_MASS_MEV[f1_type] + KE_each);
+                    readback_velocities_[slot1] = glm::vec2(-dir.y, dir.x) * ke_to_speed(KE_each, f1_type);
+                }
+                if (slot2 != UINT32_MAX) {
+                    write_spawn_genome(particles, slot2, f2_type, rng, frame_counter_);
+                    readback_positions_[slot2] = pos;
+                    readback_energies_[slot2] = mev_to_ebuf(PHYS_REST_MASS_MEV[f2_type] + KE_each);
+                    readback_velocities_[slot2] = -dir * ke_to_speed(KE_each, f2_type);
+                }
+                char notif[128]; snprintf(notif, sizeof(notif), "Decay: c\xcc\x84 \xe2\x86\x92 %s + %s + %s", d_name, f1_name, f2_name);
+                iface.push_notification(notif, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 {
                     char detail[512];
                     snprintf(detail, sizeof(detail),
-                        "Parent: anti-charm #%u (M=%.0f MeV)\nAvailable KE: %.2f MeV\ns-bar #%u KE: %.2f MeV\nW-* #%u KE: %.2f MeV (virtual/off-shell)",
-                        i, M_c, available_KE, i, available_KE * 0.3f, w_slot, available_KE * 0.7f);
-                    iface.push_decay_event("c\xcc\x84 \xe2\x86\x92 s\xcc\x84 + W\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                        "Parent: anti-charm #%u (M=%.0f MeV)\n3-body via virtual W*\nQ=%.1f MeV (KE ~%.1f each)\n%s #%u + %s #%u + %s #%u",
+                        i, M_c, Q, KE_each, d_name, i, f1_name, slot1, f2_name, slot2);
+                    char ev[64]; snprintf(ev, sizeof(ev), "c\xcc\x84 \xe2\x86\x92 %s %s%s", d_name, f1_name, f2_name);
+                    iface.push_decay_event(ev, PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
                 }
                 break;
             }
 
-            // ── Strange → up + W (virtual W*) ──
+            // ── Strange → u + f f̄ (3-body via virtual W⁻*) ──
+            // Only s → u allowed (M_c >> M_s, charm forbidden)
+            // Q ≈ 91 MeV: hadronic u+d̄ OK, leptonic e+ν only (μ mass > Q)
             case STRANGE_QUARK_TYPE: {
-                uint32_t w_slot = find_dormant(i + 1);
+                uint32_t slot1 = find_dormant(i + 1);
+                uint32_t slot2 = (slot1 != UINT32_MAX) ? find_dormant(slot1 + 1) : UINT32_MAX;
                 float M_s = PHYS_REST_MASS_MEV[STRANGE_QUARK_TYPE];
-                float available_KE = M_s * 0.5f;
-                write_spawn_genome(particles, i, UP_QUARK_TYPE, rng, frame_counter_);
-                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[UP_QUARK_TYPE] + available_KE * 0.3f);
-                readback_velocities_[i] = dir * ke_to_speed(available_KE * 0.3f, UP_QUARK_TYPE);
-                if (w_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, w_slot, W_MINUS_TYPE_PHYS, rng, frame_counter_);
-                    readback_positions_[w_slot] = pos;
-                    readback_velocities_[w_slot] = -dir * ke_to_speed(available_KE * 0.7f, W_MINUS_TYPE_PHYS);
-                    readback_energies_[w_slot] = mev_to_ebuf(available_KE * 0.7f);
+                float Q = M_s - PHYS_REST_MASS_MEV[UP_QUARK_TYPE];
+                float KE_each = Q / 3.0f;
+                std::uniform_real_distribution<float> br(0.0f, 1.0f);
+                // Virtual W⁻* products: hadronic (67%) d+ū, leptonic (33%) e⁻+ν̄e
+                // (μ mass 105.7 > Q ≈ 91, so only electron channel)
+                uint32_t f1_type, f2_type;
+                const char* f1_name; const char* f2_name;
+                if (br(rng) < 0.67f) {
+                    f1_type = DOWN_QUARK_TYPE;    f1_name = "d";
+                    f2_type = ANTI_UP_TYPE;       f2_name = "u\xcc\x84";
+                } else {
+                    f1_type = ELECTRON_TYPE_PHYS; f1_name = "e\xe2\x81\xbb";
+                    f2_type = NEUTRINO_TYPE_PHYS; f2_name = "\xce\xbd" "e";
                 }
-                iface.push_notification("Decay: s \xe2\x86\x92 u + W\xe2\x81\xbb", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                write_spawn_genome(particles, i, UP_QUARK_TYPE, rng, frame_counter_);
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[UP_QUARK_TYPE] + KE_each);
+                readback_velocities_[i] = dir * ke_to_speed(KE_each, UP_QUARK_TYPE);
+                if (slot1 != UINT32_MAX) {
+                    write_spawn_genome(particles, slot1, f1_type, rng, frame_counter_);
+                    readback_positions_[slot1] = pos;
+                    readback_energies_[slot1] = mev_to_ebuf(PHYS_REST_MASS_MEV[f1_type] + KE_each);
+                    readback_velocities_[slot1] = glm::vec2(-dir.y, dir.x) * ke_to_speed(KE_each, f1_type);
+                }
+                if (slot2 != UINT32_MAX) {
+                    write_spawn_genome(particles, slot2, f2_type, rng, frame_counter_);
+                    readback_positions_[slot2] = pos;
+                    readback_energies_[slot2] = mev_to_ebuf(PHYS_REST_MASS_MEV[f2_type] + KE_each);
+                    readback_velocities_[slot2] = -dir * ke_to_speed(KE_each, f2_type);
+                }
+                char notif[128]; snprintf(notif, sizeof(notif), "Decay: s \xe2\x86\x92 u + %s + %s", f1_name, f2_name);
+                iface.push_notification(notif, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 {
                     char detail[512];
                     snprintf(detail, sizeof(detail),
-                        "Parent: strange quark #%u (M=%.0f MeV)\nAvailable KE: %.2f MeV\nu #%u KE: %.2f MeV\nW-* #%u KE: %.2f MeV (virtual/off-shell)",
-                        i, M_s, available_KE, i, available_KE * 0.3f, w_slot, available_KE * 0.7f);
-                    iface.push_decay_event("s \xe2\x86\x92 u + W\xe2\x81\xbb", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                        "Parent: strange #%u (M=%.0f MeV)\n3-body via virtual W*\nQ=%.1f MeV (KE ~%.1f each)\nu #%u + %s #%u + %s #%u",
+                        i, M_s, Q, KE_each, i, f1_name, slot1, f2_name, slot2);
+                    iface.push_decay_event("s \xe2\x86\x92 u + ff\xcc\x84", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
                 }
                 break;
             }
             case ANTI_STRANGE_TYPE: {
-                uint32_t w_slot = find_dormant(i + 1);
+                uint32_t slot1 = find_dormant(i + 1);
+                uint32_t slot2 = (slot1 != UINT32_MAX) ? find_dormant(slot1 + 1) : UINT32_MAX;
                 float M_s = PHYS_REST_MASS_MEV[ANTI_STRANGE_TYPE];
-                float available_KE = M_s * 0.5f;
-                write_spawn_genome(particles, i, ANTI_UP_TYPE, rng, frame_counter_);
-                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[ANTI_UP_TYPE] + available_KE * 0.3f);
-                readback_velocities_[i] = dir * ke_to_speed(available_KE * 0.3f, ANTI_UP_TYPE);
-                if (w_slot != UINT32_MAX) {
-                    write_spawn_genome(particles, w_slot, W_PLUS_TYPE_PHYS, rng, frame_counter_);
-                    readback_positions_[w_slot] = pos;
-                    readback_velocities_[w_slot] = -dir * ke_to_speed(available_KE * 0.7f, W_PLUS_TYPE_PHYS);
-                    readback_energies_[w_slot] = mev_to_ebuf(available_KE * 0.7f);
+                float Q = M_s - PHYS_REST_MASS_MEV[ANTI_UP_TYPE];
+                float KE_each = Q / 3.0f;
+                std::uniform_real_distribution<float> br(0.0f, 1.0f);
+                // Virtual W⁺* products: hadronic (67%) u+d̄, leptonic (33%) e⁺+ν
+                uint32_t f1_type, f2_type;
+                const char* f1_name; const char* f2_name;
+                if (br(rng) < 0.67f) {
+                    f1_type = UP_QUARK_TYPE;      f1_name = "u";
+                    f2_type = ANTI_DOWN_TYPE;     f2_name = "d\xcc\x84";
+                } else {
+                    f1_type = POSITRON_TYPE_PHYS; f1_name = "e\xe2\x81\xba";
+                    f2_type = NEUTRINO_TYPE_PHYS; f2_name = "\xce\xbd" "e";
                 }
-                iface.push_notification("Decay: s\xcc\x84 \xe2\x86\x92 u\xcc\x84 + W\xe2\x81\xba", ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
+                write_spawn_genome(particles, i, ANTI_UP_TYPE, rng, frame_counter_);
+                readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[ANTI_UP_TYPE] + KE_each);
+                readback_velocities_[i] = dir * ke_to_speed(KE_each, ANTI_UP_TYPE);
+                if (slot1 != UINT32_MAX) {
+                    write_spawn_genome(particles, slot1, f1_type, rng, frame_counter_);
+                    readback_positions_[slot1] = pos;
+                    readback_energies_[slot1] = mev_to_ebuf(PHYS_REST_MASS_MEV[f1_type] + KE_each);
+                    readback_velocities_[slot1] = glm::vec2(-dir.y, dir.x) * ke_to_speed(KE_each, f1_type);
+                }
+                if (slot2 != UINT32_MAX) {
+                    write_spawn_genome(particles, slot2, f2_type, rng, frame_counter_);
+                    readback_positions_[slot2] = pos;
+                    readback_energies_[slot2] = mev_to_ebuf(PHYS_REST_MASS_MEV[f2_type] + KE_each);
+                    readback_velocities_[slot2] = -dir * ke_to_speed(KE_each, f2_type);
+                }
+                char notif[128]; snprintf(notif, sizeof(notif), "Decay: s\xcc\x84 \xe2\x86\x92 u\xcc\x84 + %s + %s", f1_name, f2_name);
+                iface.push_notification(notif, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
                 {
                     char detail[512];
                     snprintf(detail, sizeof(detail),
-                        "Parent: anti-strange #%u (M=%.0f MeV)\nAvailable KE: %.2f MeV\nu-bar #%u KE: %.2f MeV\nW+* #%u KE: %.2f MeV (virtual/off-shell)",
-                        i, M_s, available_KE, i, available_KE * 0.3f, w_slot, available_KE * 0.7f);
-                    iface.push_decay_event("s\xcc\x84 \xe2\x86\x92 u\xcc\x84 + W\xe2\x81\xba", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
+                        "Parent: anti-strange #%u (M=%.0f MeV)\n3-body via virtual W*\nQ=%.1f MeV (KE ~%.1f each)\nu\xcc\x84 #%u + %s #%u + %s #%u",
+                        i, M_s, Q, KE_each, i, f1_name, slot1, f2_name, slot2);
+                    iface.push_decay_event("s\xcc\x84 \xe2\x86\x92 u\xcc\x84 + ff\xcc\x84", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.8f, 0.5f, 1.0f), std::string(detail));
                 }
                 break;
             }
@@ -3274,6 +3563,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * 5.0f;
                     readback_energies_[slot] = 0.8f;
                 }
+                iface.push_notification("Decay: Axino -> gamma + N1", ImVec4(0.6f, 0.3f, 0.9f, 1.0f));
                 iface.push_decay_event("Axino -> gamma + N1", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.6f, 0.3f, 0.9f, 1.0f), "");
                 break;
             }
@@ -3290,6 +3580,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * 80.0f;
                     readback_energies_[slot] = 0.6f;
                 }
+                iface.push_notification("Decay: A' -> e+ e-", ImVec4(0.5f, 0.2f, 0.8f, 1.0f));
                 iface.push_decay_event("A' -> e+ e-", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.5f, 0.2f, 0.8f, 1.0f), "");
                 break;
             }
@@ -3306,6 +3597,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * 10.0f;
                     readback_energies_[slot] = 0.8f;
                 }
+                iface.push_notification("Decay: e~ -> e + N1", ImVec4(0.8f, 0.6f, 0.9f, 1.0f));
                 iface.push_decay_event("e~ -> e + N1", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.8f, 0.6f, 0.9f, 1.0f), "");
                 break;
             }
@@ -3322,6 +3614,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * 10.0f;
                     readback_energies_[slot] = 0.8f;
                 }
+                iface.push_notification("Decay: mu~ -> mu + N1", ImVec4(0.8f, 0.5f, 0.9f, 1.0f));
                 iface.push_decay_event("mu~ -> mu + N1", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.8f, 0.5f, 0.9f, 1.0f), "");
                 break;
             }
@@ -3338,6 +3631,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * 10.0f;
                     readback_energies_[slot] = 0.8f;
                 }
+                iface.push_notification("Decay: tau~ -> tau + N1", ImVec4(0.7f, 0.5f, 0.9f, 1.0f));
                 iface.push_decay_event("tau~ -> tau + N1", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.7f, 0.5f, 0.9f, 1.0f), "");
                 break;
             }
@@ -3354,6 +3648,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * 5.0f;
                     readback_energies_[slot] = 0.8f;
                 }
+                iface.push_notification("Decay: q~ -> q + g~", ImVec4(0.9f, 0.7f, 0.5f, 1.0f));
                 iface.push_decay_event("q~ -> q + g~", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.9f, 0.7f, 0.5f, 1.0f), "");
                 break;
             }
@@ -3370,6 +3665,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * 5.0f;
                     readback_energies_[slot] = 0.8f;
                 }
+                iface.push_notification("Decay: g~ -> g + N1", ImVec4(0.9f, 0.6f, 0.4f, 1.0f));
                 iface.push_decay_event("g~ -> g + N1", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.9f, 0.6f, 0.4f, 1.0f), "");
                 break;
             }
@@ -3386,6 +3682,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * 10.0f;
                     readback_energies_[slot] = 0.8f;
                 }
+                iface.push_notification("Decay: y~ -> gamma + N1", ImVec4(0.9f, 0.8f, 0.5f, 1.0f));
                 iface.push_decay_event("y~ -> gamma + N1", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.9f, 0.8f, 0.5f, 1.0f), "");
                 break;
             }
@@ -3402,6 +3699,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * 10.0f;
                     readback_energies_[slot] = 0.8f;
                 }
+                iface.push_notification("Decay: W~ -> W + N1", ImVec4(0.8f, 0.7f, 0.5f, 1.0f));
                 iface.push_decay_event("W~ -> W + N1", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.8f, 0.7f, 0.5f, 1.0f), "");
                 break;
             }
@@ -3418,6 +3716,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * 10.0f;
                     readback_energies_[slot] = 0.8f;
                 }
+                iface.push_notification("Decay: Z~ -> Z + N1", ImVec4(0.8f, 0.7f, 0.6f, 1.0f));
                 iface.push_decay_event("Z~ -> Z + N1", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.8f, 0.7f, 0.6f, 1.0f), "");
                 break;
             }
@@ -3434,6 +3733,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * 10.0f;
                     readback_energies_[slot] = 0.8f;
                 }
+                iface.push_notification("Decay: H~ -> H + N1", ImVec4(0.7f, 0.8f, 0.5f, 1.0f));
                 iface.push_decay_event("H~ -> H + N1", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.7f, 0.8f, 0.5f, 1.0f), "");
                 break;
             }
@@ -3450,6 +3750,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * 10.0f;
                     readback_energies_[slot] = 0.8f;
                 }
+                iface.push_notification("Decay: v~ -> nu + N1", ImVec4(0.6f, 0.8f, 0.5f, 1.0f));
                 iface.push_decay_event("v~ -> nu + N1", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.6f, 0.8f, 0.5f, 1.0f), "");
                 break;
             }
@@ -3466,6 +3767,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * 100.0f;
                     readback_energies_[slot] = 0.7f;
                 }
+                iface.push_notification("Decay: X -> u + e+", ImVec4(0.0f, 1.0f, 0.8f, 1.0f));
                 iface.push_decay_event("X -> u + e+", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.0f, 1.0f, 0.8f, 1.0f), "");
                 break;
             }
@@ -3482,6 +3784,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * C_SIM * 0.9999f;
                     readback_energies_[slot] = 0.5f;
                 }
+                iface.push_notification("Decay: Y -> d + nu", ImVec4(0.0f, 0.9f, 0.7f, 1.0f));
                 iface.push_decay_event("Y -> d + nu", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.0f, 0.9f, 0.7f, 1.0f), "");
                 break;
             }
@@ -3498,6 +3801,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * C_SIM;
                     readback_energies_[slot] = 0.5f;
                 }
+                iface.push_notification("Decay: Radion -> gamma gamma", ImVec4(0.0f, 0.8f, 0.9f, 1.0f));
                 iface.push_decay_event("Radion -> gamma gamma", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.0f, 0.8f, 0.9f, 1.0f), "");
                 break;
             }
@@ -3514,6 +3818,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * C_SIM;
                     readback_energies_[slot] = 0.4f;
                 }
+                iface.push_notification("Decay: Dilaton -> gamma gamma", ImVec4(0.0f, 0.7f, 0.8f, 1.0f));
                 iface.push_decay_event("Dilaton -> gamma gamma", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.0f, 0.7f, 0.8f, 1.0f), "");
                 break;
             }
@@ -3530,6 +3835,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * C_SIM;
                     readback_energies_[slot] = 0.5f;
                 }
+                iface.push_notification("Decay: Tachyon -> gamma gamma", ImVec4(1.0f, 0.0f, 0.5f, 1.0f));
                 iface.push_decay_event("Tachyon -> gamma gamma", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.0f, 0.5f, 1.0f), "");
                 break;
             }
@@ -3546,6 +3852,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * C_SIM;
                     readback_energies_[slot] = 0.8f;
                 }
+                iface.push_notification("Decay: Inflaton -> gamma gamma", ImVec4(1.0f, 0.9f, 0.0f, 1.0f));
                 iface.push_decay_event("Inflaton -> gamma gamma", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(1.0f, 0.9f, 0.0f, 1.0f), "");
                 break;
             }
@@ -3569,6 +3876,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[s2] = -dir * C_SIM;
                     readback_energies_[s2] = 0.5f;
                 }
+                iface.push_notification("Decay: Odderon -> 3g", ImVec4(0.8f, 0.4f, 0.0f, 1.0f));
                 iface.push_decay_event("Odderon -> 3g", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.8f, 0.4f, 0.0f, 1.0f), "");
                 break;
             }
@@ -3585,6 +3893,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * C_SIM;
                     readback_energies_[slot] = 0.5f;
                 }
+                iface.push_notification("Decay: Glueball -> gg", ImVec4(0.7f, 0.5f, 0.0f, 1.0f));
                 iface.push_decay_event("Glueball -> gg", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.7f, 0.5f, 0.0f, 1.0f), "");
                 break;
             }
@@ -3601,6 +3910,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * 80.0f;
                     readback_energies_[slot] = 0.6f;
                 }
+                iface.push_notification("Decay: X17 -> e+ e-", ImVec4(0.9f, 0.3f, 0.6f, 1.0f));
                 iface.push_decay_event("X17 -> e+ e-", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.9f, 0.3f, 0.6f, 1.0f), "");
                 break;
             }
@@ -3617,6 +3927,7 @@ void PhysicsSimulation::check_decay() {
                     readback_velocities_[slot] = -dir * C_SIM * 0.9999f;
                     readback_energies_[slot] = 0.5f;
                 }
+                iface.push_notification("Decay: Pp -> W + nu", ImVec4(0.5f, 0.9f, 0.5f, 1.0f));
                 iface.push_decay_event("Pp -> W + nu", PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.5f, 0.9f, 0.5f, 1.0f), "");
                 break;
             }
@@ -4230,6 +4541,7 @@ void PhysicsSimulation::check_photoelectric() {
                         "Photon #%u E: %.4f\nTarget e- #%u (shell %d, Z_nuc=%d)\nBinding E: %.4f\nKick E: %.4f\nEject speed: %.2f",
                         i, ph_energy, best_e, shell, Z_nucleus,
                         binding, kick_energy, glm::length(readback_velocities_[best_e]));
+                    iface.push_notification("Photoelectric: \xce\xb3 absorbed, e\xe2\x81\xbb ionized", ImVec4(0.3f, 0.7f, 1.0f, 1.0f));
                     iface.push_decay_event("Photoelectric: \xce\xb3 absorbed, e\xe2\x81\xbb ionized", PhysicsInterface::DEVT_PHOTOELECTRIC, ImVec4(0.3f, 0.7f, 1.0f, 1.0f), std::string(detail));
                 }
 
@@ -4277,6 +4589,7 @@ void PhysicsSimulation::check_photoelectric() {
                         best_e, shell, Z_nucleus,
                         ph_energy * 0.4f, binding,
                         glm::length(readback_velocities_[i]));
+                    iface.push_notification("Compton: \xce\xb3 scattered off bound e\xe2\x81\xbb", ImVec4(0.4f, 0.7f, 0.9f, 1.0f));
                     iface.push_decay_event("Compton: \xce\xb3 scattered off bound e\xe2\x81\xbb", PhysicsInterface::DEVT_PHOTOELECTRIC, ImVec4(0.4f, 0.7f, 0.9f, 1.0f), std::string(detail));
                 }
             }
@@ -4307,6 +4620,7 @@ void PhysicsSimulation::check_photoelectric() {
                         "Photon #%u E: %.4f -> %.4f\nFree e- #%u (unbound)\nEnergy transfer: %.4f\ne- energy after: %.4f",
                         i, ph_energy, readback_energies_[i],
                         best_e, transfer, readback_energies_[best_e]);
+                    iface.push_notification("Free e\xe2\x81\xbb Compton scatter", ImVec4(0.5f, 0.6f, 0.8f, 1.0f));
                     iface.push_decay_event("Free e\xe2\x81\xbb Compton scatter", PhysicsInterface::DEVT_PHOTOELECTRIC, ImVec4(0.5f, 0.6f, 0.8f, 1.0f), std::string(detail));
                 }
             }
@@ -4371,6 +4685,7 @@ void PhysicsSimulation::check_photoelectric() {
                 i, ph_energy, readback_energies_[i],
                 best_nuc, particles.types[best_nuc],
                 transfer, readback_energies_[best_nuc]);
+            iface.push_notification("Nuclear Compton: \xce\xb3 + N scatter", ImVec4(0.6f, 0.5f, 0.9f, 1.0f));
             iface.push_decay_event("Nuclear Compton: \xce\xb3 + N scatter", PhysicsInterface::DEVT_PHOTOELECTRIC, ImVec4(0.6f, 0.5f, 0.9f, 1.0f), std::string(detail));
         }
     }
@@ -4605,11 +4920,6 @@ void PhysicsSimulation::check_shell_transitions() {
     const uint32_t n = cfg.particle_count;
     std::mt19937 rng(frame_counter_ * 2654435761u + 7);
     static constexpr float BINDING_ENERGY[4] = {0.50f, 0.30f, 0.15f, 0.08f};
-    static constexpr int SHELL_CAP[] = {2, 8, 18, 32};
-    static constexpr int NUM_SHELLS = 4;
-    const float R_BOHR = 15.0f;
-    const float K_COULOMB_F = 1200.0f;
-    const float SOFTEN_SQ = 64.0f;
 
     int transition_count = 0;
 
@@ -4622,17 +4932,17 @@ void PhysicsSimulation::check_shell_transitions() {
     }
 
     // Count current shell occupancy per nucleus
-    // shell_occ[ni * NUM_SHELLS + s] = current electron count in shell s of nucleus ni
-    std::vector<int> shell_occ(detected_nuclei_.size() * NUM_SHELLS, 0);
+    // shell_occ[ni * NUM_SHELLS_O + s] = current electron count in shell s of nucleus ni
+    std::vector<int> shell_occ(detected_nuclei_.size() * NUM_SHELLS_O, 0);
     for (uint32_t i = 0; i < n; ++i) {
         if (particles.orbital_shell.size() <= i) break;
         int8_t sh = particles.orbital_shell[i];
-        if (sh < 0 || sh >= NUM_SHELLS) continue;
+        if (sh < 0 || sh >= NUM_SHELLS_O) continue;
         int32_t parent = particles.orbital_parent[i];
         if (parent < 0) continue;
         auto it = rep_to_nuc.find(parent);
         if (it == rep_to_nuc.end()) continue;
-        shell_occ[it->second * NUM_SHELLS + sh]++;
+        shell_occ[it->second * NUM_SHELLS_O + sh]++;
     }
 
     // Helper: find a dormant slot for photon emission
@@ -4647,13 +4957,13 @@ void PhysicsSimulation::check_shell_transitions() {
     auto recompute_L = [&](uint32_t idx, int Z, int shell, size_t ni) {
         int inner = 0;
         for (int s = 0; s < shell; ++s)
-            inner += shell_occ[ni * NUM_SHELLS + s];
+            inner += shell_occ[ni * NUM_SHELLS_O + s];
         float Z_eff = std::max(1.0f, static_cast<float>(Z - inner));
         float n_shell = static_cast<float>(shell + 1);
         float R_target = std::max(n_shell * n_shell * R_BOHR / Z_eff, 8.0f);
         float R3 = R_target * R_target * R_target;
-        float R2_soft = R_target * R_target + SOFTEN_SQ;
-        float L_ground = std::sqrt(Z_eff * K_COULOMB_F * R3 / R2_soft);
+        float R2_soft = R_target * R_target + SOFTEN_SQ_O;
+        float L_ground = std::sqrt(Z_eff * K_COULOMB_O * R3 / R2_soft);
         particles.genomes[idx * GENOME_SIZE + 2] = L_ground;
         particles.genomes[idx * GENOME_SIZE + 3] = cfg.orbit_boost[shell];
     };
@@ -4684,7 +4994,7 @@ void PhysicsSimulation::check_shell_transitions() {
                 // Find lowest shell with vacancy
                 int target_shell = -1;
                 for (int s = 0; s < shell; ++s) {
-                    if (shell_occ[ni * NUM_SHELLS + s] < SHELL_CAP[s]) {
+                    if (shell_occ[ni * NUM_SHELLS_O + s] < SHELL_CAP_O[s]) {
                         target_shell = s;
                         break;
                     }
@@ -4699,8 +5009,8 @@ void PhysicsSimulation::check_shell_transitions() {
                     energy_released = (BINDING_ENERGY[target_shell] - BINDING_ENERGY[shell]) * Z_factor;
 
                     // Update shell occupancy
-                    shell_occ[ni * NUM_SHELLS + shell]--;
-                    shell_occ[ni * NUM_SHELLS + target_shell]++;
+                    shell_occ[ni * NUM_SHELLS_O + shell]--;
+                    shell_occ[ni * NUM_SHELLS_O + target_shell]++;
 
                     particles.orbital_shell[i] = static_cast<int8_t>(target_shell);
                     particles.excitation_timer[i] = 0;
@@ -4742,7 +5052,7 @@ void PhysicsSimulation::check_shell_transitions() {
                     particles.excitation_timer[i] = 0;
                     particles.genomes[i * GENOME_SIZE + 2] = 0.0f;
                     particles.genomes[i * GENOME_SIZE + 3] = 0.0f;
-                    shell_occ[ni * NUM_SHELLS + shell]--;
+                    shell_occ[ni * NUM_SHELLS_O + shell]--;
 
                     // Radial kick outward
                     glm::vec2 outward = readback_positions_[i] - detected_nuclei_[ni].center;
@@ -4763,7 +5073,7 @@ void PhysicsSimulation::check_shell_transitions() {
         }
 
         // ── Thermal promotion (ground state → higher shell) ──
-        if (shell >= NUM_SHELLS - 1) continue;  // already at outermost shell
+        if (shell >= NUM_SHELLS_O - 1) continue;  // already at outermost shell
 
         // Compute kinetic energy of this electron
         float v_sq = glm::dot(readback_velocities_[i], readback_velocities_[i]);
@@ -4776,10 +5086,10 @@ void PhysicsSimulation::check_shell_transitions() {
         // Need KE > 1.5× the energy gap to promote (thermal threshold)
         if (KE > delta_E * 1.5f) {
             // Check if next shell has room
-            if (shell_occ[ni * NUM_SHELLS + next_shell] < SHELL_CAP[next_shell]) {
+            if (shell_occ[ni * NUM_SHELLS_O + next_shell] < SHELL_CAP_O[next_shell]) {
                 // Promote
-                shell_occ[ni * NUM_SHELLS + shell]--;
-                shell_occ[ni * NUM_SHELLS + next_shell]++;
+                shell_occ[ni * NUM_SHELLS_O + shell]--;
+                shell_occ[ni * NUM_SHELLS_O + next_shell]++;
                 particles.orbital_shell[i] = static_cast<int8_t>(next_shell);
                 particles.excitation_timer[i] = 1;  // mark as excited
                 recompute_L(i, Z, next_shell, ni);
@@ -6151,6 +6461,309 @@ void PhysicsSimulation::check_hadronization() {
         cpu_particles_dirty_ = true;
 }
 
+// ── Bremsstrahlung: accelerated charged particles emit photons ────────────────
+
+void PhysicsSimulation::check_bremsstrahlung() {
+    const uint32_t n = cfg.particle_count;
+    if (n == 0 || readback_positions_.empty()) return;
+
+    std::mt19937 rng(frame_counter_ * 31337u + 271828u);
+    std::uniform_real_distribution<float> prob(0.0f, 1.0f);
+    uint32_t photons_spawned = 0;
+    const uint32_t MAX_BREMS = 3;
+
+    auto find_dormant = [&](uint32_t start) -> uint32_t {
+        for (uint32_t k = start; k < n; ++k)
+            if (readback_energies_[k] < 0.01f) return k;
+        for (uint32_t k = 0; k < start; ++k)
+            if (readback_energies_[k] < 0.01f) return k;
+        return UINT32_MAX;
+    };
+
+    for (uint32_t i = 0; i < n && photons_spawned < MAX_BREMS; ++i) {
+        if (readback_energies_[i] < 0.1f) continue;
+        uint32_t type = particles.types[i];
+        if (type >= PHYS_PARTICLE_TYPES) continue;
+        float q = PHYS_CHARGE[type];
+        if (std::abs(q) < 0.01f) continue;
+
+        float gamma = compute_gamma(readback_velocities_[i]);
+        float P = 0.005f * q * q * gamma * gamma;
+        if (prob(rng) >= P) continue;
+
+        uint32_t slot = find_dormant(i + 1);
+        if (slot == UINT32_MAX) continue;
+
+        // Photon carries ~10% of parent energy, perpendicular to velocity
+        float E_parent = readback_energies_[i];
+        float E_photon = E_parent * 0.1f;
+        readback_energies_[i] -= E_photon;
+
+        glm::vec2 vel = readback_velocities_[i];
+        glm::vec2 perp = glm::normalize(glm::vec2(-vel.y, vel.x));
+
+        write_spawn_genome(particles, slot, PHOTON_TYPE_PHYS, rng, frame_counter_);
+        readback_positions_[slot] = readback_positions_[i];
+        readback_velocities_[slot] = perp * C_SIM;
+        readback_energies_[slot] = mev_to_ebuf(E_photon);
+
+        ++photons_spawned;
+
+        const char* name = (type < PHYS_PARTICLE_TYPES) ? SM_LABELS[type] : "?";
+        char msg[128];
+        snprintf(msg, sizeof(msg), "Bremsstrahlung: %s #%u \xe2\x86\x92 \xce\xb3", name, i);
+        iface.push_notification(msg, ImVec4(0.8f, 0.8f, 1.0f, 1.0f));
+        {
+            char detail[256];
+            snprintf(detail, sizeof(detail), "Source: %s #%u  q=%.0f  \xce\xb3=%.2f\nPhoton E: %.4f MeV  slot #%u",
+                     name, i, PHYS_CHARGE[type], compute_gamma(readback_velocities_[i]), E_photon, slot);
+            iface.push_decay_event(msg, PhysicsInterface::DEVT_BREMSSTRAHLUNG, ImVec4(0.8f, 0.8f, 1.0f, 1.0f), std::string(detail));
+        }
+    }
+
+    if (photons_spawned > 0)
+        cpu_particles_dirty_ = true;
+}
+
+// ── Neutrino scattering (NC + CC inverse beta decay) ─────────────────────────
+
+void PhysicsSimulation::check_neutrino_scattering() {
+    const uint32_t n = cfg.particle_count;
+    if (n == 0 || readback_positions_.empty()) return;
+
+    std::mt19937 rng(frame_counter_ * 48271u + 314159u);
+    std::uniform_real_distribution<float> prob(0.0f, 1.0f);
+    std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
+
+    for (uint32_t i = 0; i < n; ++i) {
+        if (readback_energies_[i] < 0.01f) continue;
+        uint32_t type = particles.types[i];
+        if ((particles.behavior_flags[type] & BEHAVIOR_NEUTRINO) == 0) continue;
+
+        // NC scattering: rare random deflection
+        if (prob(rng) < cfg.weak_coupling * 0.001f) {
+            float theta = angle_dist(rng);
+            glm::vec2 vel = readback_velocities_[i];
+            float speed = glm::length(vel);
+            readback_velocities_[i] = glm::vec2(std::cos(theta), std::sin(theta)) * speed;
+            const char* nu_name = (type < PHYS_PARTICLE_TYPES) ? SM_LABELS[type] : "\xce\xbd";
+            char nc_msg[128];
+            snprintf(nc_msg, sizeof(nc_msg), "NC scatter: %s #%u deflected", nu_name, i);
+            iface.push_notification(nc_msg, ImVec4(0.6f, 0.9f, 1.0f, 1.0f));
+            iface.push_decay_event(nc_msg, PhysicsInterface::DEVT_NEUTRINO, ImVec4(0.6f, 0.9f, 1.0f, 1.0f));
+            cpu_particles_dirty_ = true;
+            continue;
+        }
+
+        // CC: νₑ + n → e⁻ + p (inverse beta decay)
+        if (type != NEUTRINO_TYPE_PHYS) continue;
+        if (prob(rng) >= cfg.weak_coupling * 0.002f) continue;
+
+        // Find nearest neutron within 5px
+        uint32_t best_n = UINT32_MAX;
+        float best_d2 = 25.0f;
+        for (uint32_t j = 0; j < n; ++j) {
+            if (j == i || readback_energies_[j] < 0.01f) continue;
+            if (particles.types[j] != NEUTRON_TYPE) continue;
+            glm::vec2 d = readback_positions_[j] - readback_positions_[i];
+            float d2 = d.x * d.x + d.y * d.y;
+            if (d2 < best_d2) { best_d2 = d2; best_n = j; }
+        }
+        if (best_n == UINT32_MAX) continue;
+
+        // Transform: νₑ → e⁻, n → p
+        glm::vec2 pos_mid = (readback_positions_[i] + readback_positions_[best_n]) * 0.5f;
+        float E_avail = readback_energies_[i] + readback_energies_[best_n];
+        glm::vec2 dir = glm::normalize(readback_velocities_[i]);
+
+        write_spawn_genome(particles, i, ELECTRON_TYPE_PHYS, rng, frame_counter_);
+        readback_positions_[i] = pos_mid;
+        readback_velocities_[i] = dir * ke_to_speed(E_avail * 0.4f, ELECTRON_TYPE_PHYS);
+        readback_energies_[i] = mev_to_ebuf(PHYS_REST_MASS_MEV[ELECTRON_TYPE_PHYS] + E_avail * 0.4f);
+
+        write_spawn_genome(particles, best_n, PROTON_TYPE, rng, frame_counter_);
+        readback_positions_[best_n] = pos_mid;
+        readback_velocities_[best_n] = -dir * ke_to_speed(E_avail * 0.4f, PROTON_TYPE);
+        readback_energies_[best_n] = mev_to_ebuf(PHYS_REST_MASS_MEV[PROTON_TYPE] + E_avail * 0.4f);
+
+        iface.push_notification("CC: \xce\xbd" "e + n \xe2\x86\x92 e\xe2\x81\xbb + p", ImVec4(0.6f, 0.9f, 1.0f, 1.0f));
+        {
+            char detail[256];
+            snprintf(detail, sizeof(detail),
+                "\xce\xbd" "e #%u + n #%u \xe2\x86\x92 e- + p\nAvailable E: %.2f",
+                i, best_n, E_avail);
+            iface.push_decay_event("CC: \xce\xbd" "e + n \xe2\x86\x92 e\xe2\x81\xbb + p",
+                PhysicsInterface::DEVT_PARTICLE_DECAY, ImVec4(0.6f, 0.9f, 1.0f, 1.0f), std::string(detail));
+        }
+        cpu_particles_dirty_ = true;
+    }
+}
+
+// ── Neutrino flavor oscillations (PMNS matrix) ──────────────────────────────
+
+void PhysicsSimulation::check_neutrino_oscillations() {
+    const uint32_t n = cfg.particle_count;
+    if (n == 0 || readback_positions_.empty()) return;
+
+    std::mt19937 rng(frame_counter_ * 65537u + 161803u);
+    std::uniform_real_distribution<float> prob(0.0f, 1.0f);
+
+    // Neutrino type triplets: νₑ(6), νμ(11), ντ(12)
+    for (uint32_t i = 0; i < n; ++i) {
+        if (readback_energies_[i] < 0.01f) continue;
+        uint32_t type = particles.types[i];
+        if (type != NEUTRINO_TYPE_PHYS && type != MU_NEUTRINO_TYPE_PHYS &&
+            type != TAU_NEUTRINO_TYPE_PHYS) continue;
+
+        // Distance traveled (proxy: frames since birth × C_SIM)
+        uint32_t age = frame_counter_ - ((i < particles.birth_frames.size()) ? particles.birth_frames[i] : 0);
+        float L = static_cast<float>(age) * C_SIM;
+        float E = std::max(readback_energies_[i], 0.001f);
+
+        // Check oscillation channels
+        float sin2_arg_21 = PMNS_DM2_21 * L * SIM_OSC_SCALE / (4.0f * E);
+        float sin2_arg_32 = PMNS_DM2_32 * L * SIM_OSC_SCALE / (4.0f * E);
+
+        uint32_t new_type = type;
+        const char* osc_label = nullptr;
+
+        if (type == NEUTRINO_TYPE_PHYS) {
+            // νₑ → νμ (solar, θ₁₂)
+            float P_em = PMNS_SIN2_2T12 * std::sin(sin2_arg_21) * std::sin(sin2_arg_21);
+            // νₑ → ντ (reactor, θ₁₃)
+            float P_et = PMNS_SIN2_2T13 * std::sin(sin2_arg_32) * std::sin(sin2_arg_32);
+            float roll = prob(rng);
+            if (roll < P_em) { new_type = MU_NEUTRINO_TYPE_PHYS; osc_label = "\xce\xbd" "e \xe2\x86\x92 \xce\xbd\xce\xbc"; }
+            else if (roll < P_em + P_et) { new_type = TAU_NEUTRINO_TYPE_PHYS; osc_label = "\xce\xbd" "e \xe2\x86\x92 \xce\xbd\xcf\x84"; }
+        } else if (type == MU_NEUTRINO_TYPE_PHYS) {
+            // νμ → ντ (atmospheric, θ₂₃)
+            float P_mt = PMNS_SIN2_2T23 * std::sin(sin2_arg_32) * std::sin(sin2_arg_32);
+            // νμ → νₑ (solar reverse, θ₁₂)
+            float P_me = PMNS_SIN2_2T12 * std::sin(sin2_arg_21) * std::sin(sin2_arg_21);
+            float roll = prob(rng);
+            if (roll < P_mt) { new_type = TAU_NEUTRINO_TYPE_PHYS; osc_label = "\xce\xbd\xce\xbc \xe2\x86\x92 \xce\xbd\xcf\x84"; }
+            else if (roll < P_mt + P_me) { new_type = NEUTRINO_TYPE_PHYS; osc_label = "\xce\xbd\xce\xbc \xe2\x86\x92 \xce\xbd" "e"; }
+        } else { // TAU_NEUTRINO
+            // ντ → νμ (atmospheric reverse, θ₂₃)
+            float P_tm = PMNS_SIN2_2T23 * std::sin(sin2_arg_32) * std::sin(sin2_arg_32);
+            // ντ → νₑ (reactor reverse, θ₁₃)
+            float P_te = PMNS_SIN2_2T13 * std::sin(sin2_arg_32) * std::sin(sin2_arg_32);
+            float roll = prob(rng);
+            if (roll < P_tm) { new_type = MU_NEUTRINO_TYPE_PHYS; osc_label = "\xce\xbd\xcf\x84 \xe2\x86\x92 \xce\xbd\xce\xbc"; }
+            else if (roll < P_tm + P_te) { new_type = NEUTRINO_TYPE_PHYS; osc_label = "\xce\xbd\xcf\x84 \xe2\x86\x92 \xce\xbd" "e"; }
+        }
+
+        if (new_type != type) {
+            // Change flavor, preserve position/velocity
+            write_spawn_genome(particles, i, new_type, rng, frame_counter_);
+            char osc_msg[128];
+            snprintf(osc_msg, sizeof(osc_msg), "Oscillation: %s (#%u)", osc_label, i);
+            iface.push_notification(osc_msg, ImVec4(0.5f, 1.0f, 0.8f, 1.0f));
+            {
+                char detail[256];
+                snprintf(detail, sizeof(detail), "Particle #%u  L=%.1f  E=%.4f\nAge: %u frames",
+                         i, static_cast<float>(age) * C_SIM, E, age);
+                iface.push_decay_event(osc_msg, PhysicsInterface::DEVT_NEUTRINO, ImVec4(0.5f, 1.0f, 0.8f, 1.0f), std::string(detail));
+            }
+            cpu_particles_dirty_ = true;
+        }
+    }
+}
+
+// ── Weak flavor-changing quark scattering (W-mediated) ──────────────────────
+
+void PhysicsSimulation::check_weak_flavor_change() {
+    const uint32_t n = cfg.particle_count;
+    if (n == 0 || readback_positions_.empty()) return;
+
+    std::mt19937 rng(frame_counter_ * 77773u + 99991u);
+    std::uniform_real_distribution<float> prob(0.0f, 1.0f);
+
+    auto is_quark = [](uint32_t t) { return t >= UP_QUARK_TYPE && t <= BOTTOM_QUARK_TYPE; };
+    auto is_antiquark = [](uint32_t t) { return t >= ANTI_UP_TYPE && t <= ANTI_BOTTOM_TYPE; };
+    // up-type index: u=0, c=1, t=2; down-type index: d=0, s=1, b=2
+    auto up_idx = [](uint32_t t) -> int {
+        if (t == UP_QUARK_TYPE || t == ANTI_UP_TYPE) return 0;
+        if (t == CHARM_QUARK_TYPE || t == ANTI_CHARM_TYPE) return 1;
+        if (t == TOP_QUARK_TYPE || t == ANTI_TOP_TYPE) return 2;
+        return -1;
+    };
+    auto down_idx = [](uint32_t t) -> int {
+        if (t == DOWN_QUARK_TYPE || t == ANTI_DOWN_TYPE) return 0;
+        if (t == STRANGE_QUARK_TYPE || t == ANTI_STRANGE_TYPE) return 1;
+        if (t == BOTTOM_QUARK_TYPE || t == ANTI_BOTTOM_TYPE) return 2;
+        return -1;
+    };
+    auto is_up_type = [](uint32_t t) {
+        return t == UP_QUARK_TYPE || t == CHARM_QUARK_TYPE || t == TOP_QUARK_TYPE
+            || t == ANTI_UP_TYPE || t == ANTI_CHARM_TYPE || t == ANTI_TOP_TYPE;
+    };
+
+    static const uint32_t UP_TYPES[3] = { UP_QUARK_TYPE, CHARM_QUARK_TYPE, TOP_QUARK_TYPE };
+    static const uint32_t DOWN_TYPES[3] = { DOWN_QUARK_TYPE, STRANGE_QUARK_TYPE, BOTTOM_QUARK_TYPE };
+    static const uint32_t ANTI_UP_TYPES[3] = { ANTI_UP_TYPE, ANTI_CHARM_TYPE, ANTI_TOP_TYPE };
+    static const uint32_t ANTI_DOWN_TYPES[3] = { ANTI_DOWN_TYPE, ANTI_STRANGE_TYPE, ANTI_BOTTOM_TYPE };
+
+    for (uint32_t i = 0; i < n; ++i) {
+        if (readback_energies_[i] < 0.1f) continue;
+        uint32_t ti = particles.types[i];
+        if (!is_quark(ti) && !is_antiquark(ti)) continue;
+        if (prob(rng) >= cfg.weak_coupling * 0.0005f) continue;
+
+        // Find nearest quark within 3px
+        uint32_t best_j = UINT32_MAX;
+        float best_d2 = 9.0f;
+        for (uint32_t j = 0; j < n; ++j) {
+            if (j == i || readback_energies_[j] < 0.1f) continue;
+            uint32_t tj = particles.types[j];
+            if (!is_quark(tj) && !is_antiquark(tj)) continue;
+            glm::vec2 d = readback_positions_[j] - readback_positions_[i];
+            float d2 = d.x * d.x + d.y * d.y;
+            if (d2 < best_d2) { best_d2 = d2; best_j = j; }
+        }
+        if (best_j == UINT32_MAX) continue;
+
+        // CKM-weighted flavor transition
+        bool is_matter_i = is_quark(ti);
+        int u_i = up_idx(ti), d_i = down_idx(ti);
+        bool up_i = is_up_type(ti);
+
+        // Roll CKM for new flavor
+        float roll = prob(rng);
+        uint32_t new_type;
+        if (up_i) {
+            // up-type → down-type
+            int row = (u_i >= 0) ? u_i : 0;
+            if (roll < CKM_BR[row][0]) new_type = is_matter_i ? DOWN_TYPES[0] : ANTI_DOWN_TYPES[0];
+            else if (roll < CKM_BR[row][0] + CKM_BR[row][1]) new_type = is_matter_i ? DOWN_TYPES[1] : ANTI_DOWN_TYPES[1];
+            else new_type = is_matter_i ? DOWN_TYPES[2] : ANTI_DOWN_TYPES[2];
+        } else {
+            // down-type → up-type (use column)
+            int col = (d_i >= 0) ? d_i : 0;
+            float norm = CKM_BR[0][col] + CKM_BR[1][col]; // exclude top
+            if (roll < CKM_BR[0][col] / norm) new_type = is_matter_i ? UP_TYPES[0] : ANTI_UP_TYPES[0];
+            else new_type = is_matter_i ? UP_TYPES[1] : ANTI_UP_TYPES[1];
+        }
+
+        if (new_type == ti) continue; // no change
+
+        write_spawn_genome(particles, i, new_type, rng, frame_counter_);
+
+        const char* old_name = (ti < PHYS_PARTICLE_TYPES) ? SM_LABELS[ti] : "?";
+        const char* new_name = (new_type < PHYS_PARTICLE_TYPES) ? SM_LABELS[new_type] : "?";
+        char msg[128];
+        snprintf(msg, sizeof(msg), "Weak CC: %s \xe2\x86\x92 %s", old_name, new_name);
+        iface.push_notification(msg, ImVec4(0.7f, 0.8f, 1.0f, 1.0f));
+        {
+            char detail[256];
+            snprintf(detail, sizeof(detail), "Quark #%u: %s \xe2\x86\x92 %s\nNear quark #%u  CKM roll: %.4f",
+                     i, old_name, new_name, best_j, roll);
+            iface.push_decay_event(msg, PhysicsInterface::DEVT_WEAK_SCATTER, ImVec4(0.7f, 0.8f, 1.0f, 1.0f), std::string(detail));
+        }
+        cpu_particles_dirty_ = true;
+    }
+}
+
 // ── Quantum entanglement update ──────────────────────────────────────────────
 
 void PhysicsSimulation::update_entanglement() {
@@ -6292,6 +6905,82 @@ void PhysicsSimulation::try_unlock(AchievementID id) {
         // Auto-save achievements on unlock
         achievements.save("saves/achievements.ppach");
     }
+}
+
+// ── Gravitational wave tidal forces ──────────────────────────────────────────
+// GW wavefronts exert quadrupole tidal acceleration on massive particles:
+//   - Radial stretch (along source→particle direction)
+//   - Tangential compression (perpendicular to radial)
+// Amplitude falls off as 1/r.  Only particles within the thin wavefront shell
+// (±SHELL_WIDTH of ring.radius) feel the force each tick — a transient pulse.
+void PhysicsSimulation::apply_gw_tidal_forces(double dt) {
+    if (iface.gw_rings.empty() || cfg.particle_count == 0) return;
+
+    constexpr float SHELL_WIDTH    = 30.0f;   // wavefront thickness (world units)
+    constexpr float TIDAL_STRENGTH = 0.15f;   // overall coupling constant
+    constexpr uint32_t MASSLESS_MASK = BEHAVIOR_PHOTON | BEHAVIOR_NEUTRINO
+                                     | BEHAVIOR_GRAVITON | BEHAVIOR_GLUON;
+
+    float scaled_dt = static_cast<float>(dt) * cfg.time_scale;
+    bool any_modified = false;
+
+    for (const auto& ring : iface.gw_rings) {
+        if (ring.radius < 1.0f) continue;  // ring hasn't started propagating
+
+        // Effective strain at the wavefront: amplitude with 1/r falloff
+        float strain = ring.amplitude / std::max(1.0f, ring.radius * 0.01f);
+        if (strain < 0.001f) continue;  // too weak to matter
+
+        float r_inner = ring.radius - SHELL_WIDTH;
+        float r_outer = ring.radius + SHELL_WIDTH;
+        float r_inner_sq = r_inner * r_inner;
+        float r_outer_sq = r_outer * r_outer;
+
+        for (uint32_t i = 0; i < cfg.particle_count; ++i) {
+            if (readback_energies_[i] <= 0.0f) continue;  // dormant
+
+            uint32_t pt = particles.types[i];
+            if (pt >= PHYS_PARTICLE_TYPES) continue;
+
+            // Skip massless particles — GW don't deflect light in linearized GR
+            uint32_t flags = particles.behavior_flags[pt];
+            if (flags & MASSLESS_MASK) continue;
+
+            // Distance from ring origin to particle
+            glm::vec2 delta = readback_positions_[i] - ring.origin;
+            float dist_sq = glm::dot(delta, delta);
+
+            // Is particle within the wavefront shell?
+            if (dist_sq < r_inner_sq || dist_sq > r_outer_sq) continue;
+            float dist = std::sqrt(dist_sq);
+            if (dist < 1.0f) continue;
+
+            // Radial and tangential unit vectors
+            glm::vec2 radial = delta / dist;
+            glm::vec2 tangent = glm::vec2(-radial.y, radial.x);
+
+            // Tangential velocity component (determines squeeze direction)
+            float v_tangent = glm::dot(readback_velocities_[i], tangent);
+
+            // Quadrupole tidal acceleration (+ polarization):
+            //   Radial: stretch (positive kick outward)
+            //   Tangential: compress (negative kick inward)
+            // Smooth envelope within the shell: peaks at wavefront center
+            float shell_pos = (dist - ring.radius) / SHELL_WIDTH;  // -1..+1
+            float envelope = 1.0f - shell_pos * shell_pos;         // parabolic peak
+
+            float kick = TIDAL_STRENGTH * strain * envelope * scaled_dt;
+
+            // Apply tidal deformation to velocity
+            readback_velocities_[i] += radial  * (kick * 0.5f);   // radial stretch
+            readback_velocities_[i] -= tangent * (kick * 0.3f * (v_tangent > 0.0f ? 1.0f : -1.0f));  // tangential squeeze
+
+            any_modified = true;
+        }
+    }
+
+    if (any_modified)
+        cpu_particles_dirty_ = true;
 }
 
 void PhysicsSimulation::check_achievements() {
@@ -6516,6 +7205,11 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     if (iface.wave_mode)     cfg.field_flags |= (1u << 5);
     if (iface.show_collision_radii) cfg.field_flags |= (1u << 6);
     if (iface.hide_virtual_trails)  cfg.field_flags |= (1u << 7);
+    if (iface.hide_bond_visuals)    cfg.field_flags |= (1u << 8);
+    // GR gravity extensions
+    if (iface.gr_mass_energy)       cfg.field_flags |= (1u << 9);
+    if (iface.gr_frame_dragging)    cfg.field_flags |= (1u << 10);
+    if (iface.gr_grav_waves)        cfg.field_flags |= (1u << 11);
 
     // Pass field intensity via legacy density_limit/local_density_cap path
     cfg.density_limit    = (cfg.field_flags != 0) ? 1.0f : 0.0f;
@@ -6616,8 +7310,15 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 if (quality >= 2 || frame3) {
                     check_photoelectric();
                     check_spallation();
+                    check_bremsstrahlung();
+                }
+                if (quality >= 1 && frame4) {
+                    check_neutrino_scattering();
+                    check_weak_flavor_change();
                 }
             }
+            if (frame_counter_ % 10 == 0)
+                check_neutrino_oscillations();
 
             // Orbital update (always needed for element detection)
             if (quality >= 2 || (quality == 1 && frame2) || (quality == 0 && frame4)) {
@@ -6632,6 +7333,11 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 update_bonds();
 
             check_nuclear_decay();
+
+            // GW tidal forces: wavefronts stretch/compress passing particles
+            if (iface.gr_grav_waves && !iface.gw_rings.empty())
+                apply_gw_tidal_forces(dt);
+
             check_achievements();
 
             // ── Single batched GPU sync for all CPU physics modifications ──
@@ -6763,13 +7469,11 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 nuc_ext += NUC_SP * 0.5f;
 
                 // Place electrons — match update_orbitals formula
-                const float R_BOHR = 15.0f, K_COULOMB = 1200.0f, SOFTEN_SQ = 64.0f;
-                const int SHELL_CAP[] = {2, 8, 18, 32};
                 const float NUC_CLR = nuc_ext + 4.0f;
                 int e_left = Z_dup;
                 int shell_fill_dup[4] = {0, 0, 0, 0};
                 for (int sh = 0; sh < 4 && e_left > 0; ++sh) {
-                    int cap = std::min(SHELL_CAP[sh], e_left);
+                    int cap = std::min(SHELL_CAP_O[sh], e_left);
                     float n_sh = static_cast<float>(sh + 1);
                     int inner_e = 0;
                     for (int s = 0; s < sh; ++s) inner_e += shell_fill_dup[s];
@@ -6778,8 +7482,8 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                     float R_target = std::max(R_bohr, 8.0f);
                     R_target = std::max(R_target, NUC_CLR + sh * 8.0f);
                     float R3 = R_target * R_target * R_target;
-                    float R2_soft = R_target * R_target + SOFTEN_SQ;
-                    float L_ground = std::sqrt(Z_eff * K_COULOMB * R3 / R2_soft);
+                    float R2_soft = R_target * R_target + SOFTEN_SQ_O;
+                    float L_ground = std::sqrt(Z_eff * K_COULOMB_O * R3 / R2_soft);
                     float orbit_boost_d = cfg.orbit_boost[sh];
                     float v_orbital = (L_ground / R_target) * orbit_boost_d;
                     float shell_offset_d = sh * cfg.orbital_shell_offset;
@@ -7008,6 +7712,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     iface.readback_positions_ptr = readback_positions_.data();
     iface.entangled_partners_ptr = particles.entangled_partner.data();
     iface.readback_energies_ptr = readback_energies_.data();
+    iface.readback_types_ptr = particles.types.data();
     iface.bond_data_ptr = bond_data_.empty() ? nullptr : bond_data_.data();
     iface.bond_data_count = static_cast<uint32_t>(bond_data_.size());
 
@@ -7057,10 +7762,10 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         iface.velocity_meters.end());
 
     // ── Visualization grid (heatmap + velocity field) — OpenMP parallelized ──
-    if (iface.show_energy_heatmap || iface.show_velocity_field || iface.show_magnetic_field) {
+    if (iface.show_velocity_field || iface.show_magnetic_field) {
         iface.vis_grid = VisGrid{};
-        float cell_w = static_cast<float>(REGION_W) / VIS_GRID_W;
-        float cell_h = static_cast<float>(REGION_H) / VIS_GRID_H;
+        float cell_w = static_cast<float>(WORLD_W) / VIS_GRID_W;
+        float cell_h = static_cast<float>(WORLD_H) / VIS_GRID_H;
 
         #pragma omp parallel if(cfg.particle_count > 2000)
         {
@@ -7137,7 +7842,113 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 }
                 iface.vis_grid.bfield_z[ci] = bz;
             }
+
+            // ── Collect magnetic sources for field line visualization ──
+            // No cap — every qualifying particle gets field lines. Camera-cull
+            // off-screen particles to keep draw cost manageable.
+            // Intrinsic dipole moment (spin) and Biot-Savart (momentum) are stored
+            // separately so the visualization can apply correct spatial patterns:
+            //   Dipole: 1/r³ falloff, axis from spin/velocity
+            //   Biot-Savart: 1/r² falloff, azimuthal around velocity direction
+            iface.magnetic_sources.clear();
+            float vis_hw = static_cast<float>(REGION_W) / (2.0f * cfg.current_camera_zoom)
+                         + cfg.interaction_radius;   // half-width + margin
+            float vis_hh = static_cast<float>(REGION_H) / (2.0f * cfg.current_camera_zoom)
+                         + cfg.interaction_radius;
+            for (uint32_t pi = 0; pi < cfg.particle_count; ++pi) {
+                if (readback_energies_[pi] <= 0.0f) continue;
+
+                // Camera-cull: skip particles far outside the viewport
+                glm::vec2 rel = readback_positions_[pi] - cfg.camera_origin;
+                if (std::abs(rel.x) > vis_hw || std::abs(rel.y) > vis_hh) continue;
+
+                uint32_t pt = particles.types[pi];
+                float charge = particles.genomes[pi * GENOME_SIZE + 0];
+                float spin_v = particles.genomes[pi * GENOME_SIZE + 1];
+                glm::vec2 vel = readback_velocities_[pi];
+                float speed = glm::length(vel);
+                float mass_mev = (pt < PHYS_PARTICLE_TYPES) ? PHYS_REST_MASS_MEV[pt] : 100.0f;
+
+                // Intrinsic magnetic dipole moment (spin contribution)
+                // Nucleons: anomalous moments (in nuclear magnetons)
+                // Charged leptons: Dirac moment μ = q·ħ/(2m) ∝ charge/mass
+                float mu_int = 0.0f;
+                if (pt == PROTON_TYPE)               mu_int = MU_P * spin_v;
+                else if (pt == ANTIPROTON_TYPE_PHYS) mu_int = -MU_P * spin_v;
+                else if (pt == NEUTRON_TYPE)         mu_int = MU_N * spin_v;
+                else if (std::abs(charge) > 0.01f && std::abs(spin_v) > 0.01f) {
+                    // Dirac moment: μ ∝ charge × spin / mass
+                    // Normalized so electron ≈ 1.0 Bohr magneton
+                    mu_int = charge * spin_v / std::max(mass_mev, 0.1f) * 0.511f;
+                }
+
+                // Include particle if it has intrinsic moment OR is a moving charge
+                bool has_dipole = std::abs(mu_int) > 0.01f;
+                bool has_current = std::abs(charge) > 0.01f && speed > 0.5f;
+                if (has_dipole || has_current) {
+                    iface.magnetic_sources.push_back({
+                        readback_positions_[pi], vel, mu_int, charge, mass_mev
+                    });
+                }
+            }
         }
+    }
+
+    // ── Gravitational wave ripple propagation & emission ────────────────────
+    {
+        constexpr float C_SIM = 300.0f;
+        float scaled_dt = static_cast<float>(dt) * cfg.time_scale;
+
+        // Propagate existing rings outward at c, remove dead ones
+        for (int ri = static_cast<int>(iface.gw_rings.size()) - 1; ri >= 0; --ri) {
+            auto& ring = iface.gw_rings[ri];
+            ring.radius += C_SIM * scaled_dt;
+            if (ring.radius >= ring.max_radius) {
+                iface.gw_rings.erase(iface.gw_rings.begin() + ri);
+            }
+        }
+
+        // Emit new rings from strongly accelerating massive particles
+        if (iface.show_grav_waves && prev_velocities_.size() == cfg.particle_count) {
+            constexpr int   MAX_RINGS_TOTAL   = 512;
+            constexpr int   MAX_EMIT_PER_TICK = 8;
+            constexpr float ACCEL_THRESHOLD   = 5.0f;  // minimum |Δv/dt| to emit
+            float inv_dt = (scaled_dt > 1e-6f) ? 1.0f / scaled_dt : 0.0f;
+
+            int emitted = 0;
+            for (uint32_t pi = 0; pi < cfg.particle_count && emitted < MAX_EMIT_PER_TICK; ++pi) {
+                if (readback_energies_[pi] <= 0.0f) continue;
+                uint32_t pt = particles.types[pi];
+                if (pt >= PHYS_PARTICLE_TYPES) continue;
+
+                float mass = PHYS_REST_MASS_MEV[pt];
+                if (mass < 10.0f) continue;  // only heavy particles emit visible GW
+
+                glm::vec2 dv = readback_velocities_[pi] - prev_velocities_[pi];
+                float accel = glm::length(dv) * inv_dt;
+                if (accel < ACCEL_THRESHOLD) continue;
+
+                // GW amplitude ∝ mass × acceleration (quadrupole formula analog)
+                float amp = std::min(mass * accel * 0.0001f, 3.0f);
+                if (amp < 0.05f) continue;
+
+                if (static_cast<int>(iface.gw_rings.size()) >= MAX_RINGS_TOTAL) break;
+
+                // GW propagate across the world (half-diagonal as max extent)
+                float world_diag = std::sqrt(float(WORLD_W) * float(WORLD_W)
+                                           + float(WORLD_H) * float(WORLD_H));
+                iface.gw_rings.push_back({
+                    readback_positions_[pi],
+                    0.0f,           // starts at source
+                    amp,
+                    world_diag * 0.5f  // propagate across the simulation
+                });
+                emitted++;
+            }
+        }
+
+        // Store current velocities for next-tick acceleration detection
+        prev_velocities_ = readback_velocities_;
     }
 
     // ── Trajectory tracer update ─────────────────────────────────────────────
@@ -7260,32 +8071,30 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             cloud.is_anti = nuc.is_anti;
 
             // Compute Bohr-model shell radii (same constants as update_orbitals)
-            const float R_BOHR_C = 15.0f;
-            const int SHELL_CAP_C[] = {2, 8, 18, 32};
             int e_remaining = std::min(bound_leptons, 60);
             int shell_fill_tmp[4] = {0, 0, 0, 0};
 
             // Fill shells from inner to outer
             for (int s = 0; s < 4 && e_remaining > 0; ++s) {
-                shell_fill_tmp[s] = std::min(e_remaining, SHELL_CAP_C[s]);
+                shell_fill_tmp[s] = std::min(e_remaining, SHELL_CAP_O[s]);
                 e_remaining -= shell_fill_tmp[s];
             }
 
             for (int s = 0; s < 4; ++s) {
                 cloud.shell_fill[s] = shell_fill_tmp[s];
-                cloud.shell_cap[s] = SHELL_CAP_C[s];
+                cloud.shell_cap[s] = SHELL_CAP_O[s];
 
                 // Compute Bohr radius with Slater screening
                 float screening = 0.0f;
-                if (s == 1) screening = static_cast<float>(SHELL_CAP_C[0]) * 0.85f;
-                else if (s == 2) screening = static_cast<float>(SHELL_CAP_C[0]) * 1.0f
-                                           + static_cast<float>(SHELL_CAP_C[1]) * 0.85f;
-                else if (s == 3) screening = static_cast<float>(SHELL_CAP_C[0]) * 1.0f
-                                           + static_cast<float>(SHELL_CAP_C[1]) * 1.0f
-                                           + static_cast<float>(SHELL_CAP_C[2]) * 0.85f;
+                if (s == 1) screening = static_cast<float>(SHELL_CAP_O[0]) * 0.85f;
+                else if (s == 2) screening = static_cast<float>(SHELL_CAP_O[0]) * 1.0f
+                                           + static_cast<float>(SHELL_CAP_O[1]) * 0.85f;
+                else if (s == 3) screening = static_cast<float>(SHELL_CAP_O[0]) * 1.0f
+                                           + static_cast<float>(SHELL_CAP_O[1]) * 1.0f
+                                           + static_cast<float>(SHELL_CAP_O[2]) * 0.85f;
                 float Z_eff = std::max(1.0f, static_cast<float>(nuc.Z) - screening);
                 float n_shell = static_cast<float>(s + 1);
-                cloud.shell_radii[s] = std::max(n_shell * n_shell * R_BOHR_C / Z_eff, 8.0f);
+                cloud.shell_radii[s] = std::max(n_shell * n_shell * R_BOHR / Z_eff, 8.0f);
             }
 
             iface.nucleus_clouds.push_back(cloud);
@@ -7294,9 +8103,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
 
     // ── Compute orbit paths for bound electrons ─────────────────────────────
     if (iface.show_orbit_paths && !detected_nuclei_.empty()) {
-        constexpr float K_COULOMB_ORB = 1200.0f;
         constexpr int MAX_ORBIT_PATHS = 300;
-        const int SHELL_CAP_ORB[] = {2, 8, 18, 32};
 
         // Build map: nucleus rep → NucleusInfo index
         std::unordered_map<uint32_t, uint32_t> rep_to_nuc;
@@ -7306,8 +8113,8 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
 
         int orbit_count = 0;
         for (uint32_t i = 0; i < cfg.particle_count && orbit_count < MAX_ORBIT_PATHS; ++i) {
-            if (particles.types[i] != ELECTRON_TYPE_PHYS &&
-                particles.types[i] != POSITRON_TYPE_PHYS) continue;
+            uint32_t pt = particles.types[i];
+            if (pt != ELECTRON_TYPE_PHYS && pt != POSITRON_TYPE_PHYS) continue;
             if (particles.orbital_parent[i] < 0) continue;  // unbound
 
             uint32_t parent = static_cast<uint32_t>(particles.orbital_parent[i]);
@@ -7315,18 +8122,23 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             if (it == rep_to_nuc.end()) continue;
             const auto& nuc = detected_nuclei_[it->second];
 
+            // Enforce correct matter/antimatter pairing:
+            // electrons orbit matter nuclei, positrons orbit antinuclei
+            if (pt == ELECTRON_TYPE_PHYS && nuc.is_anti) continue;
+            if (pt == POSITRON_TYPE_PHYS && !nuc.is_anti) continue;
+
             int shell = (i < particles.orbital_shell.size())
                       ? static_cast<int>(particles.orbital_shell[i]) : -1;
             if (shell < 0 || shell > 3) continue;
 
             // Compute effective nuclear charge with Slater screening
             float screening = 0.0f;
-            if (shell == 1) screening = static_cast<float>(SHELL_CAP_ORB[0]) * 0.85f;
-            else if (shell == 2) screening = static_cast<float>(SHELL_CAP_ORB[0]) * 1.0f
-                                           + static_cast<float>(SHELL_CAP_ORB[1]) * 0.85f;
-            else if (shell == 3) screening = static_cast<float>(SHELL_CAP_ORB[0]) * 1.0f
-                                           + static_cast<float>(SHELL_CAP_ORB[1]) * 1.0f
-                                           + static_cast<float>(SHELL_CAP_ORB[2]) * 0.85f;
+            if (shell == 1) screening = static_cast<float>(SHELL_CAP_O[0]) * 0.85f;
+            else if (shell == 2) screening = static_cast<float>(SHELL_CAP_O[0]) * 1.0f
+                                           + static_cast<float>(SHELL_CAP_O[1]) * 0.85f;
+            else if (shell == 3) screening = static_cast<float>(SHELL_CAP_O[0]) * 1.0f
+                                           + static_cast<float>(SHELL_CAP_O[1]) * 1.0f
+                                           + static_cast<float>(SHELL_CAP_O[2]) * 0.85f;
             float Z_eff = std::max(1.0f, static_cast<float>(nuc.Z) - screening);
 
             // Relative position and velocity
@@ -7340,7 +8152,16 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             if (r < 1.0f) continue;  // too close to center
 
             float v_sq = glm::dot(v_vec, v_vec);
-            float K_eff = K_COULOMB_ORB * Z_eff;  // effective force constant
+
+            // Read stored orbit boost from genome[3] (matches shader ORBIT_BOOST)
+            float stored_boost = 0.0f;
+            if (i * GENOME_SIZE + 3 < particles.genomes.size())
+                stored_boost = particles.genomes[i * GENOME_SIZE + 3];
+            float orbit_boost = (stored_boost > 0.5f) ? stored_boost : cfg.orbit_boost[shell];
+
+            // Effective K includes extra binding: Coulomb + (BOOST²-1)×K/r²
+            // Shader applies F_total = K×Z_eff/r² + (BOOST²-1)×K/r²
+            float K_eff = K_COULOMB_O * (Z_eff + orbit_boost * orbit_boost - 1.0f);
 
             // Angular momentum (scalar in 2D): L = r x v
             float L = r_vec.x * v_vec.y - r_vec.y * v_vec.x;
@@ -8022,7 +8843,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
 
     // Handle render scale change (supersampling)
     {
-        int scale = std::max(1, std::min(2, iface.prefs.render_scale));
+        int scale = std::max(1, std::min(4, iface.prefs.render_scale));
         uint32_t want_w = REGION_W * static_cast<uint32_t>(scale);
         uint32_t want_h = REGION_H * static_cast<uint32_t>(scale);
         if (want_w != compute.render_w || want_h != compute.render_h) {

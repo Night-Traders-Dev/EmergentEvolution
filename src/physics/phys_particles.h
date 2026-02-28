@@ -108,7 +108,7 @@ static constexpr uint32_t PHYS_PARTICLE_TYPES  = 67;
 
 // ── Environment presets ──────────────────────────────────────────────────────
 
-static constexpr int PHYS_ENV_COUNT = 13;
+static constexpr int PHYS_ENV_COUNT = 14;
 static const char* const PHYS_ENV_NAMES[PHYS_ENV_COUNT] = {
     "Lab Mode",
     "Hydrogen Plasma",
@@ -122,7 +122,8 @@ static const char* const PHYS_ENV_NAMES[PHYS_ENV_COUNT] = {
     "Meson Factory",
     "Particle Accelerator",
     "Dark Sector",
-    "SUSY Sector"
+    "SUSY Sector",
+    "Big Bang"
 };
 
 // ── Per-type physics data ────────────────────────────────────────────────────
@@ -232,7 +233,7 @@ static constexpr float PHYS_REST_MASS_MEV[PHYS_PARTICLE_TYPES] = {
     // 19:ū   20:d̄   21:s̄   22:c̄     23:t̄       24:b̄
     2.16f, 4.67f, 93.4f, 1270.0f, 172760.0f, 4180.0f,
     // 25:g   26:W+      27:W-      28:Z       29:H
-    0.0f, 80379.0f, 80379.0f, 91188.0f, 125100.0f,
+    0.0f, 80369.2f, 80369.2f, 91187.6f, 125100.0f,
     // 30:graviton  31:DM(~100GeV WIMP)  32:DE(quintessence)
     0.0f, 100000.0f, 0.001f,
     // 33:axino(~100keV)  34:WIMPzilla(~10^12GeV)  35:SIMP(500MeV)
@@ -256,6 +257,22 @@ static constexpr float PHYS_REST_MASS_MEV[PHYS_PARTICLE_TYPES] = {
     // 65:paraparticle(500GeV) 66:dyn_axion_qp(~1meV)
     500000.0f, 0.001f,
 };
+
+// ── CKM matrix |V_ij|² row-normalized for branching (PDG 2024) ──────────────
+// Rows: u/c/t   Cols: d/s/b
+static constexpr float CKM_BR[3][3] = {
+    { 0.9490f, 0.0509f, 0.00002f },   // u: Vud²=0.9490 Vus²=0.0509 Vub²=0.00002
+    { 0.0503f, 0.9481f, 0.0016f },    // c: Vcd²=0.0503 Vcs²=0.9481 Vcb²=0.0016
+    { 0.00008f, 0.00163f, 0.99829f }, // t: Vtd²=0.00008 Vts²=0.00163 Vtb²=0.99829
+};
+
+// ── PMNS neutrino mixing parameters ─────────────────────────────────────────
+static constexpr float PMNS_SIN2_2T12 = 0.846f;    // solar angle
+static constexpr float PMNS_SIN2_2T23 = 0.999f;    // atmospheric angle
+static constexpr float PMNS_SIN2_2T13 = 0.0856f;   // reactor angle
+static constexpr float PMNS_DM2_21    = 7.53e-5f;   // solar Δm² (eV²)
+static constexpr float PMNS_DM2_32    = 2.453e-3f;  // atmospheric Δm²
+static constexpr float SIM_OSC_SCALE  = 0.01f;      // tunable oscillation scale
 
 // ── Nuclear isotope decay ────────────────────────────────────────────────────
 

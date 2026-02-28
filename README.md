@@ -15,8 +15,10 @@
 
 Particle Playground is a real-time physics sandbox that simulates 67 particle types across the
 Standard Model, Beyond Standard Model, and 34 hypothetical particles. All four fundamental forces
-run simultaneously on Vulkan compute shaders. CPU-side processes handle nuclear reactions, decay,
-orbital mechanics, covalent bonding, hadronization, and more.
+run simultaneously on Vulkan compute shaders with optional general relativity extensions
+(mass-energy equivalence, frame dragging, gravitational waves with physical tidal forces).
+CPU-side processes handle nuclear reactions, decay, orbital mechanics, covalent bonding,
+hadronization, and more.
 
 Up to **100,000 particles** in real time. GPU handles O(n&#178;) pairwise forces; CPU physics
 uses a **spatial acceleration grid** with **OpenMP** parallelization for O(n) neighbor queries.
@@ -28,6 +30,7 @@ uses a **spatial acceleration grid** with **OpenMP** parallelization for O(n) ne
 - [Physics Engine](#physics-engine)
 - [Particle Types](#particle-types)
 - [Forces](#forces)
+  - [General Relativity Extensions](#general-relativity-extensions)
 - [Orbital Mechanics](#orbital-mechanics)
 - [Covalent Bonds & Molecules](#covalent-bonds--molecules)
 - [Nuclear Reactions](#nuclear-reactions)
@@ -169,11 +172,11 @@ All forces act simultaneously in the compute shader. Six have independent **mult
 
 | Force | Implementation | Multiplier |
 |---|---|---|
-| **Electromagnetic** | Coulomb 1/r&#178; + Biot-Savart magnetic deflection | `coulomb_strength` |
+| **Electromagnetic** | Coulomb 1/r&#178; + Biot-Savart B-field + Lorentz force F=q(v&times;B) | `coulomb_strength` |
 | **Strong nuclear** | Yukawa attractive (8px range) + Pauli hard-core repulsion (6px) | `yukawa_strength`, `pauli_multiplier` |
 | **QCD color** | Cornell potential with running coupling &alpha;_eff = &alpha;_s &middot; max(0.3, 1 + 0.3 ln r) | `alpha_s_scale` |
 | **Weak** | Short-range Yukawa (0.8px) + stochastic decay (CPU) | &mdash; |
-| **Gravity** | Newtonian 1/r&#178; between massive particles | &mdash; |
+| **Gravity** | Newtonian 1/r&#178; with optional GR extensions (see below) | &mdash; |
 | **Compton** | Photon radiation pressure + oscillating B-field on charges (30px) | `compton_strength` |
 | **Annihilation** | Matter-antimatter attraction at contact (6px) | `annihilation_strength` |
 
@@ -186,6 +189,28 @@ Additional force behaviors:
 - **Tachyon** &mdash; superluminal floor (v &gt; 1.33c), rapid decay to &gamma;&gamma;
 - **Higgs field** &mdash; tunable VEV (0&ndash;500), mass coupling to heavy particles
 - **Hard-sphere collisions** &mdash; elastic position correction + velocity impulse (restitution 0.95)
+- **Synchrotron radiation** &mdash; charged particles radiate energy proportional to q&#178;&gamma;&#178;v&#178; (subtle long-term drain)
+
+### General Relativity Extensions
+
+Three optional GR corrections toggled from **Menu > Visualization**. Zero additional push-constant
+bytes (encoded in `field_flags` bits 9&ndash;11).
+
+| Extension | Physics |
+|---|---|
+| **Mass-Energy Gravity** | E=mc&#178;: gravitational mass = rest mass &times; &gamma;. Fast particles attract more strongly. |
+| **Frame Dragging** | Gravitomagnetic Lense-Thirring analog: spinning masses drag nearby movers tangentially (~1% of Newtonian). |
+| **Gravitational Waves** | Finite-speed gravity (retarded-time correction). Force direction lags behind fast-moving sources. |
+
+When gravitational waves are enabled, accelerating massive particles emit **GW ripple rings** that
+propagate at c across the entire simulation (1/r amplitude falloff). These rings are not just visual
+&mdash; they exert physical **tidal forces** on particles they pass through:
+
+- **Radial stretch**: outward kick along the source&rarr;particle axis
+- **Tangential compression**: perpendicular squeeze (quadrupole "+" polarization)
+- Amplitude falls off as 1/r, matching real GW strain decay
+- Massless particles (photons, gravitons, gluons, neutrinos) are unaffected
+- Wavefront shell is 30px thick &mdash; force is a transient pulse, not constant
 
 ---
 
@@ -272,14 +297,14 @@ Particles below 0.08 energy undergo probabilistic decay based on per-type rates.
 
 | Parent | Rate | Products |
 |---|---|---|
-| Top t | 0.50 | Bottom + W+ |
-| W+/W- | 0.50 | Lepton + Neutrino |
+| Top t | 0.50 | Bottom + real W+ (only quark heavy enough) |
+| W+/W- | 0.50 | Lepton + Neutrino (on-shell W decay) |
 | Z0 | 0.50 | e&#8315; + e&#8314; |
 | Higgs H0 | 0.40 | 2&gamma; |
 | Tau &tau; | 0.20 | e&#8315; + &nu;&tau; |
-| Charm c | 0.12 | Strange + W+ |
-| Bottom b | 0.10 | Charm + W- |
-| Strange s | 0.02 | Up + W- |
+| Bottom b | 0.10 | Daughter + f f&#773; (3-body via virtual W&#8315;*, CKM weighted) |
+| Charm c | 0.12 | Daughter + f f&#773; (3-body via virtual W&#8314;*, CKM weighted) |
+| Strange s | 0.02 | Up + f f&#773; (3-body via virtual W&#8315;*, Q &asymp; 91 MeV) |
 | Muon &mu; | 0.01 | e&#8315; + &nu;&mu; + &nu;e |
 
 </details>
@@ -470,7 +495,7 @@ in Settings).
 
 ### Visualization Overlays
 
-Ten independent overlays toggled from **Menu > Visualization**:
+Overlays toggled from **Menu > Visualization**:
 
 | Overlay | Description |
 |---|---|
@@ -484,6 +509,8 @@ Ten independent overlays toggled from **Menu > Visualization**:
 | **Energy Heatmap** | 32&times;18 KE density grid (blue to red) |
 | **Velocity Field** | Arrow grid showing average velocity per cell |
 | **Force Vectors** | Coulomb/Yukawa/Gravity breakdown on selected particle |
+| **GW Ripples** | Expanding gravitational wave rings from accelerating masses (1/r amplitude, gold&rarr;violet) |
+| **Gravity Map** | Gravitational mass density heatmap (supports relativistic mass when E=mc&#178; enabled) |
 
 ### Field Visualization
 
@@ -498,6 +525,8 @@ velocity meter (tracks single particle), distance ruler (nanometer scale), densi
 
 ### Tools
 
+- **Force Objects**: EM field (proper Lorentz F=q(v&times;B), curves charged particles without speed loss),
+  strong nuclear, weak, gravity well, heat source
 - **Particle Accelerator**: fire projectiles at a target (single, triple, stream modes)
 - **Mirror**: reflective line segments with configurable elasticity (GPU-side reflection)
 - **Nuclear Debug**: tune reaction thresholds and rates in real time
@@ -525,7 +554,7 @@ Thermodynamics, Milestones, Chemistry). Persist via `.ppach` file.
 
 ## Environment Presets
 
-Thirteen presets spanning vacuum to SUSY sector, selectable from the **Environment** dropdown.
+Fourteen presets spanning vacuum to the Big Bang, selectable from the **Environment** dropdown.
 
 <details>
 <summary><b>All presets</b></summary>
@@ -545,8 +574,16 @@ Thirteen presets spanning vacuum to SUSY sector, selectable from the **Environme
 | 10 | Particle Accelerator | 10&#8312; K | High-energy protons + synchrotron |
 | 11 | Dark Sector | 10&#179; K | 40% DM, 30% p, 15% e, 10% DE, 5% graviton |
 | 12 | SUSY Sector | 10&#179; K | Neutralino/selectron/smuon/squark/gluino mix |
+| 13 | Big Bang | 2&times;10&#185;&#8309; K | Singularity-point quark-gluon plasma with Hubble expansion |
 
 </details>
+
+The **Big Bang** preset models the quark epoch (~10&#8315;&#185;&#178; to 10&#8315;&#8310; s).
+All particles spawn from a tight central point (&sigma; = 3% of screen) with radial outward
+velocities (Hubble-like expansion). Particle mix: 40% quarks (u/d + antiquarks), 15% gluons,
+10% photons, 15% leptons (all 3 generations), 8% W/Z bosons, 2% Higgs, 10% BSM (graviton,
+dark matter, dark energy). Hadronization is disabled (quarks are deconfined). As the system cools
+via dampening, quarks confine into hadrons and structure forms under gravity.
 
 ---
 
@@ -671,6 +708,7 @@ EmergentEvolution/
 | 15 | Genome | read |
 | 16 | Bond partners | read (CPU-managed) |
 | 17 | Force objects | read |
+| 18 | Mass inverse + ZPE table | read |
 
 All buffers are HOST_VISIBLE + HOST_COHERENT for CPU readback. A/B buffers ping-pong each tick.
 

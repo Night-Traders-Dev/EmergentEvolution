@@ -291,13 +291,13 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
         set(3,  100.0f,    0.0f);                      // Photon (massless)
         set(4,  1.0f,      zpe_from_mass(1.0f));      // Positron
         set(5,  0.025f,    zpe_from_mass(0.025f));    // Antiproton
-        set(6,  100.0f,    0.0f);                      // Neutrino_e
-        set(7,  100.0f,    0.0f);                      // Neutrino_mu
-        set(8,  100.0f,    0.0f);                      // Neutrino_tau
-        set(9,  0.005f,    zpe_from_mass(0.005f));    // Muon
-        set(10, 0.005f,    zpe_from_mass(0.005f));    // Antimuon
-        set(11, 0.0003f,   zpe_from_mass(0.0003f));   // Tau
-        set(12, 0.0003f,   zpe_from_mass(0.0003f));   // Antitau
+        set(6,  100.0f,    0.0f);                      // Neutrino_e (massless)
+        set(7,  0.005f,    zpe_from_mass(0.005f));    // Muon (μ⁻)
+        set(8,  0.005f,    zpe_from_mass(0.005f));    // Antimuon (μ⁺)
+        set(9,  0.0003f,   zpe_from_mass(0.0003f));   // Tau (τ⁻)
+        set(10, 0.0003f,   zpe_from_mass(0.0003f));   // Antitau (τ⁺)
+        set(11, 100.0f,    0.0f);                      // Muon Neutrino (νμ, massless)
+        set(12, 100.0f,    0.0f);                      // Tau Neutrino (ντ, massless)
         // Quarks
         set(13, 0.2f,      zpe_from_mass(0.2f));      // Up
         set(14, 0.15f,     zpe_from_mass(0.15f));     // Down
@@ -343,15 +343,15 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
         set(49, 0.000025f,       zpe_from_mass(0.000025f));        // Sneutrino
         // Hypothetical: Force Carriers & Gravity
         set(50, 100.0f,          0.0f);                             // Gravitino
-        set(51, 0.0000000005f,   zpe_from_mass(0.0000000005f));    // X Boson
-        set(52, 0.0000000005f,   zpe_from_mass(0.0000000005f));    // Y Boson
-        set(53, 0.0000000003f,   zpe_from_mass(0.0000000003f));    // Monopole
+        set(51, 0.00004f,        zpe_from_mass(0.00004f));         // X Boson (GUT-scale, capped)
+        set(52, 0.00004f,        zpe_from_mass(0.00004f));         // Y Boson (GUT-scale, capped)
+        set(53, 0.00005f,        zpe_from_mass(0.00005f));         // Monopole (GUT-scale, capped)
         set(54, 0.000005f,       zpe_from_mass(0.000005f));        // Radion
         set(55, 0.0005f,         zpe_from_mass(0.0005f));          // Dilaton
         // Hypothetical: Theoretical Extremes
         set(56, 50.0f,           0.0f);                             // Tachyon
-        set(57, 0.00000000005f,  zpe_from_mass(0.00000000005f));   // Preon
-        set(58, 0.0000000004f,   zpe_from_mass(0.0000000004f));    // Inflaton
+        set(57, 0.00003f,        zpe_from_mass(0.00003f));         // Preon (sub-quark, capped)
+        set(58, 0.00004f,        zpe_from_mass(0.00004f));         // Inflaton (GUT-scale, capped)
         set(59, 100.0f,          0.0f);                             // Majoron
         set(60, 0.002f,          zpe_from_mass(0.002f));           // Odderon
         set(61, 0.003f,          zpe_from_mass(0.003f));           // Glueball

@@ -26,7 +26,7 @@ struct UserPrefs {
     bool  spatial_grid    = true;  // use spatial grid for neighbor queries
     float music_volume    = 0.5f;  // 0.0-1.0 background music volume
     bool  music_muted     = false; // mute toggle
-    int   render_scale    = 1;     // 1=native, 2=2x supersampling
+    int   render_scale    = 1;     // 1=native, 2=2x, 3=3x, 4=4x supersampling
     bool  event_log_limit = true;  // true=cap at 10k entries, false=unlimited
     bool  event_log_save  = false; // true=append events to saves/event_log.txt
 };
@@ -230,6 +230,14 @@ public:
     bool  show_magnetic_field  = false;
     float magnetic_field_opacity = 0.35f;
 
+    bool  show_gravity_map     = false;
+    bool  show_grav_waves      = false;  // GW ripple visualization
+
+    // General Relativity extensions (GPU gravity)
+    bool  gr_mass_energy    = false;  // E=mc² gravitational mass (bit 9)
+    bool  gr_frame_dragging = false;  // spin-gravity coupling (bit 10)
+    bool  gr_grav_waves     = false;  // finite-speed gravity / GW (bit 11)
+
     bool  show_orbit_paths    = false;
 
     // Orbit path data (populated by simulation each tick)
@@ -248,6 +256,25 @@ public:
     VisGrid vis_grid;
     std::vector<std::vector<glm::vec2>> trajectory_history;
 
+    // Magnetic field line sources (populated by simulation when show_magnetic_field)
+    struct MagneticSource {
+        glm::vec2 pos;
+        glm::vec2 vel;
+        float intrinsic_moment; // spin dipole μ (signed, nuclear magnetons / Bohr magnetons)
+        float charge;           // particle charge (for Biot-Savart B ∝ q·v×r̂/r²)
+        float mass_mev;         // rest mass in MeV (for momentum scaling)
+    };
+    std::vector<MagneticSource> magnetic_sources;
+
+    // Gravitational wave ripples (expanding rings from accelerating masses)
+    struct GWRing {
+        glm::vec2 origin;       // emission center (world)
+        float     radius;       // current ring radius (world units)
+        float     amplitude;    // wave strength (∝ mass × acceleration)
+        float     max_radius;   // fade out at this range
+    };
+    std::vector<GWRing> gw_rings;
+
     struct ForceContribution {
         glm::vec2 direction;
         float magnitude;
@@ -257,6 +284,7 @@ public:
     std::vector<ForceContribution> force_contributions;
 
     const float* readback_energies_ptr = nullptr;
+    const uint32_t* readback_types_ptr = nullptr;
 
     // Stats display
     float    fps_display = 0.0f;
@@ -278,6 +306,11 @@ public:
     float field_intensity = 0.5f;
     bool  show_collision_radii = false;
     bool  hide_virtual_trails  = false;
+    bool  hide_bond_visuals       = false;  // hide bond lines (shader + overlay), keep spring physics
+    bool  hide_entanglement_lines = false;  // hide dashed lines, keep velocity coupling
+
+    // Bottom bar auto-hide
+    float bottom_bar_offset = 0.0f;  // 0.0 = fully visible, 1.0 = fully hidden
 
     // Emergent feedback display
     float emergent_temp_display   = 0.0f;
@@ -328,6 +361,10 @@ public:
 
     // Particle list (all active particles, populated each tick)
     bool show_particle_list = false;
+    bool particle_type_filter[MAX_PARTICLE_TYPES] = {}; // all true by default (initialized in init())
+
+    // Element list filter
+    int element_filter_mode = 0; // 0=all, 1=stable, 2=unstable, 3=antimatter, 4=molecules
 
     // Electron cloud visualization
     bool show_electron_cloud = false;
@@ -389,8 +426,11 @@ public:
         DEVT_PHOTODISINTEGRATION,   // γ + A → (A-1) + n
         DEVT_BOND_FORMED,           // Covalent bond created
         DEVT_BOND_BROKEN,           // Covalent bond broken
+        DEVT_BREMSSTRAHLUNG,        // Bremsstrahlung photon emission
+        DEVT_NEUTRINO,              // Neutrino scatter / oscillation
+        DEVT_WEAK_SCATTER,          // Weak flavor-changing scattering
     };
-    static constexpr int DEVT_COUNT = 13;
+    static constexpr int DEVT_COUNT = 16;
     struct DecayLogEntry {
         std::string description;
         std::string details;        // multi-line detail shown on click
@@ -405,7 +445,7 @@ public:
     void save_event_to_disk(const char* desc, DecayEventType type);
     bool show_nuclear_debug = false;
     int32_t expanded_event_idx = -1;  // which event is expanded in log
-    bool event_filter[DEVT_COUNT] = {true,true,true,true,true,true,true,true,true,true,true,true,true};
+    bool event_filter[DEVT_COUNT] = {true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true};
 
     void push_decay_event(const char* desc, DecayEventType type, ImVec4 color = ImVec4(1,0.6f,0.2f,1));
     void push_decay_event(const char* desc, DecayEventType type, ImVec4 color, const std::string& details);
@@ -420,6 +460,7 @@ private:
     void push_theme();
     void pop_theme();
     void draw_bottom_bar(SimConfig& cfg, bool& request_reset);
+    void draw_top_bar(const SimConfig& cfg);
     void draw_settings_panel(SimConfig& cfg);
     void draw_spawn_menu(const SimConfig& cfg);
     void draw_info_card(const Particles& particles);
@@ -447,6 +488,8 @@ private:
     void draw_force_vectors_overlay(const SimConfig& cfg);
     void draw_atom_grid(const SimConfig& cfg);
     void draw_orbit_paths(const SimConfig& cfg);
+    void draw_gravity_map(const SimConfig& cfg);
+    void draw_grav_waves(const SimConfig& cfg);
     void draw_measurement_panel();
 
     // Splash animation state

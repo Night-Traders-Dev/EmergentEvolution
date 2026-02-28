@@ -368,6 +368,27 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
             else if (r < 0.85f) type = GLUINO_TYPE_PHYS;
             else if (r < 0.95f) type = PHOTON_TYPE_PHYS;
             else type = ELECTRON_TYPE_PHYS;
+        } else if (env == 13) {
+            // Big Bang: quark-epoch plasma — all SM particles, matter-antimatter symmetric
+            float r = unit(rng);
+            if      (r < 0.10f) type = UP_QUARK_TYPE;        // 10% u
+            else if (r < 0.20f) type = DOWN_QUARK_TYPE;      // 10% d
+            else if (r < 0.30f) type = ANTI_UP_TYPE;          // 10% ū
+            else if (r < 0.40f) type = ANTI_DOWN_TYPE;        // 10% d̄
+            else if (r < 0.55f) type = GLUON_TYPE_PHYS;      // 15% gluon
+            else if (r < 0.65f) type = PHOTON_TYPE_PHYS;     // 10% photon
+            else if (r < 0.69f) type = ELECTRON_TYPE_PHYS;   //  4% e⁻
+            else if (r < 0.73f) type = POSITRON_TYPE_PHYS;   //  4% e⁺
+            else if (r < 0.76f) type = NEUTRINO_TYPE_PHYS;   //  3% νe
+            else if (r < 0.78f) type = MU_NEUTRINO_TYPE_PHYS;//  2% νμ
+            else if (r < 0.80f) type = TAU_NEUTRINO_TYPE_PHYS;//  2% ντ
+            else if (r < 0.83f) type = W_PLUS_TYPE_PHYS;     //  3% W⁺
+            else if (r < 0.86f) type = W_MINUS_TYPE_PHYS;    //  3% W⁻
+            else if (r < 0.88f) type = Z_BOSON_TYPE_PHYS;    //  2% Z⁰
+            else if (r < 0.90f) type = HIGGS_TYPE_PHYS;      //  2% Higgs
+            else if (r < 0.93f) type = GRAVITON_TYPE_PHYS;   //  3% graviton
+            else if (r < 0.97f) type = DARK_MATTER_TYPE_PHYS;//  4% dark matter
+            else                type = DARK_ENERGY_TYPE_PHYS; //  3% dark energy
         } else {
             // Meson Factory: quark-antiquark pairs
             float r = unit(rng);
@@ -432,6 +453,13 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
                 pos = glm::vec2(cx + gauss(rng) * sigma, cy + gauss(rng) * sigma);
                 break;
             }
+            case 13: {
+                // Big Bang: tight central singularity (3% of screen)
+                float cx = rw * 0.5f, cy = rh * 0.5f;
+                float sigma = std::min(sw, sh) * 0.03f;
+                pos = glm::vec2(cx + gauss(rng) * sigma, cy + gauss(rng) * sigma);
+                break;
+            }
             case 10: {
                 // Particle Accelerator — beam ring (elliptical)
                 float cx = rw * 0.5f, cy = rh * 0.5f;
@@ -457,7 +485,24 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
 
         // Random initial velocity (scaled by mass)
         glm::vec2 vel;
-        if (env == 10) {
+        if (env == 13) {
+            // Big Bang: radial outward expansion from center (Hubble-like v ∝ r)
+            float cx = rw * 0.5f, cy = rh * 0.5f;
+            glm::vec2 delta = pos - glm::vec2(cx, cy);
+            float r = glm::length(delta);
+            float expansion_speed = 15.0f;
+            if (r > 0.1f) {
+                vel = glm::normalize(delta) * expansion_speed;
+            } else {
+                vel = glm::vec2(gauss(rng), gauss(rng)) * expansion_speed;
+            }
+            // Thermal jitter on top of expansion
+            vel += glm::vec2(gauss(rng) * 3.0f, gauss(rng) * 3.0f);
+            // Massless particles at c
+            if (type == PHOTON_TYPE_PHYS || type == GRAVITON_TYPE_PHYS || type == GLUON_TYPE_PHYS) {
+                vel = glm::normalize(vel + glm::vec2(0.001f)) * C_SIM;
+            }
+        } else if (env == 10) {
             // Accelerator: tangential velocity along the beam ring
             float cx = rw * 0.5f, cy = rh * 0.5f;
             float dx_beam = pos.x - cx, dy_beam = pos.y - cy;

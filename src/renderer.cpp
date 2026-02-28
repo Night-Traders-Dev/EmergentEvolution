@@ -2,6 +2,7 @@
 #include <stdexcept>
 #include <array>
 #include <string>
+#include <cstdio>
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -320,6 +321,35 @@ void Renderer::init_imgui(VulkanContext& ctx, GLFWwindow* window) {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+    // Load font with Greek, math symbols, arrows, superscripts for physics notation
+    static const ImWchar physics_glyph_ranges[] = {
+        0x0020, 0x00FF, // Basic Latin + Latin Supplement
+        0x0300, 0x036F, // Combining Diacritical Marks (overline ̄, etc.)
+        0x0370, 0x03FF, // Greek and Coptic (ν, μ, τ, α, β, γ, etc.)
+        0x2070, 0x209F, // Superscripts and Subscripts (⁺, ⁻, ⁰, ¹, ², ³)
+        0x2190, 0x21FF, // Arrows (→, ←, ↑, ↓)
+        0x2200, 0x22FF, // Mathematical Operators (×, ·, ∓, ≈, ∞)
+        0x2500, 0x257F, // Box Drawing (─, │, etc.)
+        0,
+    };
+    const char* font_paths[] = {
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    };
+    bool font_loaded = false;
+    for (const char* path : font_paths) {
+        FILE* f = std::fopen(path, "rb");
+        if (f) {
+            std::fclose(f);
+            io.Fonts->AddFontFromFileTTF(path, 15.0f, nullptr, physics_glyph_ranges);
+            font_loaded = true;
+            break;
+        }
+    }
+    if (!font_loaded)
+        io.Fonts->AddFontDefault();
 
     // Dark theme matching the original Godot look
     ImGui::StyleColorsDark();

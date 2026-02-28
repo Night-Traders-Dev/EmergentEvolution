@@ -81,6 +81,7 @@ private:
 
     std::vector<glm::vec2> readback_positions_;
     std::vector<glm::vec2> readback_velocities_;
+    std::vector<glm::vec2> prev_velocities_;      // previous tick velocities (for GW accel)
     std::vector<float>     readback_energies_;
 
     SpatialGrid grid_;
@@ -148,6 +149,11 @@ private:
     void check_shell_transitions();
     void check_spallation();
     void check_hadronization();
+    void check_bremsstrahlung();
+    void check_neutrino_scattering();
+    void check_neutrino_oscillations();
+    void check_weak_flavor_change();
+    void apply_gw_tidal_forces(double dt);
 
     uint32_t spawn_atom_at(glm::vec2 pos, int Z, int N, std::mt19937& rng, uint32_t& search_start);
     void place_force_object(glm::vec2 world_pos, ForceObjectType type);
