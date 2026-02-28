@@ -1023,11 +1023,13 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
             ImVec4(0.3f, 0.6f, 1.0f, 1.0f),   // shell 1: blue
             ImVec4(0.3f, 0.9f, 0.5f, 1.0f),   // shell 2: green
             ImVec4(0.9f, 0.7f, 0.2f, 1.0f),   // shell 3: gold
+            ImVec4(0.95f, 0.35f, 0.3f, 1.0f),  // shell 4: red
         };
         const ImVec4 SHELL_COLORS_ANTI[] = {
             ImVec4(0.0f, 0.85f, 0.95f, 1.0f),  // shell 1: cyan
             ImVec4(0.6f, 0.3f, 0.95f, 1.0f),   // shell 2: purple
             ImVec4(0.95f, 0.4f, 0.6f, 1.0f),   // shell 3: pink
+            ImVec4(1.0f, 0.7f, 0.3f, 1.0f),    // shell 4: orange
         };
 
         for (const auto& cloud : nucleus_clouds) {
@@ -1044,8 +1046,8 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
 
             const ImVec4* shell_colors = cloud.is_anti ? SHELL_COLORS_ANTI : SHELL_COLORS_MATTER;
 
-            for (int s = 0; s < 3; ++s) {
-                if (cloud.shell_cap[s] == 0) continue;  // shouldn't happen
+            for (int s = 0; s < 4; ++s) {
+                if (cloud.shell_cap[s] == 0) continue;
 
                 float r_px = cloud.shell_radii[s] * cfg.current_camera_zoom * scx;
                 if (r_px < 1.5f) continue;
@@ -2991,6 +2993,56 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
         }
     }
 
+    // ── Electron Orbitals ──────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Electron Orbitals")) {
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Per-shell orbital speed and binding");
+        ImGui::SliderFloat("1s Boost", &cfg.orbit_boost[0], 0.5f, 12.0f, "%.1f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Shell 1 (1s) speed multiplier\n2 electrons, closest to nucleus");
+        ImGui::SliderFloat("2sp Boost", &cfg.orbit_boost[1], 0.5f, 12.0f, "%.1f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Shell 2 (2s, 2p) speed multiplier\n8 electrons");
+        ImGui::SliderFloat("3spd Boost", &cfg.orbit_boost[2], 0.5f, 12.0f, "%.1f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Shell 3 (3s, 3p, 3d) speed multiplier\n18 electrons");
+        ImGui::SliderFloat("4spdf Boost", &cfg.orbit_boost[3], 0.5f, 12.0f, "%.1f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Shell 4 (4s, 4p, 4d, 4f) speed multiplier\n32 electrons, outermost");
+        ImGui::SliderFloat("Binding Radius", &cfg.orbital_binding_radius, 30.0f, 300.0f, "%.0f px");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Maximum distance an electron can bind to a nucleus\nLarger = electrons captured from further away");
+        ImGui::SliderFloat("Shell Offset", &cfg.orbital_shell_offset, 0.0f, 6.28f, "%.2f rad");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Angular offset between shells at spawn\n2.40 = golden angle (natural distribution)\n0 = all shells aligned");
+
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Shell Transitions");
+        ImGui::Checkbox("Enable Transitions", &cfg.shell_transitions_enabled);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Allow electrons to jump between shells\nPromotion (thermal), de-excitation (photon emission), ionization");
+        if (cfg.shell_transitions_enabled) {
+            ImGui::SliderFloat("De-excitation Time", &cfg.deexcitation_lifetime, 10.0f, 300.0f, "%.0f frames");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("How long an excited electron stays in a higher shell\nbefore dropping back down and emitting a photon");
+            ImGui::SliderInt("Max Trans/Frame", &cfg.max_transitions_per_frame, 1, 32);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Maximum shell transitions per simulation frame\nHigher = more responsive, slightly more CPU");
+        }
+
+        ImGui::Separator();
+        if (ImGui::Button("Reset##orbitals")) {
+            cfg.orbit_boost[0] = 1.5f;
+            cfg.orbit_boost[1] = 3.5f;
+            cfg.orbit_boost[2] = 6.0f;
+            cfg.orbit_boost[3] = 9.0f;
+            cfg.orbital_binding_radius = 130.0f;
+            cfg.orbital_shell_offset = 2.399f;
+            cfg.shell_transitions_enabled = true;
+            cfg.deexcitation_lifetime = 60.0f;
+            cfg.max_transitions_per_frame = 8;
+        }
+    }
+
     // ── World Settings ───────────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("World Settings")) {
         ImGui::SliderFloat("Friction", &cfg.dampening, 0.50f, 0.99f, "%.3f");
@@ -4062,6 +4114,23 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
                     navigate_to_particle = parent;
                 }
                 ImGui::PopStyleColor();
+
+                // Show orbital shell info for bound electrons/positrons
+                if ((ptype == ELECTRON_TYPE_PHYS || ptype == POSITRON_TYPE_PHYS) &&
+                    idx < particles.orbital_shell.size()) {
+                    int8_t sh = particles.orbital_shell[idx];
+                    if (sh >= 0 && sh <= 3) {
+                        static const char* shell_names[] = {"1s", "2sp", "3spd", "4spdf"};
+                        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Shell");
+                        ImGui::SameLine(col_w);
+                        ImGui::Text("%s", shell_names[sh]);
+                        if (idx < particles.excitation_timer.size() && particles.excitation_timer[idx] > 0) {
+                            ImGui::SameLine();
+                            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
+                                "(excited %u frames)", particles.excitation_timer[idx]);
+                        }
+                    }
+                }
             }
         }
 

@@ -28,6 +28,8 @@ public:
 
     std::vector<uint32_t> birth_frames;   // frame at which each particle was created
     std::vector<int32_t>  orbital_parent;  // index of parent nucleus proton, or -1 if unbound
+    std::vector<int8_t>   orbital_shell;      // shell index 0-3, or -1 if unbound
+    std::vector<uint16_t> excitation_timer;   // frames since last shell promotion (0 = ground state)
     std::vector<uint32_t> entangled_partner;  // index of entangled partner, 0xFFFFFFFF = none
     std::vector<uint8_t>  cascade_tag;        // spallation cascade origin: 0=none, 1=photopion, 2=VMD, 3=pion_decay, 4=muon_decay
 

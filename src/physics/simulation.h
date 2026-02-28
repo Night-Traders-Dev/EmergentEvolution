@@ -17,8 +17,8 @@
 // ── Spatial acceleration grid for O(N) neighbor queries ─────────────────────
 struct SpatialGrid {
     static constexpr float CELL_SIZE    = 30.0f;
-    static constexpr int   COLS         = static_cast<int>(REGION_W / CELL_SIZE) + 1;  // 86
-    static constexpr int   ROWS         = static_cast<int>(REGION_H / CELL_SIZE) + 1;  // 49
+    static constexpr int   COLS         = static_cast<int>(WORLD_W / CELL_SIZE) + 1;  // 342
+    static constexpr int   ROWS         = static_cast<int>(WORLD_H / CELL_SIZE) + 1;  // 193
     static constexpr int   TOTAL_CELLS  = COLS * ROWS;
 
     uint32_t cell_start[TOTAL_CELLS];
@@ -112,7 +112,7 @@ private:
         int Z = 0, N = 0;
         uint32_t rep = 0;
         bool is_anti = false;       // antimatter nucleus (antiprotons)
-        int shell_fill[3] = {0, 0, 0};  // pre-computed electron shell occupancy
+        int shell_fill[4] = {0, 0, 0, 0};  // electron shell occupancy (1s,2s2p,3s3p3d,4s4p4d4f)
         std::vector<uint32_t> proton_indices;
         std::vector<uint32_t> neutron_indices;
     };
@@ -145,6 +145,7 @@ private:
     void update_bonds();
     void check_nuclear_decay();
     void check_photoelectric();
+    void check_shell_transitions();
     void check_spallation();
     void check_hadronization();
 

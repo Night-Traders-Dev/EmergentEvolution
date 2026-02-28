@@ -8,6 +8,8 @@
 
 static constexpr uint32_t REGION_W           = 2560;
 static constexpr uint32_t REGION_H           = 1440;
+static constexpr uint32_t WORLD_W            = REGION_W * 4;  // 10240 — simulation world bounds
+static constexpr uint32_t WORLD_H            = REGION_H * 4;  // 5760
 static constexpr uint32_t MAX_PARTICLE_TYPES = 68;
 static constexpr uint32_t GROUP_DENSITY      = 256;
 static constexpr uint32_t GENOME_SIZE        = 4;   // floats per particle: charge, electronegativity, reactivity, bond_strength
@@ -273,6 +275,16 @@ struct SimConfig {
     float    compton_strength         = 1.0f;   // Compton scattering (photon-matter)
     float    annihilation_strength    = 1.0f;   // Matter-antimatter annihilation
 
+    // Electron orbital parameters — per-shell speed multipliers (steep gradient)
+    float    orbit_boost[4]           = {1.5f, 3.5f, 6.0f, 9.0f};  // 1s, 2s2p, 3s3p3d, 4s4p4d4f
+    float    orbital_binding_radius   = 130.0f; // max electron-nucleus binding distance (px)
+    float    orbital_shell_offset     = 2.399f; // golden angle offset between shells (radians)
+
+    // Shell transition parameters
+    bool     shell_transitions_enabled  = true;   // enable promotion/demotion/ionization
+    float    deexcitation_lifetime      = 60.0f;  // frames before excited electron de-excites
+    int      max_transitions_per_frame  = 8;      // cap transitions per tick
+
     // Visual
     bool     show_trails        = false;  // particle trail rendering (fade instead of clear)
 
@@ -282,7 +294,7 @@ struct SimConfig {
     // Force objects (transient — set each frame before compute dispatch)
     uint32_t force_object_count = 0;
 
-    glm::vec2 camera_origin      = { REGION_W / 2.0f, REGION_H / 2.0f };
+    glm::vec2 camera_origin      = { WORLD_W / 2.0f, WORLD_H / 2.0f };
     float     camera_zoom        = 1.0f;
     float     current_camera_zoom = 1.0f;
 

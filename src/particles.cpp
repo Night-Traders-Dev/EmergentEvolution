@@ -293,8 +293,10 @@ void Particles::gen_particles(const SimConfig& cfg) {
     velocities.clear();
     types.clear();
 
-    const float rw = static_cast<float>(REGION_W);
-    const float rh = static_cast<float>(REGION_H);
+    const float rw = static_cast<float>(WORLD_W);   // world bounds
+    const float rh = static_cast<float>(WORLD_H);
+    const float sw = static_cast<float>(REGION_W);  // spawn distribution scale
+    const float sh = static_cast<float>(REGION_H);
 
     // ── Empty-world reservoir ──────────────────────────────────────────────────
     // Fills the full particle_count slots with dormant H atoms at energy=0.
@@ -310,6 +312,8 @@ void Particles::gen_particles(const SimConfig& cfg) {
         energies.assign(pool, 0.0f);          // dark / near-invisible
         birth_frames.assign(pool, 0u);
         orbital_parent.assign(pool, -1);
+        orbital_shell.assign(pool, -1);
+        excitation_timer.assign(pool, 0);
         entangled_partner.assign(pool, 0xFFFFFFFFu);
         cascade_tag.assign(pool, 0u);
         genomes.assign(pool * GENOME_SIZE, 0.0f);
@@ -333,6 +337,8 @@ void Particles::gen_particles(const SimConfig& cfg) {
         energies.assign(2, 1.0f);
         birth_frames.assign(2, 0u);
         orbital_parent.assign(2, -1);
+        orbital_shell.assign(2, -1);
+        excitation_timer.assign(2, 0);
         entangled_partner.assign(2, 0xFFFFFFFFu);
         cascade_tag.assign(2, 0u);
         genomes.assign(2 * GENOME_SIZE, 0.0f);
@@ -392,44 +398,48 @@ void Particles::gen_particles(const SimConfig& cfg) {
         switch (cfg.environment_mode) {
             case 2: { // Hydrothermal Vent — plume rising from bottom-center
                 float cx = rw * 0.5f;
-                float plume_sx = rw * 0.06f;
+                float plume_sx = sw * 0.06f;
                 if (rand_range_f(0.0f, 1.0f) < 0.70f) {
                     // Plume column: narrow x, biased toward bottom
-                    float py = rh - std::abs(gauss(rng_)) * rh * 0.4f;
+                    float py = rh * 0.5f + sh * 0.5f - std::abs(gauss(rng_)) * sh * 0.4f;
                     py = std::clamp(py, 0.0f, rh - 1.0f);
                     pos = glm::vec2(
                         std::clamp(cx + gauss(rng_) * plume_sx, 0.0f, rw - 1.0f),
                         py);
                 } else {
-                    // Sparse warm-water background
-                    pos = glm::vec2(rand_range_f(0.0f, rw), rand_range_f(0.0f, rh));
+                    // Sparse warm-water background centered on world
+                    pos = glm::vec2(
+                        rw * 0.5f + rand_range_f(-sw * 0.5f, sw * 0.5f),
+                        rh * 0.5f + rand_range_f(-sh * 0.5f, sh * 0.5f));
                 }
                 break;
             }
             case 6: { // Nebula — dense Gaussian cloud at center
                 float cx = rw * 0.5f, cy = rh * 0.5f;
-                float sx = rw * 0.25f, sy = rh * 0.25f;
+                float gsx = sw * 0.25f, gsy = sh * 0.25f;
                 pos = glm::vec2(
-                    std::clamp(cx + gauss(rng_) * sx, 0.0f, rw - 1.0f),
-                    std::clamp(cy + gauss(rng_) * sy, 0.0f, rh - 1.0f));
+                    std::clamp(cx + gauss(rng_) * gsx, 0.0f, rw - 1.0f),
+                    std::clamp(cy + gauss(rng_) * gsy, 0.0f, rh - 1.0f));
                 break;
             }
             case 7: { // Asteroid — dense rocky core + scattered debris
                 float cx = rw * 0.5f, cy = rh * 0.5f;
-                float core_s = rw * 0.08f;
+                float core_s = sw * 0.08f;
                 if (rand_range_f(0.0f, 1.0f) < 0.80f) {
                     pos = glm::vec2(
                         std::clamp(cx + gauss(rng_) * core_s, 0.0f, rw - 1.0f),
                         std::clamp(cy + gauss(rng_) * core_s, 0.0f, rh - 1.0f));
                 } else {
-                    // Scattered debris
-                    pos = glm::vec2(rand_range_f(0.0f, rw), rand_range_f(0.0f, rh));
+                    // Scattered debris centered on world
+                    pos = glm::vec2(
+                        rw * 0.5f + rand_range_f(-sw * 0.5f, sw * 0.5f),
+                        rh * 0.5f + rand_range_f(-sh * 0.5f, sh * 0.5f));
                 }
                 break;
             }
             case 8: { // Comet — dense nucleus + elongated tail
-                float nx = rw * 0.25f, ny = rh * 0.5f;
-                float nuc_s = rw * 0.05f;
+                float nx = rw * 0.5f - sw * 0.25f, ny = rh * 0.5f;
+                float nuc_s = sw * 0.05f;
                 if (rand_range_f(0.0f, 1.0f) < 0.55f) {
                     // Dense icy nucleus
                     pos = glm::vec2(
@@ -437,9 +447,9 @@ void Particles::gen_particles(const SimConfig& cfg) {
                         std::clamp(ny + gauss(rng_) * nuc_s, 0.0f, rh - 1.0f));
                 } else {
                     // Tail streaming rightward, widening with distance
-                    float tx = nx + std::abs(gauss(rng_)) * rw * 0.35f;
-                    float spread = (tx - nx) / rw * 0.3f;
-                    float ty = ny + gauss(rng_) * rh * (0.03f + spread);
+                    float tx = nx + std::abs(gauss(rng_)) * sw * 0.35f;
+                    float spread = (tx - nx) / sw * 0.3f;
+                    float ty = ny + gauss(rng_) * sh * (0.03f + spread);
                     pos = glm::vec2(
                         std::clamp(tx, 0.0f, rw - 1.0f),
                         std::clamp(ty, 0.0f, rh - 1.0f));
@@ -447,7 +457,9 @@ void Particles::gen_particles(const SimConfig& cfg) {
                 break;
             }
             default: // Uniform fill (Tide Pool, Primordial Soup, Freshwater Pond, Deep Space)
-                pos = glm::vec2(rand_range_f(0.0f, rw), rand_range_f(0.0f, rh));
+                pos = glm::vec2(
+                    rw * 0.5f + rand_range_f(-sw * 0.5f, sw * 0.5f),
+                    rh * 0.5f + rand_range_f(-sh * 0.5f, sh * 0.5f));
                 break;
         }
 
@@ -467,6 +479,8 @@ void Particles::gen_particles(const SimConfig& cfg) {
     energies.assign(cfg.particle_count, 1.0f);
     birth_frames.assign(cfg.particle_count, 0u);
     orbital_parent.assign(cfg.particle_count, -1);
+    orbital_shell.assign(cfg.particle_count, -1);
+    excitation_timer.assign(cfg.particle_count, 0);
     entangled_partner.assign(cfg.particle_count, 0xFFFFFFFFu);
     cascade_tag.assign(cfg.particle_count, 0u);
 

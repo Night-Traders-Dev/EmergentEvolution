@@ -209,8 +209,8 @@ void PhysicsSimulation::reset() {
 
     // Particle Accelerator: auto-place EM force objects as bending magnets
     if (cfg.environment_mode == 10) {
-        float cx = static_cast<float>(REGION_W) * 0.5f;
-        float cy = static_cast<float>(REGION_H) * 0.5f;
+        float cx = static_cast<float>(WORLD_W) * 0.5f;
+        float cy = static_cast<float>(WORLD_H) * 0.5f;
         float rx = static_cast<float>(REGION_W) * 0.35f;
         float ry = static_cast<float>(REGION_H) * 0.35f;
         // Place 8 EM magnets evenly around the ring
@@ -368,8 +368,8 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
             if (count > 0) {
                 center /= static_cast<float>(count);
                 glm::vec2 delta = world_pos - center;
-                float rw = static_cast<float>(REGION_W);
-                float rh = static_cast<float>(REGION_H);
+                float rw = static_cast<float>(WORLD_W);
+                float rh = static_cast<float>(WORLD_H);
                 for (uint32_t i = 0; i < static_cast<uint32_t>(readback_positions_.size()); ++i) {
                     if (readback_energies_[i] <= 0.0f) continue;
                     if (static_cast<int32_t>(i) == nuc_rep || particles.orbital_parent[i] == nuc_rep) {
@@ -653,8 +653,8 @@ void PhysicsSimulation::do_accelerator_fire(glm::vec2 aim_world_pos) {
         shot_dirs.push_back(dir);
     }
 
-    float rw = static_cast<float>(REGION_W);
-    float rh = static_cast<float>(REGION_H);
+    float rw = static_cast<float>(WORLD_W);
+    float rh = static_cast<float>(WORLD_H);
     float offset_dist = cfg.radius * 4.0f + 8.0f;
 
     std::mt19937 rng(static_cast<uint32_t>(aim_world_pos.x * 1000.0f + aim_world_pos.y + frame_counter_));
@@ -718,8 +718,8 @@ uint32_t PhysicsSimulation::spawn_atom_at(glm::vec2 pos, int Z, int N,
         return UINT32_MAX;
     };
 
-    float rw = static_cast<float>(REGION_W);
-    float rh = static_cast<float>(REGION_H);
+    float rw = static_cast<float>(WORLD_W);
+    float rh = static_cast<float>(WORLD_H);
     auto wrap_pos = [&](glm::vec2 p) -> glm::vec2 {
         p.x = std::fmod(p.x + rw, rw);
         p.y = std::fmod(p.y + rh, rh);
@@ -729,7 +729,7 @@ uint32_t PhysicsSimulation::spawn_atom_at(glm::vec2 pos, int Z, int N,
     const float R_BOHR_SPAWN = 15.0f;
     const float K_COULOMB_SPAWN = 1200.0f;
     const float SOFTEN_SQ_SPAWN = 64.0f;
-    const int SHELL_CAP_SPAWN[] = {2, 8, 18};
+    const int SHELL_CAP_SPAWN[] = {2, 8, 18, 32};
 
     if (N < 0) N = Z;
     int A = Z + N;
@@ -798,8 +798,8 @@ uint32_t PhysicsSimulation::spawn_atom_at(glm::vec2 pos, int Z, int N,
     const float NUC_CLEAR = nuc_extent + 4.0f;
 
     int electrons_left = Z;
-    int shell_fill_spawn[3] = {0, 0, 0};
-    for (int shell = 0; shell < 3 && electrons_left > 0; ++shell) {
+    int shell_fill_spawn[4] = {0, 0, 0, 0};
+    for (int shell = 0; shell < 4 && electrons_left > 0; ++shell) {
         int cap = std::min(SHELL_CAP_SPAWN[shell], electrons_left);
         float n_shell = static_cast<float>(shell + 1);
 
@@ -815,27 +815,38 @@ uint32_t PhysicsSimulation::spawn_atom_at(glm::vec2 pos, int Z, int N,
         float R3 = R_target * R_target * R_target;
         float R2_soft = R_target * R_target + SOFTEN_SQ_SPAWN;
         float L_ground = std::sqrt(Z_eff * K_COULOMB_SPAWN * R3 / R2_soft);
-        float v_orbital = L_ground / R_target;
+
+        // Per-shell boost from SimConfig
+        float orbit_boost = cfg.orbit_boost[shell];
+        float v_orbital = (L_ground / R_target) * orbit_boost;
+
+        // Stagger shells by configurable offset for cloud appearance
+        float shell_offset = shell * cfg.orbital_shell_offset;
 
         for (int e = 0; e < cap; ++e) {
             uint32_t slot = find_dormant(search_start);
             if (slot == UINT32_MAX) break;
             search_start = slot + 1;
 
-            float angle = 2.0f * 3.14159265f * static_cast<float>(e) / static_cast<float>(cap);
+            float angle = shell_offset + 2.0f * 3.14159265f * static_cast<float>(e) / static_cast<float>(cap);
             glm::vec2 offset(R_target * std::cos(angle), R_target * std::sin(angle));
             glm::vec2 tangent(-std::sin(angle), std::cos(angle));
 
             readback_positions_[slot] = wrap_pos(pos + offset);
             readback_velocities_[slot] = tangent * v_orbital;
 
-            float e_speed = glm::length(tangent * v_orbital);
+            float e_speed = v_orbital;
             float e_beta = std::min(e_speed / C_SIM, 0.9999f);
             float e_gamma = 1.0f / std::sqrt(1.0f - e_beta * e_beta);
             readback_energies_[slot] = mev_to_ebuf(e_gamma * PHYS_REST_MASS_MEV[ELECTRON_TYPE_PHYS]);
 
             write_spawn_genome(particles, slot, ELECTRON_TYPE_PHYS, rng, frame_counter_);
             particles.genomes[slot * GENOME_SIZE + 2] = L_ground;
+            particles.genomes[slot * GENOME_SIZE + 3] = orbit_boost;  // stored for shader
+            if (slot < particles.orbital_shell.size()) {
+                particles.orbital_shell[slot] = static_cast<int8_t>(shell);
+                particles.excitation_timer[slot] = 0;
+            }
         }
 
         shell_fill_spawn[shell] = cap;
@@ -866,8 +877,8 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
     std::normal_distribution<float> gauss(0.0f, 1.0f);
 
     // ── Helper: wrap position into toroidal world ─────────────────────────
-    float rw = static_cast<float>(REGION_W);
-    float rh = static_cast<float>(REGION_H);
+    float rw = static_cast<float>(WORLD_W);
+    float rh = static_cast<float>(WORLD_H);
     auto wrap_pos = [&](glm::vec2 p) -> glm::vec2 {
         p.x = std::fmod(p.x + rw, rw);
         p.y = std::fmod(p.y + rh, rh);
@@ -878,7 +889,7 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
     const float R_BOHR_SPAWN = 15.0f;
     const float K_COULOMB_SPAWN = 1200.0f;
     const float SOFTEN_SQ_SPAWN = 64.0f;
-    const int SHELL_CAP_SPAWN[] = {2, 8, 18};
+    const int SHELL_CAP_SPAWN[] = {2, 8, 18, 32};
 
     // ── Molecule spawn ───────────────────────────────────────────────────
     if (iface.spawn_molecule_idx >= 0 &&
@@ -1056,16 +1067,16 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
             [](const ElectronEntry& a, const ElectronEntry& b) { return a.dist < b.dist; });
 
         // Pre-compute shell assignments for electrons
-        int shell_fill[3] = {0, 0, 0};
-        struct ShellInfo { float L_ground; int shell; };
+        int shell_fill[4] = {0, 0, 0, 0};
+        struct ShellInfo { float L_ground; int shell; float boost; };
         std::vector<ShellInfo> electron_shells;
         for (size_t ei = 0; ei < electron_entries.size(); ++ei) {
             int shell = -1;
-            for (int s = 0; s < 3; ++s) {
+            for (int s = 0; s < 4; ++s) {
                 if (shell_fill[s] < SHELL_CAP_SPAWN[s]) { shell = s; break; }
             }
             if (shell < 0) {
-                electron_shells.push_back({120.0f, 0});
+                electron_shells.push_back({120.0f, 0, cfg.orbit_boost[0]});
                 continue;
             }
             shell_fill[shell]++;
@@ -1078,7 +1089,7 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
             float R3 = R_target * R_target * R_target;
             float R2_soft = R_target * R_target + SOFTEN_SQ_SPAWN;
             float L_ground = std::sqrt(Z_eff * K_COULOMB_SPAWN * R3 / R2_soft);
-            electron_shells.push_back({L_ground, shell});
+            electron_shells.push_back({L_ground, shell, cfg.orbit_boost[shell]});
         }
 
         // Spawn all particles
@@ -1134,12 +1145,17 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
 
             write_spawn_genome(particles, slot, t, rng, frame_counter_);
 
-            // Write L_ground to genome[2] for electrons
+            // Write L_ground + boost + shell to genome for electrons
             if (is_electron && nucleon_count > 0) {
                 for (size_t ei = 0; ei < electron_entries.size(); ++ei) {
                     if (std::abs(electron_entries[ei].dx - tmpl.atoms[a].dx) < 0.1f &&
                         std::abs(electron_entries[ei].dy - tmpl.atoms[a].dy) < 0.1f) {
                         particles.genomes[slot * GENOME_SIZE + 2] = electron_shells[ei].L_ground;
+                        particles.genomes[slot * GENOME_SIZE + 3] = electron_shells[ei].boost;
+                        if (slot < particles.orbital_shell.size()) {
+                            particles.orbital_shell[slot] = static_cast<int8_t>(electron_shells[ei].shell);
+                            particles.excitation_timer[slot] = 0;
+                        }
                         break;
                     }
                 }
@@ -1764,19 +1780,44 @@ void PhysicsSimulation::update_orbitals() {
     const uint32_t n = cfg.particle_count;
     const float NUCLEAR_CLUSTER_RADIUS = 10.0f;
     const float NUCLEAR_CLUSTER_RADIUS_SQ = NUCLEAR_CLUSTER_RADIUS * NUCLEAR_CLUSTER_RADIUS;
-    const float BINDING_RADIUS = 60.0f;
+    // Tighter clustering radius for nucleons from different atoms —
+    // electron clouds keep distinct atoms apart; only explicit fusion
+    // (high energy collision) should merge nucleons from different atoms.
+    const float CROSS_ATOM_CLUSTER_RADIUS = 3.0f;
+    const float CROSS_ATOM_CLUSTER_RADIUS_SQ = CROSS_ATOM_CLUSTER_RADIUS * CROSS_ATOM_CLUSTER_RADIUS;
+    const float BINDING_RADIUS = cfg.orbital_binding_radius;
     const float R_BOHR = 15.0f;        // base Bohr radius (hydrogen ground state in px)
     const float K_COULOMB_F = 1200.0f;  // must match shader K_COULOMB
     const float SOFTEN_SQ = 64.0f;      // must match shader SOFTEN_MIN² (8²)
 
-    // Shell capacities: 1s=2, 2s2p=8, 3s3p3d=18
-    static const int SHELL_CAP[] = {2, 8, 18};
-    static const int NUM_SHELLS = 3;
-    static const int MAX_ELECTRONS = 2 + 8 + 18;  // 28
+    // Shell capacities: 1s=2, 2s2p=8, 3s3p3d=18, 4s4p4d4f=32
+    static const int SHELL_CAP[] = {2, 8, 18, 32};
+    static const int NUM_SHELLS = 4;
+    static const int MAX_ELECTRONS = 2 + 8 + 18 + 32;  // 60
+
+    // Save previous orbital_parent before clearing (used to detect cross-atom clustering)
+    std::vector<int32_t> prev_orbital_parent(particles.orbital_parent.begin(),
+                                              particles.orbital_parent.end());
+    prev_orbital_parent.resize(n, -1);
 
     // Clear orbital parent mapping for all particles
     particles.orbital_parent.resize(n, -1);
     std::fill(particles.orbital_parent.begin(), particles.orbital_parent.end(), -1);
+
+    // Ensure orbital_shell and excitation_timer are sized (preserve previous values)
+    particles.orbital_shell.resize(n, -1);
+    particles.excitation_timer.resize(n, 0);
+
+    // Save previous shell assignments before clearing
+    std::vector<int8_t> prev_orbital_shell(particles.orbital_shell.begin(),
+                                            particles.orbital_shell.end());
+
+    // Helper: get nucleus representative for a nucleon from previous frame
+    auto prev_nuc_rep = [&](uint32_t idx) -> int32_t {
+        if (idx >= prev_orbital_parent.size()) return -1;
+        int32_t p = prev_orbital_parent[idx];
+        return (p >= 0) ? p : static_cast<int32_t>(idx);  // self if not in a nucleus
+    };
 
     // ── Step 1: Cluster nucleons into nuclei ────────────────────────────
     struct Nucleus {
@@ -1809,7 +1850,18 @@ void PhysicsSimulation::update_orbitals() {
                 uint32_t tj = particles.types[j];
                 if (tj != PROTON_TYPE && tj != NEUTRON_TYPE) return;
                 glm::vec2 d = (readback_positions_[j] - readback_positions_[mi]);
-                if (glm::dot(d, d) < NUCLEAR_CLUSTER_RADIUS_SQ) {
+                float d2 = glm::dot(d, d);
+
+                // Use tighter radius only if BOTH nucleons were in established,
+                // *different* atoms last frame. New/free particles (orbital_parent == -1)
+                // use the normal radius so freshly spawned atoms can cluster properly.
+                int32_t prev_mi = (mi < prev_orbital_parent.size()) ? prev_orbital_parent[mi] : -1;
+                int32_t prev_j  = (j  < prev_orbital_parent.size()) ? prev_orbital_parent[j]  : -1;
+                bool cross_atom = (prev_mi >= 0 && prev_j >= 0
+                                   && prev_nuc_rep(mi) != prev_nuc_rep(j));
+                float threshold = cross_atom ? CROSS_ATOM_CLUSTER_RADIUS_SQ
+                                             : NUCLEAR_CLUSTER_RADIUS_SQ;
+                if (d2 < threshold) {
                     members.push_back(j);
                     clustered[j] = true;
                 }
@@ -1929,6 +1981,7 @@ void PhysicsSimulation::update_orbitals() {
         uint32_t idx;
         int nuc_idx;
         float dist;
+        bool assigned = false;
     };
     std::vector<ElectronBind> bindings;
     std::vector<ElectronBind> anti_bindings;  // positrons → antinuclei
@@ -1982,6 +2035,8 @@ void PhysicsSimulation::update_orbitals() {
             particles.orbital_parent[i] = static_cast<int32_t>(nuclei[best_nuc].rep);
         } else {
             particles.genomes[i * GENOME_SIZE + 2] = 0.0f;  // free electron
+            particles.orbital_shell[i] = -1;
+            particles.excitation_timer[i] = 0;
         }
     }
 
@@ -1992,19 +2047,66 @@ void PhysicsSimulation::update_orbitals() {
     });
 
     // ── Step 3: Assign orbital shells and compute L_ground ──────────────
+    // Two-pass approach: first retain electrons in their previous shells,
+    // then assign newly-captured electrons to available slots.
     // shell_fill[nuc_idx * NUM_SHELLS + shell] = count of electrons in that shell
     std::vector<int> shell_fill(nuclei.size() * NUM_SHELLS, 0);
 
+    // Helper: compute and write L_ground + boost for an electron in a given shell
+    auto write_orbital_params = [&](uint32_t idx, int nuc_idx, int shell) {
+        int Z = nuclei[nuc_idx].Z;
+        int inner_electrons = 0;
+        for (int s = 0; s < shell; ++s)
+            inner_electrons += shell_fill[nuc_idx * NUM_SHELLS + s];
+        float Z_eff = std::max(1.0f, static_cast<float>(Z - inner_electrons));
+        float n_shell = static_cast<float>(shell + 1);
+        float R_target = std::max(n_shell * n_shell * R_BOHR / Z_eff, 8.0f);
+        float R3 = R_target * R_target * R_target;
+        float R2_soft = R_target * R_target + SOFTEN_SQ;
+        float L_ground = std::sqrt(Z_eff * K_COULOMB_F * R3 / R2_soft);
+        particles.genomes[idx * GENOME_SIZE + 2] = L_ground;
+        particles.genomes[idx * GENOME_SIZE + 3] = cfg.orbit_boost[shell];
+        particles.orbital_shell[idx] = static_cast<int8_t>(shell);
+    };
+
+    // Pass 1: retain electrons that were already bound to the same nucleus
     for (auto& b : bindings) {
         int Z = nuclei[b.nuc_idx].Z;
+        int8_t prev_shell = (b.idx < prev_orbital_shell.size()) ? prev_orbital_shell[b.idx] : -1;
+        int32_t prev_parent = (b.idx < prev_orbital_parent.size()) ? prev_orbital_parent[b.idx] : -1;
+        bool was_bound_here = (prev_parent >= 0 &&
+                               prev_parent == static_cast<int32_t>(nuclei[b.nuc_idx].rep) &&
+                               prev_shell >= 0 && prev_shell < NUM_SHELLS);
+        if (!was_bound_here) continue;
 
-        // Count already assigned to this nucleus
+        // Check capacity: total assigned to this nucleus vs max allowed
+        int total_assigned = 0;
+        for (int s = 0; s < NUM_SHELLS; ++s)
+            total_assigned += shell_fill[b.nuc_idx * NUM_SHELLS + s];
+        if (total_assigned >= std::min(Z, MAX_ELECTRONS)) continue;
+
+        // Try to keep in same shell
+        int offset = b.nuc_idx * NUM_SHELLS + prev_shell;
+        if (shell_fill[offset] < SHELL_CAP[prev_shell]) {
+            shell_fill[offset]++;
+            write_orbital_params(b.idx, b.nuc_idx, prev_shell);
+            // Preserve excitation_timer — don't reset it
+            b.assigned = true;
+        }
+    }
+
+    // Pass 2: assign newly-captured or displaced electrons to lowest available shell
+    for (auto& b : bindings) {
+        if (b.assigned) continue;
+        int Z = nuclei[b.nuc_idx].Z;
+
         int total_assigned = 0;
         for (int s = 0; s < NUM_SHELLS; ++s)
             total_assigned += shell_fill[b.nuc_idx * NUM_SHELLS + s];
 
         if (total_assigned >= std::min(Z, MAX_ELECTRONS)) {
             particles.genomes[b.idx * GENOME_SIZE + 2] = 0.0f;  // excess, free
+            particles.orbital_shell[b.idx] = -1;
             continue;
         }
 
@@ -2018,30 +2120,13 @@ void PhysicsSimulation::update_orbitals() {
         }
         if (shell < 0) {
             particles.genomes[b.idx * GENOME_SIZE + 2] = 0.0f;
+            particles.orbital_shell[b.idx] = -1;
             continue;
         }
 
         shell_fill[b.nuc_idx * NUM_SHELLS + shell]++;
-
-        // Compute target orbital radius using Bohr model with screening
-        // Inner electrons screen nuclear charge
-        int inner_electrons = 0;
-        for (int s = 0; s < shell; ++s)
-            inner_electrons += shell_fill[b.nuc_idx * NUM_SHELLS + s];
-
-        float Z_eff = std::max(1.0f, static_cast<float>(Z - inner_electrons));
-        float n_shell = static_cast<float>(shell + 1);
-        float R_target = n_shell * n_shell * R_BOHR / Z_eff;
-        R_target = std::max(R_target, 8.0f);  // don't go inside nucleon cluster
-
-        // Compute L_ground: at equilibrium, F_coulomb = F_centrifugal
-        // Z_eff * K / (R² + soften²) = L² / R³
-        // L² = Z_eff * K * R³ / (R² + soften²)
-        float R3 = R_target * R_target * R_target;
-        float R2_soft = R_target * R_target + SOFTEN_SQ;
-        float L_ground = std::sqrt(Z_eff * K_COULOMB_F * R3 / R2_soft);
-
-        particles.genomes[b.idx * GENOME_SIZE + 2] = L_ground;
+        write_orbital_params(b.idx, b.nuc_idx, shell);
+        particles.excitation_timer[b.idx] = 0;  // newly captured = ground state
     }
 
     // Copy shell_fill into NucleusInfo for matter nuclei
@@ -2059,7 +2144,49 @@ void PhysicsSimulation::update_orbitals() {
                   });
         std::vector<int> anti_shell_fill(antinuclei.size() * NUM_SHELLS, 0);
 
+        // Helper for antinuclei orbital params
+        auto write_anti_orbital_params = [&](uint32_t idx, int anuc_idx, int shell) {
+            int Z = antinuclei[anuc_idx].Z;
+            int inner = 0;
+            for (int s = 0; s < shell; ++s)
+                inner += anti_shell_fill[anuc_idx * NUM_SHELLS + s];
+            float Z_eff = std::max(1.0f, static_cast<float>(Z - inner));
+            float n_shell = static_cast<float>(shell + 1);
+            float R_target = std::max(n_shell * n_shell * R_BOHR / Z_eff, 8.0f);
+            float R3 = R_target * R_target * R_target;
+            float R2_soft = R_target * R_target + SOFTEN_SQ;
+            float L_ground = std::sqrt(Z_eff * K_COULOMB_F * R3 / R2_soft);
+            particles.genomes[idx * GENOME_SIZE + 2] = L_ground;
+            particles.genomes[idx * GENOME_SIZE + 3] = cfg.orbit_boost[shell];
+            particles.orbital_shell[idx] = static_cast<int8_t>(shell);
+        };
+
+        // Pass 1: retain positrons already bound to same antinucleus
         for (auto& b : anti_bindings) {
+            int Z = antinuclei[b.nuc_idx].Z;
+            int8_t prev_shell = (b.idx < prev_orbital_shell.size()) ? prev_orbital_shell[b.idx] : -1;
+            int32_t prev_parent = (b.idx < prev_orbital_parent.size()) ? prev_orbital_parent[b.idx] : -1;
+            bool was_bound_here = (prev_parent >= 0 &&
+                                   prev_parent == static_cast<int32_t>(antinuclei[b.nuc_idx].rep) &&
+                                   prev_shell >= 0 && prev_shell < NUM_SHELLS);
+            if (!was_bound_here) continue;
+
+            int total_assigned = 0;
+            for (int s = 0; s < NUM_SHELLS; ++s)
+                total_assigned += anti_shell_fill[b.nuc_idx * NUM_SHELLS + s];
+            if (total_assigned >= std::min(Z, MAX_ELECTRONS)) continue;
+
+            int offset = b.nuc_idx * NUM_SHELLS + prev_shell;
+            if (anti_shell_fill[offset] < SHELL_CAP[prev_shell]) {
+                anti_shell_fill[offset]++;
+                write_anti_orbital_params(b.idx, b.nuc_idx, prev_shell);
+                b.assigned = true;
+            }
+        }
+
+        // Pass 2: assign newly-captured positrons
+        for (auto& b : anti_bindings) {
+            if (b.assigned) continue;
             int Z = antinuclei[b.nuc_idx].Z;
 
             int total_assigned = 0;
@@ -2068,6 +2195,7 @@ void PhysicsSimulation::update_orbitals() {
 
             if (total_assigned >= std::min(Z, MAX_ELECTRONS)) {
                 particles.genomes[b.idx * GENOME_SIZE + 2] = 0.0f;
+                particles.orbital_shell[b.idx] = -1;
                 continue;
             }
 
@@ -2080,23 +2208,13 @@ void PhysicsSimulation::update_orbitals() {
             }
             if (shell < 0) {
                 particles.genomes[b.idx * GENOME_SIZE + 2] = 0.0f;
+                particles.orbital_shell[b.idx] = -1;
                 continue;
             }
 
             anti_shell_fill[b.nuc_idx * NUM_SHELLS + shell]++;
-
-            int inner = 0;
-            for (int s = 0; s < shell; ++s)
-                inner += anti_shell_fill[b.nuc_idx * NUM_SHELLS + s];
-
-            float Z_eff = std::max(1.0f, static_cast<float>(Z - inner));
-            float n_shell = static_cast<float>(shell + 1);
-            float R_target = std::max(n_shell * n_shell * R_BOHR / Z_eff, 8.0f);
-            float R3 = R_target * R_target * R_target;
-            float R2_soft = R_target * R_target + SOFTEN_SQ;
-            float L_ground = std::sqrt(Z_eff * K_COULOMB_F * R3 / R2_soft);
-
-            particles.genomes[b.idx * GENOME_SIZE + 2] = L_ground;
+            write_anti_orbital_params(b.idx, b.nuc_idx, shell);
+            particles.excitation_timer[b.idx] = 0;
         }
 
         // Copy anti_shell_fill into NucleusInfo for antinuclei
@@ -2119,12 +2237,12 @@ void PhysicsSimulation::update_orbitals() {
 void PhysicsSimulation::repel_distinct_nuclei() {
     if (detected_nuclei_.size() < 2) return;
 
-    const float REPEL_RADIUS    = 30.0f;   // start repelling when centers this close
+    const float REPEL_RADIUS    = 40.0f;   // start repelling when centers this close
     const float REPEL_RADIUS_SQ = REPEL_RADIUS * REPEL_RADIUS;
-    const float DANGER_DIST     = 14.0f;   // below this, hard position push (> cluster radius 10)
+    const float DANGER_DIST     = 16.0f;   // below this, hard position push (> cluster radius 10)
     const float MIN_DIST        = 3.0f;    // softening floor
-    const float VEL_K           = 1.5f;    // velocity impulse strength
-    const float POS_K           = 0.4f;    // position correction strength (for close nuclei)
+    const float VEL_K           = 80.0f;   // velocity impulse strength (was 1.5; needs to overcome drift)
+    const float POS_K           = 1.2f;    // position correction strength (for close nuclei)
     const uint32_t n = cfg.particle_count;
     bool any_modified = false;
 
@@ -3849,6 +3967,8 @@ void PhysicsSimulation::check_nuclear_decay() {
                 readback_energies_[best_e] = 0.0f;
                 readback_velocities_[best_e] = glm::vec2(0.0f);
                 particles.orbital_parent[best_e] = -1;
+                particles.orbital_shell[best_e] = -1;
+                particles.excitation_timer[best_e] = 0;
 
                 // Transmute proton → neutron
                 uint32_t pi = nuc.proton_indices.back();
@@ -4001,9 +4121,8 @@ void PhysicsSimulation::check_photoelectric() {
     const float INTERACTION_RADIUS_SQ = INTERACTION_RADIUS * INTERACTION_RADIUS;
 
     // Binding energy per shell (game units): how much photon energy needed to ionize
-    // Shell 1 (1s) is tightest, shell 3 (3s3p3d) loosest
-    const float BINDING_ENERGY[] = {0.5f, 0.3f, 0.15f};  // indexed by shell
-    const int SHELL_CAP[] = {2, 8, 18};
+    // Shell 1 (1s) is tightest, shell 4 (4s4p4d4f) loosest
+    const float BINDING_ENERGY[] = {0.50f, 0.30f, 0.15f, 0.08f};  // indexed by shell
 
     const int MAX_INTERACTIONS_PER_FRAME = cfg.max_compton_per_frame;
     int interaction_count = 0;
@@ -4058,37 +4177,18 @@ void PhysicsSimulation::check_photoelectric() {
         if (is_bound) {
             // ── Bound electron: photoelectric effect / Compton ──
 
-            // Determine which shell this electron is in
-            // We check which nucleus it belongs to and compute its shell
-            int shell = -1;
+            // Use persistent shell assignment from update_orbitals()
+            int shell = (best_e < particles.orbital_shell.size())
+                ? static_cast<int>(particles.orbital_shell[best_e]) : -1;
+            if (shell < 0 || shell > 3) shell = 0;  // fallback
+
             int Z_nucleus = 0;
             for (const auto& nuc : detected_nuclei_) {
-                if (static_cast<int32_t>(nuc.rep) != orbital_parent) continue;
-                Z_nucleus = nuc.Z;
-
-                // Determine which shell this electron is in by distance
-                float R_BOHR_PE = 15.0f;
-                float ed = glm::length((readback_positions_[best_e] - nuc.center));
-                float shell_radii[3];
-                for (int s = 0; s < 3; ++s) {
-                    float screening = 0.0f;
-                    if (s == 1) screening = static_cast<float>(SHELL_CAP[0]) * 0.85f;
-                    else if (s == 2) screening = static_cast<float>(SHELL_CAP[0]) + static_cast<float>(SHELL_CAP[1]) * 0.85f;
-                    float Z_eff = std::max(1.0f, static_cast<float>(nuc.Z) - screening);
-                    float n_sh = static_cast<float>(s + 1);
-                    shell_radii[s] = std::max(n_sh * n_sh * R_BOHR_PE / Z_eff, 8.0f);
+                if (static_cast<int32_t>(nuc.rep) == orbital_parent) {
+                    Z_nucleus = nuc.Z;
+                    break;
                 }
-                int best_s = 0;
-                float best_diff = std::abs(ed - shell_radii[0]);
-                for (int s = 1; s < 3; ++s) {
-                    float diff = std::abs(ed - shell_radii[s]);
-                    if (diff < best_diff) { best_diff = diff; best_s = s; }
-                }
-                shell = best_s;
-                break;
             }
-
-            if (shell < 0) shell = 0;  // fallback
 
             // Scale binding energy by Z (heavier atoms bind tighter)
             float Z_factor = std::max(1.0f, static_cast<float>(Z_nucleus));
@@ -4116,6 +4216,8 @@ void PhysicsSimulation::check_photoelectric() {
                 readback_velocities_[best_e] = eject_dir * eject_speed;
                 readback_energies_[best_e] = std::min(readback_energies_[best_e] + kick_energy, 1.0f);
                 particles.orbital_parent[best_e] = -1;  // ionized — no longer bound
+                particles.orbital_shell[best_e] = -1;
+                particles.excitation_timer[best_e] = 0;
                 particles.genomes[best_e * GENOME_SIZE + 2] = 0.0f;  // clear orbital L
 
                 used[best_e] = true;
@@ -4141,7 +4243,7 @@ void PhysicsSimulation::check_photoelectric() {
                 glm::vec2 deflect = rand_dir();
                 readback_velocities_[i] = deflect * C_SIM;
 
-                // Boost electron: if transfer > binding, ionize; otherwise kick to higher shell
+                // Boost electron: if transfer > binding, ionize; otherwise promote to higher shell
                 if (transfer >= binding) {
                     // Ionize
                     glm::vec2 kick_dir = glm::normalize((readback_positions_[best_e] - readback_positions_[i]) + glm::vec2(0.001f));
@@ -4149,23 +4251,18 @@ void PhysicsSimulation::check_photoelectric() {
                     readback_velocities_[best_e] = kick_dir * eject_speed;
                     readback_energies_[best_e] = std::min(readback_energies_[best_e] + transfer, 1.0f);
                     particles.orbital_parent[best_e] = -1;
+                    particles.orbital_shell[best_e] = -1;
+                    particles.excitation_timer[best_e] = 0;
                     particles.genomes[best_e * GENOME_SIZE + 2] = 0.0f;
                 } else {
-                    // Excite: push electron outward (simulate shell promotion)
-                    // Increase its orbital angular momentum → it drifts to a higher shell
-                    float current_L = particles.genomes[best_e * GENOME_SIZE + 2];
-                    float boost_L = transfer * 200.0f;  // energy → angular momentum boost
-                    particles.genomes[best_e * GENOME_SIZE + 2] = current_L + boost_L;
-                    readback_energies_[best_e] = std::min(readback_energies_[best_e] + transfer * 0.5f, 1.0f);
-
-                    // Small radial kick outward
-                    glm::vec2 outward(0.0f);
-                    if (orbital_parent >= 0 && static_cast<uint32_t>(orbital_parent) < n) {
-                        outward = (readback_positions_[best_e] - readback_positions_[orbital_parent]);
-                        float len = glm::length(outward);
-                        if (len > 0.1f) outward /= len;
+                    // Excite: promote electron to next shell
+                    int next_shell = shell + 1;
+                    if (next_shell < 4 && best_e < particles.orbital_shell.size()) {
+                        particles.orbital_shell[best_e] = static_cast<int8_t>(next_shell);
+                        particles.excitation_timer[best_e] = 1;
+                        // L_ground will be recomputed by update_orbitals() next frame
                     }
-                    readback_velocities_[best_e] += outward * transfer * 30.0f;
+                    readback_energies_[best_e] = std::min(readback_energies_[best_e] + transfer * 0.5f, 1.0f);
                 }
 
                 used[i] = true;
@@ -4498,6 +4595,212 @@ void PhysicsSimulation::check_pion_decay() {
     }
 }
 
+// ── Electron shell transitions ──────────────────────────────────────────────
+// Handles energy-based promotion (thermal excitation), spontaneous de-excitation
+// (with photon emission), and ionization of excited electrons.
+
+void PhysicsSimulation::check_shell_transitions() {
+    if (readback_positions_.empty() || detected_nuclei_.empty()) return;
+
+    const uint32_t n = cfg.particle_count;
+    std::mt19937 rng(frame_counter_ * 2654435761u + 7);
+    static constexpr float BINDING_ENERGY[4] = {0.50f, 0.30f, 0.15f, 0.08f};
+    static constexpr int SHELL_CAP[] = {2, 8, 18, 32};
+    static constexpr int NUM_SHELLS = 4;
+    const float R_BOHR = 15.0f;
+    const float K_COULOMB_F = 1200.0f;
+    const float SOFTEN_SQ = 64.0f;
+
+    int transition_count = 0;
+
+    // Build per-nucleus shell occupancy from current orbital_shell data
+    // Map nucleus rep → index in detected_nuclei_
+    std::unordered_map<int32_t, size_t> rep_to_nuc;
+    for (size_t ni = 0; ni < detected_nuclei_.size(); ++ni) {
+        if (!detected_nuclei_[ni].is_anti)
+            rep_to_nuc[static_cast<int32_t>(detected_nuclei_[ni].rep)] = ni;
+    }
+
+    // Count current shell occupancy per nucleus
+    // shell_occ[ni * NUM_SHELLS + s] = current electron count in shell s of nucleus ni
+    std::vector<int> shell_occ(detected_nuclei_.size() * NUM_SHELLS, 0);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (particles.orbital_shell.size() <= i) break;
+        int8_t sh = particles.orbital_shell[i];
+        if (sh < 0 || sh >= NUM_SHELLS) continue;
+        int32_t parent = particles.orbital_parent[i];
+        if (parent < 0) continue;
+        auto it = rep_to_nuc.find(parent);
+        if (it == rep_to_nuc.end()) continue;
+        shell_occ[it->second * NUM_SHELLS + sh]++;
+    }
+
+    // Helper: find a dormant slot for photon emission
+    auto find_dormant = [&](uint32_t start) -> uint32_t {
+        for (uint32_t i = start; i < n; ++i) {
+            if (readback_energies_[i] < 0.01f) return i;
+        }
+        return UINT32_MAX;
+    };
+
+    // Helper: recompute L_ground for electron in a given shell of a nucleus
+    auto recompute_L = [&](uint32_t idx, int Z, int shell, size_t ni) {
+        int inner = 0;
+        for (int s = 0; s < shell; ++s)
+            inner += shell_occ[ni * NUM_SHELLS + s];
+        float Z_eff = std::max(1.0f, static_cast<float>(Z - inner));
+        float n_shell = static_cast<float>(shell + 1);
+        float R_target = std::max(n_shell * n_shell * R_BOHR / Z_eff, 8.0f);
+        float R3 = R_target * R_target * R_target;
+        float R2_soft = R_target * R_target + SOFTEN_SQ;
+        float L_ground = std::sqrt(Z_eff * K_COULOMB_F * R3 / R2_soft);
+        particles.genomes[idx * GENOME_SIZE + 2] = L_ground;
+        particles.genomes[idx * GENOME_SIZE + 3] = cfg.orbit_boost[shell];
+    };
+
+    for (uint32_t i = 0; i < n && transition_count < cfg.max_transitions_per_frame; ++i) {
+        if (readback_energies_[i] < 0.01f) continue;
+        uint32_t t = particles.types[i];
+        if (t != ELECTRON_TYPE_PHYS && t != POSITRON_TYPE_PHYS) continue;
+        if (i >= particles.orbital_shell.size()) continue;
+
+        int8_t shell = particles.orbital_shell[i];
+        if (shell < 0) continue;  // free electron, not bound
+
+        int32_t parent = particles.orbital_parent[i];
+        if (parent < 0) continue;
+
+        auto it = rep_to_nuc.find(parent);
+        if (it == rep_to_nuc.end()) continue;
+        size_t ni = it->second;
+        int Z = detected_nuclei_[ni].Z;
+        float Z_factor = std::sqrt(std::max(1.0f, static_cast<float>(Z)));
+
+        // ── Spontaneous de-excitation ──
+        if (particles.excitation_timer[i] > 0) {
+            particles.excitation_timer[i]++;
+
+            if (particles.excitation_timer[i] >= static_cast<uint16_t>(cfg.deexcitation_lifetime)) {
+                // Find lowest shell with vacancy
+                int target_shell = -1;
+                for (int s = 0; s < shell; ++s) {
+                    if (shell_occ[ni * NUM_SHELLS + s] < SHELL_CAP[s]) {
+                        target_shell = s;
+                        break;
+                    }
+                }
+
+                if (target_shell >= 0) {
+                    // De-excite: move electron down, emit photon
+                    float energy_released = (BINDING_ENERGY[shell] - BINDING_ENERGY[target_shell]) * Z_factor;
+                    // Note: BINDING_ENERGY is ordered inner=highest, so released = old_shell - new_shell
+                    // But since old_shell > target_shell numerically, and binding energy is lower for outer shells:
+                    // energy_released = BINDING_ENERGY[target_shell] - BINDING_ENERGY[shell]
+                    energy_released = (BINDING_ENERGY[target_shell] - BINDING_ENERGY[shell]) * Z_factor;
+
+                    // Update shell occupancy
+                    shell_occ[ni * NUM_SHELLS + shell]--;
+                    shell_occ[ni * NUM_SHELLS + target_shell]++;
+
+                    particles.orbital_shell[i] = static_cast<int8_t>(target_shell);
+                    particles.excitation_timer[i] = 0;
+                    recompute_L(i, Z, target_shell, ni);
+
+                    // Spawn photon
+                    if (energy_released > 0.01f) {
+                        uint32_t slot = find_dormant(0);
+                        if (slot != UINT32_MAX) {
+                            write_spawn_genome(particles, slot, PHOTON_TYPE_PHYS, rng, frame_counter_);
+                            readback_positions_[slot] = readback_positions_[i];
+                            // Tangent direction for momentum conservation
+                            glm::vec2 to_nuc = detected_nuclei_[ni].center - readback_positions_[i];
+                            float len = glm::length(to_nuc);
+                            glm::vec2 tangent = (len > 0.1f)
+                                ? glm::vec2(-to_nuc.y / len, to_nuc.x / len)
+                                : glm::vec2(1.0f, 0.0f);
+                            readback_velocities_[slot] = tangent * C_SIM;
+                            readback_energies_[slot] = std::min(energy_released, 1.0f);
+                            particles.orbital_shell[slot] = -1;
+                            particles.excitation_timer[slot] = 0;
+                            cpu_particles_dirty_ = true;
+                        }
+                    }
+
+                    transition_count++;
+                    iface.push_decay_event(
+                        "De-excitation: e\xe2\x81\xbb \xe2\x86\x92 lower shell + \xce\xb3",
+                        PhysicsInterface::DEVT_PHOTOELECTRIC,
+                        ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "");
+                    continue;
+                }
+
+                // No lower shell available: if at outermost occupied shell and timer >> lifetime, ionize
+                if (shell >= 2 && particles.excitation_timer[i] >= static_cast<uint16_t>(cfg.deexcitation_lifetime * 2.0f)) {
+                    // Ionize
+                    particles.orbital_parent[i] = -1;
+                    particles.orbital_shell[i] = -1;
+                    particles.excitation_timer[i] = 0;
+                    particles.genomes[i * GENOME_SIZE + 2] = 0.0f;
+                    particles.genomes[i * GENOME_SIZE + 3] = 0.0f;
+                    shell_occ[ni * NUM_SHELLS + shell]--;
+
+                    // Radial kick outward
+                    glm::vec2 outward = readback_positions_[i] - detected_nuclei_[ni].center;
+                    float len = glm::length(outward);
+                    if (len > 0.1f) outward /= len;
+                    else outward = glm::vec2(1.0f, 0.0f);
+                    readback_velocities_[i] += outward * 40.0f;
+                    cpu_particles_dirty_ = true;
+                    transition_count++;
+                    iface.push_decay_event(
+                        "Ionization: excited e\xe2\x81\xbb escaped atom",
+                        PhysicsInterface::DEVT_PHOTOELECTRIC,
+                        ImVec4(1.0f, 0.5f, 0.2f, 1.0f), "");
+                    continue;
+                }
+            }
+            continue;  // excited electrons don't also get thermal promotion
+        }
+
+        // ── Thermal promotion (ground state → higher shell) ──
+        if (shell >= NUM_SHELLS - 1) continue;  // already at outermost shell
+
+        // Compute kinetic energy of this electron
+        float v_sq = glm::dot(readback_velocities_[i], readback_velocities_[i]);
+        // electron mass_inv ≈ 1.0 (lightest), so KE ≈ 0.5 * v²
+        float KE = 0.5f * v_sq / (C_SIM * C_SIM);  // normalize to sim energy scale
+
+        int next_shell = shell + 1;
+        float delta_E = (BINDING_ENERGY[shell] - BINDING_ENERGY[next_shell]) * Z_factor;
+
+        // Need KE > 1.5× the energy gap to promote (thermal threshold)
+        if (KE > delta_E * 1.5f) {
+            // Check if next shell has room
+            if (shell_occ[ni * NUM_SHELLS + next_shell] < SHELL_CAP[next_shell]) {
+                // Promote
+                shell_occ[ni * NUM_SHELLS + shell]--;
+                shell_occ[ni * NUM_SHELLS + next_shell]++;
+                particles.orbital_shell[i] = static_cast<int8_t>(next_shell);
+                particles.excitation_timer[i] = 1;  // mark as excited
+                recompute_L(i, Z, next_shell, ni);
+
+                // Reduce electron speed (it spent energy climbing)
+                float speed = std::sqrt(v_sq);
+                if (speed > 1.0f) {
+                    float new_speed = speed * 0.7f;  // lose ~30% of speed
+                    readback_velocities_[i] *= (new_speed / speed);
+                }
+                cpu_particles_dirty_ = true;
+                transition_count++;
+                iface.push_decay_event(
+                    "Excitation: e\xe2\x81\xbb promoted to higher shell",
+                    PhysicsInterface::DEVT_PHOTOELECTRIC,
+                    ImVec4(1.0f, 0.9f, 0.3f, 1.0f), "");
+            }
+        }
+    }
+}
+
 // ── Nuclear spallation ──────────────────────────────────────────────────────
 // When a high-energy particle (any massive particle) strikes a nucleus with
 // sufficient kinetic energy, the nucleus shatters into individual nucleon
@@ -4661,6 +4964,8 @@ void PhysicsSimulation::check_spallation() {
                 if (total_disintegration || (ejected > total_nucleons / 2)) {
                     readback_velocities_[k] += rand_dir() * 40.0f;
                     particles.orbital_parent[k] = -1;
+                    particles.orbital_shell[k] = -1;
+                    particles.excitation_timer[k] = 0;
                     particles.genomes[k * GENOME_SIZE + 2] = 0.0f;
                 }
             }
@@ -4817,6 +5122,8 @@ void PhysicsSimulation::check_spallation() {
                     if (particles.orbital_parent[k] != static_cast<int32_t>(nuc.rep)) continue;
                     readback_velocities_[k] += rand_dir() * 50.0f;
                     particles.orbital_parent[k] = -1;
+                    particles.orbital_shell[k] = -1;
+                    particles.excitation_timer[k] = 0;
                     particles.genomes[k * GENOME_SIZE + 2] = 0.0f;
                 }
 
@@ -5105,8 +5412,13 @@ void PhysicsSimulation::check_virtual_pairs() {
 
     std::mt19937 rng(frame_counter_ * 1664525u + 1013904223u);
     std::uniform_real_distribution<float> unit(0.0f, 1.0f);
-    std::uniform_real_distribution<float> x_dist(0.0f, static_cast<float>(REGION_W));
-    std::uniform_real_distribution<float> y_dist(0.0f, static_cast<float>(REGION_H));
+    // Spawn virtual pairs within the camera's visible area (not a fixed rectangle)
+    float half_vw = static_cast<float>(REGION_W) / (2.0f * cfg.current_camera_zoom);
+    float half_vh = static_cast<float>(REGION_H) / (2.0f * cfg.current_camera_zoom);
+    std::uniform_real_distribution<float> x_dist(cfg.camera_origin.x - half_vw,
+                                                  cfg.camera_origin.x + half_vw);
+    std::uniform_real_distribution<float> y_dist(cfg.camera_origin.y - half_vh,
+                                                  cfg.camera_origin.y + half_vh);
 
     auto find_dormant = [&](uint32_t start) -> uint32_t {
         for (uint32_t k = start; k < n; ++k)
@@ -5282,9 +5594,8 @@ void PhysicsSimulation::check_hadronization() {
     constexpr float HADRONIZE_RADIUS   = 50.0f;   // search radius for meson partners
     constexpr float STRING_BREAK_DIST  = 55.0f;   // create new pairs beyond this
     constexpr float MESON_ENERGY       = 0.4f;
-    constexpr float MESON_SPEED        = 60.0f;
-    constexpr uint32_t MAX_HADRONIZE   = 6;        // cap meson-formation events/frame
-    constexpr uint32_t MAX_STRING_BREAK = 4;
+    constexpr uint32_t MAX_HADRONIZE   = 24;       // aggressive meson binding (confinement)
+    constexpr uint32_t MAX_STRING_BREAK = 2;
 
     // ── Helpers ──────────────────────────────────────────────────────────────
     auto is_quark = [](uint32_t t) { return t >= UP_QUARK_TYPE && t <= BOTTOM_QUARK_TYPE; };
@@ -5331,6 +5642,10 @@ void PhysicsSimulation::check_hadronization() {
     }
 
     if (free_quarks.empty()) return;
+
+    // Suppress pair creation if too many free quarks already — confinement pressure
+    constexpr uint32_t MAX_FREE_QUARKS = 24;
+    bool suppress_creation = (free_quarks.size() > MAX_FREE_QUARKS);
 
     std::mt19937 rng(frame_counter_ * 3141592653u);
     std::vector<bool> consumed(n, false);
@@ -5394,7 +5709,7 @@ void PhysicsSimulation::check_hadronization() {
     constexpr float HAGEDORN_TEMP    = 1.7e12f;
     constexpr float BARYON_RADIUS    = 15.0f;   // quarks must be very close
     constexpr float BARYON_RADIUS_SQ = BARYON_RADIUS * BARYON_RADIUS;
-    constexpr uint32_t MAX_BARYON    = 8;
+    constexpr uint32_t MAX_BARYON    = 16;
 
     // Map quark flavor to up-like(0) or down-like(1) for baryon determination
     // +2/3 charge quarks (u,c,t) → up-like → eventually decay to u
@@ -5513,7 +5828,9 @@ void PhysicsSimulation::check_hadronization() {
         }
     }
 
-    // ── Phase 3: vacuum instability — spawn partner for remaining free quarks ─
+    // ── Phase 3: vacuum instability — spawn confinement partner for free quarks ─
+    // In real QCD, a free quark's color field creates a q-qbar pair that immediately
+    // forms a meson with the original quark. The new pair is BOUND, not free.
     uint32_t search_from = 0;
     auto find_dormant = [&](uint32_t start) -> uint32_t {
         for (uint32_t k = start; k < n; ++k)
@@ -5524,6 +5841,7 @@ void PhysicsSimulation::check_hadronization() {
     };
 
     uint32_t vacuum_events = 0;
+    if (!suppress_creation) {
     for (size_t fi = 0; fi < free_quarks.size() && vacuum_events < MAX_STRING_BREAK; ++fi) {
         uint32_t i = free_quarks[fi];
         if (consumed[i]) continue;
@@ -5545,41 +5863,50 @@ void PhysicsSimulation::check_hadronization() {
 
         glm::vec2 pos_i = readback_positions_[i];
         float a = angle_dist_(rng);
-        glm::vec2 offset(std::cos(a) * 5.0f, std::sin(a) * 5.0f);
+        glm::vec2 off(std::cos(a) * 2.0f, std::sin(a) * 2.0f);
 
         float color_i = particles.genomes[i * GENOME_SIZE + 2];
         write_spawn_genome(particles, slot, spawn_type, rng, frame_counter_);
         particles.genomes[slot * GENOME_SIZE + 2] = -color_i;  // complementary color
 
-        readback_positions_[slot]  = pos_i + offset;
-        readback_velocities_[slot] = glm::vec2(std::cos(a), std::sin(a)) * MESON_SPEED;
-        readback_energies_[slot]   = MESON_ENERGY;
+        // Spawn close to parent and drifting toward it (bound meson, not escaping)
+        readback_positions_[slot]  = pos_i + off;
+        readback_velocities_[slot] = readback_velocities_[i] - off * 5.0f;
+        readback_energies_[slot]   = MESON_ENERGY * 0.5f;
 
-        // Drain energy from parent quark
-        readback_energies_[i] -= 0.2f;
-        if (readback_energies_[i] < 0.1f) readback_energies_[i] = 0.1f;
+        // Immediately bind as meson (confinement)
+        particles.entangled_partner[i]    = slot;
+        particles.entangled_partner[slot] = i;
+
+        // Stronger energy drain from parent
+        readback_energies_[i] -= 0.3f;
+        if (readback_energies_[i] < 0.05f) readback_energies_[i] = 0.05f;
 
         consumed[i] = true;
         any_changed = true;
         ++vacuum_events;
 
-        iface.push_notification("Vacuum: q\xc4\x81 pair", ImVec4(0.3f, 0.9f, 0.4f, 1.0f));
+        iface.push_notification("Confinement: q\xc4\x81 meson", ImVec4(0.3f, 0.9f, 0.4f, 1.0f));
         {
             char vac_detail[512];
             snprintf(vac_detail, sizeof(vac_detail),
-                "Source quark #%u type=%u E=%.4f\nSpawned antiquark type=%u slot %u\nColor: %.3f -> complement %.3f\nQuark E after: %.4f",
+                "Source quark #%u type=%u E=%.4f\nBound antiquark type=%u slot %u\nColor: %.3f -> complement %.3f\nQuark E after: %.4f",
                 i, ti, readback_energies_[i],
                 spawn_type, slot,
                 particles.genomes[i * GENOME_SIZE + 2],
                 particles.genomes[slot * GENOME_SIZE + 2],
                 readback_energies_[i]);
-            iface.push_decay_event("Vacuum pair", PhysicsInterface::DEVT_PAIR_PRODUCTION,
+            iface.push_decay_event("Confinement pair", PhysicsInterface::DEVT_PAIR_PRODUCTION,
                                    ImVec4(0.3f, 0.9f, 0.4f, 1.0f), std::string(vac_detail));
         }
     }
+    } // suppress_creation
 
-    // ── Phase 4: string breaking — bound pairs stretched beyond threshold ────
+    // ── Phase 4: string breaking — stretched pair → 2 bound mesons ─────────
+    // In real QCD, when a color string breaks, the new q-qbar pair immediately
+    // binds with the original quarks: [q_orig + qbar_new] and [q_new + qbar_orig].
     uint32_t breaks = 0;
+    if (!suppress_creation) {
     for (uint32_t i = 0; i < n && breaks < MAX_STRING_BREAK; ++i) {
         if (readback_energies_[i] < 0.01f) continue;
         uint32_t ti = particles.types[i];
@@ -5620,10 +5947,10 @@ void PhysicsSimulation::check_hadronization() {
         if (slot_qbar == UINT32_MAX) break;
         search_from = slot_qbar + 1;
 
-        glm::vec2 midpoint = (readback_positions_[i] + readback_positions_[best_j]) * 0.5f;
         glm::vec2 axis = (readback_positions_[best_j] - readback_positions_[i]);
         float dist = std::sqrt(best_d2);
         glm::vec2 dir = (dist > 0.1f) ? axis / dist : glm::vec2(1.0f, 0.0f);
+        glm::vec2 perp(-dir.y, dir.x);
 
         uint32_t new_q_type    = (rng() % 2 == 0) ? UP_QUARK_TYPE : DOWN_QUARK_TYPE;
         uint32_t new_qbar_type = anti_flavor(new_q_type);
@@ -5634,15 +5961,24 @@ void PhysicsSimulation::check_hadronization() {
         write_spawn_genome(particles, slot_qbar, new_qbar_type, rng, frame_counter_);
         particles.genomes[slot_qbar * GENOME_SIZE + 2] = -color_i;
 
-        readback_positions_[slot_q]    = (midpoint - dir * 3.0f);
-        readback_positions_[slot_qbar] = (midpoint + dir * 3.0f);
-        readback_velocities_[slot_q]    = -dir * MESON_SPEED;
-        readback_velocities_[slot_qbar] =  dir * MESON_SPEED;
-        readback_energies_[slot_q]    = MESON_ENERGY;
-        readback_energies_[slot_qbar] = MESON_ENERGY;
+        // Place new quarks near their binding partners (not at midpoint)
+        readback_positions_[slot_q]    = readback_positions_[best_j] + perp * 2.0f;
+        readback_positions_[slot_qbar] = readback_positions_[i] - perp * 2.0f;
+        // Low relative velocity — bound state, not escaping
+        readback_velocities_[slot_q]    = readback_velocities_[best_j] + perp * 3.0f;
+        readback_velocities_[slot_qbar] = readback_velocities_[i] - perp * 3.0f;
+        readback_energies_[slot_q]    = 0.2f;
+        readback_energies_[slot_qbar] = 0.2f;
 
-        readback_energies_[i]      = std::max(0.1f, readback_energies_[i] - 0.15f);
-        readback_energies_[best_j] = std::max(0.1f, readback_energies_[best_j] - 0.15f);
+        // Immediately entangle as 2 mesons: [q_orig + qbar_new], [q_new + qbar_orig]
+        particles.entangled_partner[i]        = slot_qbar;
+        particles.entangled_partner[slot_qbar] = i;
+        particles.entangled_partner[best_j]   = slot_q;
+        particles.entangled_partner[slot_q]   = best_j;
+
+        // Stronger energy drain on originals (string energy consumed)
+        readback_energies_[i]      = std::max(0.05f, readback_energies_[i] - 0.25f);
+        readback_energies_[best_j] = std::max(0.05f, readback_energies_[best_j] - 0.25f);
 
         consumed[i] = true;
         consumed[best_j] = true;
@@ -5657,11 +5993,12 @@ void PhysicsSimulation::check_hadronization() {
                 i, ti, color_i, best_j, particles.types[best_j],
                 dist, STRING_BREAK_DIST,
                 slot_q, new_q_type, slot_qbar, new_qbar_type,
-                MESON_ENERGY);
+                readback_energies_[slot_q]);
             iface.push_decay_event("String break", PhysicsInterface::DEVT_PAIR_PRODUCTION,
                                    ImVec4(0.3f, 0.9f, 0.4f, 1.0f), std::string(str_detail));
         }
     }
+    } // suppress_creation
 
     // ── Phase 5: gluon interactions ─────────────────────────────────────────
     // Gluons carry color charge and are confined like quarks.
@@ -5671,7 +6008,7 @@ void PhysicsSimulation::check_hadronization() {
     constexpr float GLUON_ABSORB_RADIUS    = 12.0f;
     constexpr float GLUON_ABSORB_RADIUS_SQ = GLUON_ABSORB_RADIUS * GLUON_ABSORB_RADIUS;
     constexpr float GLUON_SPLIT_ENERGY     = 0.2f;
-    constexpr uint32_t MAX_GLUON_EVENTS    = 6;
+    constexpr uint32_t MAX_GLUON_EVENTS    = 4;
 
     uint32_t gluon_events = 0;
     for (uint32_t i = 0; i < n && gluon_events < MAX_GLUON_EVENTS; ++i) {
@@ -5759,9 +6096,10 @@ void PhysicsSimulation::check_hadronization() {
             continue;
         }
 
-        // ── Isolated gluon — split into q+q̄ (color confinement) ────────
-        // Quark gets gluon's carried color, antiquark gets gluon's anticolor
-        if (readback_energies_[i] >= GLUON_SPLIT_ENERGY) {
+        // ── Isolated gluon — split into bound q+q̄ meson (confinement) ───
+        // Quark gets gluon's carried color, antiquark gets gluon's anticolor.
+        // The pair is immediately entangled as a meson (no free quarks produced).
+        if (!suppress_creation && readback_energies_[i] >= GLUON_SPLIT_ENERGY) {
             uint32_t slot = find_dormant(search_from);
             if (slot == UINT32_MAX) continue;
             search_from = slot + 1;
@@ -5778,13 +6116,17 @@ void PhysicsSimulation::check_hadronization() {
             particles.genomes[i * GENOME_SIZE + 2] = q_color;
             readback_energies_[i] = half_energy;
 
-            // Spawn antiquark in dormant slot
+            // Spawn antiquark very close with shared velocity (bound meson)
             float a = angle_dist_(rng);
             write_spawn_genome(particles, slot, qbar_type, rng, frame_counter_);
             particles.genomes[slot * GENOME_SIZE + 2] = qb_color;
-            readback_positions_[slot]  = readback_positions_[i] + glm::vec2(std::cos(a) * 3.0f, std::sin(a) * 3.0f);
-            readback_velocities_[slot] = glm::vec2(std::cos(a), std::sin(a)) * 40.0f;
+            readback_positions_[slot]  = readback_positions_[i] + glm::vec2(std::cos(a) * 1.0f, std::sin(a) * 1.0f);
+            readback_velocities_[slot] = readback_velocities_[i] + glm::vec2(std::cos(a), std::sin(a)) * 3.0f;
             readback_energies_[slot]   = half_energy;
+
+            // Immediately entangle as meson
+            particles.entangled_partner[i]    = slot;
+            particles.entangled_partner[slot] = i;
 
             consumed[i] = true;
             any_changed = true;
@@ -6280,6 +6622,8 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             // Orbital update (always needed for element detection)
             if (quality >= 2 || (quality == 1 && frame2) || (quality == 0 && frame4)) {
                 update_orbitals();
+                if (cfg.shell_transitions_enabled)
+                    check_shell_transitions();
                 repel_distinct_nuclei();
             }
 
@@ -6355,8 +6699,8 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 center /= static_cast<float>(member_count);
                 // Offset the duplicate 80px to the right
                 glm::vec2 dup_origin = center + glm::vec2(80.0f, 0.0f);
-                float rw = static_cast<float>(REGION_W);
-                float rh = static_cast<float>(REGION_H);
+                float rw = static_cast<float>(WORLD_W);
+                float rh = static_cast<float>(WORLD_H);
                 auto wrap = [&](glm::vec2 p) -> glm::vec2 {
                     p.x = std::fmod(p.x + rw, rw);
                     p.y = std::fmod(p.y + rh, rh);
@@ -6420,11 +6764,11 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
 
                 // Place electrons — match update_orbitals formula
                 const float R_BOHR = 15.0f, K_COULOMB = 1200.0f, SOFTEN_SQ = 64.0f;
-                const int SHELL_CAP[] = {2, 8, 18};
+                const int SHELL_CAP[] = {2, 8, 18, 32};
                 const float NUC_CLR = nuc_ext + 4.0f;
                 int e_left = Z_dup;
-                int shell_fill_dup[3] = {0, 0, 0};
-                for (int sh = 0; sh < 3 && e_left > 0; ++sh) {
+                int shell_fill_dup[4] = {0, 0, 0, 0};
+                for (int sh = 0; sh < 4 && e_left > 0; ++sh) {
                     int cap = std::min(SHELL_CAP[sh], e_left);
                     float n_sh = static_cast<float>(sh + 1);
                     int inner_e = 0;
@@ -6436,13 +6780,15 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                     float R3 = R_target * R_target * R_target;
                     float R2_soft = R_target * R_target + SOFTEN_SQ;
                     float L_ground = std::sqrt(Z_eff * K_COULOMB * R3 / R2_soft);
-                    float v_orbital = L_ground / R_target;
+                    float orbit_boost_d = cfg.orbit_boost[sh];
+                    float v_orbital = (L_ground / R_target) * orbit_boost_d;
+                    float shell_offset_d = sh * cfg.orbital_shell_offset;
 
                     for (int e = 0; e < cap; ++e) {
                         uint32_t slot = find_dormant(search);
                         if (slot == UINT32_MAX) break;
                         search = slot + 1;
-                        float angle = 2.0f * 3.14159265f * static_cast<float>(e) / static_cast<float>(cap);
+                        float angle = shell_offset_d + 2.0f * 3.14159265f * static_cast<float>(e) / static_cast<float>(cap);
                         glm::vec2 offset(R_target * std::cos(angle), R_target * std::sin(angle));
                         glm::vec2 tangent(-std::sin(angle), std::cos(angle));
                         readback_positions_[slot] = wrap(dup_origin + offset);
@@ -6450,6 +6796,11 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                         readback_energies_[slot] = DUP_ENERGY;
                         write_spawn_genome(particles, slot, ELECTRON_TYPE_PHYS, rng, frame_counter_);
                         particles.genomes[slot * GENOME_SIZE + 2] = L_ground * e_scale_dup;
+                        particles.genomes[slot * GENOME_SIZE + 3] = orbit_boost_d;
+                        if (slot < particles.orbital_shell.size()) {
+                            particles.orbital_shell[slot] = static_cast<int8_t>(sh);
+                            particles.excitation_timer[slot] = 0;
+                        }
                         dup_slots.push_back(slot);
                     }
                     shell_fill_dup[sh] = cap;
@@ -6824,10 +7175,10 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 if (j == si || readback_energies_[j] <= 0.0f) continue;
                 glm::vec2 d = readback_positions_[j] - pos_i;
                 // Toroidal wrapping
-                if (d.x > REGION_W * 0.5f) d.x -= REGION_W;
-                if (d.x < -REGION_W * 0.5f) d.x += REGION_W;
-                if (d.y > REGION_H * 0.5f) d.y -= REGION_H;
-                if (d.y < -REGION_H * 0.5f) d.y += REGION_H;
+                if (d.x > WORLD_W * 0.5f) d.x -= WORLD_W;
+                if (d.x < -WORLD_W * 0.5f) d.x += WORLD_W;
+                if (d.y > WORLD_H * 0.5f) d.y -= WORLD_H;
+                if (d.y < -WORLD_H * 0.5f) d.y += WORLD_H;
 
                 float r2 = glm::dot(d, d);
                 float r = std::sqrt(r2);
@@ -6909,17 +7260,17 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
 
             // Compute Bohr-model shell radii (same constants as update_orbitals)
             const float R_BOHR_C = 15.0f;
-            const int SHELL_CAP_C[] = {2, 8, 18};
-            int e_remaining = std::min(bound_leptons, 28);
-            int shell_fill_tmp[3] = {0, 0, 0};
+            const int SHELL_CAP_C[] = {2, 8, 18, 32};
+            int e_remaining = std::min(bound_leptons, 60);
+            int shell_fill_tmp[4] = {0, 0, 0, 0};
 
             // Fill shells from inner to outer
-            for (int s = 0; s < 3 && e_remaining > 0; ++s) {
+            for (int s = 0; s < 4 && e_remaining > 0; ++s) {
                 shell_fill_tmp[s] = std::min(e_remaining, SHELL_CAP_C[s]);
                 e_remaining -= shell_fill_tmp[s];
             }
 
-            for (int s = 0; s < 3; ++s) {
+            for (int s = 0; s < 4; ++s) {
                 cloud.shell_fill[s] = shell_fill_tmp[s];
                 cloud.shell_cap[s] = SHELL_CAP_C[s];
 
@@ -6928,6 +7279,9 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 if (s == 1) screening = static_cast<float>(SHELL_CAP_C[0]) * 0.85f;
                 else if (s == 2) screening = static_cast<float>(SHELL_CAP_C[0]) * 1.0f
                                            + static_cast<float>(SHELL_CAP_C[1]) * 0.85f;
+                else if (s == 3) screening = static_cast<float>(SHELL_CAP_C[0]) * 1.0f
+                                           + static_cast<float>(SHELL_CAP_C[1]) * 1.0f
+                                           + static_cast<float>(SHELL_CAP_C[2]) * 0.85f;
                 float Z_eff = std::max(1.0f, static_cast<float>(nuc.Z) - screening);
                 float n_shell = static_cast<float>(s + 1);
                 cloud.shell_radii[s] = std::max(n_shell * n_shell * R_BOHR_C / Z_eff, 8.0f);
@@ -7431,6 +7785,8 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 for (uint32_t g = 0; g < GENOME_SIZE; g++)
                     particles.genomes[slot * GENOME_SIZE + g] = p.genome[g];
                 particles.orbital_parent[slot] = -1;  // will be reassigned by update_orbitals
+                particles.orbital_shell[slot] = -1;
+                particles.excitation_timer[slot] = 0;
                 placed++;
             }
 
@@ -7504,6 +7860,8 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                         particles.orbital_parent[slot] = static_cast<int32_t>(first_proton_slot);
                     else
                         particles.orbital_parent[slot] = -1;
+                    particles.orbital_shell[slot] = -1;  // assigned by update_orbitals
+                    particles.excitation_timer[slot] = 0;
 
                     placed++;
                 }

@@ -151,11 +151,12 @@ LoadResult load_simulation(const std::string& filepath) {
         // v1-v2: SimConfig was written without size prefix.
         // New fields are appended at the end, so old layout is a prefix.
         // Read only the bytes the old save wrote (= sizeof(SimConfig) minus new fields).
-        // New fields appended at end: 56 bytes (fusion/fission v3) + 12 bytes (Casimir v4)
-        //   + 4 bytes (fissility v5) = 72
-        // Old v1-v2 size = current size - 72.
+        // Fields not in v1-v2: orbital params (36 bytes), fusion/fission v3 (56 bytes),
+        // Casimir v4 (12 bytes), fissility v5 (4 bytes) = 108 bytes total.
+        // Note: orbital + shell transition params were inserted before show_trails,
+        // so v1-v2 load is approximate — new fields get defaults from SimConfig{}.
         r.cfg = SimConfig{};  // defaults for new fields
-        uint32_t old_cfg_size = static_cast<uint32_t>(sizeof(SimConfig)) - 72u;
+        uint32_t old_cfg_size = static_cast<uint32_t>(sizeof(SimConfig)) - 108u;
         f.read(reinterpret_cast<char*>(&r.cfg), old_cfg_size);
         if (!f.good()) {
             r.message = "Failed to read config";

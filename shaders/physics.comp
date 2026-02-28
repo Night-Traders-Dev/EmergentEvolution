@@ -541,6 +541,7 @@ void apply_physics(uint i) {
     bool  is_light_particle = (flags_a & BEHAVIOR_LEPTON) != 0u && abs(charge_a) > 0.01;  // all charged leptons (e/mu/tau)
     float closest_nuc_dist  = 9999.0;
     vec2  closest_nuc_delta = vec2(0.0);
+    vec2  closest_nuc_vel   = vec2(0.0);
     float nearby_charge_sum = 0.0;  // sum of nearby charges (for magnetic moment gating)
     float accumulated_Bz    = 0.0;  // total B-field from all neighbors (for spin coupling)
 
@@ -697,6 +698,7 @@ void apply_physics(uint i) {
                 if (dist < closest_nuc_dist) {
                     closest_nuc_dist = dist;
                     closest_nuc_delta = delta;
+                    closest_nuc_vel = in_vel_buffer.data[j];
                 }
             }
         }
@@ -884,24 +886,66 @@ void apply_physics(uint i) {
         }
     }
 
-    // ── Centrifugal barrier (applied ONCE per electron) ──────────────────
+    // ── Orbital confinement + tangential drive (applied ONCE per electron) ──
     // genome[2] stores L_ground from CPU orbital assignment (0 = free electron)
     if (is_light_particle && closest_nuc_dist < params.interaction_radius) {
         float L_ground = get_color(i);  // genome[2] repurposed for orbital L
         if (L_ground < 1.0) L_ground = L_MIN;  // free electron: default
 
         vec2 nuc_normal = closest_nuc_delta / max(closest_nuc_dist, 0.1);
+        vec2 nuc_tangent = vec2(-nuc_normal.y, nuc_normal.x);
 
-        // Angular momentum relative to nearest nucleon
-        float L_actual = abs(closest_nuc_delta.x * vel_a.y - closest_nuc_delta.y * vel_a.x);
-        float L_eff = max(L_actual, L_ground);
+        // Velocity relative to parent nucleus (must not fight bulk atom motion)
+        vec2 rel_vel = vel_a - closest_nuc_vel;
 
-        // Centrifugal barrier: F = L²/(m·r³) — heavier leptons orbit tighter
+        // Per-electron orbital boost from genome[3] (set by CPU from SimConfig).
+        // Positive value = boost factor; 0 or negative = use steeper default.
+        float stored_boost = get_decay(i);
+        float ORBIT_BOOST = (stored_boost > 0.5) ? stored_boost
+            : mix(1.5, 9.0, clamp((closest_nuc_dist - 8.0) / 72.0, 0.0, 1.0));
+
+        // ── Centrifugal barrier (L_ground only) ───────────────────────
+        // Prevents electron from collapsing into the nucleus.
         float r3 = closest_nuc_dist * closest_nuc_dist * closest_nuc_dist + CENTRIFUGAL_SOFTEN;
-        float F_centrifugal = min(L_eff * L_eff * mass_inv_a / r3, 300.0);
+        float F_centrifugal = min(L_ground * L_ground * mass_inv_a / r3, 300.0);
         total_force -= nuc_normal * F_centrifugal;
 
+        // ── Extra binding for boosted orbital speed ───────────────────
+        // At ORBIT_BOOST× speed, need BOOST²× centripetal. Coulomb gives 1×,
+        // add (BOOST²-1)×. Outer electrons get much stronger binding
+        // (BOOST=5 → 24× extra), keeping the cloud tightly confined.
+        float r2_soft = closest_nuc_dist * closest_nuc_dist + CENTRIFUGAL_SOFTEN;
+        float F_bind = (ORBIT_BOOST * ORBIT_BOOST - 1.0) * K_COULOMB * abs(charge_a) / r2_soft;
+        total_force += nuc_normal * F_bind;
+
+        // ── Asymmetric radial damping (outward only) ──────────────────
+        // Only damp OUTWARD radial motion to prevent escape. Symmetric
+        // damping bleeds orbital energy due to rotating reference frame.
+        float v_rad = dot(rel_vel, nuc_normal);  // positive = moving away
+        if (v_rad > 0.0) {
+            total_force -= nuc_normal * v_rad * 20.0;
+        }
+
+        // ── Orbital tangential drive ──────────────────────────────────
+        // Drive to boosted speed. Uses L_ground only (not L_actual) to
+        // avoid runaway feedback.
+        float mass_e = 1.0 / max(mass_inv_a, 0.001);
+        float target_v_tan = L_ground / (mass_e * max(closest_nuc_dist, 1.0));
+        target_v_tan *= ORBIT_BOOST;
+        float v_tan_rel = dot(rel_vel, nuc_tangent);
+
+        // Consistent orbit direction per particle (half CW, half CCW)
+        float orbit_sign = (i % 2u == 0u) ? 1.0 : -1.0;
+        // If already orbiting in one direction, keep that direction
+        if (abs(v_tan_rel) > target_v_tan * 0.1)
+            orbit_sign = sign(v_tan_rel);
+
+        float dv = target_v_tan * orbit_sign - v_tan_rel;
+        float drive_k = 15.0;
+        total_force += nuc_tangent * dv * drive_k;
+
         // Spin-orbit coupling
+        float L_actual = abs(closest_nuc_delta.x * rel_vel.y - closest_nuc_delta.y * rel_vel.x);
         float F_SO = spin_a * L_actual * K_SPIN_ORBIT
                    / (closest_nuc_dist * closest_nuc_dist * closest_nuc_dist * closest_nuc_dist + 1.0);
         total_force -= nuc_normal * F_SO;
@@ -1018,9 +1062,12 @@ void apply_physics(uint i) {
             delta_e += params.vacuum_energy * 0.003 * params.dt;
 
         // Decay drain from genome[3] (virtual particles use negative sign as marker)
+        // For electrons/positrons, positive genome[3] = orbital boost factor, not decay.
         float decay_rate = get_decay(i);
+        bool is_orbital_boost = (type_a == ELECTRON_TYPE || type_a == POSITRON_TYPE)
+                                && decay_rate > 0.0;
         float abs_decay = abs(decay_rate);
-        if (abs_decay > 0.001) {
+        if (abs_decay > 0.001 && !is_orbital_boost) {
             delta_e -= abs_decay * params.dt;
         }
 

@@ -319,9 +319,9 @@ public:
         int Z;                  // proton/antiproton count
         int electrons;          // bound electron/positron count
         bool is_anti;
-        float shell_radii[3];   // Bohr radii for shells 1/2/3 (world units)
-        int   shell_fill[3];    // electrons in each shell
-        int   shell_cap[3];     // max electrons per shell
+        float shell_radii[4];   // Bohr radii for shells 1-4 (world units)
+        int   shell_fill[4];    // electrons in each shell
+        int   shell_cap[4];     // max electrons per shell
     };
     std::vector<NucleusCloudInfo> nucleus_clouds;
 

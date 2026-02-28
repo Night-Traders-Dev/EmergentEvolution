@@ -272,11 +272,13 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
         p.angular_velocities.resize(pool, 0.0f);
         p.genomes.resize(pool * GENOME_SIZE, 0.0f);
 
-        std::uniform_real_distribution<float> dx(0.0f, static_cast<float>(REGION_W));
-        std::uniform_real_distribution<float> dy(0.0f, static_cast<float>(REGION_H));
+        std::uniform_real_distribution<float> dx(0.0f, static_cast<float>(WORLD_W));
+        std::uniform_real_distribution<float> dy(0.0f, static_cast<float>(WORLD_H));
 
         p.birth_frames.assign(pool, 0u);
         p.orbital_parent.assign(pool, -1);
+        p.orbital_shell.assign(pool, -1);
+        p.excitation_timer.assign(pool, 0);
         p.entangled_partner.assign(pool, 0xFFFFFFFFu);
 
         for (uint32_t i = 0; i < pool; ++i) {
@@ -291,12 +293,14 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
     uint32_t count = cfg.particle_count;
 
     std::uniform_real_distribution<float> unit(0.0f, 1.0f);
-    std::uniform_real_distribution<float> dx(0.0f, static_cast<float>(REGION_W));
-    std::uniform_real_distribution<float> dy(0.0f, static_cast<float>(REGION_H));
+    std::uniform_real_distribution<float> dx(0.0f, static_cast<float>(WORLD_W));
+    std::uniform_real_distribution<float> dy(0.0f, static_cast<float>(WORLD_H));
     std::normal_distribution<float> gauss(0.0f, 1.0f);
 
-    const float rw = static_cast<float>(REGION_W);
-    const float rh = static_cast<float>(REGION_H);
+    const float rw = static_cast<float>(WORLD_W);   // world bounds
+    const float rh = static_cast<float>(WORLD_H);
+    const float sw = static_cast<float>(REGION_W);  // spawn distribution scale
+    const float sh = static_cast<float>(REGION_H);
 
     p.positions.reserve(count);
     p.velocities.reserve(count);
@@ -383,22 +387,26 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
             case 2: {
                 if (unit(rng) < 0.80f) {
                     float cx = rw * 0.5f, cy = rh * 0.5f;
-                    float sigma = std::min(rw, rh) * 0.12f;
+                    float sigma = std::min(sw, sh) * 0.12f;
                     pos = glm::vec2(cx + gauss(rng) * sigma, cy + gauss(rng) * sigma);
                 } else {
-                    pos = glm::vec2(dx(rng), dy(rng));
+                    pos = glm::vec2(
+                        rw * 0.5f + (dx(rng) - rw * 0.5f) * (sw / rw),
+                        rh * 0.5f + (dy(rng) - rh * 0.5f) * (sh / rh));
                 }
                 break;
             }
             case 3: {
                 float cx = rw * 0.5f, cy = rh * 0.5f;
-                float sigma = std::min(rw, rh) * 0.25f;
+                float sigma = std::min(sw, sh) * 0.25f;
                 pos = glm::vec2(cx + gauss(rng) * sigma, cy + gauss(rng) * sigma);
                 break;
             }
             case 5: {
                 if (i % 4 == 0) {
-                    pos = glm::vec2(dx(rng), dy(rng));
+                    pos = glm::vec2(
+                        rw * 0.5f + (dx(rng) - rw * 0.5f) * (sw / rw),
+                        rh * 0.5f + (dy(rng) - rh * 0.5f) * (sh / rh));
                 } else {
                     glm::vec2 center = p.positions[i - (i % 4)];
                     pos = center + glm::vec2(gauss(rng) * 4.0f, gauss(rng) * 4.0f);
@@ -408,11 +416,11 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
             case 6: {
                 if (type == ELECTRON_TYPE_PHYS) {
                     float cx = rw * 0.5f, cy = rh * 0.5f;
-                    float sigma = std::min(rw, rh) * 0.18f;
+                    float sigma = std::min(sw, sh) * 0.18f;
                     pos = glm::vec2(cx + gauss(rng) * sigma, cy + gauss(rng) * sigma);
                 } else {
                     float cx = rw * 0.5f, cy = rh * 0.5f;
-                    float sigma = std::min(rw, rh) * 0.04f;
+                    float sigma = std::min(sw, sh) * 0.04f;
                     pos = glm::vec2(cx + gauss(rng) * sigma, cy + gauss(rng) * sigma);
                 }
                 break;
@@ -420,15 +428,15 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
             case 7: case 8: case 9: case 11: case 12: {
                 // QGP, Electroweak, Meson Factory, Dark Sector, SUSY Sector — central Gaussian
                 float cx = rw * 0.5f, cy = rh * 0.5f;
-                float sigma = std::min(rw, rh) * 0.20f;
+                float sigma = std::min(sw, sh) * 0.20f;
                 pos = glm::vec2(cx + gauss(rng) * sigma, cy + gauss(rng) * sigma);
                 break;
             }
             case 10: {
                 // Particle Accelerator — beam ring (elliptical)
                 float cx = rw * 0.5f, cy = rh * 0.5f;
-                float rx = rw * 0.35f;  // ellipse semi-major
-                float ry = rh * 0.35f;  // ellipse semi-minor
+                float rx = sw * 0.35f;  // ellipse semi-major
+                float ry = sh * 0.35f;  // ellipse semi-minor
                 float beam_width = 12.0f;
                 std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
                 float theta = angle_dist(rng);
@@ -437,7 +445,9 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
                 break;
             }
             default:
-                pos = glm::vec2(dx(rng), dy(rng));
+                pos = glm::vec2(
+                    rw * 0.5f + (dx(rng) - rw * 0.5f) * (sw / rw),
+                    rh * 0.5f + (dy(rng) - rh * 0.5f) * (sh / rh));
                 break;
         }
 
@@ -486,5 +496,7 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
     // Auxiliary vectors (not populated in the per-particle loop above)
     p.birth_frames.assign(count, 0u);
     p.orbital_parent.assign(count, -1);
+    p.orbital_shell.assign(count, -1);
+    p.excitation_timer.assign(count, 0);
     p.entangled_partner.assign(count, 0xFFFFFFFFu);
 }
