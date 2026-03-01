@@ -1,4 +1,6 @@
 #include "physics/interface.h"
+#include "physics/tutorial.h"
+#include "physics/scenarios.h"
 #include "physics/audio.h"
 #include "physics/molecules.h"
 #include "physics/phys_particles.h"
@@ -36,7 +38,7 @@ void PhysicsInterface::init() {
 // ── Settings persistence ────────────────────────────────────────────────────
 
 static constexpr uint32_t PPCFG_MAGIC   = 0x47464350;  // "PCFG" little-endian
-static constexpr uint32_t PPCFG_VERSION = 2;
+static constexpr uint32_t PPCFG_VERSION = 3;
 
 void PhysicsInterface::save_prefs() {
     std::error_code ec;
@@ -54,10 +56,27 @@ void PhysicsInterface::load_prefs() {
     uint32_t magic = 0, version = 0;
     f.read(reinterpret_cast<char*>(&magic), sizeof(uint32_t));
     f.read(reinterpret_cast<char*>(&version), sizeof(uint32_t));
-    if (magic != PPCFG_MAGIC || version != PPCFG_VERSION) return;
+    if (magic != PPCFG_MAGIC) return;
+    if (version != PPCFG_VERSION && version != 2) return;
     UserPrefs loaded{};
-    f.read(reinterpret_cast<char*>(&loaded), sizeof(UserPrefs));
-    if (f.good()) prefs = loaded;
+    if (version == 2) {
+        // Read only the v2 fields (smaller struct), keep v3 defaults
+        f.read(reinterpret_cast<char*>(&loaded), 52);  // v2 UserPrefs was 52 bytes
+        if (f.good()) {
+            // Copy only v2 fields, keep new field defaults
+            UserPrefs defaults{};
+            prefs = loaded;
+            prefs.autosave_interval = defaults.autosave_interval;
+            prefs.window_mode = defaults.window_mode;
+            prefs.window_w = defaults.window_w;
+            prefs.window_h = defaults.window_h;
+            prefs.bloom_enabled = defaults.bloom_enabled;
+            prefs.tutorial_done = defaults.tutorial_done;
+        }
+    } else {
+        f.read(reinterpret_cast<char*>(&loaded), sizeof(UserPrefs));
+        if (f.good()) prefs = loaded;
+    }
 }
 
 // ── Molecule bestiary persistence ─────────────────────────────────────────────
@@ -660,6 +679,13 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         return;
     }
 
+    // Scenario selection menu (blocks other UI when visible)
+    if (show_scenario_menu) {
+        draw_scenario_menu();
+        pop_theme();
+        return;
+    }
+
     // Draw bottom bar (auto-hides) and top stats bar
     draw_bottom_bar(cfg, request_reset);
     draw_top_bar(cfg);
@@ -718,7 +744,7 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
 
     // ── Accelerator aim visualization overlay ──
     if (accel_mode && accel_phase == 1 && accel_source_idx >= 0
-        && accel_fire_type >= 0 && accel_fire_type < PHYS_PARTICLE_TYPES) {
+        && accel_fire_type >= 0 && static_cast<uint32_t>(accel_fire_type) < PHYS_PARTICLE_TYPES) {
         ImGuiIO& io = ImGui::GetIO();
         float win_w = io.DisplaySize.x;
         float win_h = io.DisplaySize.y;
@@ -1103,6 +1129,18 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         fg->AddText(ImVec2(io2.DisplaySize.x * 0.5f - ts.x * 0.5f, 30.0f),
                     ImGui::ColorConvertFloat4ToU32(ImVec4(0.8f, 0.8f, 0.9f, 1.0f)), txt);
     }
+
+    // Scenario goal HUD (top-center, during active scenario)
+    if (scenarios_ptr && scenarios_ptr->active) draw_scenario_goal_hud();
+
+    // Tutorial overlay
+    if (tutorial_ptr && tutorial_ptr->active) draw_tutorial_overlay();
+
+    // Encyclopedia popup
+    if (show_encyclopedia) draw_encyclopedia_popup();
+
+    // Loading overlay (highest priority, covers everything)
+    if (show_loading_overlay) draw_loading_overlay();
 
     // Draw notifications last so they render on top of all windows
     draw_notifications();

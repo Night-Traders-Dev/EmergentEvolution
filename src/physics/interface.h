@@ -29,6 +29,12 @@ struct UserPrefs {
     int   render_scale    = 1;     // 1=native, 2=2x, 3=3x, 4=4x supersampling
     bool  event_log_limit = true;  // true=cap at 10k entries, false=unlimited
     bool  event_log_save  = false; // true=append events to saves/event_log.txt
+    int   autosave_interval = 5;   // minutes between auto-saves (0=disabled)
+    int   window_mode     = 0;     // 0=borderless fullscreen, 1=windowed
+    int   window_w        = 0;     // windowed width (0=monitor default)
+    int   window_h        = 0;     // windowed height (0=monitor default)
+    bool  bloom_enabled   = true;  // post-processing bloom
+    bool  tutorial_done   = false; // true after tutorial completed or skipped
 };
 
 // ── Group template for spawning composite structures ─────────────────────────
@@ -115,6 +121,10 @@ public:
     bool spawn_menu_visible = true;
     bool pending_spawn = false;
     bool sim_running = true;
+
+    // Loading overlay
+    bool show_loading_overlay = false;
+    const char* loading_message = "";
 
     // Selection tool
     bool select_mode = false;
@@ -437,6 +447,18 @@ public:
     AchievementManager* achievements_ptr = nullptr;  // set by simulation
     struct AudioPlayer* audio_ptr = nullptr;         // set by simulation
 
+    // Tutorial
+    class TutorialManager* tutorial_ptr = nullptr;  // set by simulation
+
+    // Encyclopedia popup
+    bool show_encyclopedia = false;
+    int  encyclopedia_type = 0;    // particle type index
+
+    // Scenarios
+    class ScenarioManager* scenarios_ptr = nullptr;  // set by simulation
+    bool show_scenario_menu = false;
+    int  request_scenario_start = -1;  // set by UI, consumed by simulation tick
+
     // Camera navigation (set by info card click, consumed by simulation)
     int32_t navigate_to_particle = -1;
 
@@ -532,12 +554,17 @@ private:
     void draw_accelerator_panel();
     void draw_notifications();
     void draw_settings_menu();
+    void draw_loading_overlay();
     void draw_achievements_panel();
     void draw_decay_log();
     void draw_particle_bestiary();
     void draw_element_bestiary();
     void draw_molecule_bestiary();
     void draw_nuclear_debug(SimConfig& cfg);
+    void draw_tutorial_overlay();
+    void draw_encyclopedia_popup();
+    void draw_scenario_menu();
+    void draw_scenario_goal_hud();
     void draw_measurement_overlays(const SimConfig& cfg);
     void draw_energy_heatmap(const SimConfig& cfg);
     void draw_velocity_field(const SimConfig& cfg);

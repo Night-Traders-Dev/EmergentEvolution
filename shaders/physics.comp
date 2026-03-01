@@ -45,6 +45,10 @@ layout(set = 0, binding = 18, std430) readonly buffer MassZpeBuffer {
 layout(set = 0, binding = 19, std430) readonly buffer GridCellStart { uint data[]; } grid_cell_start;
 layout(set = 0, binding = 20, std430) readonly buffer GridIndices   { uint data[]; } grid_indices;
 
+// Bloom post-processing ping-pong images
+layout(set = 0, binding = 21, rgba32f) uniform image2D bloom_tex_a;
+layout(set = 0, binding = 22, rgba32f) uniform image2D bloom_tex_b;
+
 // Grid constants (world 10240×5760, cell size 100px)
 const float GRID_CELL_SIZE = 100.0;
 const int   GRID_COLS      = 103;  // ceil(10240/100)
@@ -1798,8 +1802,9 @@ void render_particle(uint i) {
     bool is_dark_energy = (flags & BEHAVIOR_DARK_ENERGY) != 0u;
     bool is_virtual     = get_decay(i) < -0.001;  // negative decay = virtual particle
 
-    // Size by particle type
-    float base_radius = params.radius * params.camera_zoom;
+    // Size by particle type (zoom-adaptive: sqrt scaling for better visibility at all zoom levels)
+    float zoom_scale = mix(params.camera_zoom, sqrt(max(params.camera_zoom, 0.001)), 0.5);
+    float base_radius = params.radius * zoom_scale;
     float render_radius;
     if (is_photon_p)        render_radius = base_radius * 0.25;      // massless: smaller than electron
     else if (is_gluon_p)    render_radius = base_radius * 0.3;       // colored boson: slightly larger than photon
@@ -2629,18 +2634,91 @@ void render_collision_debug(uint i) {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+//  BLOOM POST-PROCESSING (steps 6-9)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const float BLOOM_THRESHOLD = 0.6;
+const float BLOOM_INTENSITY = 0.35;
+
+// 9-tap Gaussian kernel weights (sigma ~1.8)
+const float BLOOM_W[5] = float[](0.227027, 0.194946, 0.121621, 0.054054, 0.016216);
+
+// Step 6: Extract bright pixels from render texture into bloom_tex_a
+void bloom_extract(uint pixel_idx) {
+    ivec2 tex_size = imageSize(out_render_texture);
+    int px = int(pixel_idx) % tex_size.x;
+    int py = int(pixel_idx) / tex_size.x;
+    if (py >= tex_size.y) return;
+
+    ivec2 coord = ivec2(px, py);
+    vec4 color = imageLoad(out_render_texture, coord);
+
+    // Luminance-based brightness extraction
+    float lum = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
+    float brightness = max(0.0, lum - BLOOM_THRESHOLD);
+    float factor = brightness / max(lum, 0.001);
+
+    imageStore(bloom_tex_a, coord, vec4(color.rgb * factor, 1.0));
+}
+
+// Step 7: Horizontal Gaussian blur (bloom_a → bloom_b)
+void bloom_blur_h(uint pixel_idx) {
+    ivec2 tex_size = imageSize(bloom_tex_a);
+    int px = int(pixel_idx) % tex_size.x;
+    int py = int(pixel_idx) / tex_size.x;
+    if (py >= tex_size.y) return;
+
+    vec3 result = imageLoad(bloom_tex_a, ivec2(px, py)).rgb * BLOOM_W[0];
+    for (int k = 1; k < 5; k++) {
+        result += imageLoad(bloom_tex_a, ivec2(clamp(px + k, 0, tex_size.x - 1), py)).rgb * BLOOM_W[k];
+        result += imageLoad(bloom_tex_a, ivec2(clamp(px - k, 0, tex_size.x - 1), py)).rgb * BLOOM_W[k];
+    }
+    imageStore(bloom_tex_b, ivec2(px, py), vec4(result, 1.0));
+}
+
+// Step 8: Vertical Gaussian blur (bloom_b → bloom_a)
+void bloom_blur_v(uint pixel_idx) {
+    ivec2 tex_size = imageSize(bloom_tex_b);
+    int px = int(pixel_idx) % tex_size.x;
+    int py = int(pixel_idx) / tex_size.x;
+    if (py >= tex_size.y) return;
+
+    vec3 result = imageLoad(bloom_tex_b, ivec2(px, py)).rgb * BLOOM_W[0];
+    for (int k = 1; k < 5; k++) {
+        result += imageLoad(bloom_tex_b, ivec2(px, clamp(py + k, 0, tex_size.y - 1))).rgb * BLOOM_W[k];
+        result += imageLoad(bloom_tex_b, ivec2(px, clamp(py - k, 0, tex_size.y - 1))).rgb * BLOOM_W[k];
+    }
+    imageStore(bloom_tex_a, ivec2(px, py), vec4(result, 1.0));
+}
+
+// Step 9: Composite bloom back onto render texture
+void bloom_composite(uint pixel_idx) {
+    ivec2 tex_size = imageSize(out_render_texture);
+    int px = int(pixel_idx) % tex_size.x;
+    int py = int(pixel_idx) / tex_size.x;
+    if (py >= tex_size.y) return;
+
+    ivec2 coord = ivec2(px, py);
+    vec4 scene = imageLoad(out_render_texture, coord);
+    vec3 bloom = imageLoad(bloom_tex_a, coord).rgb;
+
+    // Additive blend with intensity control
+    scene.rgb += bloom * BLOOM_INTENSITY;
+
+    imageStore(out_render_texture, coord, scene);
+}
+
 void main() {
     uint i = gl_GlobalInvocationID.x;
 
-    // Steps 3 and 5 use pixel index, not particle index
-    if (params.step == 3u) {
-        fade_pixel(i);
-        return;
-    }
-    if (params.step == 5u) {
-        render_field_gather(i);
-        return;
-    }
+    // Pixel-index steps (dispatch over render texture pixels)
+    if (params.step == 3u) { fade_pixel(i);       return; }
+    if (params.step == 5u) { render_field_gather(i); return; }
+    if (params.step == 6u) { bloom_extract(i);    return; }
+    if (params.step == 7u) { bloom_blur_h(i);     return; }
+    if (params.step == 8u) { bloom_blur_v(i);     return; }
+    if (params.step == 9u) { bloom_composite(i);  return; }
 
     if (i >= params.particle_count) return;
 

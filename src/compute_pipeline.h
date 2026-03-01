@@ -119,6 +119,10 @@ private:
     static constexpr uint32_t GPU_GRID_CELLS   = 103 * 58;  // 5974
     static constexpr uint32_t MAX_GPU_PARTICLES = 200000;
 
+    // Bloom post-processing ping-pong images (bindings 21-22)
+    Image bloom_image_a_{};
+    Image bloom_image_b_{};
+
     // Actual particle count the buffers were allocated for (safe dispatch cap)
     uint32_t live_particle_count_ = 0;
 

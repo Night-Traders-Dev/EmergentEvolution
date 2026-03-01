@@ -144,6 +144,13 @@ void PhysicsSimulation::init(GLFWwindow* window) {
     iface.init();
     iface.achievements_ptr = &achievements;
     iface.audio_ptr = &audio;
+    iface.tutorial_ptr = &tutorial;
+    iface.scenarios_ptr = &scenarios;
+
+    // Start tutorial for first-time users
+    if (!iface.prefs.tutorial_done) {
+        tutorial.start();
+    }
     cfg.generation_seed = static_cast<uint32_t>(iface.seed_value);
 
     // Load persistent achievements from disk
@@ -436,9 +443,10 @@ void PhysicsSimulation::reset() {
 // ── Input handling ───────────────────────────────────────────────────────────
 
 void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
-    // Camera smoothing
-    cfg.current_camera_zoom += (cfg.camera_zoom - cfg.current_camera_zoom)
-                               * std::min(1.0f, static_cast<float>(dt) * 8.0f);
+    // Camera smoothing (zoom + origin)
+    float smooth_factor = 1.0f - std::exp(-8.0f * static_cast<float>(dt));
+    cfg.current_camera_zoom += (cfg.camera_zoom - cfg.current_camera_zoom) * smooth_factor;
+    cfg.current_camera_origin += (cfg.camera_origin - cfg.current_camera_origin) * smooth_factor;
 
     // Mouse handling
     double mx, my;
@@ -503,8 +511,19 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
     // Space to toggle sim
     static bool space_was = false;
     bool space_now = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
-    if (space_now && !space_was) is_active = !is_active;
+    if (space_now && !space_was && !ImGui::GetIO().WantCaptureKeyboard) is_active = !is_active;
     space_was = space_now;
+
+    // [ and ] to halve/double time scale
+    static bool lbracket_was = false, rbracket_was = false;
+    bool lb_now = glfwGetKey(window, GLFW_KEY_LEFT_BRACKET) == GLFW_PRESS;
+    bool rb_now = glfwGetKey(window, GLFW_KEY_RIGHT_BRACKET) == GLFW_PRESS;
+    if (lb_now && !lbracket_was && !ImGui::GetIO().WantCaptureKeyboard)
+        cfg.time_scale = std::max(0.0625f, cfg.time_scale * 0.5f);
+    if (rb_now && !rbracket_was && !ImGui::GetIO().WantCaptureKeyboard)
+        cfg.time_scale = std::min(16.0f, cfg.time_scale * 2.0f);
+    lbracket_was = lb_now;
+    rbracket_was = rb_now;
 
     // F2 reset
     static bool f2_was = false;
@@ -1141,6 +1160,9 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     cfg.density_limit    = (cfg.field_flags != 0) ? 1.0f : 0.0f;
     cfg.local_density_cap = iface.field_intensity;
 
+    // Bloom post-processing toggle from user prefs
+    cfg.bloom_enabled = iface.prefs.bloom_enabled;
+
     // Upload dynamic GPU data
     cfg.force_object_count = force_object_count_;
     if (is_active) {
@@ -1280,6 +1302,23 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 apply_gw_tidal_forces(dt);
 
             check_achievements();
+
+            // ── Tutorial auto-advance ────────────────────────────────────
+            if (tutorial.active && tutorial.is_step_complete(*this)) {
+                tutorial.advance();
+                if (!tutorial.active) {
+                    iface.prefs.tutorial_done = true;
+                    iface.save_prefs();
+                }
+            }
+
+            // ── Scenario goal check ─────────────────────────────────────
+            if (scenarios.active && !scenarios.goal_complete) {
+                scenarios.check_goal(*this);
+                if (scenarios.goal_complete) {
+                    iface.push_notification("Goal Complete!", ImVec4(0.2f, 1.0f, 0.4f, 1.0f));
+                }
+            }
 
             // ── Single batched GPU sync for all CPU physics modifications ──
             if (cpu_particles_dirty_) {
@@ -2485,6 +2524,31 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         iface.save_load_msg_timer = 3.0f;
     }
 
+    // ── Auto-save ──────────────────────────────────────────────────────────
+    if (is_active && iface.prefs.autosave_interval > 0) {
+        autosave_timer_ += static_cast<float>(dt);
+        float interval_sec = static_cast<float>(iface.prefs.autosave_interval) * 60.0f;
+        if (autosave_timer_ >= interval_sec) {
+            autosave_timer_ = 0.0f;
+            // Ensure fresh readback
+            if (readback_positions_.empty() && compute.is_ready()) {
+                readback_positions_.resize(cfg.particle_count);
+                readback_velocities_.resize(cfg.particle_count);
+                readback_energies_.resize(cfg.particle_count);
+                compute.read_current_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+            }
+            auto result = save_simulation(
+                "saves/autosave.ppsg", cfg, particles,
+                readback_positions_, readback_velocities_, readback_energies_,
+                force_objects_, force_object_count_,
+                iface.field_em, iface.field_strong, iface.field_weak,
+                iface.field_gravity, iface.field_higgs, iface.field_dark_energy,
+                iface.field_intensity, iface.log_temperature);
+            if (result.success)
+                iface.push_notification("Auto-saved", ImVec4(0.4f, 0.8f, 0.4f, 1.0f));
+        }
+    }
+
     // ── Undo/Redo requests ─────────────────────────────────────────────────
     if (iface.request_undo) {
         iface.request_undo = false;
@@ -2493,6 +2557,15 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     if (iface.request_redo) {
         iface.request_redo = false;
         perform_redo();
+    }
+
+    // ── Scenario start request ────────────────────────────────────────────
+    if (iface.request_scenario_start >= 0) {
+        int idx = iface.request_scenario_start;
+        iface.request_scenario_start = -1;
+        scenarios.start_scenario(idx, *this);
+        is_active = true;
+        iface.sim_running = true;
     }
 
     // ── Element export request ───────────────────────────────────────────────

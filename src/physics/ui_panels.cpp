@@ -188,9 +188,27 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
         ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
         ImGui::SameLine(0, 10);
         ImGui::SetNextItemWidth(80);
-        ImGui::SliderFloat("##TimeScale", &cfg.time_scale, 0.0f, 20.0f, "%.1fx");
+        ImGui::SliderFloat("##TimeScale", &cfg.time_scale, 0.0f, 16.0f, "%.2fx");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Simulation speed\n0 = frozen, 5 = default, 20 = fast");
+            ImGui::SetTooltip("Simulation speed  [ = slower, ] = faster\nSpace = pause/resume");
+
+        // Time preset buttons
+        {
+            static const float presets[] = { 0.25f, 0.5f, 1.0f, 2.0f, 4.0f };
+            static const char* labels[]  = { ".25", ".5", "1x", "2x", "4x" };
+            ImGui::SameLine(0, 6);
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(3, 2));
+            for (int i = 0; i < 5; i++) {
+                if (i > 0) ImGui::SameLine(0, 2);
+                bool active = (std::abs(cfg.time_scale - presets[i]) < 0.01f);
+                if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.25f, 0.5f, 0.9f));
+                else        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.08f, 0.10f, 0.18f, 0.7f));
+                char btn_id[16]; snprintf(btn_id, sizeof(btn_id), "%s###TS%d", labels[i], i);
+                if (ImGui::SmallButton(btn_id)) cfg.time_scale = presets[i];
+                ImGui::PopStyleColor();
+            }
+            ImGui::PopStyleVar();
+        }
 
         // Emergent temperature
         ImGui::SameLine(0, 20);
@@ -335,6 +353,7 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
         if (ImGui::Button("Menu", ImVec2(menu_btn_w, 26))) {
             show_tools_popup = !show_tools_popup;
         }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tools & settings menu");
 
         // Menu popup (rendered above the button)
         if (show_tools_popup) {
@@ -750,6 +769,48 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
 
         ImGui::SliderInt("Seed", &seed_value, 0, 99999);
         cfg.generation_seed = static_cast<uint32_t>(seed_value);
+
+        // Quick experiment presets (adjust parameters without resetting)
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Quick Presets:");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Apply parameter tweaks without resetting the simulation");
+        float bw = (ImGui::GetContentRegionAvail().x - 8.0f) / 2.0f;
+        if (ImGui::Button("Cold Lab", ImVec2(bw, 0))) {
+            cfg.temperature_kelvin = 10.0f;
+            log_temperature = 1.0f;
+            cfg.dampening = 0.995f;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("10 K, high damping — slow and stable");
+        ImGui::SameLine();
+        if (ImGui::Button("Hot Plasma", ImVec2(bw, 0))) {
+            cfg.temperature_kelvin = 1e7f;
+            log_temperature = 7.0f;
+            cfg.dampening = 0.98f;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("10 MK — hot enough for fusion");
+        if (ImGui::Button("Nuclear Fuel", ImVec2(bw, 0))) {
+            cfg.temperature_kelvin = 1e8f;
+            log_temperature = 8.0f;
+            cfg.dampening = 0.985f;
+            cfg.pressure_resistance = 40.0f;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("100 MK, low pressure — fusion/fission conditions");
+        ImGui::SameLine();
+        if (ImGui::Button("Antimatter", ImVec2(bw, 0))) {
+            cfg.temperature_kelvin = 5000.0f;
+            log_temperature = std::log10(5000.0f);
+            cfg.virtual_pairs_enabled = true;
+            cfg.virtual_pair_threshold = 1.5f;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Enable virtual pairs, lower threshold — more antimatter");
+        if (ImGui::Button("Dark Universe", ImVec2(bw, 0))) {
+            cfg.temperature_kelvin = 2.7f;
+            log_temperature = std::log10(2.7f);
+            cfg.gravity_strength = 3.0f;
+            cfg.dampening = 0.997f;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("2.7 K, strong gravity — dark matter clustering");
     }
 
     // ── Temperature ──────────────────────────────────────────────────────────

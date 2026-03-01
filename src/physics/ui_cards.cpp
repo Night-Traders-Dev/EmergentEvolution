@@ -1,5 +1,6 @@
 #include "physics/interface.h"
 #include "physics/phys_particles.h"
+#include "physics/encyclopedia.h"
 #include "physics/ui_data.h"
 #include <imgui.h>
 #include <cstdio>
@@ -43,9 +44,21 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
     ImGui::SetNextWindowSize(ImVec2(250, 0), ImGuiCond_Appearing);
 
     if (ImGui::Begin("##InfoCard", nullptr, card_flags)) {
-        // Particle name with color
+        // Particle name with color + encyclopedia button
         ImVec4 pcolor = (ptype < PHYS_PARTICLE_TYPES) ? PHYS_TYPE_UI_COLORS[ptype] : ImVec4(1,1,1,1);
         ImGui::TextColored(pcolor, "%s", name);
+        ImGui::SameLine(0, 6);
+        if (ptype < PHYS_PARTICLE_TYPES) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.15f, 0.25f, 0.7f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.25f, 0.45f, 0.9f));
+            if (ImGui::SmallButton("?")) {
+                show_encyclopedia = true;
+                encyclopedia_type = static_cast<int>(ptype);
+            }
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("View encyclopedia entry");
+            ImGui::SameLine();
+        }
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "#%u", idx);
         if (pinned) {
@@ -438,6 +451,82 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// ── Encyclopedia Popup ───────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_encyclopedia_popup() {
+    if (encyclopedia_type < 0 || encyclopedia_type >= static_cast<int>(PHYS_PARTICLE_TYPES)) {
+        show_encyclopedia = false;
+        return;
+    }
+
+    ImGuiIO& io = ImGui::GetIO();
+    float popup_w = 400.0f;
+    float popup_h = 340.0f;
+    ImGui::SetNextWindowPos(ImVec2((io.DisplaySize.x - popup_w) * 0.5f,
+                                   (io.DisplaySize.y - popup_h) * 0.5f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(popup_w, popup_h), ImGuiCond_Appearing);
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.06f, 0.12f, 0.97f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+
+    bool open = show_encyclopedia;
+    if (ImGui::Begin("Encyclopedia##EncPopup", &open, ImGuiWindowFlags_NoCollapse)) {
+        const auto& e = ENCYCLOPEDIA[encyclopedia_type];
+        ImVec4 pcolor = PHYS_TYPE_UI_COLORS[encyclopedia_type];
+
+        // Name and symbol
+        ImGui::TextColored(pcolor, "%s  (%s)", e.name, e.symbol);
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Category: %s", e.category);
+        ImGui::Separator();
+
+        // Description
+        ImGui::Dummy(ImVec2(0, 4));
+        ImGui::TextWrapped("%s", e.description);
+        ImGui::Dummy(ImVec2(0, 8));
+
+        // Properties table
+        ImGui::SeparatorText("Properties");
+        ImGui::Columns(2, nullptr, false);
+        ImGui::SetColumnWidth(0, 140.0f);
+
+        ImGui::Text("Mass:"); ImGui::NextColumn();
+        if (e.mass_mev > 0.0f) {
+            if (e.mass_mev >= 1000.0f) ImGui::Text("%.1f GeV/c2", e.mass_mev / 1000.0f);
+            else ImGui::Text("%.3f MeV/c2", e.mass_mev);
+        } else {
+            ImGui::Text("0 (massless)");
+        }
+        ImGui::NextColumn();
+
+        ImGui::Text("Charge:"); ImGui::NextColumn();
+        if (std::abs(e.charge) < 0.01f) ImGui::Text("0 (neutral)");
+        else if (std::abs(e.charge - 1.0f) < 0.01f) ImGui::Text("+1");
+        else if (std::abs(e.charge + 1.0f) < 0.01f) ImGui::Text("-1");
+        else ImGui::Text("%+.3f", e.charge);
+        ImGui::NextColumn();
+
+        ImGui::Text("Spin:"); ImGui::NextColumn();
+        if (std::abs(e.spin - 0.5f) < 0.01f) ImGui::Text("1/2 (fermion)");
+        else if (std::abs(e.spin - 1.0f) < 0.01f) ImGui::Text("1 (vector boson)");
+        else if (std::abs(e.spin - 1.5f) < 0.01f) ImGui::Text("3/2");
+        else if (std::abs(e.spin - 2.0f) < 0.01f) ImGui::Text("2 (tensor boson)");
+        else ImGui::Text("0 (scalar)");
+        ImGui::NextColumn();
+
+        ImGui::Text("Discovered:"); ImGui::NextColumn();
+        ImGui::TextWrapped("%s", e.discovered);
+        ImGui::NextColumn();
+
+        ImGui::Columns(1);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+
+    show_encyclopedia = open;
+}
+
 // ── Element Detail Card ──────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 

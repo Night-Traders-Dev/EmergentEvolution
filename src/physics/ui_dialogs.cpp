@@ -1,5 +1,7 @@
 #include "physics/interface.h"
 #include "physics/phys_particles.h"
+#include "physics/tutorial.h"
+#include "physics/scenarios.h"
 #include "physics/ui_data.h"
 #include "physics/audio.h"
 #include "vulkan_context.h"
@@ -444,8 +446,15 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
             request_reset = true;
         }
 
-        // Save
+        // Scenarios
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 2));
+        if (ImGui::Button("Scenarios", ImVec2(btn_w, btn_h))) {
+            show_scenario_menu = true;
+            show_pause_menu = false;
+        }
+
+        // Save
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 3));
         if (ImGui::Button("Save", ImVec2(btn_w, btn_h))) {
             show_save_dialog = true;
             show_load_dialog = false;
@@ -454,7 +463,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         }
 
         // Load
-        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 3));
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 4));
         if (ImGui::Button("Load", ImVec2(btn_w, btn_h))) {
             show_load_dialog = true;
             show_save_dialog = false;
@@ -463,7 +472,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         }
 
         // About
-        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 4));
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 5));
         if (ImGui::Button("About", ImVec2(btn_w, btn_h))) {
             show_splash = true;
             splash_inited_ = false;  // re-init animation
@@ -471,21 +480,21 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         }
 
         // Achievements
-        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 5));
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 6));
         if (ImGui::Button("Achievements", ImVec2(btn_w, btn_h))) {
             show_achievements_panel = true;
             show_pause_menu = false;
         }
 
         // Settings
-        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 6));
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 7));
         if (ImGui::Button("Settings", ImVec2(btn_w, btn_h))) {
             show_settings_menu = true;
             show_pause_menu = false;
         }
 
         // Quit
-        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 7));
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 8));
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.4f, 0.08f, 0.08f, 0.90f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.6f, 0.15f, 0.15f, 0.95f));
         if (ImGui::Button("Quit", ImVec2(btn_w, btn_h))) {
@@ -497,7 +506,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         ImGui::PopStyleVar();
 
         // Hint text
-        float hint_y = btn_y + btn_spacing * 8 + 10.0f;
+        float hint_y = btn_y + btn_spacing * 9 + 10.0f;
         const char* hint = "Press Escape to resume";
         ImVec2 hint_size = ImGui::CalcTextSize(hint);
         ImGui::SetCursorPos(ImVec2(cx - hint_size.x * 0.5f, hint_y));
@@ -618,6 +627,17 @@ void PhysicsInterface::draw_settings_menu() {
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Native: render at base resolution\n2x/3x/4x: higher resolution, downsampled\nHigher quality but uses more GPU memory");
 
+            ImGui::Dummy(ImVec2(0, 8));
+            const char* window_labels[] = { "Borderless Fullscreen", "Windowed" };
+            ImGui::Combo("Window Mode", &prefs.window_mode, window_labels, 2);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Alt+Enter to toggle at any time\nChange takes effect on next launch");
+
+            ImGui::Dummy(ImVec2(0, 8));
+            ImGui::Checkbox("Bloom Glow", &prefs.bloom_enabled);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Post-processing bloom effect\nAdds a soft glow around bright particles");
+
             ImGui::Dummy(ImVec2(0, 12));
             ImGui::SeparatorText("Visual Overlays");
             {
@@ -681,6 +701,21 @@ void PhysicsInterface::draw_settings_menu() {
             ImGui::Checkbox("Spatial Grid", &prefs.spatial_grid);
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Use spatial acceleration grid for neighbor searches\nGreatly improves CPU physics performance\nDisable only for debugging");
+
+            ImGui::Dummy(ImVec2(0, 12));
+            ImGui::SeparatorText("Auto-Save");
+            {
+                const char* autosave_labels[] = { "Disabled", "2 min", "5 min", "10 min" };
+                const int   autosave_values[] = { 0, 2, 5, 10 };
+                int autosave_idx = 0;
+                for (int i = 0; i < 4; i++) {
+                    if (autosave_values[i] == prefs.autosave_interval) { autosave_idx = i; break; }
+                }
+                if (ImGui::Combo("Auto-Save Interval", &autosave_idx, autosave_labels, 4))
+                    prefs.autosave_interval = autosave_values[autosave_idx];
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Automatically save to saves/autosave.ppsg\nat the chosen interval");
+            }
         }
 
         // ── Tab 2: Theme ─────────────────────────────────────────────────
@@ -801,6 +836,102 @@ void PhysicsInterface::draw_settings_menu() {
     ImGui::End();
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Loading Overlay ─────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_loading_overlay() {
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
+        | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav;
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.03f, 0.06f, 0.92f));
+    if (ImGui::Begin("##LoadingOverlay", nullptr, flags)) {
+        float cx = io.DisplaySize.x * 0.5f;
+        float cy = io.DisplaySize.y * 0.5f;
+
+        // Animated spinner
+        float t = static_cast<float>(ImGui::GetTime());
+        const char* spinner_frames[] = { "|", "/", "-", "\\" };
+        int frame = static_cast<int>(t * 8.0f) % 4;
+
+        ImGui::SetCursorPos(ImVec2(cx - 60.0f, cy - 20.0f));
+        ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "%s  %s",
+                           spinner_frames[frame], loading_message);
+    }
+    ImGui::End();
+    ImGui::PopStyleColor();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Tutorial Overlay ────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_tutorial_overlay() {
+    if (!tutorial_ptr || !tutorial_ptr->active) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    const auto& step = tutorial_ptr->current();
+    const auto& tc = get_theme(std::clamp(prefs.theme, 0, total_theme_count() - 1));
+
+    float panel_w = 500.0f;
+    float panel_h = 160.0f;
+    float panel_x = (io.DisplaySize.x - panel_w) * 0.5f;
+    float panel_y = io.DisplaySize.y - panel_h - 80.0f;
+
+    ImGui::SetNextWindowPos(ImVec2(panel_x, panel_y));
+    ImGui::SetNextWindowSize(ImVec2(panel_w, panel_h));
+
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
+        | ImGuiWindowFlags_NoCollapse;
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.05f, 0.10f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(tc.accent.x, tc.accent.y, tc.accent.z, 0.6f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.5f);
+
+    if (ImGui::Begin("##Tutorial", nullptr, flags)) {
+        // Step counter
+        ImGui::TextColored(ImVec4(tc.accent.x, tc.accent.y, tc.accent.z, 0.7f),
+                           "Step %d of %d", tutorial_ptr->current_step + 1, tutorial_ptr->step_count());
+
+        // Title
+        ImGui::TextColored(tc.accent, "%s", step.title);
+        ImGui::Separator();
+
+        // Description
+        ImGui::TextWrapped("%s", step.text);
+
+        // Buttons
+        ImGui::SetCursorPosY(panel_h - 35.0f);
+        if (step.check_complete == nullptr) {
+            if (ImGui::Button("Next", ImVec2(80, 24))) {
+                tutorial_ptr->advance();
+                if (!tutorial_ptr->active) {
+                    prefs.tutorial_done = true;
+                    save_prefs();
+                }
+            }
+        } else {
+            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "(Complete the action to continue)");
+        }
+
+        ImGui::SameLine(panel_w - 120.0f);
+        if (ImGui::Button("Skip Tutorial", ImVec2(100, 24))) {
+            tutorial_ptr->skip();
+            prefs.tutorial_done = true;
+            save_prefs();
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(2);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1621,5 +1752,269 @@ void PhysicsInterface::draw_save_load_dialog() {
         pending_free_thumbnails_ = true;
     }
 
+    ImGui::End();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Scenario Menu ──────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_scenario_menu() {
+    if (!scenarios_ptr) { show_scenario_menu = false; return; }
+
+    ImGuiIO& io = ImGui::GetIO();
+
+    // Fullscreen overlay background
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGuiWindowFlags overlay_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
+        | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav;
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.03f, 0.06f, 0.92f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+
+    if (ImGui::Begin("##ScenarioOverlay", nullptr, overlay_flags)) {
+        float cx = io.DisplaySize.x * 0.5f;
+
+        // Title
+        float old_scale = ImGui::GetFont()->Scale;
+        ImGui::GetFont()->Scale = 1.8f;
+        ImGui::PushFont(ImGui::GetFont());
+        const char* title = "SCENARIOS";
+        ImVec2 title_size = ImGui::CalcTextSize(title);
+        ImGui::SetCursorPos(ImVec2(cx - title_size.x * 0.5f, 30.0f));
+        ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "%s", title);
+        ImGui::GetFont()->Scale = old_scale;
+        ImGui::PopFont();
+
+        // Category tabs
+        static const char* CATEGORIES[] = { "All", "Nuclear", "Chemistry", "Cosmology", "Sandbox" };
+        static int selected_category = 0;
+
+        float tab_y = 75.0f;
+        float tab_w = 100.0f;
+        float total_tab_w = 5 * tab_w + 4 * 8.0f;
+        float tab_start_x = cx - total_tab_w * 0.5f;
+
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+        for (int c = 0; c < 5; c++) {
+            ImGui::SetCursorPos(ImVec2(tab_start_x + c * (tab_w + 8.0f), tab_y));
+            bool active = (selected_category == c);
+            if (active) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.35f, 0.60f, 0.95f));
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.10f, 0.12f, 0.20f, 0.80f));
+            }
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.18f, 0.30f, 0.55f, 0.95f));
+            if (ImGui::Button(CATEGORIES[c], ImVec2(tab_w, 28.0f))) {
+                selected_category = c;
+            }
+            ImGui::PopStyleColor(2);
+        }
+        ImGui::PopStyleVar();
+
+        // Scenario cards grid
+        int count = ScenarioManager::scenario_count();
+        float card_w = 340.0f;
+        float card_h = 140.0f;
+        float card_spacing = 16.0f;
+        int cols = std::max(1, static_cast<int>((io.DisplaySize.x - 80.0f) / (card_w + card_spacing)));
+        float grid_w = cols * card_w + (cols - 1) * card_spacing;
+        float grid_start_x = cx - grid_w * 0.5f;
+        float grid_start_y = 120.0f;
+
+        // Category colors
+        auto cat_color = [](const char* cat) -> ImVec4 {
+            if (std::strcmp(cat, "Nuclear") == 0)    return ImVec4(1.0f, 0.4f, 0.3f, 1.0f);
+            if (std::strcmp(cat, "Chemistry") == 0)  return ImVec4(0.3f, 0.9f, 0.5f, 1.0f);
+            if (std::strcmp(cat, "Cosmology") == 0)  return ImVec4(0.6f, 0.4f, 1.0f, 1.0f);
+            if (std::strcmp(cat, "Sandbox") == 0)    return ImVec4(0.9f, 0.8f, 0.3f, 1.0f);
+            return ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
+        };
+
+        int visible_idx = 0;
+        for (int i = 0; i < count; i++) {
+            const Scenario& s = ScenarioManager::get(i);
+
+            // Category filter
+            if (selected_category > 0) {
+                if (std::strcmp(s.category, CATEGORIES[selected_category]) != 0)
+                    continue;
+            }
+
+            int col = visible_idx % cols;
+            int row = visible_idx / cols;
+            float x = grid_start_x + col * (card_w + card_spacing);
+            float y = grid_start_y + row * (card_h + card_spacing);
+            visible_idx++;
+
+            // Card background
+            ImVec2 card_min(x, y);
+            ImVec2 card_max(x + card_w, y + card_h);
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+
+            bool hovered = ImGui::IsMouseHoveringRect(card_min, card_max);
+            ImU32 bg_col = hovered
+                ? ImGui::ColorConvertFloat4ToU32(ImVec4(0.12f, 0.16f, 0.28f, 0.95f))
+                : ImGui::ColorConvertFloat4ToU32(ImVec4(0.08f, 0.10f, 0.18f, 0.90f));
+            dl->AddRectFilled(card_min, card_max, bg_col, 8.0f);
+
+            // Border
+            ImVec4 cc = cat_color(s.category);
+            ImU32 border = hovered
+                ? ImGui::ColorConvertFloat4ToU32(ImVec4(cc.x, cc.y, cc.z, 0.8f))
+                : ImGui::ColorConvertFloat4ToU32(ImVec4(cc.x, cc.y, cc.z, 0.3f));
+            dl->AddRect(card_min, card_max, border, 8.0f, 0, 1.5f);
+
+            // Category badge
+            ImVec2 badge_pos(x + 10.0f, y + 8.0f);
+            dl->AddText(badge_pos,
+                ImGui::ColorConvertFloat4ToU32(ImVec4(cc.x, cc.y, cc.z, 0.8f)),
+                s.category);
+
+            // Scenario name
+            ImGui::SetCursorPos(ImVec2(x + 10.0f, y + 26.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.95f, 1.0f, 1.0f));
+            float s2 = ImGui::GetFont()->Scale;
+            ImGui::GetFont()->Scale = 1.2f;
+            ImGui::PushFont(ImGui::GetFont());
+            ImGui::Text("%s", s.name);
+            ImGui::GetFont()->Scale = s2;
+            ImGui::PopFont();
+            ImGui::PopStyleColor();
+
+            // Description (wrapped)
+            ImGui::SetCursorPos(ImVec2(x + 10.0f, y + 50.0f));
+            ImGui::PushTextWrapPos(x + card_w - 10.0f);
+            ImGui::TextColored(ImVec4(0.65f, 0.68f, 0.78f, 1.0f), "%s", s.description);
+            ImGui::PopTextWrapPos();
+
+            // Goal text (if not sandbox)
+            if (s.goal_text) {
+                ImGui::SetCursorPos(ImVec2(x + 10.0f, y + card_h - 42.0f));
+                ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 0.8f), "Goal: %s", s.goal_text);
+            }
+
+            // Start button
+            ImGui::SetCursorPos(ImVec2(x + card_w - 75.0f, y + card_h - 36.0f));
+            ImGui::PushID(i);
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.35f, 0.55f, 0.90f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.45f, 0.70f, 0.95f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.30f, 0.50f, 1.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+            if (ImGui::Button("Start", ImVec2(60.0f, 28.0f))) {
+                show_scenario_menu = false;
+                request_scenario_start = i;
+            }
+            ImGui::PopStyleVar();
+            ImGui::PopStyleColor(3);
+            ImGui::PopID();
+        }
+
+        // Back button (bottom center)
+        float back_y = io.DisplaySize.y - 60.0f;
+        ImGui::SetCursorPos(ImVec2(cx - 60.0f, back_y));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.14f, 0.22f, 0.90f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.25f, 0.40f, 0.95f));
+        if (ImGui::Button("Back", ImVec2(120.0f, 36.0f))) {
+            show_scenario_menu = false;
+        }
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar();
+
+        // ESC to close
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            show_scenario_menu = false;
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Scenario Goal HUD ──────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_scenario_goal_hud() {
+    if (!scenarios_ptr || !scenarios_ptr->active) return;
+
+    const Scenario& s = scenarios_ptr->current();
+    ImGuiIO& io = ImGui::GetIO();
+    ImDrawList* fg = ImGui::GetForegroundDrawList();
+
+    float cx = io.DisplaySize.x * 0.5f;
+    float hud_y = 8.0f;
+
+    // Build HUD text
+    char buf[256];
+    if (scenarios_ptr->goal_complete) {
+        std::snprintf(buf, sizeof(buf), "%s  --  COMPLETE!", s.name);
+    } else if (s.goal_text) {
+        std::snprintf(buf, sizeof(buf), "%s  |  %s", s.name, s.goal_text);
+    } else {
+        std::snprintf(buf, sizeof(buf), "%s  |  Sandbox", s.name);
+    }
+
+    ImVec2 text_size = ImGui::CalcTextSize(buf);
+    float pad_x = 16.0f, pad_y = 6.0f;
+    float bg_w = text_size.x + pad_x * 2;
+    float bg_h = text_size.y + pad_y * 2;
+
+    ImVec2 bg_min(cx - bg_w * 0.5f, hud_y);
+    ImVec2 bg_max(cx + bg_w * 0.5f, hud_y + bg_h);
+
+    // Background
+    ImU32 bg_col = scenarios_ptr->goal_complete
+        ? ImGui::ColorConvertFloat4ToU32(ImVec4(0.05f, 0.20f, 0.08f, 0.85f))
+        : ImGui::ColorConvertFloat4ToU32(ImVec4(0.04f, 0.06f, 0.12f, 0.85f));
+    fg->AddRectFilled(bg_min, bg_max, bg_col, 6.0f);
+
+    // Border
+    ImU32 border_col = scenarios_ptr->goal_complete
+        ? ImGui::ColorConvertFloat4ToU32(ImVec4(0.2f, 0.9f, 0.3f, 0.7f))
+        : ImGui::ColorConvertFloat4ToU32(ImVec4(0.3f, 0.5f, 0.8f, 0.5f));
+    fg->AddRect(bg_min, bg_max, border_col, 6.0f, 0, 1.0f);
+
+    // Text
+    ImU32 text_col = scenarios_ptr->goal_complete
+        ? ImGui::ColorConvertFloat4ToU32(ImVec4(0.3f, 1.0f, 0.4f, 1.0f))
+        : ImGui::ColorConvertFloat4ToU32(ImVec4(0.8f, 0.85f, 0.95f, 1.0f));
+    fg->AddText(ImVec2(cx - text_size.x * 0.5f, hud_y + pad_y), text_col, buf);
+
+    // Hint (shown below goal when not yet complete, if available)
+    if (!scenarios_ptr->goal_complete && s.hint_text) {
+        ImVec2 hint_size = ImGui::CalcTextSize(s.hint_text);
+        float hint_y = hud_y + bg_h + 4.0f;
+        ImVec2 hint_bg_min(cx - hint_size.x * 0.5f - 8.0f, hint_y);
+        ImVec2 hint_bg_max(cx + hint_size.x * 0.5f + 8.0f, hint_y + hint_size.y + 6.0f);
+        fg->AddRectFilled(hint_bg_min, hint_bg_max,
+            ImGui::ColorConvertFloat4ToU32(ImVec4(0.03f, 0.04f, 0.08f, 0.75f)), 4.0f);
+        fg->AddText(ImVec2(cx - hint_size.x * 0.5f, hint_y + 3.0f),
+            ImGui::ColorConvertFloat4ToU32(ImVec4(0.55f, 0.60f, 0.70f, 0.8f)), s.hint_text);
+    }
+
+    // End scenario button (small, right side of HUD)
+    // Use ImGui for clickable button instead of raw draw
+    float end_btn_x = bg_max.x + 8.0f;
+    float end_btn_y = hud_y;
+    ImGui::SetNextWindowPos(ImVec2(end_btn_x, end_btn_y));
+    ImGui::SetNextWindowSize(ImVec2(24.0f, bg_h));
+    ImGuiWindowFlags btn_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
+        | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_AlwaysAutoResize;
+    if (ImGui::Begin("##ScenarioEndBtn", nullptr, btn_flags)) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.5f, 0.2f, 0.2f, 0.5f));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.4f, 0.4f, 0.8f));
+        if (ImGui::Button("X", ImVec2(20.0f, bg_h - 4.0f))) {
+            scenarios_ptr->end();
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("End scenario");
+        ImGui::PopStyleColor(3);
+    }
     ImGui::End();
 }

@@ -30,6 +30,23 @@ void ComputePipeline::init(VulkanContext& ctx, const std::string& shader_spv_pat
 
     particle_texture_view = particle_texture.view;
 
+    // Create bloom ping-pong images (same size and format as render texture)
+    for (Image* img : { &bloom_image_a_, &bloom_image_b_ }) {
+        *img = ctx.create_image(
+            render_w, render_h,
+            VK_FORMAT_R32G32B32A32_SFLOAT,
+            VK_IMAGE_USAGE_STORAGE_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        img->view = ctx.create_image_view(
+            img->handle,
+            VK_FORMAT_R32G32B32A32_SFLOAT,
+            VK_IMAGE_ASPECT_COLOR_BIT);
+        ctx.transition_image_layout(
+            img->handle,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_GENERAL);
+    }
+
     sampler = ctx.create_sampler_nearest();
 
     create_descriptor_set_layout(ctx.device);
@@ -47,6 +64,8 @@ void ComputePipeline::destroy(VulkanContext& ctx) {
     if (desc_set_layout_ != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(ctx.device, desc_set_layout_, nullptr);
     if (sampler          != VK_NULL_HANDLE) vkDestroySampler(ctx.device, sampler, nullptr);
     ctx.destroy_image(particle_texture);
+    ctx.destroy_image(bloom_image_a_);
+    ctx.destroy_image(bloom_image_b_);
 }
 
 // ── Resize render texture ─────────────────────────────────────────────────────
@@ -82,20 +101,56 @@ void ComputePipeline::resize_render_texture(VulkanContext& ctx, uint32_t w, uint
 
     particle_texture_view = particle_texture.view;
 
-    // Update binding 7 (storage image) in both descriptor sets
+    // Recreate bloom images at new size
+    ctx.destroy_image(bloom_image_a_);
+    ctx.destroy_image(bloom_image_b_);
+    for (Image* img : { &bloom_image_a_, &bloom_image_b_ }) {
+        *img = ctx.create_image(
+            render_w, render_h,
+            VK_FORMAT_R32G32B32A32_SFLOAT,
+            VK_IMAGE_USAGE_STORAGE_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        img->view = ctx.create_image_view(
+            img->handle,
+            VK_FORMAT_R32G32B32A32_SFLOAT,
+            VK_IMAGE_ASPECT_COLOR_BIT);
+        ctx.transition_image_layout(
+            img->handle,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_GENERAL);
+    }
+
+    // Update bindings 7 (render texture), 21-22 (bloom) in both descriptor sets
     if (desc_set_a_ != VK_NULL_HANDLE) {
         VkDescriptorImageInfo img_info{ VK_NULL_HANDLE, particle_texture.view, VK_IMAGE_LAYOUT_GENERAL };
+        VkDescriptorImageInfo bloom_a_info{ VK_NULL_HANDLE, bloom_image_a_.view, VK_IMAGE_LAYOUT_GENERAL };
+        VkDescriptorImageInfo bloom_b_info{ VK_NULL_HANDLE, bloom_image_b_.view, VK_IMAGE_LAYOUT_GENERAL };
 
-        VkWriteDescriptorSet writes[2]{};
+        VkWriteDescriptorSet writes[6]{};
         for (int i = 0; i < 2; ++i) {
-            writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[i].dstSet          = (i == 0) ? desc_set_a_ : desc_set_b_;
-            writes[i].dstBinding      = 7;
-            writes[i].descriptorCount = 1;
-            writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            writes[i].pImageInfo      = &img_info;
+            VkDescriptorSet dset = (i == 0) ? desc_set_a_ : desc_set_b_;
+            writes[i * 3 + 0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i * 3 + 0].dstSet          = dset;
+            writes[i * 3 + 0].dstBinding      = 7;
+            writes[i * 3 + 0].descriptorCount = 1;
+            writes[i * 3 + 0].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[i * 3 + 0].pImageInfo      = &img_info;
+
+            writes[i * 3 + 1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i * 3 + 1].dstSet          = dset;
+            writes[i * 3 + 1].dstBinding      = 21;
+            writes[i * 3 + 1].descriptorCount = 1;
+            writes[i * 3 + 1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[i * 3 + 1].pImageInfo      = &bloom_a_info;
+
+            writes[i * 3 + 2].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i * 3 + 2].dstSet          = dset;
+            writes[i * 3 + 2].dstBinding      = 22;
+            writes[i * 3 + 2].descriptorCount = 1;
+            writes[i * 3 + 2].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[i * 3 + 2].pImageInfo      = &bloom_b_info;
         }
-        vkUpdateDescriptorSets(ctx.device, 2, writes, 0, nullptr);
+        vkUpdateDescriptorSets(ctx.device, 6, writes, 0, nullptr);
     }
 }
 
@@ -106,7 +161,7 @@ void ComputePipeline::resize_render_texture(VulkanContext& ctx, uint32_t w, uint
 // Bindings 9-12: polar angle/angular-velocity (double-buffered)
 
 void ComputePipeline::create_descriptor_set_layout(VkDevice device) {
-    std::array<VkDescriptorSetLayoutBinding, 21> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 23> bindings{};
 
     // Bindings 0-6 and 8-20: storage buffers
     for (uint32_t i = 0; i < 7; ++i) {
@@ -121,11 +176,20 @@ void ComputePipeline::create_descriptor_set_layout(VkDevice device) {
         bindings[i].descriptorCount = 1;
         bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
     }
-    // Binding 7: storage image
+    // Binding 7: render texture (storage image)
     bindings[7].binding         = 7;
     bindings[7].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[7].descriptorCount = 1;
     bindings[7].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+    // Bindings 21-22: bloom ping-pong images (storage images)
+    bindings[21].binding         = 21;
+    bindings[21].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[21].descriptorCount = 1;
+    bindings[21].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[22].binding         = 22;
+    bindings[22].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[22].descriptorCount = 1;
+    bindings[22].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
 
     VkDescriptorSetLayoutCreateInfo ci{};
     ci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -182,11 +246,11 @@ void ComputePipeline::create_compute_pipeline(VulkanContext& ctx,
 // ── Descriptor pool ───────────────────────────────────────────────────────────
 
 void ComputePipeline::create_descriptor_pool(VkDevice device) {
-    // 2 sets × 16 storage buffers (7 orig + 1 behavior + 4 angle/avel + 2 energy + 1 genome + 1 bond) = 32
-    // 2 sets × 1 storage image = 2
+    // 2 sets × 20 storage buffers = 40 (+2 spare)
+    // 2 sets × 3 storage images (render + bloom_a + bloom_b) = 6
     std::array<VkDescriptorPoolSize, 2> pool_sizes{};
     pool_sizes[0] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 42 };
-    pool_sizes[1] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,   2 };
+    pool_sizes[1] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,   6 };
 
     VkDescriptorPoolCreateInfo ci{};
     ci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -544,9 +608,9 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     std::vector<VkWriteDescriptorSet>    writes;
     std::vector<VkDescriptorBufferInfo>  buf_infos;
     std::vector<VkDescriptorImageInfo>   img_infos;
-    writes.reserve(44);
+    writes.reserve(50);
     buf_infos.reserve(42);
-    img_infos.reserve(2);
+    img_infos.reserve(6);
 
     auto pos_sz  = pos_buffer_a_.size;
     auto vel_sz  = vel_buffer_a_.size;
@@ -585,6 +649,8 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     write_storage_buffer(writes, buf_infos, desc_set_a_, 18, mass_zpe_buffer_.handle,    mzpe_sz);
     write_storage_buffer(writes, buf_infos, desc_set_a_, 19, grid_cell_start_buffer_.handle, gcs_sz);
     write_storage_buffer(writes, buf_infos, desc_set_a_, 20, grid_indices_buffer_.handle,    gix_sz);
+    write_storage_image (writes, img_infos, desc_set_a_, 21, bloom_image_a_.view);
+    write_storage_image (writes, img_infos, desc_set_a_, 22, bloom_image_b_.view);
 
     // ── Set B: in=b, out=a ────────────────────────────────────────────────────
     write_storage_buffer(writes, buf_infos, desc_set_b_,  0, pos_buffer_b_.handle,         pos_sz);
@@ -608,6 +674,8 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     write_storage_buffer(writes, buf_infos, desc_set_b_, 18, mass_zpe_buffer_.handle,    mzpe_sz);
     write_storage_buffer(writes, buf_infos, desc_set_b_, 19, grid_cell_start_buffer_.handle, gcs_sz);
     write_storage_buffer(writes, buf_infos, desc_set_b_, 20, grid_indices_buffer_.handle,    gix_sz);
+    write_storage_image (writes, img_infos, desc_set_b_, 21, bloom_image_a_.view);
+    write_storage_image (writes, img_infos, desc_set_b_, 22, bloom_image_b_.view);
 
     vkUpdateDescriptorSets(ctx.device,
                            static_cast<uint32_t>(writes.size()),
@@ -837,7 +905,7 @@ void ComputePipeline::record(VkCommandBuffer cmd,
         static_cast<float>(REGION_W) + cfg.radius * 2.0f,
         static_cast<float>(REGION_H) + cfg.radius * 2.0f
     };
-    pc.camera_origin      = cfg.camera_origin;
+    pc.camera_origin      = cfg.current_camera_origin;
     pc.particle_count     = particle_count;
     pc.particle_types     = MAX_PARTICLE_TYPES;
     pc.dt                 = dt;
@@ -988,6 +1056,63 @@ void ComputePipeline::record(VkCommandBuffer cmd,
 
         pc.step = 4;
         dispatch(cmd, active_set, pc, particle_count);
+    }
+
+    // ── Steps 6-9: bloom post-processing (optional) ─────────────────────────
+    if (cfg.bloom_enabled && bloom_image_a_.handle != VK_NULL_HANDLE) {
+        uint32_t pixel_count = render_w * render_h;
+        uint32_t bloom_groups = pixel_count / 256 + 1;
+
+        VkMemoryBarrier bloom_barrier{};
+        bloom_barrier.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        bloom_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        bloom_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+
+        // Barrier: particle render writes → bloom extract reads
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 1, &bloom_barrier, 0, nullptr, 0, nullptr);
+
+        // Step 6: brightness extract (render_tex → bloom_a)
+        PushConstants bloom_pc = pc;
+        bloom_pc.step = 6;
+        vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, sizeof(PushConstants), &bloom_pc);
+        vkCmdDispatch(cmd, bloom_groups, 1, 1);
+
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 1, &bloom_barrier, 0, nullptr, 0, nullptr);
+
+        // Step 7: horizontal blur (bloom_a → bloom_b)
+        bloom_pc.step = 7;
+        vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, sizeof(PushConstants), &bloom_pc);
+        vkCmdDispatch(cmd, bloom_groups, 1, 1);
+
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 1, &bloom_barrier, 0, nullptr, 0, nullptr);
+
+        // Step 8: vertical blur (bloom_b → bloom_a)
+        bloom_pc.step = 8;
+        vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, sizeof(PushConstants), &bloom_pc);
+        vkCmdDispatch(cmd, bloom_groups, 1, 1);
+
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 1, &bloom_barrier, 0, nullptr, 0, nullptr);
+
+        // Step 9: composite (bloom_a + render_tex → render_tex)
+        bloom_pc.step = 9;
+        vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, sizeof(PushConstants), &bloom_pc);
+        vkCmdDispatch(cmd, bloom_groups, 1, 1);
     }
 
     // Memory barrier: compute image write → fragment shader read

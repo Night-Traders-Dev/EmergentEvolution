@@ -8,6 +8,8 @@
 #include "physics/interface.h"
 #include "physics/achievements.h"
 #include "physics/audio.h"
+#include "physics/tutorial.h"
+#include "physics/scenarios.h"
 #include <GLFW/glfw3.h>
 #include <vector>
 #include <deque>
@@ -118,10 +120,22 @@ public:
     PhysicsInterface iface{};
     AchievementManager achievements{};
     AudioPlayer        audio{};
+    TutorialManager    tutorial{};
+    ScenarioManager    scenarios{};
 
     // Force objects (stationary force emitters)
     ForceObject  force_objects_[MAX_FORCE_OBJECTS] = {};
     uint32_t     force_object_count_ = 0;
+
+    // Fullscreen toggle state (public for main.cpp access)
+    bool is_fullscreen_       = true;   // starts borderless fullscreen
+    int  saved_window_x_      = 100;
+    int  saved_window_y_      = 100;
+    int  saved_window_w_      = 1280;
+    int  saved_window_h_      = 720;
+
+    // Public for scenario setup functions
+    uint32_t spawn_atom_at(glm::vec2 pos, int Z, int N, std::mt19937& rng, uint32_t& search_start);
 
 private:
     // ── GPU spatial grid (uploaded each frame for shader neighbor lookup) ──
@@ -192,6 +206,9 @@ private:
     int    fps_frame_cnt_ = 0;
     uint32_t frame_counter_ = 0;
 
+    // Auto-save timer
+    float autosave_timer_ = 0.0f;
+
     static constexpr const char* COMPUTE_SPV = "shaders/physics.spv";
     static constexpr const char* VERT_SPV    = "shaders/fullscreen.vert.spv";
     static constexpr const char* FRAG_SPV    = "shaders/fullscreen.frag.spv";
@@ -219,7 +236,6 @@ private:
     void check_weak_flavor_change();
     void apply_gw_tidal_forces(double dt);
 
-    uint32_t spawn_atom_at(glm::vec2 pos, int Z, int N, std::mt19937& rng, uint32_t& search_start);
     void place_force_object(glm::vec2 world_pos, ForceObjectType type);
     void place_mirror(glm::vec2 endpoint1, glm::vec2 endpoint2);
     int  hit_test_force_objects(glm::vec2 world_pos, float snap_radius);

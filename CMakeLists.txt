@@ -70,6 +70,10 @@ add_executable(particle_physics
     src/physics/quantum.cpp
     src/physics/spawning.cpp
 
+    # Onboarding & gameplay
+    src/physics/tutorial.cpp
+    src/physics/scenarios.cpp
+
     # UI component modules (split from interface.cpp)
     src/physics/ui_panels.cpp
     src/physics/ui_cards.cpp

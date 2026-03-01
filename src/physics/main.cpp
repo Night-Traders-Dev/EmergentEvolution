@@ -23,6 +23,47 @@ static void framebuffer_resize_callback(GLFWwindow*, int, int) {
         g_sim_resize->renderer.swapchain_dirty = true;
 }
 
+// ── Fullscreen toggle (Alt+Enter) ────────────────────────────────────────────
+
+static void toggle_fullscreen(GLFWwindow* window, PhysicsSimulation& sim) {
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+
+    if (sim.is_fullscreen_) {
+        // Switch to windowed
+        int w = sim.saved_window_w_;
+        int h = sim.saved_window_h_;
+        int x = sim.saved_window_x_;
+        int y = sim.saved_window_y_;
+        if (w <= 0 || h <= 0) { w = mode->width * 3 / 4; h = mode->height * 3 / 4; }
+        if (x <= 0 || y <= 0) { x = (mode->width - w) / 2; y = (mode->height - h) / 2; }
+        glfwSetWindowMonitor(window, nullptr, x, y, w, h, 0);
+        glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_TRUE);
+        sim.is_fullscreen_ = false;
+        sim.iface.prefs.window_mode = 1;
+    } else {
+        // Save windowed position/size before going fullscreen
+        glfwGetWindowPos(window, &sim.saved_window_x_, &sim.saved_window_y_);
+        glfwGetWindowSize(window, &sim.saved_window_w_, &sim.saved_window_h_);
+        sim.iface.prefs.window_w = sim.saved_window_w_;
+        sim.iface.prefs.window_h = sim.saved_window_h_;
+        // Switch to borderless fullscreen
+        glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
+        glfwSetWindowMonitor(window, nullptr, 0, 0, mode->width, mode->height, 0);
+        glfwMaximizeWindow(window);
+        sim.is_fullscreen_ = true;
+        sim.iface.prefs.window_mode = 0;
+    }
+    sim.renderer.swapchain_dirty = true;
+}
+
+static void key_callback(GLFWwindow* window, int key, int /*scancode*/, int action, int mods) {
+    if (action == GLFW_PRESS && key == GLFW_KEY_ENTER && (mods & GLFW_MOD_ALT)) {
+        if (g_sim_resize)
+            toggle_fullscreen(window, *g_sim_resize);
+    }
+}
+
 int main() {
 #ifdef _WIN32
     // Set CWD to the executable's directory so relative paths (saves/, assets/) work
@@ -95,6 +136,7 @@ int main() {
     g_sim_resize = &sim;
 
     glfwSetFramebufferSizeCallback(window, framebuffer_resize_callback);
+    glfwSetKeyCallback(window, key_callback);
     PhysicsSim_RegisterScrollCallback(window, &sim);
 
     try {
@@ -104,8 +146,26 @@ int main() {
         return 1;
     }
 
+    // Apply saved window mode after prefs are loaded
+    if (sim.iface.prefs.window_mode == 1) {
+        // User prefers windowed mode
+        int w = sim.iface.prefs.window_w;
+        int h = sim.iface.prefs.window_h;
+        if (w <= 0 || h <= 0) { w = mode->width * 3 / 4; h = mode->height * 3 / 4; }
+        int x = (mode->width - w) / 2;
+        int y = (mode->height - h) / 2;
+        glfwSetWindowMonitor(window, nullptr, x, y, w, h, 0);
+        glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_TRUE);
+        sim.is_fullscreen_ = false;
+        sim.saved_window_w_ = w;
+        sim.saved_window_h_ = h;
+        sim.saved_window_x_ = x;
+        sim.saved_window_y_ = y;
+    }
+
     using Clock = std::chrono::high_resolution_clock;
     auto last_time = Clock::now();
+    bool device_lost_recovery = false;
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
@@ -120,8 +180,19 @@ int main() {
             sim.tick(window, dt);
         } catch (const std::exception& e) {
             std::cerr << "Tick error: " << e.what() << "\n";
+            if (!device_lost_recovery) {
+                // Attempt one recovery (e.g., device lost)
+                device_lost_recovery = true;
+                sim.is_active = false;
+                std::cerr << "Simulation paused due to error. Attempting recovery...\n";
+                try {
+                    vkDeviceWaitIdle(sim.vk.device);
+                } catch (...) {}
+                continue;
+            }
             break;
         }
+        device_lost_recovery = false;
 
         // FPS cap — sleep to maintain target frame time
         int cap = sim.iface.prefs.fps_cap;

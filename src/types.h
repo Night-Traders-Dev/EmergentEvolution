@@ -290,6 +290,7 @@ struct SimConfig {
 
     // Visual
     bool     show_trails        = false;  // particle trail rendering (fade instead of clear)
+    bool     bloom_enabled      = true;   // post-processing bloom glow
 
     // Timestep multiplier (UI-adjustable)
     float    time_scale         = 1.0f;
@@ -297,7 +298,8 @@ struct SimConfig {
     // Force objects (transient — set each frame before compute dispatch)
     uint32_t force_object_count = 0;
 
-    glm::vec2 camera_origin      = { WORLD_W / 2.0f, WORLD_H / 2.0f };
+    glm::vec2 camera_origin          = { WORLD_W / 2.0f, WORLD_H / 2.0f };
+    glm::vec2 current_camera_origin  = { WORLD_W / 2.0f, WORLD_H / 2.0f };
     float     camera_zoom        = 1.0f;
     float     current_camera_zoom = 1.0f;
 
