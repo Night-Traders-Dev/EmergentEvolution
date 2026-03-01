@@ -332,13 +332,14 @@ ImportElementResult import_element(const std::string& filepath) {
 // ── Molecule export/import (.ppmol) ──────────────────────────────────────────
 
 static constexpr uint32_t PPMOL_MAGIC   = 0x4D4F4C50;  // "PLOM" little-endian
-static constexpr uint32_t PPMOL_VERSION = 1;
+static constexpr uint32_t PPMOL_VERSION = 2;  // v2 adds name field
 
 SaveResult export_molecule(
     const std::string& filepath,
     const std::string& formula,
     const std::vector<MoleculeAtomData>& atoms,
-    const std::vector<MoleculeBondData>& bonds)
+    const std::vector<MoleculeBondData>& bonds,
+    const std::string& name)
 {
     std::ofstream f(filepath, std::ios::binary);
     if (!f.is_open())
@@ -351,6 +352,11 @@ SaveResult export_molecule(
     uint32_t flen = static_cast<uint32_t>(formula.size());
     write_val(f, flen);
     f.write(formula.data(), flen);
+
+    // Name string (v2+, length-prefixed)
+    uint32_t nlen = static_cast<uint32_t>(name.size());
+    write_val(f, nlen);
+    if (nlen > 0) f.write(name.data(), nlen);
 
     // Atom count + bond count
     uint32_t atom_count = static_cast<uint32_t>(atoms.size());
@@ -405,7 +411,7 @@ ImportMoleculeResult import_molecule(const std::string& filepath) {
         r.message = "Not a valid .ppmol file";
         return r;
     }
-    if (version != PPMOL_VERSION) {
+    if (version < 1 || version > PPMOL_VERSION) {
         r.message = "Unsupported .ppmol version";
         return r;
     }
@@ -416,6 +422,17 @@ ImportMoleculeResult import_molecule(const std::string& filepath) {
     if (flen > 256) { r.message = "Formula too long"; return r; }
     r.formula.resize(flen);
     f.read(r.formula.data(), flen);
+
+    // Name (v2+)
+    if (version >= 2) {
+        uint32_t nlen = 0;
+        read_val(f, nlen);
+        if (nlen > 256) { r.message = "Name too long"; return r; }
+        if (nlen > 0) {
+            r.name.resize(nlen);
+            f.read(r.name.data(), nlen);
+        }
+    }
 
     // Counts
     uint32_t atom_count = 0, bond_count = 0;

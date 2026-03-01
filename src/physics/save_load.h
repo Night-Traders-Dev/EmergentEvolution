@@ -92,13 +92,15 @@ SaveResult export_molecule(
     const std::string& filepath,
     const std::string& formula,
     const std::vector<MoleculeAtomData>& atoms,
-    const std::vector<MoleculeBondData>& bonds
+    const std::vector<MoleculeBondData>& bonds,
+    const std::string& name = ""
 );
 
 struct ImportMoleculeResult {
     bool success = false;
     std::string message;
     std::string formula;
+    std::string name;           // common name (v2+), empty for v1 files
     std::vector<MoleculeAtomData> atoms;
     std::vector<MoleculeBondData> bonds;
 };

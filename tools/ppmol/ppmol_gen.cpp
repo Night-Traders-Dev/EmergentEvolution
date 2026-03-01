@@ -33,7 +33,7 @@
 // ── Format constants (must match save_load.cpp) ─────────────────────────────
 
 static constexpr uint32_t PPMOL_MAGIC   = 0x4D4F4C50;  // "PLOM" little-endian
-static constexpr uint32_t PPMOL_VERSION = 1;
+static constexpr uint32_t PPMOL_VERSION = 2;  // v2 adds name field
 static constexpr size_t   GENOME_SIZE   = 4;  // charge, spin, color_charge, decay_rate
 
 // ── Particle type indices (must match types.h / phys_particles.h) ───────────
@@ -164,6 +164,7 @@ struct ImportResult {
     bool success = false;
     std::string message;
     std::string formula;
+    std::string name;       // common name (v2+), empty for v1 files
     std::vector<AtomData> atoms;
     std::vector<BondData> bonds;
 };
@@ -215,7 +216,8 @@ static SaveResult export_molecule(
     const std::string& filepath,
     const std::string& formula,
     const std::vector<AtomData>& atoms,
-    const std::vector<BondData>& bonds)
+    const std::vector<BondData>& bonds,
+    const std::string& name = "")
 {
     std::ofstream f(filepath, std::ios::binary);
     if (!f.is_open())
@@ -227,6 +229,11 @@ static SaveResult export_molecule(
     uint32_t flen = static_cast<uint32_t>(formula.size());
     write_val(f, flen);
     f.write(formula.data(), flen);
+
+    // Name (v2+)
+    uint32_t nlen = static_cast<uint32_t>(name.size());
+    write_val(f, nlen);
+    if (nlen > 0) f.write(name.data(), nlen);
 
     uint32_t atom_count = static_cast<uint32_t>(atoms.size());
     uint32_t bond_count = static_cast<uint32_t>(bonds.size());
@@ -275,7 +282,7 @@ static ImportResult import_molecule(const std::string& filepath) {
         r.message = "Truncated file (header)"; return r;
     }
     if (magic != PPMOL_MAGIC) { r.message = "Not a valid .ppmol file"; return r; }
-    if (version != PPMOL_VERSION) { r.message = "Unsupported .ppmol version"; return r; }
+    if (version < 1 || version > 2) { r.message = "Unsupported .ppmol version"; return r; }
 
     uint32_t flen = 0;
     if (!read_val(f, flen)) { r.message = "Truncated file (formula len)"; return r; }
@@ -283,6 +290,18 @@ static ImportResult import_molecule(const std::string& filepath) {
     r.formula.resize(flen);
     f.read(r.formula.data(), flen);
     if (!f.good()) { r.message = "Truncated file (formula)"; return r; }
+
+    // Name (v2+)
+    if (version >= 2) {
+        uint32_t nlen = 0;
+        if (!read_val(f, nlen)) { r.message = "Truncated file (name len)"; return r; }
+        if (nlen > 256) { r.message = "Name too long"; return r; }
+        if (nlen > 0) {
+            r.name.resize(nlen);
+            f.read(r.name.data(), nlen);
+            if (!f.good()) { r.message = "Truncated file (name)"; return r; }
+        }
+    }
 
     uint32_t atom_count = 0, bond_count = 0;
     if (!read_val(f, atom_count) || !read_val(f, bond_count)) {
@@ -704,12 +723,97 @@ static float parse_float_or(const std::string& s, float def) {
 
 // ── Commands ────────────────────────────────────────────────────────────────
 
+// ── Common molecule name lookup ──────────────────────────────────────────────
+
+struct MoleculeNameEntry { const char* formula; const char* name; };
+static const MoleculeNameEntry MOLECULE_NAMES[] = {
+    // Diatomic
+    {"H2",      "Hydrogen"},
+    {"O2",      "Oxygen"},
+    {"N2",      "Nitrogen"},
+    {"F2",      "Fluorine"},
+    {"Cl2",     "Chlorine"},
+    {"HF",      "Hydrogen Fluoride"},
+    {"HCl",     "Hydrogen Chloride"},
+    {"HBr",     "Hydrogen Bromide"},
+    {"HI",      "Hydrogen Iodide"},
+    {"CO",      "Carbon Monoxide"},
+    {"NO",      "Nitric Oxide"},
+    {"NaCl",    "Sodium Chloride"},
+    {"NaF",     "Sodium Fluoride"},
+    {"KCl",     "Potassium Chloride"},
+    {"MgO",     "Magnesium Oxide"},
+    {"CaO",     "Calcium Oxide"},
+    {"LiH",     "Lithium Hydride"},
+    {"NaH",     "Sodium Hydride"},
+    // Triatomic
+    {"H2O",     "Water"},
+    {"CO2",     "Carbon Dioxide"},
+    {"NO2",     "Nitrogen Dioxide"},
+    {"H2S",     "Hydrogen Sulfide"},
+    {"O3",      "Ozone"},
+    {"SO2",     "Sulfur Dioxide"},
+    {"CS2",     "Carbon Disulfide"},
+    {"N2O",     "Nitrous Oxide"},
+    {"HCN",     "Hydrogen Cyanide"},
+    {"SiO2",    "Silicon Dioxide"},
+    // 4-atom
+    {"NH3",     "Ammonia"},
+    {"PH3",     "Phosphine"},
+    {"BF3",     "Boron Trifluoride"},
+    {"SO3",     "Sulfur Trioxide"},
+    {"NaOH",    "Sodium Hydroxide"},
+    {"H2O2",    "Hydrogen Peroxide"},
+    {"COCl2",   "Phosgene"},
+    // 5-atom
+    {"CH4",     "Methane"},
+    {"SiH4",    "Silane"},
+    {"CF4",     "Carbon Tetrafluoride"},
+    {"CCl4",    "Carbon Tetrachloride"},
+    {"CHCl3",   "Chloroform"},
+    {"CH2Cl2",  "Dichloromethane"},
+    {"CH3Cl",   "Chloromethane"},
+    {"HNO3",    "Nitric Acid"},
+    {"HCOOH",   "Formic Acid"},
+    // 6+ atom
+    {"CH2O",    "Formaldehyde"},
+    {"CH3OH",   "Methanol"},
+    {"C2H2",    "Acetylene"},
+    {"C2H4",    "Ethylene"},
+    {"C2H6",    "Ethane"},
+    {"C2H5OH",  "Ethanol"},
+    {"CH3COOH", "Acetic Acid"},
+    {"CH3NH2",  "Methylamine"},
+    {"NaHCO3",  "Sodium Bicarbonate"},
+    {"H2SO4",   "Sulfuric Acid"},
+    {"H3PO4",   "Phosphoric Acid"},
+    // Larger
+    {"C3H8",    "Propane"},
+    {"C3H6O",   "Acetone"},
+    {"C6H6",    "Benzene"},
+    {"C6H12O6", "Glucose"},
+    {"C8H10N4O2","Caffeine"},
+    {"Fe2O3",   "Iron(III) Oxide"},
+    {"CaCO3",   "Calcium Carbonate"},
+    {"Ca(OH)2", "Calcium Hydroxide"},
+    {"Al2O3",   "Aluminium Oxide"},
+    {"CH3OCH3", "Dimethyl Ether"},
+};
+static constexpr int MOLECULE_NAMES_SIZE = sizeof(MOLECULE_NAMES) / sizeof(MOLECULE_NAMES[0]);
+
+static const char* lookup_molecule_name(const std::string& formula) {
+    for (int i = 0; i < MOLECULE_NAMES_SIZE; ++i)
+        if (formula == MOLECULE_NAMES[i].formula) return MOLECULE_NAMES[i].name;
+    return nullptr;
+}
+
 static void print_help() {
     std::cout << "ppmol_gen — molecule file tool (EmergentEvolution)\n\n";
     std::cout << "Commands:\n";
-    std::cout << "  gen <out.ppmol> <formula> [--seed N] [--scale F] [--no-particles]\n";
+    std::cout << "  gen <out.ppmol> <formula> [--name NAME] [--seed N] [--scale F] [--no-particles]\n";
     std::cout << "      Generate .ppmol from chemical formula.\n";
-    std::cout << "      --scale F : inter-atom spacing in pixels (default: 36 = bond_rest_length)\n";
+    std::cout << "      --name NAME : common name (e.g. \"Water\"). Auto-detected for known molecules.\n";
+    std::cout << "      --scale F   : inter-atom spacing in pixels (default: 36 = bond_rest_length)\n";
     std::cout << "      Examples: H2O, C6H12O6, NaCl, Ca(OH)2, C10H14BrNO2\n\n";
     std::cout << "  dump <file.ppmol>\n";
     std::cout << "      Print molecule info.\n\n";
@@ -743,6 +847,7 @@ static int cmd_gen(int argc, char** argv) {
 
     std::string out_path = argv[2];
     std::string formula  = argv[3];
+    std::string mol_name;
     uint64_t seed = 42;
     float atom_spacing = DEFAULT_ATOM_SPACING;
     bool gen_particles = true;
@@ -750,8 +855,15 @@ static int cmd_gen(int argc, char** argv) {
     for (int i = 4; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--seed" && i+1 < argc) { seed = std::stoull(argv[++i]); }
+        else if (arg == "--name" && i+1 < argc) { mol_name = argv[++i]; }
         else if (arg == "--scale" && i+1 < argc) { atom_spacing = parse_float_or(argv[++i], DEFAULT_ATOM_SPACING); }
         else if (arg == "--no-particles") { gen_particles = false; }
+    }
+
+    // Auto-detect name if not explicitly provided
+    if (mol_name.empty()) {
+        const char* known = lookup_molecule_name(formula);
+        if (known) mol_name = known;
     }
 
     // Parse formula
@@ -929,7 +1041,7 @@ static int cmd_gen(int argc, char** argv) {
         }
     }
 
-    auto res = export_molecule(out_path, formula, atoms, bonds);
+    auto res = export_molecule(out_path, formula, atoms, bonds, mol_name);
 
     if (res.success) {
         // Count particles
@@ -938,6 +1050,8 @@ static int cmd_gen(int argc, char** argv) {
 
         std::cout << "Generated: " << out_path << "\n";
         std::cout << "  Formula:   " << formula << "\n";
+        if (!mol_name.empty())
+            std::cout << "  Name:      " << mol_name << "\n";
         std::cout << "  Atoms:     " << atoms.size() << "\n";
         std::cout << "  Bonds:     " << bonds.size() << "\n";
         std::cout << "  Particles: " << total_particles << "\n";
@@ -954,6 +1068,8 @@ static int cmd_dump(int argc, char** argv) {
     if (!r.success) { std::cerr << "Error: " << r.message << "\n"; return 1; }
 
     std::cout << "Formula:    " << r.formula << "\n";
+    if (!r.name.empty())
+        std::cout << "Name:       " << r.name << "\n";
     std::cout << "Atoms:      " << r.atoms.size() << "\n";
     std::cout << "Bonds:      " << r.bonds.size() << "\n";
 
@@ -1018,8 +1134,12 @@ static int cmd_validate(int argc, char** argv) {
     int total_p = 0;
     for (auto& a : r.atoms) total_p += static_cast<int>(a.particles.size());
 
-    printf("VALID — %s: %zu atoms, %zu bonds, %d particles (GENOME_SIZE=%zu)\n",
-           r.formula.c_str(), r.atoms.size(), r.bonds.size(), total_p, GENOME_SIZE);
+    if (!r.name.empty())
+        printf("VALID — %s (%s): %zu atoms, %zu bonds, %d particles (v2, GENOME_SIZE=%zu)\n",
+               r.formula.c_str(), r.name.c_str(), r.atoms.size(), r.bonds.size(), total_p, GENOME_SIZE);
+    else
+        printf("VALID — %s: %zu atoms, %zu bonds, %d particles (GENOME_SIZE=%zu)\n",
+               r.formula.c_str(), r.atoms.size(), r.bonds.size(), total_p, GENOME_SIZE);
     return 0;
 }
 
@@ -1027,7 +1147,7 @@ static int cmd_copy(int argc, char** argv) {
     if (argc < 4) { print_help(); return 2; }
     auto r = import_molecule(argv[2]);
     if (!r.success) { std::cerr << "Error: " << r.message << "\n"; return 1; }
-    auto w = export_molecule(argv[3], r.formula, r.atoms, r.bonds);
+    auto w = export_molecule(argv[3], r.formula, r.atoms, r.bonds, r.name);
     std::cout << (w.success ? "Copied\n" : "Error\n");
     return w.success ? 0 : 1;
 }
