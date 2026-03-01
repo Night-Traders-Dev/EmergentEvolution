@@ -38,7 +38,11 @@ void PhysicsInterface::init() {
 // ── Settings persistence ────────────────────────────────────────────────────
 
 static constexpr uint32_t PPCFG_MAGIC   = 0x47464350;  // "PCFG" little-endian
-static constexpr uint32_t PPCFG_VERSION = 3;
+static constexpr uint32_t PPCFG_VERSION = 4;
+
+// Historical struct sizes (for backward-compat migration)
+static constexpr size_t PPCFG_V2_SIZE = 52;   // temp_unit .. event_log_save
+static constexpr size_t PPCFG_V3_SIZE = 72;   // + autosave_interval .. tutorial_done
 
 void PhysicsInterface::save_prefs() {
     std::error_code ec;
@@ -57,25 +61,39 @@ void PhysicsInterface::load_prefs() {
     f.read(reinterpret_cast<char*>(&magic), sizeof(uint32_t));
     f.read(reinterpret_cast<char*>(&version), sizeof(uint32_t));
     if (magic != PPCFG_MAGIC) return;
-    if (version != PPCFG_VERSION && version != 2) return;
+    if (version < 2 || version > PPCFG_VERSION) return;
+
+    // Zero-init loaded struct so new fields get defaults
     UserPrefs loaded{};
-    if (version == 2) {
-        // Read only the v2 fields (smaller struct), keep v3 defaults
-        f.read(reinterpret_cast<char*>(&loaded), 52);  // v2 UserPrefs was 52 bytes
-        if (f.good()) {
-            // Copy only v2 fields, keep new field defaults
-            UserPrefs defaults{};
-            prefs = loaded;
-            prefs.autosave_interval = defaults.autosave_interval;
-            prefs.window_mode = defaults.window_mode;
-            prefs.window_w = defaults.window_w;
-            prefs.window_h = defaults.window_h;
-            prefs.bloom_enabled = defaults.bloom_enabled;
-            prefs.tutorial_done = defaults.tutorial_done;
-        }
-    } else {
-        f.read(reinterpret_cast<char*>(&loaded), sizeof(UserPrefs));
-        if (f.good()) prefs = loaded;
+    size_t read_size = sizeof(UserPrefs);
+    if (version == 2)      read_size = PPCFG_V2_SIZE;
+    else if (version == 3) read_size = PPCFG_V3_SIZE;
+
+    f.read(reinterpret_cast<char*>(&loaded), static_cast<std::streamsize>(read_size));
+    if (!f.good()) return;
+
+    // Copy loaded fields, then restore defaults for fields added after this version
+    prefs = loaded;
+    UserPrefs defaults{};
+    if (version <= 2) {
+        prefs.autosave_interval = defaults.autosave_interval;
+        prefs.window_mode = defaults.window_mode;
+        prefs.window_w = defaults.window_w;
+        prefs.window_h = defaults.window_h;
+        prefs.bloom_enabled = defaults.bloom_enabled;
+        prefs.tutorial_done = defaults.tutorial_done;
+    }
+    if (version <= 3) {
+        prefs.vsync = defaults.vsync;
+        prefs.preferred_gpu = defaults.preferred_gpu;
+        prefs.preferred_monitor = defaults.preferred_monitor;
+        prefs.mouse_sensitivity = defaults.mouse_sensitivity;
+        prefs.colorblind_mode = defaults.colorblind_mode;
+        prefs.high_contrast = defaults.high_contrast;
+        prefs.reduced_motion = defaults.reduced_motion;
+        prefs.quality_preset = defaults.quality_preset;
+        prefs.sfx_volume = defaults.sfx_volume;
+        prefs.sfx_muted = defaults.sfx_muted;
     }
 }
 
@@ -549,9 +567,12 @@ void PhysicsInterface::push_theme() {
     ImGuiStyle& s = ImGui::GetStyle();
     auto* col = s.Colors;
 
+    // High contrast mode: boost text brightness, border alpha, accent saturation
+    float hc = prefs.high_contrast ? 1.0f : 0.0f;
+
     // Derived colors
-    ImVec4 bg_child  = ImVec4(c.bg.x, c.bg.y, c.bg.z, 0.45f);
-    ImVec4 bg_popup  = ImVec4(c.bg.x, c.bg.y, c.bg.z, 0.80f);
+    ImVec4 bg_child  = ImVec4(c.bg.x, c.bg.y, c.bg.z, 0.45f + hc * 0.3f);
+    ImVec4 bg_popup  = ImVec4(c.bg.x, c.bg.y, c.bg.z, 0.80f + hc * 0.15f);
     ImVec4 bg_menu   = ImVec4(c.bg.x, c.bg.y, c.bg.z, 0.95f);
     ImVec4 frame_act = ImVec4(c.border.x, c.border.y, c.border.z, 0.70f);
     ImVec4 title_col = ImVec4(c.bg_dim.x, c.bg_dim.y, c.bg_dim.z, 0.55f);
@@ -560,12 +581,18 @@ void PhysicsInterface::push_theme() {
     ImVec4 accent_lo = ImVec4(c.accent.x, c.accent.y, c.accent.z, 0.40f);
     ImVec4 accent_md = ImVec4(c.accent.x, c.accent.y, c.accent.z, 0.60f);
     ImVec4 accent_hi = ImVec4(c.accent.x, c.accent.y, c.accent.z, 0.80f);
-    ImVec4 sep       = ImVec4(c.border.x, c.border.y, c.border.z, 0.60f);
+    ImVec4 sep       = ImVec4(c.border.x, c.border.y, c.border.z, 0.60f + hc * 0.3f);
+
+    // High contrast: brighter text
+    ImVec4 text_hc   = prefs.high_contrast ? ImVec4(1.0f, 1.0f, 1.0f, 1.0f) : c.text;
+    ImVec4 border_hc = prefs.high_contrast
+        ? ImVec4(c.border.x * 1.5f, c.border.y * 1.5f, c.border.z * 1.5f, 1.0f)
+        : c.border;
 
     col[ImGuiCol_WindowBg]             = c.bg;
     col[ImGuiCol_ChildBg]              = bg_child;
     col[ImGuiCol_PopupBg]              = bg_popup;
-    col[ImGuiCol_Border]               = c.border;
+    col[ImGuiCol_Border]               = border_hc;
     col[ImGuiCol_BorderShadow]         = ImVec4(0,0,0,0);
     col[ImGuiCol_FrameBg]              = c.frame;
     col[ImGuiCol_FrameBgHovered]       = c.frame_hover;
@@ -593,7 +620,7 @@ void PhysicsInterface::push_theme() {
     col[ImGuiCol_Tab]                  = c.frame;
     col[ImGuiCol_TabHovered]           = btn_hov;
     col[ImGuiCol_TabSelected]          = accent_lo;
-    col[ImGuiCol_Text]                 = c.text;
+    col[ImGuiCol_Text]                 = text_hc;
     col[ImGuiCol_TextDisabled]         = c.text_dim;
 
     // Style vars
@@ -668,6 +695,13 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     // Settings menu (blocks other UI when visible)
     if (show_settings_menu) {
         draw_settings_menu();
+        pop_theme();
+        return;
+    }
+
+    // Credits panel (blocks other UI when visible)
+    if (show_credits_) {
+        draw_credits();
         pop_theme();
         return;
     }

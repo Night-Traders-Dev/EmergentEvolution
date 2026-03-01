@@ -231,6 +231,8 @@ void PhysicsSimulation::init(GLFWwindow* window) {
     fs::create_directories("saves");
     achievements.load("saves/achievements.ppach");
 
+    vk.preferred_gpu_index = iface.prefs.preferred_gpu;
+    vk.vsync_requested = iface.prefs.vsync;
     vk.init(window);
 
 #ifdef PORTABLE_BUILD
@@ -257,6 +259,8 @@ void PhysicsSimulation::init(GLFWwindow* window) {
     if (!audio.init("assets/sound.mp3"))
         audio.init("../assets/sound.mp3");
     audio.set_volume(iface.prefs.music_volume);
+    audio.set_sfx_volume(iface.prefs.sfx_volume);
+    audio.sfx_muted = iface.prefs.sfx_muted;
     if (iface.prefs.music_muted) audio.pause();
 
     reset();
@@ -496,6 +500,7 @@ void PhysicsSimulation::reset() {
     entangled_pair_count_ = 0;
 
     physics_gen_data(particles, cfg);
+    apply_colorblind_correction(particles, iface.prefs.colorblind_mode);
     cfg.particle_count = static_cast<uint32_t>(particles.positions.size());
 
     // Particle Accelerator: auto-place EM force objects as bending magnets
@@ -555,9 +560,9 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
     bool rmb = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
     bool lmb = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
 
-    // Camera pan (right mouse)
+    // Camera pan (right mouse) — scaled by mouse sensitivity
     if (rmb && !ImGui::GetIO().WantCaptureMouse) {
-        cfg.camera_origin -= smooth_mouse_change_ / cfg.current_camera_zoom;
+        cfg.camera_origin -= smooth_mouse_change_ * iface.prefs.mouse_sensitivity / cfg.current_camera_zoom;
     }
 
     // WASD camera movement
@@ -567,6 +572,82 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
         if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) cfg.camera_origin.y += cam_speed;
         if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) cfg.camera_origin.x -= cam_speed;
         if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) cfg.camera_origin.x += cam_speed;
+    }
+
+    // ── Gamepad input ──────────────────────────────────────────────────────
+    {
+        GLFWgamepadstate gp;
+        bool gamepad_connected = glfwGetGamepadState(GLFW_JOYSTICK_1, &gp);
+        if (gamepad_connected) {
+            float cam_speed = 600.0f / cfg.current_camera_zoom * static_cast<float>(dt)
+                              * iface.prefs.mouse_sensitivity;
+
+            // Left stick → camera pan (with deadzone)
+            float lx = gp.axes[GLFW_GAMEPAD_AXIS_LEFT_X];
+            float ly = gp.axes[GLFW_GAMEPAD_AXIS_LEFT_Y];
+            if (std::abs(lx) > 0.15f) cfg.camera_origin.x += lx * cam_speed;
+            if (std::abs(ly) > 0.15f) cfg.camera_origin.y += ly * cam_speed;
+
+            // Right trigger → zoom in, Left trigger → zoom out
+            float rt = (gp.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] + 1.0f) * 0.5f;  // 0..1
+            float lt = (gp.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] + 1.0f) * 0.5f;
+            if (rt > 0.1f) cfg.camera_zoom *= 1.0f + rt * 2.0f * static_cast<float>(dt);
+            if (lt > 0.1f) cfg.camera_zoom *= 1.0f - lt * 2.0f * static_cast<float>(dt);
+            cfg.camera_zoom = std::clamp(cfg.camera_zoom, 0.1f, 20.0f);
+
+            // Start → toggle pause
+            static bool start_was_down = false;
+            bool start_down = gp.buttons[GLFW_GAMEPAD_BUTTON_START];
+            if (start_down && !start_was_down) {
+                iface.show_pause_menu = !iface.show_pause_menu;
+                if (iface.show_pause_menu) {
+                    iface.show_settings_menu = false;
+                    is_active = false;
+                } else {
+                    is_active = iface.sim_running;
+                }
+            }
+            start_was_down = start_down;
+
+            // B → back (close menus/deselect)
+            static bool b_was_down = false;
+            bool b_down = gp.buttons[GLFW_GAMEPAD_BUTTON_B];
+            if (b_down && !b_was_down) {
+                if (iface.show_settings_menu) {
+                    iface.show_settings_menu = false;
+                    iface.show_pause_menu = true;
+                    iface.save_prefs();
+                } else if (iface.show_pause_menu) {
+                    iface.show_pause_menu = false;
+                    is_active = iface.sim_running;
+                } else if (iface.selected_particle_idx >= 0) {
+                    iface.selected_particle_idx = -1;
+                }
+            }
+            b_was_down = b_down;
+
+            // A → space (toggle play/pause when no menu)
+            static bool a_was_down = false;
+            bool a_down = gp.buttons[GLFW_GAMEPAD_BUTTON_A];
+            if (a_down && !a_was_down) {
+                if (!iface.show_pause_menu && !iface.show_settings_menu) {
+                    is_active = !is_active;
+                    iface.sim_running = is_active;
+                }
+            }
+            a_was_down = a_down;
+
+            // Bumpers → cycle settings tabs
+            static bool lb_was_down = false, rb_was_down = false;
+            bool lb_down = gp.buttons[GLFW_GAMEPAD_BUTTON_LEFT_BUMPER];
+            bool rb_down = gp.buttons[GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER];
+            if (iface.show_settings_menu) {
+                if (lb_down && !lb_was_down) iface.settings_tab = std::max(0, iface.settings_tab - 1);
+                if (rb_down && !rb_was_down) iface.settings_tab = std::min(4, iface.settings_tab + 1);
+            }
+            lb_was_down = lb_down;
+            rb_was_down = rb_down;
+        }
     }
 
     // F3 toggle spawn menu
@@ -942,6 +1023,7 @@ void PhysicsSimulation::try_unlock(AchievementID id) {
         char buf[256];
         snprintf(buf, sizeof(buf), "Achievement Unlocked: %s — %s", def.name, def.description);
         iface.push_notification(buf, ImVec4(1.0f, 0.843f, 0.0f, 1.0f));
+        audio.play_achievement();
         // Auto-save achievements on unlock
         achievements.save("saves/achievements.ppach");
     }
@@ -1254,6 +1336,12 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
 
     // Bloom post-processing toggle from user prefs
     cfg.bloom_enabled = iface.prefs.bloom_enabled;
+
+    // VSync: detect preference change → trigger swapchain recreation
+    if (vk.vsync_requested != iface.prefs.vsync) {
+        vk.vsync_requested = iface.prefs.vsync;
+        renderer.swapchain_dirty = true;
+    }
 
     // Upload dynamic GPU data
     cfg.force_object_count = force_object_count_;
@@ -2105,7 +2193,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         }
 
         // Emit new rings from strongly accelerating massive particles
-        if (iface.show_grav_waves && prev_velocities_.size() == cfg.particle_count) {
+        if (iface.show_grav_waves && !iface.prefs.reduced_motion && prev_velocities_.size() == cfg.particle_count) {
             constexpr int   MAX_RINGS_TOTAL   = 512;
             constexpr int   MAX_EMIT_PER_TICK = 8;
             constexpr float ACCEL_THRESHOLD   = 5.0f;  // minimum |Δv/dt| to emit

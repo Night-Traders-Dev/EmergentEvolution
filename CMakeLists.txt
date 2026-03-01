@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(particle_playground LANGUAGES CXX)
+project(particle_playground VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -124,6 +124,8 @@ endif()
 # Windows: link system libs for audio (WASAPI), windowing, etc.
 if(WIN32)
     target_link_libraries(particle_physics PRIVATE ole32 winmm)
+    # .exe icon + version info resource
+    target_sources(particle_physics PRIVATE assets/particle_playground.rc)
 endif()
 
 # OpenMP — link if available, define HAS_OPENMP so source can guard omp calls
@@ -138,6 +140,14 @@ target_compile_options(particle_physics PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/W4 /utf-8>
     $<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:GNU,Clang>>:-O3>
     $<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:MSVC>>:/O2>
+)
+
+# Version info — available in source as APP_VERSION string and component ints
+target_compile_definitions(particle_physics PRIVATE
+    APP_VERSION="${CMAKE_PROJECT_VERSION}"
+    APP_VERSION_MAJOR=${CMAKE_PROJECT_VERSION_MAJOR}
+    APP_VERSION_MINOR=${CMAKE_PROJECT_VERSION_MINOR}
+    APP_VERSION_PATCH=${CMAKE_PROJECT_VERSION_PATCH}
 )
 
 # Windows: prevent <windows.h> macro pollution (min/max, etc.)

@@ -204,7 +204,8 @@ void PhysicsInterface::draw_splash_screen() {
     }
 
     // Init particles on first call (or re-init on About)
-    if (!splash_inited_) { init_splash_particles(); splash_inited_ = true; }
+    // Skip splash animation in reduced-motion mode
+    if (!splash_inited_ && !prefs.reduced_motion) { init_splash_particles(); splash_inited_ = true; }
 
     float dt = io.DeltaTime;
     splash_time_ += dt;
@@ -364,10 +365,13 @@ void PhysicsInterface::draw_splash_screen() {
         }
         ImGui::PopFont();
 
+#ifndef APP_VERSION
+#define APP_VERSION "0.1.0"
+#endif
         // Subtitle
         ImGui::SetCursorPos(ImVec2(left_margin, title_y + 40.0f * scale));
         ImGui::TextColored(ImVec4(0.0f, 0.78f, 1.0f, 0.7f),
-            "Standard Model  |  Fusion  |  Fission  |  67 Particle Types");
+            "Standard Model  |  Fusion  |  Fission  |  67 Particle Types  |  v" APP_VERSION);
 
         // Top-right badge "QUANTUM PHYSICS SANDBOX"
         {
@@ -425,17 +429,22 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         ImGui::PushFont(ImGui::GetFont());
         const char* title = "PAUSED";
         ImVec2 title_size = ImGui::CalcTextSize(title);
-        ImGui::SetCursorPos(ImVec2(cx - title_size.x * 0.5f, cy - 140.0f));
+        // Compute total menu height and center vertically
+        float btn_h = 40.0f;
+        float btn_spacing = 48.0f;
+        float title_h = title_size.y + 20.0f;  // title + gap to first button
+        float menu_h = title_h + btn_spacing * 9 + btn_h + 30.0f; // 10 buttons + hint
+        float menu_top = cy - menu_h * 0.5f;
+
+        ImGui::SetCursorPos(ImVec2(cx - title_size.x * 0.5f, menu_top));
         ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "%s", title);
         ImGui::GetFont()->Scale = old_scale;
         ImGui::PopFont();
 
         // Menu buttons (centered column)
         float btn_w = 200.0f;
-        float btn_h = 40.0f;
         float btn_x = cx - btn_w * 0.5f;
-        float btn_y = cy - 60.0f;
-        float btn_spacing = 52.0f;
+        float btn_y = menu_top + title_h;
 
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.14f, 0.22f, 0.90f));
@@ -496,15 +505,22 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
             show_pause_menu = false;
         }
 
-        // Settings
+        // Credits
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 7));
+        if (ImGui::Button("Credits", ImVec2(btn_w, btn_h))) {
+            show_credits_ = true;
+            show_pause_menu = false;
+        }
+
+        // Settings
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 8));
         if (ImGui::Button("Settings", ImVec2(btn_w, btn_h))) {
             show_settings_menu = true;
             show_pause_menu = false;
         }
 
         // Quit
-        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 8));
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 9));
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.4f, 0.08f, 0.08f, 0.90f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.6f, 0.15f, 0.15f, 0.95f));
         if (ImGui::Button("Quit", ImVec2(btn_w, btn_h))) {
@@ -516,7 +532,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         ImGui::PopStyleVar();
 
         // Hint text
-        float hint_y = btn_y + btn_spacing * 9 + 10.0f;
+        float hint_y = btn_y + btn_spacing * 10 + 10.0f;
         const char* hint = "Press Escape to resume";
         ImVec2 hint_size = ImGui::CalcTextSize(hint);
         ImGui::SetCursorPos(ImVec2(cx - hint_size.x * 0.5f, hint_y));
@@ -569,8 +585,8 @@ void PhysicsInterface::draw_settings_menu() {
         float panel_bottom = cy + 230.0f;
         float panel_h = panel_bottom - panel_top;
 
-        static const char* TAB_LABELS[] = { "Display", "Performance", "Theme", "Audio & Log" };
-        static constexpr int TAB_COUNT = 4;
+        static const char* TAB_LABELS[] = { "Display", "Performance", "Theme", "Access.", "Audio & Log" };
+        static constexpr int TAB_COUNT = 5;
         float tab_w = panel_w / TAB_COUNT;
 
         ImGui::SetCursorPos(ImVec2(panel_x, tab_top));
@@ -616,6 +632,40 @@ void PhysicsInterface::draw_settings_menu() {
         if (settings_tab == 0) {
             ImGui::Dummy(ImVec2(0, 6));
 
+            // Quality presets
+            {
+                const char* preset_labels[] = { "Low", "Medium", "High", "Ultra", "Custom" };
+                int old_preset = prefs.quality_preset;
+                if (ImGui::Combo("Quality Preset", &prefs.quality_preset, preset_labels, 5)) {
+                    if (prefs.quality_preset != 4 && prefs.quality_preset != old_preset) {
+                        // Apply preset values
+                        switch (prefs.quality_preset) {
+                            case 0: // Low
+                                prefs.render_scale = 1; prefs.bloom_enabled = false;
+                                prefs.physics_quality = 0; prefs.physics_skip = 2;
+                                break;
+                            case 1: // Medium
+                                prefs.render_scale = 1; prefs.bloom_enabled = false;
+                                prefs.physics_quality = 1; prefs.physics_skip = 1;
+                                break;
+                            case 2: // High
+                                prefs.render_scale = 1; prefs.bloom_enabled = true;
+                                prefs.physics_quality = 2; prefs.physics_skip = 0;
+                                break;
+                            case 3: // Ultra
+                                prefs.render_scale = 2; prefs.bloom_enabled = true;
+                                prefs.physics_quality = 2; prefs.physics_skip = 0;
+                                break;
+                        }
+                    }
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Quick quality settings\nLow: best performance\nUltra: highest quality\nCustom: manual control");
+            }
+
+            ImGui::Dummy(ImVec2(0, 8));
+            ImGui::SeparatorText("Display");
+
             ImGui::Text("Temperature Units");
             ImGui::RadioButton("Kelvin",     &prefs.temp_unit, 0); ImGui::SameLine();
             ImGui::RadioButton("Celsius",    &prefs.temp_unit, 1); ImGui::SameLine();
@@ -632,8 +682,10 @@ void PhysicsInterface::draw_settings_menu() {
             ImGui::Dummy(ImVec2(0, 8));
             const char* render_labels[] = { "Native (1x)", "Supersampled (2x)", "Supersampled (3x)", "Supersampled (4x)" };
             int render_idx = std::clamp(prefs.render_scale - 1, 0, 3);
-            if (ImGui::Combo("Render Quality", &render_idx, render_labels, 4))
+            if (ImGui::Combo("Render Quality", &render_idx, render_labels, 4)) {
                 prefs.render_scale = render_idx + 1;
+                prefs.quality_preset = 4; // Custom
+            }
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Native: render at base resolution\n2x/3x/4x: higher resolution, downsampled\nHigher quality but uses more GPU memory");
 
@@ -643,8 +695,44 @@ void PhysicsInterface::draw_settings_menu() {
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Alt+Enter to toggle at any time\nChange takes effect on next launch");
 
+            // Monitor picker
+            {
+                int mon_count = 0;
+                GLFWmonitor** monitors = glfwGetMonitors(&mon_count);
+                if (monitors && mon_count > 1) {
+                    ImGui::Dummy(ImVec2(0, 8));
+                    static std::vector<std::string> mon_labels;
+                    static std::vector<const char*> mon_ptrs;
+                    if (static_cast<int>(mon_labels.size()) != mon_count) {
+                        mon_labels.clear();
+                        mon_ptrs.clear();
+                        for (int m = 0; m < mon_count; m++) {
+                            const GLFWvidmode* vm = glfwGetVideoMode(monitors[m]);
+                            const char* name = glfwGetMonitorName(monitors[m]);
+                            char buf[256];
+                            snprintf(buf, sizeof(buf), "%d: %s (%dx%d)", m + 1,
+                                     name ? name : "Unknown", vm ? vm->width : 0, vm ? vm->height : 0);
+                            mon_labels.push_back(buf);
+                        }
+                        mon_ptrs.resize(mon_count);
+                        for (int m = 0; m < mon_count; m++)
+                            mon_ptrs[m] = mon_labels[m].c_str();
+                    }
+                    prefs.preferred_monitor = std::clamp(prefs.preferred_monitor, 0, mon_count - 1);
+                    ImGui::Combo("Monitor", &prefs.preferred_monitor, mon_ptrs.data(), mon_count);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Select display for fullscreen mode\nTakes effect on next fullscreen toggle or restart");
+                }
+            }
+
             ImGui::Dummy(ImVec2(0, 8));
-            ImGui::Checkbox("Bloom Glow", &prefs.bloom_enabled);
+            ImGui::Checkbox("VSync", &prefs.vsync);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Synchronize with display refresh rate\nReduces tearing but may cap FPS\nTakes effect immediately");
+
+            ImGui::Dummy(ImVec2(0, 8));
+            if (ImGui::Checkbox("Bloom Glow", &prefs.bloom_enabled))
+                prefs.quality_preset = 4;
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Post-processing bloom effect\nAdds a soft glow around bright particles");
             ImGui::Checkbox("Wobbly Windows", &prefs.wobbly_windows);
@@ -678,6 +766,44 @@ void PhysicsInterface::draw_settings_menu() {
         else if (settings_tab == 1) {
             ImGui::Dummy(ImVec2(0, 6));
 
+            // GPU selection + VRAM display
+            if (vk_ctx_ && !vk_ctx_->gpu_list.empty()) {
+                // Build GPU label list
+                static std::vector<std::string> gpu_labels;
+                static std::vector<const char*> gpu_ptrs;
+                if (gpu_labels.size() != vk_ctx_->gpu_list.size() + 1) {
+                    gpu_labels.clear();
+                    gpu_ptrs.clear();
+                    gpu_labels.push_back("Auto (recommended)");
+                    for (const auto& g : vk_ctx_->gpu_list) {
+                        char buf[256];
+                        float vram_mb = static_cast<float>(g.vram_bytes) / (1024.0f * 1024.0f);
+                        snprintf(buf, sizeof(buf), "%s (%.0f MB)", g.name.c_str(), vram_mb);
+                        gpu_labels.push_back(buf);
+                    }
+                    gpu_ptrs.resize(gpu_labels.size());
+                    for (size_t i = 0; i < gpu_labels.size(); i++)
+                        gpu_ptrs[i] = gpu_labels[i].c_str();
+                }
+                int gpu_combo_idx = prefs.preferred_gpu + 1;  // -1=auto → 0, 0 → 1, etc.
+                if (gpu_combo_idx < 0 || gpu_combo_idx >= static_cast<int>(gpu_ptrs.size()))
+                    gpu_combo_idx = 0;
+                if (ImGui::Combo("GPU", &gpu_combo_idx, gpu_ptrs.data(), static_cast<int>(gpu_ptrs.size()))) {
+                    prefs.preferred_gpu = gpu_combo_idx - 1;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Select GPU device (requires restart to take effect)");
+
+                // Show current GPU + VRAM
+                int cur = vk_ctx_->selected_gpu_index;
+                if (cur >= 0 && cur < static_cast<int>(vk_ctx_->gpu_list.size())) {
+                    float vram_gb = static_cast<float>(vk_ctx_->gpu_list[cur].vram_bytes) / (1024.0f * 1024.0f * 1024.0f);
+                    ImGui::TextColored(tc.text_dim, "Active: %s  |  VRAM: %.1f GB",
+                        vk_ctx_->gpu_list[cur].name.c_str(), vram_gb);
+                }
+                ImGui::Dummy(ImVec2(0, 8));
+            }
+
 #ifdef HAS_OPENMP
             int sys_max = omp_get_max_threads();
             if (prefs.max_threads <= 0) prefs.max_threads = sys_max;
@@ -701,12 +827,14 @@ void PhysicsInterface::draw_settings_menu() {
 
             ImGui::Dummy(ImVec2(0, 8));
             const char* quality_labels[] = { "Low", "Medium", "High" };
-            ImGui::Combo("Physics Quality", &prefs.physics_quality, quality_labels, 3);
+            if (ImGui::Combo("Physics Quality", &prefs.physics_quality, quality_labels, 3))
+                prefs.quality_preset = 4;
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Low: essential physics, skip expensive checks\nMedium: most interactions at reduced rate\nHigh: full simulation fidelity every frame");
 
             ImGui::Dummy(ImVec2(0, 8));
-            ImGui::SliderInt("Physics Skip", &prefs.physics_skip, 0, 4);
+            if (ImGui::SliderInt("Physics Skip", &prefs.physics_skip, 0, 4))
+                prefs.quality_preset = 4;
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Run CPU physics every (N+1) frames\n0 = every frame (best quality)\nHigher = better FPS, less accurate");
 
@@ -714,6 +842,19 @@ void PhysicsInterface::draw_settings_menu() {
             ImGui::Checkbox("Spatial Grid", &prefs.spatial_grid);
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Use spatial acceleration grid for neighbor searches\nGreatly improves CPU physics performance\nDisable only for debugging");
+
+            ImGui::Dummy(ImVec2(0, 12));
+            ImGui::SeparatorText("Particles");
+            {
+                int pc = static_cast<int>(std::round(particle_count_slider * particle_count_slider));
+                char fmt[64];
+                snprintf(fmt, sizeof(fmt), "%%.0f  (%d particles)", pc);
+                ImGui::SliderFloat("Max Particles", &particle_count_slider, 10.0f, 316.0f, fmt);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Drag to set max particle count (sqrt scale)\n10\xc2\xb2=100 up to 316\xc2\xb2=~100,000");
+                ImGui::TextColored(tc.text_dim, "Active: %u  |  Dormant: %u",
+                    active_particle_display, dormant_particle_display);
+            }
 
             ImGui::Dummy(ImVec2(0, 12));
             ImGui::SeparatorText("Auto-Save");
@@ -788,8 +929,44 @@ void PhysicsInterface::draw_settings_menu() {
                 ImGui::SetTooltip("Place .pptheme files in the themes/ directory.\nClick to scan and load them.\n\nFormat (one field per line):\n  name=My Theme\n  bg=0.05,0.05,0.08,0.75\n  accent=0.3,0.7,0.9,1.0\n  ...");
         }
 
-        // ── Tab 3: Audio & Log ───────────────────────────────────────────
+        // ── Tab 3: Accessibility ─────────────────────────────────────────
         else if (settings_tab == 3) {
+            ImGui::Dummy(ImVec2(0, 6));
+
+            ImGui::TextColored(tc.accent, "Vision");
+            ImGui::Separator();
+
+            const char* cb_labels[] = { "Off", "Protanopia (red-weak)", "Deuteranopia (green-weak)", "Tritanopia (blue-weak)" };
+            ImGui::Combo("Colorblind Mode", &prefs.colorblind_mode, cb_labels, 4);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Adjust particle colors for color vision deficiency\nShifts problematic hue pairs to distinguishable alternatives");
+
+            ImGui::Dummy(ImVec2(0, 8));
+            ImGui::Checkbox("High Contrast", &prefs.high_contrast);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Increase UI contrast\nThicker borders, brighter text, bolder accents");
+
+            ImGui::Dummy(ImVec2(0, 14));
+            ImGui::TextColored(tc.accent, "Motion");
+            ImGui::Separator();
+
+            if (ImGui::Checkbox("Reduced Motion", &prefs.reduced_motion)) {
+                if (prefs.reduced_motion) prefs.wobbly_windows = false;
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Disable UI animations and visual effects\nTurns off wobbly windows, splash particles,\nand gravitational wave ripple visualization");
+
+            ImGui::Dummy(ImVec2(0, 14));
+            ImGui::TextColored(tc.accent, "Input");
+            ImGui::Separator();
+
+            ImGui::SliderFloat("Mouse Sensitivity", &prefs.mouse_sensitivity, 0.1f, 3.0f, "%.1fx");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Adjust camera pan speed when dragging\n1.0x = default speed");
+        }
+
+        // ── Tab 4: Audio & Log ───────────────────────────────────────────
+        else if (settings_tab == 4) {
             ImGui::Dummy(ImVec2(0, 6));
 
             ImGui::TextColored(tc.accent, "Music");
@@ -807,6 +984,23 @@ void PhysicsInterface::draw_settings_menu() {
                 if (ImGui::SliderFloat("Music Volume", &vol_pct, 0.0f, 100.0f, "%.0f%%")) {
                     prefs.music_volume = vol_pct / 100.0f;
                     if (audio_ptr) audio_ptr->set_volume(prefs.music_volume);
+                }
+            }
+
+            ImGui::Dummy(ImVec2(0, 14));
+
+            ImGui::TextColored(tc.accent, "Sound Effects");
+            ImGui::Separator();
+
+            if (ImGui::Checkbox("Mute SFX", &prefs.sfx_muted)) {
+                if (audio_ptr) audio_ptr->sfx_muted = prefs.sfx_muted;
+            }
+
+            if (!prefs.sfx_muted) {
+                float sfx_pct = prefs.sfx_volume * 100.0f;
+                if (ImGui::SliderFloat("SFX Volume", &sfx_pct, 0.0f, 100.0f, "%.0f%%")) {
+                    prefs.sfx_volume = sfx_pct / 100.0f;
+                    if (audio_ptr) audio_ptr->set_sfx_volume(prefs.sfx_volume);
                 }
             }
 
@@ -840,10 +1034,15 @@ void PhysicsInterface::draw_settings_menu() {
         }
         ImGui::PopStyleVar();
 
-        // Hint
+        // Version + hint
+        const char* ver = "v" APP_VERSION;
+        ImVec2 ver_size = ImGui::CalcTextSize(ver);
+        ImGui::SetCursorPos(ImVec2(cx - ver_size.x * 0.5f, panel_bottom + 56.0f));
+        ImGui::TextColored(ImVec4(0.4f, 0.43f, 0.5f, 0.5f), "%s", ver);
+
         const char* hint = "Press Escape to resume";
         ImVec2 hint_size = ImGui::CalcTextSize(hint);
-        ImGui::SetCursorPos(ImVec2(cx - hint_size.x * 0.5f, panel_bottom + 60.0f));
+        ImGui::SetCursorPos(ImVec2(cx - hint_size.x * 0.5f, panel_bottom + 74.0f));
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 0.6f), "%s", hint);
     }
     ImGui::End();
@@ -1125,6 +1324,17 @@ void PhysicsInterface::push_decay_event(const char* desc, DecayEventType type, I
     }
     decay_log.push_back({std::string(desc), details, type, color, frame_counter_display, std::time(nullptr)});
     if (prefs.event_log_save) save_event_to_disk(desc, type);
+
+    // Trigger SFX for major physics events
+    if (audio_ptr) {
+        switch (type) {
+            case DEVT_FUSION:          audio_ptr->play_fusion();  break;
+            case DEVT_FISSION:         audio_ptr->play_fission(); break;
+            case DEVT_PARTICLE_DECAY:
+            case DEVT_NUCLEAR_DECAY:   audio_ptr->play_decay();   break;
+            default: break;
+        }
+    }
 }
 
 void PhysicsInterface::save_event_to_disk(const char* desc, DecayEventType type) {
@@ -2030,4 +2240,104 @@ void PhysicsInterface::draw_scenario_goal_hud() {
         ImGui::PopStyleColor(3);
     }
     ImGui::End();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Credits Screen ──────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_credits() {
+    ImGuiIO& io = ImGui::GetIO();
+    const auto& tc = get_theme(std::clamp(prefs.theme, 0, total_theme_count() - 1));
+
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.02f, 0.04f, 0.92f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::Begin("##Credits", nullptr,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove);
+    {
+        float cx = io.DisplaySize.x * 0.5f;
+
+        // Title
+        ImGui::PushFont(title_font ? title_font : ImGui::GetFont());
+        const char* title = "Credits";
+        ImVec2 title_size = ImGui::CalcTextSize(title);
+        ImGui::SetCursorPos(ImVec2(cx - title_size.x * 0.5f, 40.0f));
+        ImGui::TextColored(tc.accent, "%s", title);
+        ImGui::PopFont();
+
+        // Scrollable credits area
+        float panel_w = 500.0f;
+        float panel_top = 100.0f;
+        float panel_bottom = io.DisplaySize.y - 100.0f;
+        ImGui::SetCursorPos(ImVec2(cx - panel_w * 0.5f, panel_top));
+        ImGui::BeginChild("##CreditsScroll", ImVec2(panel_w, panel_bottom - panel_top), false);
+
+        // Embedded credits text (works without file access)
+        static const char* CREDITS_TEXT[] = {
+            "ENGINE & LIBRARIES",
+            "",
+            "Vulkan SDK  -  Graphics & Compute API",
+            "  Apache License 2.0",
+            "",
+            "GLFW  -  Window, Input & Context",
+            "  zlib/libpng License",
+            "",
+            "GLM  -  OpenGL Mathematics",
+            "  MIT License",
+            "",
+            "Dear ImGui  -  Immediate Mode GUI",
+            "  MIT License",
+            "",
+            "miniaudio  -  Audio Playback Engine",
+            "  MIT-0 / Public Domain",
+            "",
+            "stb_image / stb_image_write  -  Image I/O",
+            "  MIT License / Public Domain",
+            "",
+            "BUILD TOOLS",
+            "",
+            "CMake  -  Build System Generator",
+            "  BSD 3-Clause License",
+            "",
+            "glslc  -  SPIR-V Shader Compiler",
+            "  Apache License 2.0",
+            "",
+        };
+
+        for (const char* line : CREDITS_TEXT) {
+            if (line[0] == '\0') {
+                ImGui::Dummy(ImVec2(0, 4));
+            } else if (line[0] != ' ') {
+                // Section header or library name
+                bool is_header = (line == CREDITS_TEXT[0] || std::string(line) == "BUILD TOOLS");
+                if (is_header) {
+                    ImGui::Dummy(ImVec2(0, 8));
+                    ImGui::TextColored(tc.accent, "%s", line);
+                    ImGui::Separator();
+                } else {
+                    ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 0.95f), "%s", line);
+                }
+            } else {
+                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.65f, 0.8f), "%s", line);
+            }
+        }
+
+        ImGui::EndChild();
+
+        // Back button
+        float btn_w = 160.0f;
+        ImGui::SetCursorPos(ImVec2(cx - btn_w * 0.5f, panel_bottom + 15.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+        if (ImGui::Button("Back", ImVec2(btn_w, 36.0f))) {
+            show_credits_ = false;
+            show_pause_menu = true;
+        }
+        ImGui::PopStyleVar();
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
 }

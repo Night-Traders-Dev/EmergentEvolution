@@ -56,11 +56,23 @@ public:
     VkSurfaceKHR             surface         = VK_NULL_HANDLE;
     VkCommandPool            cmd_pool        = VK_NULL_HANDLE;
 
+    bool                     vsync_requested = false;  // true = FIFO (VSync on), false = MAILBOX preferred
+
     VkSwapchainKHR           swapchain       = VK_NULL_HANDLE;
     VkFormat                 swapchain_format{};
     VkExtent2D               swapchain_extent{};
     std::vector<VkImage>     swapchain_images;
     std::vector<VkImageView> swapchain_views;
+
+    // ── GPU info (populated during init) ────────────────────────────────────
+    struct GPUInfo {
+        std::string name;
+        VkPhysicalDeviceType type;
+        VkDeviceSize vram_bytes;  // device-local heap size
+    };
+    std::vector<GPUInfo> gpu_list;         // all suitable GPUs found during init
+    int  selected_gpu_index   = 0;         // which GPU was actually used
+    int  preferred_gpu_index  = -1;        // set from UserPrefs before init(); -1=auto
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
     void init(GLFWwindow* window);

@@ -599,3 +599,7 @@ inline std::string name_molecule_dynamic(const std::vector<std::pair<int,int>>& 
 
 // Populate a Particles object for the sub-atomic physics simulation.
 void physics_gen_data(Particles& p, const SimConfig& cfg);
+
+// Apply colorblind-friendly color correction to particle colors.
+// mode: 0=off, 1=protanopia, 2=deuteranopia, 3=tritanopia
+void apply_colorblind_correction(Particles& p, int mode);

@@ -36,6 +36,18 @@ struct UserPrefs {
     bool  bloom_enabled   = false; // post-processing bloom
     bool  wobbly_windows  = true;  // subtle floating UI panel animations
     bool  tutorial_done   = false; // true after tutorial completed or skipped
+
+    // v4 fields — append only, keep defaults for backward compat
+    bool  vsync            = false;  // VSync (FIFO present mode)
+    int   preferred_gpu    = -1;     // -1=auto, 0+=index from GPU enumeration
+    int   preferred_monitor = 0;     // monitor index for fullscreen
+    float mouse_sensitivity = 1.0f;  // mouse speed multiplier (0.1-3.0)
+    int   colorblind_mode  = 0;      // 0=off, 1=protanopia, 2=deuteranopia, 3=tritanopia
+    bool  high_contrast    = false;  // high contrast UI
+    bool  reduced_motion   = false;  // disable wobbly windows + splash particles + GW ripples
+    int   quality_preset   = 2;      // 0=Low, 1=Medium, 2=High, 3=Ultra, 4=Custom
+    float sfx_volume       = 0.7f;   // 0.0-1.0 sound effect volume
+    bool  sfx_muted        = false;  // mute SFX toggle
 };
 
 // ── Group template for spawning composite structures ─────────────────────────
@@ -117,6 +129,7 @@ public:
     bool show_splash = true;
     bool show_pause_menu = false;
     bool show_settings_menu = false;
+    bool show_credits_ = false;
     int  settings_tab = 0;  // 0=Display, 1=Performance, 2=Theme, 3=Audio & Log
     bool request_quit = false;
     UserPrefs prefs;
@@ -597,6 +610,7 @@ private:
     void draw_gravity_map(const SimConfig& cfg);
     void draw_grav_waves(const SimConfig& cfg);
     void draw_measurement_panel();
+    void draw_credits();
 
     // Splash animation state
     struct SplashParticle {

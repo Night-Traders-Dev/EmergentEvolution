@@ -545,3 +545,41 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
     p.excitation_timer.assign(count, 0);
     p.entangled_partner.assign(count, 0xFFFFFFFFu);
 }
+
+// ── Colorblind correction ────────────────────────────────────────────────────
+// Simplified Daltonize: shift problematic hue channels to distinguishable ones.
+// mode: 0=off, 1=protanopia (red-weak), 2=deuteranopia (green-weak), 3=tritanopia (blue-weak)
+void apply_colorblind_correction(Particles& p, int mode) {
+    if (mode <= 0 || mode > 3) return;
+
+    for (uint32_t i = 0; i < std::min(static_cast<uint32_t>(p.colors.size()),
+                                        static_cast<uint32_t>(PHYS_PARTICLE_TYPES)); ++i) {
+        // Start from original colors
+        glm::vec4 c = PHYS_COLORS[i];
+        float r = c.r, g = c.g, b = c.b;
+
+        switch (mode) {
+            case 1: // Protanopia: red-weak — shift red toward blue
+                r = c.r * 0.2f + c.b * 0.8f;
+                g = c.g * 0.9f + c.r * 0.1f;
+                b = c.b * 0.7f + c.r * 0.3f;
+                break;
+            case 2: // Deuteranopia: green-weak — shift green toward blue
+                r = c.r * 0.8f + c.g * 0.2f;
+                g = c.g * 0.2f + c.b * 0.8f;
+                b = c.b * 0.7f + c.g * 0.3f;
+                break;
+            case 3: // Tritanopia: blue-weak — shift blue toward red
+                r = c.r * 0.7f + c.b * 0.3f;
+                g = c.g * 0.9f + c.b * 0.1f;
+                b = c.b * 0.2f + c.r * 0.8f;
+                break;
+        }
+
+        p.colors[i] = glm::vec4(
+            std::clamp(r, 0.0f, 1.0f),
+            std::clamp(g, 0.0f, 1.0f),
+            std::clamp(b, 0.0f, 1.0f),
+            c.a);
+    }
+}

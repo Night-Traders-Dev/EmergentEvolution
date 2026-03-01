@@ -206,22 +206,44 @@ void VulkanContext::pick_physical_device() {
     std::vector<VkPhysicalDevice> devices(count);
     vkEnumeratePhysicalDevices(instance, &count, devices.data());
 
-    // Prefer discrete GPU
+    // Build gpu_list of all suitable devices
+    gpu_list.clear();
+    std::vector<VkPhysicalDevice> suitable_devices;
     for (auto dev : devices) {
+        if (!is_device_suitable(dev)) continue;
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(dev, &props);
-        if (is_device_suitable(dev) &&
-            props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
-        {
-            physical_device = dev;
+        VkPhysicalDeviceMemoryProperties mem;
+        vkGetPhysicalDeviceMemoryProperties(dev, &mem);
+        VkDeviceSize vram = 0;
+        for (uint32_t i = 0; i < mem.memoryHeapCount; ++i) {
+            if (mem.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+                vram += mem.memoryHeaps[i].size;
+        }
+        gpu_list.push_back({ props.deviceName, props.deviceType, vram });
+        suitable_devices.push_back(dev);
+    }
+    if (suitable_devices.empty())
+        throw std::runtime_error("No suitable GPU found");
+
+    // Use preferred GPU if valid
+    if (preferred_gpu_index >= 0 && preferred_gpu_index < static_cast<int>(suitable_devices.size())) {
+        physical_device = suitable_devices[preferred_gpu_index];
+        selected_gpu_index = preferred_gpu_index;
+        return;
+    }
+
+    // Auto-select: prefer discrete GPU
+    for (int i = 0; i < static_cast<int>(suitable_devices.size()); ++i) {
+        if (gpu_list[i].type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+            physical_device = suitable_devices[i];
+            selected_gpu_index = i;
             return;
         }
     }
-    // Fallback to any suitable device
-    for (auto dev : devices) {
-        if (is_device_suitable(dev)) { physical_device = dev; return; }
-    }
-    throw std::runtime_error("No suitable GPU found");
+    // Fallback to first suitable
+    physical_device = suitable_devices[0];
+    selected_gpu_index = 0;
 }
 
 // ── Logical device ────────────────────────────────────────────────────────────
@@ -286,6 +308,8 @@ VkSurfaceFormatKHR VulkanContext::choose_surface_format(
 VkPresentModeKHR VulkanContext::choose_present_mode(
     const std::vector<VkPresentModeKHR>& modes)
 {
+    if (vsync_requested)
+        return VK_PRESENT_MODE_FIFO_KHR;  // FIFO is guaranteed available
     for (auto m : modes)
         if (m == VK_PRESENT_MODE_MAILBOX_KHR) return m;
     return VK_PRESENT_MODE_FIFO_KHR;

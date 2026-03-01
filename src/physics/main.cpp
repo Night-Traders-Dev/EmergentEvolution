@@ -25,8 +25,16 @@ static void framebuffer_resize_callback(GLFWwindow*, int, int) {
 
 // ── Fullscreen toggle (Alt+Enter) ────────────────────────────────────────────
 
+static GLFWmonitor* get_preferred_monitor(int preferred_idx) {
+    int count = 0;
+    GLFWmonitor** monitors = glfwGetMonitors(&count);
+    if (monitors && preferred_idx >= 0 && preferred_idx < count)
+        return monitors[preferred_idx];
+    return glfwGetPrimaryMonitor();
+}
+
 static void toggle_fullscreen(GLFWwindow* window, PhysicsSimulation& sim) {
-    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    GLFWmonitor* monitor = get_preferred_monitor(sim.iface.prefs.preferred_monitor);
     const GLFWvidmode* mode = glfwGetVideoMode(monitor);
 
     if (sim.is_fullscreen_) {
@@ -98,9 +106,12 @@ int main() {
 
     GLFWmonitor* monitor = glfwGetPrimaryMonitor();
     const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+#ifndef APP_VERSION
+#define APP_VERSION "0.1.0"
+#endif
     GLFWwindow* window = glfwCreateWindow(
         mode->width, mode->height,
-        "Particle Playground",
+        "Particle Playground v" APP_VERSION,
         nullptr, nullptr);
 
     if (!window) {
@@ -146,21 +157,36 @@ int main() {
         return 1;
     }
 
-    // Apply saved window mode after prefs are loaded
-    if (sim.iface.prefs.window_mode == 1) {
-        // User prefers windowed mode
-        int w = sim.iface.prefs.window_w;
-        int h = sim.iface.prefs.window_h;
-        if (w <= 0 || h <= 0) { w = mode->width * 3 / 4; h = mode->height * 3 / 4; }
-        int x = (mode->width - w) / 2;
-        int y = (mode->height - h) / 2;
-        glfwSetWindowMonitor(window, nullptr, x, y, w, h, 0);
-        glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_TRUE);
-        sim.is_fullscreen_ = false;
-        sim.saved_window_w_ = w;
-        sim.saved_window_h_ = h;
-        sim.saved_window_x_ = x;
-        sim.saved_window_y_ = y;
+    // Apply saved window mode + preferred monitor after prefs are loaded
+    {
+        GLFWmonitor* pref_mon = get_preferred_monitor(sim.iface.prefs.preferred_monitor);
+        const GLFWvidmode* pref_mode = glfwGetVideoMode(pref_mon);
+
+        if (sim.iface.prefs.window_mode == 1) {
+            // User prefers windowed mode
+            int w = sim.iface.prefs.window_w;
+            int h = sim.iface.prefs.window_h;
+            if (w <= 0 || h <= 0) { w = pref_mode->width * 3 / 4; h = pref_mode->height * 3 / 4; }
+            int mx, my;
+            glfwGetMonitorPos(pref_mon, &mx, &my);
+            int x = mx + (pref_mode->width - w) / 2;
+            int y = my + (pref_mode->height - h) / 2;
+            glfwSetWindowMonitor(window, nullptr, x, y, w, h, 0);
+            glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_TRUE);
+            sim.is_fullscreen_ = false;
+            sim.saved_window_w_ = w;
+            sim.saved_window_h_ = h;
+            sim.saved_window_x_ = x;
+            sim.saved_window_y_ = y;
+        } else if (pref_mon != monitor) {
+            // Fullscreen on non-primary monitor: reposition window
+            int mx, my;
+            glfwGetMonitorPos(pref_mon, &mx, &my);
+            glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
+            glfwSetWindowMonitor(window, nullptr, mx, my, pref_mode->width, pref_mode->height, 0);
+            glfwMaximizeWindow(window);
+            sim.renderer.swapchain_dirty = true;
+        }
     }
 
     using Clock = std::chrono::high_resolution_clock;
