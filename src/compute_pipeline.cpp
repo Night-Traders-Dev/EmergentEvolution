@@ -1108,7 +1108,29 @@ void ComputePipeline::record(VkCommandBuffer cmd,
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             0, 1, &bloom_barrier, 0, nullptr, 0, nullptr);
 
-        // Step 9: composite (bloom_a + render_tex → render_tex)
+        // Step 10: wide horizontal blur (bloom_a → bloom_b, 2× step)
+        bloom_pc.step = 10;
+        vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, sizeof(PushConstants), &bloom_pc);
+        vkCmdDispatch(cmd, bloom_groups, 1, 1);
+
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 1, &bloom_barrier, 0, nullptr, 0, nullptr);
+
+        // Step 11: wide vertical blur (bloom_b → bloom_b)
+        bloom_pc.step = 11;
+        vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, sizeof(PushConstants), &bloom_pc);
+        vkCmdDispatch(cmd, bloom_groups, 1, 1);
+
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 1, &bloom_barrier, 0, nullptr, 0, nullptr);
+
+        // Step 9: composite (bloom_a fine + bloom_b wide + render_tex → render_tex)
         bloom_pc.step = 9;
         vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT,
                            0, sizeof(PushConstants), &bloom_pc);

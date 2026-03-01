@@ -97,6 +97,7 @@ void PhysicsSimulation::check_annihilation() {
             iface.push_notification(amsg, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
             iface.push_decay_event(amsg, PhysicsInterface::DEVT_ANNIHILATION,
                 ImVec4(1.0f, 0.3f, 0.3f, 1.0f), std::string(adetail));
+            cfg.shake_intensity = std::max(cfg.shake_intensity, 12.0f);
         }
 
         glm::vec2 mid = (readback_positions_[i] + readback_positions_[best_j]) * 0.5f;
@@ -337,6 +338,7 @@ void PhysicsSimulation::check_fusion() {
             char msg[64];
             snprintf(msg, sizeof(msg), "Fusion: p+p (%.1f keV)", best_KE_cm * 1000.0f);
             iface.push_notification(msg, ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
+            cfg.shake_intensity = std::max(cfg.shake_intensity, 8.0f);
             {
                 char fd[256];
                 snprintf(fd, sizeof(fd),
@@ -420,6 +422,7 @@ void PhysicsSimulation::check_fusion() {
             readback_energies_[j] = std::min(readback_energies_[j] + mev_to_ebuf(E_bind * 0.5f), 1.0f);
             iface.push_notification("Fusion: p + n \xe2\x86\x92 deuteron",
                                     ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
+            cfg.shake_intensity = std::max(cfg.shake_intensity, 8.0f);
             {
                 glm::vec2 rv = readback_velocities_[j] - readback_velocities_[i];
                 float ke_cm = cm_kinetic_energy(m_proton, m_neutron, glm::dot(rv, rv));
@@ -573,6 +576,7 @@ void PhysicsSimulation::check_fission() {
             snprintf(msg, sizeof(msg), "Fission: %d-nucleon cluster split + %dn",
                      static_cast<int>(cluster.size()), free_neutrons);
             iface.push_notification(msg, ImVec4(1.0f, 0.6f, 0.2f, 1.0f));
+            cfg.shake_intensity = std::max(cfg.shake_intensity, 10.0f);
             char detail[512];
             snprintf(detail, sizeof(detail),
                 "Neutron #%u KE: %.2f MeV\nCluster size: %d nucleons (p=%d)\nFragments: 2 x %d nucleons\nFree neutrons ejected: %d (%.2f MeV each)\nE_fission total: %.2f MeV",

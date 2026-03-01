@@ -292,6 +292,10 @@ struct SimConfig {
     bool     show_trails        = false;  // particle trail rendering (fade instead of clear)
     bool     bloom_enabled      = true;   // post-processing bloom glow
 
+    // Camera shake (triggered by nuclear events)
+    float    shake_intensity    = 0.0f;   // current magnitude (pixels)
+    float    shake_decay        = 0.92f;  // per-frame exponential decay
+
     // Timestep multiplier (UI-adjustable)
     float    time_scale         = 1.0f;
 

@@ -34,6 +34,7 @@ struct UserPrefs {
     int   window_w        = 0;     // windowed width (0=monitor default)
     int   window_h        = 0;     // windowed height (0=monitor default)
     bool  bloom_enabled   = true;  // post-processing bloom
+    bool  wobbly_windows  = true;  // subtle floating UI panel animations
     bool  tutorial_done   = false; // true after tutorial completed or skipped
 };
 
@@ -111,6 +112,8 @@ void scan_theme_directory();
 
 class PhysicsInterface {
 public:
+    ImFont* title_font = nullptr;  // 48px font for crisp splash title (set by simulation init)
+
     bool show_splash = true;
     bool show_pause_menu = false;
     bool show_settings_menu = false;
@@ -121,6 +124,17 @@ public:
     bool spawn_menu_visible = true;
     bool pending_spawn = false;
     bool sim_running = true;
+
+    // Wobbly windows animation time
+    float wobble_time = 0.0f;
+
+    // Get a subtle wobble offset for floating UI windows (unique per window via phase)
+    ImVec2 wobble_offset(float phase) const {
+        if (!prefs.wobbly_windows) return ImVec2(0, 0);
+        float wx = std::sin(wobble_time * 1.2f + phase) * 2.0f;
+        float wy = std::cos(wobble_time * 0.9f + phase * 1.7f) * 1.5f;
+        return ImVec2(wx, wy);
+    }
 
     // Loading overlay
     bool show_loading_overlay = false;
@@ -254,6 +268,8 @@ public:
 
     bool  show_magnetic_field  = false;
     float magnetic_field_opacity = 0.35f;
+    bool  bfield_cache_valid     = false;  // B-field vis grid cache
+    float bfield_cache_mean_speed = 0.0f;  // mean |v| when cache was last built
 
     bool  show_gravity_map     = false;
     bool  show_grav_waves      = false;  // GW ripple visualization

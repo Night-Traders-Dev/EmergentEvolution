@@ -1938,9 +1938,14 @@ void render_particle(uint i) {
                     continue;
                 }
 
-                // ── Smooth edge for solid particles ─────────────────────────
-                float edge = 1.0 - smoothstep(render_radius * 0.65, render_radius, d);
+                // ── Smooth edge with sub-pixel anti-aliasing ───────────────
+                float aa_width = max(1.0, render_radius * 0.15);
+                float edge = 1.0 - smoothstep(render_radius - aa_width, render_radius, d);
                 col.rgb *= edge;
+
+                // ── Rim lighting (depth illusion at particle edge) ──────────
+                float rim = smoothstep(render_radius * 0.5, render_radius - aa_width, d);
+                col.rgb += col.rgb * (1.0 - rim) * edge * 0.25;
 
                 // ── Nucleon inner glow ──────────────────────────────────────
                 if (is_nucleon) {
@@ -2692,7 +2697,7 @@ void bloom_blur_v(uint pixel_idx) {
     imageStore(bloom_tex_a, ivec2(px, py), vec4(result, 1.0));
 }
 
-// Step 9: Composite bloom back onto render texture
+// Step 9: Composite bloom back onto render texture (dual-layer: fine + wide)
 void bloom_composite(uint pixel_idx) {
     ivec2 tex_size = imageSize(out_render_texture);
     int px = int(pixel_idx) % tex_size.x;
@@ -2701,24 +2706,59 @@ void bloom_composite(uint pixel_idx) {
 
     ivec2 coord = ivec2(px, py);
     vec4 scene = imageLoad(out_render_texture, coord);
-    vec3 bloom = imageLoad(bloom_tex_a, coord).rgb;
+    vec3 fine_bloom = imageLoad(bloom_tex_a, coord).rgb;
+    vec3 wide_bloom = imageLoad(bloom_tex_b, coord).rgb;
 
-    // Additive blend with intensity control
-    scene.rgb += bloom * BLOOM_INTENSITY;
+    // Additive blend: fine bloom (sharp glow) + wide bloom (soft halo)
+    scene.rgb += fine_bloom * BLOOM_INTENSITY + wide_bloom * 0.15;
 
     imageStore(out_render_texture, coord, scene);
+}
+
+// Step 10: Wide horizontal blur (bloom_a → bloom_b, 2× step for softer glow)
+void bloom_blur_wide_h(uint pixel_idx) {
+    ivec2 tex_size = imageSize(bloom_tex_a);
+    int px = int(pixel_idx) % tex_size.x;
+    int py = int(pixel_idx) / tex_size.x;
+    if (py >= tex_size.y) return;
+
+    vec3 result = imageLoad(bloom_tex_a, ivec2(px, py)).rgb * BLOOM_W[0];
+    for (int k = 1; k < 5; k++) {
+        int offset = k * 2;  // 2× step size for wider blur
+        result += imageLoad(bloom_tex_a, ivec2(clamp(px + offset, 0, tex_size.x - 1), py)).rgb * BLOOM_W[k];
+        result += imageLoad(bloom_tex_a, ivec2(clamp(px - offset, 0, tex_size.x - 1), py)).rgb * BLOOM_W[k];
+    }
+    imageStore(bloom_tex_b, ivec2(px, py), vec4(result, 1.0));
+}
+
+// Step 11: Wide vertical blur (bloom_b → bloom_b in-place via bloom_a readback)
+void bloom_blur_wide_v(uint pixel_idx) {
+    ivec2 tex_size = imageSize(bloom_tex_b);
+    int px = int(pixel_idx) % tex_size.x;
+    int py = int(pixel_idx) / tex_size.x;
+    if (py >= tex_size.y) return;
+
+    vec3 result = imageLoad(bloom_tex_b, ivec2(px, py)).rgb * BLOOM_W[0];
+    for (int k = 1; k < 5; k++) {
+        int offset = k * 2;
+        result += imageLoad(bloom_tex_b, ivec2(px, clamp(py + offset, 0, tex_size.y - 1))).rgb * BLOOM_W[k];
+        result += imageLoad(bloom_tex_b, ivec2(px, clamp(py - offset, 0, tex_size.y - 1))).rgb * BLOOM_W[k];
+    }
+    imageStore(bloom_tex_b, ivec2(px, py), vec4(result, 1.0));
 }
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
 
     // Pixel-index steps (dispatch over render texture pixels)
-    if (params.step == 3u) { fade_pixel(i);       return; }
-    if (params.step == 5u) { render_field_gather(i); return; }
-    if (params.step == 6u) { bloom_extract(i);    return; }
-    if (params.step == 7u) { bloom_blur_h(i);     return; }
-    if (params.step == 8u) { bloom_blur_v(i);     return; }
-    if (params.step == 9u) { bloom_composite(i);  return; }
+    if (params.step == 3u)  { fade_pixel(i);          return; }
+    if (params.step == 5u)  { render_field_gather(i);  return; }
+    if (params.step == 6u)  { bloom_extract(i);        return; }
+    if (params.step == 7u)  { bloom_blur_h(i);         return; }
+    if (params.step == 8u)  { bloom_blur_v(i);         return; }
+    if (params.step == 10u) { bloom_blur_wide_h(i);    return; }
+    if (params.step == 11u) { bloom_blur_wide_v(i);    return; }
+    if (params.step == 9u)  { bloom_composite(i);      return; }
 
     if (i >= params.particle_count) return;
 

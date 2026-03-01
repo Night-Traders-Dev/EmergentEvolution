@@ -344,6 +344,8 @@ void Renderer::init_imgui(VulkanContext& ctx, GLFWwindow* window) {
         if (f) {
             std::fclose(f);
             io.Fonts->AddFontFromFileTTF(path, 15.0f, nullptr, physics_glyph_ranges);
+            // Load title font at 48px for crisp splash screen rendering
+            title_font = io.Fonts->AddFontFromFileTTF(path, 48.0f, nullptr, physics_glyph_ranges);
             font_loaded = true;
             break;
         }

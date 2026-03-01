@@ -186,7 +186,9 @@ void PhysicsInterface::draw_nuclear_debug(SimConfig& cfg) {
     if (!show_nuclear_debug) return;
 
     ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 680, 60), ImGuiCond_Appearing);
+    {   auto w = wobble_offset(4.0f);
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 680 + w.x, 60 + w.y), ImGuiCond_Appearing);
+    }
     ImGui::SetNextWindowSize(ImVec2(320, 540), ImGuiCond_Appearing);
     ImGui::SetNextWindowSizeConstraints(ImVec2(280, 300), ImVec2(500, 800));
 

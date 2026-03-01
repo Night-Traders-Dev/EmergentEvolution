@@ -328,11 +328,19 @@ void PhysicsInterface::draw_splash_screen() {
                     IM_COL32(0, 200, 255, 153), 1.0f);
 
         // Title "Particle Playground" — large text with glow shadow
-        float old_scale = ImGui::GetFont()->Scale;
-        float title_font_scale = 2.2f * scale;
-        if (title_font_scale < 1.5f) title_font_scale = 1.5f;
-        ImGui::GetFont()->Scale = title_font_scale;
-        ImGui::PushFont(ImGui::GetFont());
+        // Use pre-rasterized 48px title font for crisp rendering (no bitmap scaling blur)
+        bool has_title_font = (title_font != nullptr);
+        if (has_title_font) {
+            ImGui::PushFont(title_font);
+        } else {
+            // Fallback: runtime scale (blurry but functional)
+            float old_scale_val = ImGui::GetFont()->Scale;
+            float title_font_scale = 2.2f * scale;
+            if (title_font_scale < 1.5f) title_font_scale = 1.5f;
+            ImGui::GetFont()->Scale = title_font_scale;
+            ImGui::PushFont(ImGui::GetFont());
+            (void)old_scale_val; // used in PopFont below
+        }
 
         // Glow shadow layers (drawn behind, progressively offset + dimmer)
         for (int g = 3; g >= 1; --g) {
@@ -351,7 +359,9 @@ void PhysicsInterface::draw_splash_screen() {
         // "Playground" in cyan
         ImGui::TextColored(ImVec4(0.0f, 0.83f, 1.0f, 1.0f), "Playground");
 
-        ImGui::GetFont()->Scale = old_scale;
+        if (!has_title_font) {
+            ImGui::GetFont()->Scale = 1.0f;  // restore default scale
+        }
         ImGui::PopFont();
 
         // Subtitle
@@ -637,6 +647,9 @@ void PhysicsInterface::draw_settings_menu() {
             ImGui::Checkbox("Bloom Glow", &prefs.bloom_enabled);
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Post-processing bloom effect\nAdds a soft glow around bright particles");
+            ImGui::Checkbox("Wobbly Windows", &prefs.wobbly_windows);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Subtle floating animation for UI panels");
 
             ImGui::Dummy(ImVec2(0, 12));
             ImGui::SeparatorText("Visual Overlays");

@@ -43,6 +43,8 @@ uses a **spatial acceleration grid** with **OpenMP** parallelization for O(n) ne
 - [Quantum Entanglement](#quantum-entanglement)
 - [Emergent Thermodynamics](#emergent-thermodynamics)
 - [UI & Visualization](#ui--visualization)
+- [Tutorial & Onboarding](#tutorial--onboarding)
+- [Scenarios & Gameplay](#scenarios--gameplay)
 - [Environment Presets](#environment-presets)
 - [Save / Load](#save--load)
 - [Controls](#controls)
@@ -58,8 +60,9 @@ uses a **spatial acceleration grid** with **OpenMP** parallelization for O(n) ne
 | Particle count | Up to **100,000** simultaneous particles |
 | GPU forces | O(n&#178;) pairwise per-frame on Vulkan compute shader |
 | CPU physics | O(n) via **spatial acceleration grid** (30px cells, 342&times;193 = 65,906 cells) |
-| Parallelism | **OpenMP** across all cores for statistics, measurement, visualization |
+| Parallelism | **OpenMP** across all cores for grid builds, entropy, statistics, measurement, B-field visualization |
 | GPU sync | Single `vkDeviceWaitIdle` per frame (batched dirty flag) |
+| GPU post-processing | **Dual-layer bloom** (fine + wide Gaussian blur), zoom-adaptive particle sizing |
 | World | 10,240 &times; 5,760 px toroidal space |
 | Buffers | Double-buffered ping-pong (position, velocity, angle, angular velocity, energy, genome) |
 | Genome | 4 floats per particle: charge, spin, color charge / orbital L, decay rate |
@@ -532,11 +535,34 @@ velocity meter (tracks single particle), distance ruler (nanometer scale), densi
 - **Nuclear Debug**: tune reaction thresholds and rates in real time
 - **Halt Velocities / Remove Massless / Remove Massive**: utility actions
 
+### Visual Quality
+
+- **Dual-layer bloom**: brightness extract &rarr; fine Gaussian blur &rarr; wide Gaussian blur &rarr; composite.
+  Two bloom layers (fine sharp glow + soft wide halo) produce rich light bleeding from energetic particles.
+  Togglable in Display settings.
+- **Rim lighting**: particles have bright edge highlights for depth illusion
+- **Sub-pixel anti-aliasing**: adaptive AA band width (`max(1px, 15% radius)`) ensures smooth edges at all zoom levels
+- **Zoom-adaptive sizing**: `mix(zoom, sqrt(zoom), 0.5)` &mdash; particles stay visible when zoomed out, don't overlap when zoomed in
+- **Camera shake**: fusion, fission, and annihilation events trigger exponentially decaying camera shake (8&ndash;12px intensity)
+- **Wobbly windows**: subtle sinusoidal floating animation on UI panels (2px amplitude, togglable)
+
 ### Spawn Picker (F3)
 
 Categorized spawning: leptons, quarks, bosons, hypothetical particles, composite atoms
 (H through Fe as complete atoms with hexagonal nuclei and electron shells), and molecules
 by formula. Configurable count, energy, and scatter radius.
+
+### Experiment Presets
+
+Quick-apply buttons in the Environment settings panel:
+
+| Preset | Temperature | Description |
+|---|---|---|
+| Cold Lab | 10 K | Cold vacuum with low dampening |
+| Hot Plasma | 10 MK | Extreme thermal energy |
+| Nuclear Fuel | 100 MK | Fusion-ready proton gas |
+| Antimatter | 10 K | Matter + antimatter mix with virtual pairs |
+| Dark Universe | 100 K | Dark matter + dark energy dominated |
 
 ### Themes
 
@@ -549,6 +575,53 @@ tabs: Display, Performance, Theme, and Audio & Log. User preferences persist acr
 
 64 milestones across 6 categories (Nuclear Physics, Element Creation, Particle Zoo,
 Thermodynamics, Milestones, Chemistry). Persist via `.ppach` file.
+
+---
+
+## Tutorial & Onboarding
+
+A 10-step interactive tutorial guides new users through the simulation:
+
+1. **Welcome** &mdash; introduction and basic controls
+2. **Spawning Particles** &mdash; click to place particles
+3. **Camera Controls** &mdash; scroll to zoom, drag to pan
+4. **Spawn Menu** &mdash; open the categorized spawn picker
+5. **Elements** &mdash; create nuclei from protons and neutrons
+6. **Accelerator** &mdash; fire high-energy projectiles
+7. **Force Objects** &mdash; place EM fields and gravity wells
+8. **Time Control** &mdash; speed up and slow down simulation
+9. **Saving** &mdash; save and load simulation state
+10. **Explore** &mdash; congratulations, begin free play
+
+### Particle Encyclopedia
+
+Every particle type has an encyclopedia entry accessible via the **?** button on info cards.
+Entries include: name, symbol, category, mass (MeV), charge, spin, physics description,
+and discovery history.
+
+---
+
+## Scenarios & Gameplay
+
+12 guided scenarios with goals across four categories:
+
+| Category | Scenario | Goal |
+|---|---|---|
+| **Nuclear** | First Light | Create your first photon |
+| **Nuclear** | Hydrogen Factory | Build 5 hydrogen atoms |
+| **Nuclear** | Solar Core | Trigger hydrogen fusion |
+| **Nuclear** | Chain Reaction | Cause a fission chain reaction |
+| **Nuclear** | Antimatter Lab | Observe matter-antimatter annihilation |
+| **Chemistry** | Water World | Form H&#8322;O molecules |
+| **Chemistry** | Chemistry Set | Create 3 different molecules |
+| **Cosmology** | Dark Sector | Observe dark matter clustering |
+| **Cosmology** | Particle Zoo | Discover 10 particle types |
+| **Cosmology** | Stellar Nucleosynthesis | Build elements up to Iron |
+| **Sandbox** | Free Play: Lab | Open sandbox (no goal) |
+| **Sandbox** | Free Play: Space | Space environment sandbox |
+
+Accessible from the pause menu. Active scenarios display a goal HUD with progress,
+hints, and completion notifications.
 
 ---
 
@@ -601,6 +674,9 @@ Simulation saves capture a 320&times;180 PNG thumbnail. The load dialog displays
 card grid with preview images, names, dates, and file sizes. Element and molecule files store
 positions as offsets from centroid for portability.
 
+**Auto-save**: configurable interval (Off / 2 / 5 / 10 minutes) saves to `saves/autosave.ppsg`
+automatically during simulation. Interval is set in **Settings > Performance**.
+
 ---
 
 ## Controls
@@ -613,6 +689,8 @@ positions as offsets from centroid for portability.
 | `F3` | Spawn Picker |
 | `F4` | Select mode |
 | `Space` | Pause / unpause |
+| `[` / `]` | Halve / double time scale (0.0625&times;&ndash;16&times;) |
+| `Alt+Enter` | Toggle borderless fullscreen / windowed |
 | `Ctrl+S` / `Ctrl+L` | Save / Load |
 | `W A S D` | Pan camera |
 | Left drag | Pan camera |
@@ -669,7 +747,7 @@ EmergentEvolution/
 │   ├── types.h                  # SimConfig, PushConstants, shared constants
 │   ├── particles.h/.cpp         # CPU particle arrays and type data
 │   ├── vulkan_context.h/.cpp    # Vulkan instance, device, swapchain, buffers
-│   ├── compute_pipeline.h/.cpp  # 20-binding descriptor layout, buffer lifecycle, readback
+│   ├── compute_pipeline.h/.cpp  # 23-binding descriptor layout, buffer lifecycle, readback, bloom
 │   ├── renderer.h/.cpp          # Fullscreen-quad pipeline, ImGui integration
 │   ├── stb_image*.h/.cpp        # Image loading/writing (icons, thumbnails)
 │   └── miniaudio.h              # Single-header audio (MP3 decode + playback)
@@ -697,9 +775,12 @@ EmergentEvolution/
 │   ├── achievements.h/.cpp      # 64 achievements, persistence
 │   ├── audio.h/.cpp             # Background music via miniaudio
 │   ├── save_load.h/.cpp         # Binary .ppsg/.ppel/.ppmol serialization
+│   ├── tutorial.h/.cpp          # 10-step interactive tutorial system
+│   ├── scenarios.h/.cpp         # 12 guided scenarios with goals
+│   ├── encyclopedia.h           # Particle type descriptions and metadata
 │   └── main.cpp                 # Entry point
 ├── shaders/
-│   ├── physics.comp             # GPU: forces, collisions, bonds, fields, wave rendering
+│   ├── physics.comp             # GPU: forces, collisions, bonds, fields, bloom, wave rendering
 │   ├── fullscreen.vert/.frag    # Render pipeline
 ├── assets/                      # Icons, music, splash reference
 └── CMakeLists.txt
@@ -725,6 +806,8 @@ EmergentEvolution/
 | 18 | Mass inverse + ZPE table | read |
 | 19 | GPU spatial grid cell starts | read (CPU-built) |
 | 20 | GPU spatial grid sorted indices | read (CPU-built) |
+| 21 | Bloom texture A (fine) | image read/write |
+| 22 | Bloom texture B (wide) | image read/write |
 
 Particle buffers use DEVICE_LOCAL memory on discrete GPUs with staging buffers for CPU
 readback. A/B buffers ping-pong each tick.

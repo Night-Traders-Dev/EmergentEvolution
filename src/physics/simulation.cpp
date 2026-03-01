@@ -51,31 +51,68 @@ void SpatialGrid::build(const std::vector<glm::vec2>& positions,
     indices.resize(n);
     std::memset(cell_count, 0, sizeof(cell_count));
 
-    // Count particles per cell
-    for (uint32_t i = 0; i < n; ++i) {
-        if (energies[i] < 0.01f) continue;
-        int col = std::clamp(static_cast<int>(positions[i].x / CELL_SIZE), 0, COLS - 1);
-        int row = std::clamp(static_cast<int>(positions[i].y / CELL_SIZE), 0, ROWS - 1);
-        cell_count[row * COLS + col]++;
+    // Pass 1: Count particles per cell (thread-local histograms → merge)
+#ifdef HAS_OPENMP
+    if (n > 5000) {
+        #pragma omp parallel
+        {
+            uint32_t local_count[TOTAL_CELLS] = {};
+            #pragma omp for nowait
+            for (uint32_t i = 0; i < n; ++i) {
+                if (energies[i] < 0.01f) continue;
+                int col = std::clamp(static_cast<int>(positions[i].x / CELL_SIZE), 0, COLS - 1);
+                int row = std::clamp(static_cast<int>(positions[i].y / CELL_SIZE), 0, ROWS - 1);
+                local_count[row * COLS + col]++;
+            }
+            #pragma omp critical
+            for (int c = 0; c < TOTAL_CELLS; ++c)
+                cell_count[c] += local_count[c];
+        }
+    } else
+#endif
+    {
+        for (uint32_t i = 0; i < n; ++i) {
+            if (energies[i] < 0.01f) continue;
+            int col = std::clamp(static_cast<int>(positions[i].x / CELL_SIZE), 0, COLS - 1);
+            int row = std::clamp(static_cast<int>(positions[i].y / CELL_SIZE), 0, ROWS - 1);
+            cell_count[row * COLS + col]++;
+        }
     }
 
-    // Prefix sum → cell_start
+    // Pass 2: Prefix sum → cell_start (serial — tiny loop)
     uint32_t acc = 0;
     for (int c = 0; c < TOTAL_CELLS; ++c) {
         cell_start[c] = acc;
         acc += cell_count[c];
     }
 
-    // Scatter — use a temporary offset array
+    // Pass 3: Scatter (atomic capture for thread safety)
     uint32_t offsets[TOTAL_CELLS];
     std::memcpy(offsets, cell_start, sizeof(cell_start));
 
-    for (uint32_t i = 0; i < n; ++i) {
-        if (energies[i] < 0.01f) continue;
-        int col = std::clamp(static_cast<int>(positions[i].x / CELL_SIZE), 0, COLS - 1);
-        int row = std::clamp(static_cast<int>(positions[i].y / CELL_SIZE), 0, ROWS - 1);
-        int cell = row * COLS + col;
-        indices[offsets[cell]++] = i;
+#ifdef HAS_OPENMP
+    if (n > 5000) {
+        #pragma omp parallel for
+        for (uint32_t i = 0; i < n; ++i) {
+            if (energies[i] < 0.01f) continue;
+            int col = std::clamp(static_cast<int>(positions[i].x / CELL_SIZE), 0, COLS - 1);
+            int row = std::clamp(static_cast<int>(positions[i].y / CELL_SIZE), 0, ROWS - 1);
+            int cell = row * COLS + col;
+            uint32_t slot;
+            #pragma omp atomic capture
+            slot = offsets[cell]++;
+            indices[slot] = i;
+        }
+    } else
+#endif
+    {
+        for (uint32_t i = 0; i < n; ++i) {
+            if (energies[i] < 0.01f) continue;
+            int col = std::clamp(static_cast<int>(positions[i].x / CELL_SIZE), 0, COLS - 1);
+            int row = std::clamp(static_cast<int>(positions[i].y / CELL_SIZE), 0, ROWS - 1);
+            int cell = row * COLS + col;
+            indices[offsets[cell]++] = i;
+        }
     }
 }
 
@@ -87,26 +124,63 @@ void GPUGrid::build(const std::vector<glm::vec2>& positions,
     cell_start.assign(TOTAL_CELLS + 1, 0);
     sorted_indices.resize(n);
 
-    // Pass 1: count per cell (offset by 1 for prefix-sum)
-    for (uint32_t i = 0; i < n; ++i) {
-        if (energies[i] < 0.001f) continue;  // skip dormant
-        int col = std::clamp(static_cast<int>(positions[i].x / CELL_SIZE), 0, COLS - 1);
-        int row = std::clamp(static_cast<int>(positions[i].y / CELL_SIZE), 0, ROWS - 1);
-        cell_start[static_cast<size_t>(row * COLS + col) + 1]++;
+    // Pass 1: count per cell (thread-local histograms → merge)
+#ifdef HAS_OPENMP
+    if (n > 5000) {
+        #pragma omp parallel
+        {
+            std::vector<uint32_t> local_count(TOTAL_CELLS, 0);
+            #pragma omp for nowait
+            for (uint32_t i = 0; i < n; ++i) {
+                if (energies[i] < 0.001f) continue;
+                int col = std::clamp(static_cast<int>(positions[i].x / CELL_SIZE), 0, COLS - 1);
+                int row = std::clamp(static_cast<int>(positions[i].y / CELL_SIZE), 0, ROWS - 1);
+                local_count[static_cast<size_t>(row * COLS + col)]++;
+            }
+            #pragma omp critical
+            for (int c = 0; c < TOTAL_CELLS; ++c)
+                cell_start[static_cast<size_t>(c) + 1] += local_count[c];
+        }
+    } else
+#endif
+    {
+        for (uint32_t i = 0; i < n; ++i) {
+            if (energies[i] < 0.001f) continue;
+            int col = std::clamp(static_cast<int>(positions[i].x / CELL_SIZE), 0, COLS - 1);
+            int row = std::clamp(static_cast<int>(positions[i].y / CELL_SIZE), 0, ROWS - 1);
+            cell_start[static_cast<size_t>(row * COLS + col) + 1]++;
+        }
     }
 
-    // Pass 2: prefix sum
+    // Pass 2: prefix sum (serial — tiny loop)
     for (int c = 1; c <= TOTAL_CELLS; ++c)
         cell_start[c] += cell_start[c - 1];
 
-    // Pass 3: scatter using temporary offsets
+    // Pass 3: scatter (atomic capture for thread safety)
     std::vector<uint32_t> offsets(cell_start.begin(), cell_start.begin() + TOTAL_CELLS);
-    for (uint32_t i = 0; i < n; ++i) {
-        if (energies[i] < 0.001f) continue;
-        int col = std::clamp(static_cast<int>(positions[i].x / CELL_SIZE), 0, COLS - 1);
-        int row = std::clamp(static_cast<int>(positions[i].y / CELL_SIZE), 0, ROWS - 1);
-        int cell = row * COLS + col;
-        sorted_indices[offsets[cell]++] = i;
+#ifdef HAS_OPENMP
+    if (n > 5000) {
+        #pragma omp parallel for
+        for (uint32_t i = 0; i < n; ++i) {
+            if (energies[i] < 0.001f) continue;
+            int col = std::clamp(static_cast<int>(positions[i].x / CELL_SIZE), 0, COLS - 1);
+            int row = std::clamp(static_cast<int>(positions[i].y / CELL_SIZE), 0, ROWS - 1);
+            int cell = row * COLS + col;
+            uint32_t slot;
+            #pragma omp atomic capture
+            slot = offsets[cell]++;
+            sorted_indices[slot] = i;
+        }
+    } else
+#endif
+    {
+        for (uint32_t i = 0; i < n; ++i) {
+            if (energies[i] < 0.001f) continue;
+            int col = std::clamp(static_cast<int>(positions[i].x / CELL_SIZE), 0, COLS - 1);
+            int row = std::clamp(static_cast<int>(positions[i].y / CELL_SIZE), 0, ROWS - 1);
+            int cell = row * COLS + col;
+            sorted_indices[offsets[cell]++] = i;
+        }
     }
 }
 
@@ -168,6 +242,7 @@ void PhysicsSimulation::init(GLFWwindow* window) {
 
     compute.init(vk, COMPUTE_SPV);
     renderer.init(vk, window, compute);
+    iface.title_font = renderer.title_font;
 
     // Give interface a pointer to VulkanContext for thumbnail loading
     iface.set_vk_ctx(&vk);
@@ -369,6 +444,7 @@ void PhysicsSimulation::reset() {
     prev_entropy_ = 0.0f;
     entropy_trend_ = 0;
     entropy_trend_ema_ = 0.0f;
+    iface.bfield_cache_valid = false;
 
     // Clear force objects
     force_object_count_ = 0;
@@ -447,6 +523,16 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
     float smooth_factor = 1.0f - std::exp(-8.0f * static_cast<float>(dt));
     cfg.current_camera_zoom += (cfg.camera_zoom - cfg.current_camera_zoom) * smooth_factor;
     cfg.current_camera_origin += (cfg.camera_origin - cfg.current_camera_origin) * smooth_factor;
+
+    // Camera shake (triggered by nuclear events, decays exponentially)
+    if (cfg.shake_intensity > 0.1f) {
+        float angle = static_cast<float>(frame_counter_) * 7.13f;
+        cfg.current_camera_origin.x += std::cos(angle) * cfg.shake_intensity;
+        cfg.current_camera_origin.y += std::sin(angle * 1.37f) * cfg.shake_intensity;
+        cfg.shake_intensity *= cfg.shake_decay;
+    } else {
+        cfg.shake_intensity = 0.0f;
+    }
 
     // Mouse handling
     double mx, my;
@@ -1105,6 +1191,7 @@ void PhysicsSimulation::check_achievements() {
 void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     handle_input(window, dt);
     frame_counter_++;
+    iface.wobble_time += static_cast<float>(dt);
 
     // Apply thread count from settings (only when changed to avoid runtime overhead)
 #ifdef HAS_OPENMP
@@ -1713,15 +1800,42 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 float cell_ke[E_CELLS] = {};
                 uint32_t cell_count[E_CELLS] = {};
 
-                for (uint32_t i = 0; i < n; ++i) {
-                    if (readback_energies_[i] < 0.01f) continue;
-                    int gx = std::clamp(static_cast<int>(readback_positions_[i].x / cell_w),
-                                        0, static_cast<int>(E_GRID_W) - 1);
-                    int gy = std::clamp(static_cast<int>(readback_positions_[i].y / cell_h),
-                                        0, static_cast<int>(E_GRID_H) - 1);
-                    int idx = gy * E_GRID_W + gx;
-                    cell_ke[idx] += 0.5f * glm::dot(readback_velocities_[i], readback_velocities_[i]);
-                    cell_count[idx]++;
+#ifdef HAS_OPENMP
+                if (n > 5000) {
+                    #pragma omp parallel
+                    {
+                        float local_ke[E_CELLS] = {};
+                        uint32_t local_cnt[E_CELLS] = {};
+                        #pragma omp for nowait
+                        for (uint32_t i = 0; i < n; ++i) {
+                            if (readback_energies_[i] < 0.01f) continue;
+                            int gx = std::clamp(static_cast<int>(readback_positions_[i].x / cell_w),
+                                                0, static_cast<int>(E_GRID_W) - 1);
+                            int gy = std::clamp(static_cast<int>(readback_positions_[i].y / cell_h),
+                                                0, static_cast<int>(E_GRID_H) - 1);
+                            int idx = gy * E_GRID_W + gx;
+                            local_ke[idx] += 0.5f * glm::dot(readback_velocities_[i], readback_velocities_[i]);
+                            local_cnt[idx]++;
+                        }
+                        #pragma omp critical
+                        for (uint32_t c = 0; c < E_CELLS; ++c) {
+                            cell_ke[c] += local_ke[c];
+                            cell_count[c] += local_cnt[c];
+                        }
+                    }
+                } else
+#endif
+                {
+                    for (uint32_t i = 0; i < n; ++i) {
+                        if (readback_energies_[i] < 0.01f) continue;
+                        int gx = std::clamp(static_cast<int>(readback_positions_[i].x / cell_w),
+                                            0, static_cast<int>(E_GRID_W) - 1);
+                        int gy = std::clamp(static_cast<int>(readback_positions_[i].y / cell_h),
+                                            0, static_cast<int>(E_GRID_H) - 1);
+                        int idx = gy * E_GRID_W + gx;
+                        cell_ke[idx] += 0.5f * glm::dot(readback_velocities_[i], readback_velocities_[i]);
+                        cell_count[idx]++;
+                    }
                 }
 
                 float S = 0.0f;
@@ -1848,6 +1962,21 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             constexpr float K_MAG = 1.0f;
             constexpr float K_DIP = 2.0f;
 
+            // Pre-cache: skip recomputation when particle motion hasn't changed significantly
+            float mean_speed = 0.0f;
+            #pragma omp parallel for reduction(+:mean_speed) if(cfg.particle_count > 5000)
+            for (uint32_t i = 0; i < cfg.particle_count; ++i)
+                mean_speed += glm::length(readback_velocities_[i]);
+            mean_speed /= std::max(cfg.particle_count, 1u);
+
+            float speed_delta = std::abs(mean_speed - iface.bfield_cache_mean_speed)
+                              / (iface.bfield_cache_mean_speed + 0.001f);
+            bool need_recompute = !iface.bfield_cache_valid
+                                || speed_delta > 0.10f
+                                || (frame_counter_ % 30) == 0;
+
+            if (need_recompute) {
+
             #pragma omp parallel for if(VIS_GRID_CELLS > 100)
             for (uint32_t ci = 0; ci < VIS_GRID_CELLS; ++ci) {
                 float cx = (ci % VIS_GRID_W + 0.5f) * cell_w;
@@ -1887,6 +2016,9 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 }
                 iface.vis_grid.bfield_z[ci] = bz;
             }
+            iface.bfield_cache_valid = true;
+            iface.bfield_cache_mean_speed = mean_speed;
+            } // end need_recompute
 
             // ── Collect magnetic sources for field line visualization ──
             // No cap — every qualifying particle gets field lines. Camera-cull

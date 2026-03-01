@@ -596,7 +596,9 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
     ImGuiIO& io = ImGui::GetIO();
     float max_h = io.DisplaySize.y - 64.0f;
 
-    ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
+    {   auto w = wobble_offset(1.0f);
+        ImGui::SetNextWindowPos(ImVec2(10 + w.x, 10 + w.y), ImGuiCond_FirstUseEver);
+    }
     ImGui::SetNextWindowSize(ImVec2(300, std::min(680.0f, max_h)), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(280, 200), ImVec2(350, max_h));
 
@@ -1151,7 +1153,9 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
     ImGuiIO& io = ImGui::GetIO();
     float max_h = io.DisplaySize.y - 64.0f;
 
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 330, 10), ImGuiCond_FirstUseEver);
+    {   auto w = wobble_offset(2.0f);
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 330 + w.x, 10 + w.y), ImGuiCond_FirstUseEver);
+    }
     ImGui::SetNextWindowSize(ImVec2(320, std::min(620.0f, max_h)), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(300, 200), ImVec2(360, max_h));
 

@@ -5,6 +5,7 @@
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
 #include <vector>
+#include <imgui.h>
 
 static constexpr int FRAMES_IN_FLIGHT = 2;
 
@@ -23,6 +24,7 @@ struct FrameData {
 class Renderer {
 public:
     bool swapchain_dirty = false;
+    ImFont* title_font = nullptr;  // 48px font for splash screen title (crisp rendering)
 
     void init(VulkanContext& ctx,
               GLFWwindow*   window,
