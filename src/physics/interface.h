@@ -90,6 +90,19 @@ struct VisGrid {
     uint32_t count[VIS_GRID_CELLS]  = {};
 };
 
+// Theme color palette — shared across UI modules
+struct ThemeColors {
+    ImVec4 bg, bg_dim, accent, accent_bright, border, frame, frame_hover, text, text_dim;
+};
+
+// Theme accessors (defined in interface.cpp)
+inline constexpr int BUILTIN_THEME_COUNT = 14;
+int total_theme_count();
+const ThemeColors& get_theme(int idx);
+const char* get_theme_name(int idx);
+int custom_theme_count();
+void scan_theme_directory();
+
 class PhysicsInterface {
 public:
     bool show_splash = true;
@@ -574,3 +587,7 @@ private:
     void load_thumbnails();
     void free_thumbnails();
 };
+
+// Molecular formula builder (defined in ui_lists.cpp, used by ui_cards.cpp)
+std::string build_molecular_formula(const std::vector<PhysicsInterface::ElementSummary>& elems,
+                                     const std::vector<uint32_t>& atom_indices);

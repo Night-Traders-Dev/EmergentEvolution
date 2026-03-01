@@ -2319,6 +2319,228 @@ void render_field(uint i) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+//  GATHER-BASED FIELD VISUALIZATION (step 5) — one thread per pixel
+//  Uses GPU spatial grid for O(k) neighbor lookup instead of O(N) scatter.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void render_field_gather(uint pixel_idx) {
+    uint tex_w = uint(params.region_size.x);
+    uint tex_h = uint(params.region_size.y);
+    if (pixel_idx >= tex_w * tex_h) return;
+
+    ivec2 pixel = ivec2(pixel_idx % tex_w, pixel_idx / tex_w);
+
+    uint fflags = params.field_flags;
+    // Support legacy density_limit encoding for backward compat
+    if (fflags == 0u) {
+        float fm = params.density_limit;
+        if (fm > 0.5 && fm < 1.5) fflags = 1u;
+        else if (fm > 1.5 && fm < 2.5) fflags = 2u;
+        else if (fm > 2.5 && fm < 3.5) fflags = 3u;
+    }
+
+    bool show_em     = (fflags & 1u) != 0u;
+    bool show_strong = (fflags & 2u) != 0u;
+    bool show_weak   = (fflags & 4u) != 0u;
+    bool show_grav   = (fflags & 8u) != 0u;
+    bool show_higgs  = (fflags & 16u) != 0u;
+    bool show_de     = (fflags & (1u << 12)) != 0u;
+
+    // Convert pixel to world coordinates
+    vec2 screen_center = params.region_size * 0.5;
+    vec2 world_pos = params.camera_origin
+        + (vec2(pixel) - screen_center) / params.camera_zoom;
+
+    float intensity = params.local_density_cap;
+    vec3 field_total = vec3(0.0);
+
+    // Determine max world-space range for grid query
+    float max_range = 0.0;
+    if (show_em)     max_range = FIELD_MAX_WORLD_RADIUS;
+    if (show_strong) max_range = max(max_range, YUKAWA_RANGE * 3.5);
+    if (show_weak)   max_range = max(max_range, 15.0);
+    if (show_grav)   max_range = max(max_range, FIELD_MAX_WORLD_RADIUS);
+    if (show_higgs)  max_range = max(max_range, 40.0);
+    if (show_de)     max_range = max(max_range, FIELD_MAX_WORLD_RADIUS);
+
+    // Query GPU spatial grid for nearby particles
+    int cell_x = clamp(int(world_pos.x / GRID_CELL_SIZE), 0, GRID_COLS - 1);
+    int cell_y = clamp(int(world_pos.y / GRID_CELL_SIZE), 0, GRID_ROWS - 1);
+    int search_r = int(ceil(max_range / GRID_CELL_SIZE));
+
+    for (int cy = max(0, cell_y - search_r); cy <= min(GRID_ROWS - 1, cell_y + search_r); cy++) {
+    for (int cx = max(0, cell_x - search_r); cx <= min(GRID_COLS - 1, cell_x + search_r); cx++) {
+        uint g_cell  = uint(cy * GRID_COLS + cx);
+        uint g_start = grid_cell_start.data[g_cell];
+        uint g_end   = grid_cell_start.data[g_cell + 1u];
+        for (uint gk = g_start; gk < g_end; gk++) {
+            uint j = grid_indices.data[gk];
+
+            float energy_j = in_energy_buffer.data[j];
+            if (energy_j < 0.01) continue;
+
+            uint  type_j  = type_buffer.data[j];
+            uint  flags_j = behavior_buffer.data[type_j];
+
+            // Skip photons and neutrinos
+            if ((flags_j & (BEHAVIOR_PHOTON | BEHAVIOR_NEUTRINO)) != 0u) continue;
+
+            vec2  pos_j = in_pos_buffer.data[j];
+            float world_dist = max(length(pos_j - world_pos), 1.0);
+            if (world_dist > max_range) continue;
+
+            float charge_j    = get_charge(j);
+            bool has_charge_j  = abs(charge_j) > 0.01;
+            bool is_nucleon_j  = is_baryon(type_j);
+            bool is_colored_j  = is_colored(flags_j);
+            bool is_weak_b_j   = (flags_j & BEHAVIOR_WEAK_BOSON) != 0u;
+            bool is_massive_j  = get_mass_inv(type_j) < 10.0;
+            bool is_de_j       = (flags_j & BEHAVIOR_DARK_ENERGY) != 0u;
+
+            // Check if this particle contributes to any enabled field
+            bool contributes = false;
+            if (show_em && has_charge_j) contributes = true;
+            if (show_strong && (is_nucleon_j || is_colored_j)) contributes = true;
+            if (show_weak && (is_weak_b_j || is_massive_j)) contributes = true;
+            if (show_grav && is_massive_j) contributes = true;
+            if (show_higgs && is_massive_j) contributes = true;
+            if (show_de && is_de_j) contributes = true;
+            if (!contributes) continue;
+
+            float scale = FIELD_SCALE * intensity * energy_j;
+
+            // ── Electromagnetic (Coulomb potential) ──
+            if (show_em && has_charge_j) {
+                float phi = charge_j / (world_dist * world_dist + 9.0);
+                float viz_K = 8000.0;
+                if (phi > 0.0)
+                    field_total += vec3(phi * 1.0, phi * 0.25, phi * 0.03) * viz_K * scale;
+                else
+                    field_total += vec3(-phi * 0.03, -phi * 0.35, -phi * 1.0) * viz_K * scale;
+            }
+
+            // ── Strong nuclear (Yukawa for nucleons, color for quarks) ──
+            if (show_strong) {
+                if (is_nucleon_j) {
+                    float yukawa = exp(-world_dist / YUKAWA_RANGE) / max(world_dist, 0.5);
+                    field_total += vec3(yukawa * 0.08, yukawa * 0.6, yukawa * 0.35) * YUKAWA_COUPLING * scale;
+                }
+                if (is_colored_j) {
+                    float cc = abs(get_color(j));
+                    float cornell = params.string_tension * world_dist * 0.001;
+                    vec3 qcd_col = vec3(0.0);
+                    if (cc > 0.5 && cc < 1.5) qcd_col = vec3(cornell, 0.0, 0.0);
+                    else if (cc > 1.5 && cc < 2.5) qcd_col = vec3(0.0, cornell, 0.0);
+                    else qcd_col = vec3(0.0, 0.0, cornell);
+                    field_total += qcd_col * 2.0 * scale;
+                }
+            }
+
+            // ── Weak field ──
+            if (show_weak && (is_weak_b_j || is_massive_j)) {
+                float weak_range = is_weak_b_j ? 0.8 : 3.0;
+                float weak_str = is_weak_b_j ? 3.0 : 0.8;
+                float weak_V = weak_str * exp(-world_dist / weak_range);
+                field_total += vec3(weak_V * 0.5, weak_V * 0.1, weak_V * 0.9) * 800.0 * scale;
+            }
+
+            // ── Gravitational ──
+            if (show_grav && is_massive_j) {
+                float mass = get_mass(type_j);
+                float grav_phi = mass / (world_dist * world_dist + 4.0);
+                field_total += vec3(grav_phi * 0.2, grav_phi * 0.25, grav_phi * 0.5) * 500.0 * scale;
+            }
+
+            // ── Higgs field ──
+            if (show_higgs && is_massive_j) {
+                float mass = get_mass(type_j);
+                float higgs_d = mass * exp(-world_dist / 30.0) / (world_dist + 1.0);
+                field_total += vec3(higgs_d * 0.7, higgs_d * 0.6, higgs_d * 0.15) * 400.0 * scale;
+            }
+
+            // ── Dark Energy ──
+            if (show_de && is_de_j) {
+                float lambda_eff = 0.8 / (params.interaction_radius + 1.0);
+                float de_phi = lambda_eff * world_dist / (world_dist + 2.0);
+                if (type_j == INFLATON_TYPE) de_phi *= 20.0;
+                if (type_j == CHAMELEON_TYPE) {
+                    float screen = world_dist / (world_dist + 8.0);
+                    de_phi *= screen;
+                }
+                field_total += vec3(de_phi * 0.9, de_phi * 0.12, de_phi * 0.18) * 3000.0 * scale;
+            }
+        }
+    }}
+
+    // ── Force objects (iterate all, they're few — max 32) ──
+    float fo_scale = FIELD_SCALE * intensity * 4.0;
+    for (uint fo = 0u; fo < params.force_object_count; fo++) {
+        if (force_objects.data[fo].is_active == 0u) continue;
+        uint  fo_type   = force_objects.data[fo].force_type;
+        float fo_str    = force_objects.data[fo].strength;
+        float fo_radius = force_objects.data[fo].radius;
+        vec2  fo_pos    = vec2(force_objects.data[fo].x, force_objects.data[fo].y);
+        if (fo_type == 5u) continue;  // mirror — no field
+
+        bool fo_contributes = false;
+        if (show_em     && (fo_type == 0u || fo_type == 6u)) fo_contributes = true;
+        if (show_strong && fo_type == 1u) fo_contributes = true;
+        if (show_weak   && fo_type == 2u) fo_contributes = true;
+        if (show_grav   && (fo_type == 3u || fo_type == 8u)) fo_contributes = true;
+        if (!fo_contributes) continue;
+
+        float fo_dist = max(length(fo_pos - world_pos), 1.0);
+        float fo_t = fo_dist / fo_radius;
+        if (fo_t > 1.0) continue;
+
+        vec3 fo_color = vec3(0.0);
+        if (fo_type == 0u && show_em) {
+            float phi = fo_str / (fo_dist * fo_dist + 4.0);
+            float viz_K = 12000.0;
+            if (phi > 0.0)
+                fo_color += vec3(phi * 1.0, phi * 0.25, phi * 0.03) * viz_K;
+            else
+                fo_color += vec3(-phi * 0.03, -phi * 0.35, -phi * 1.0) * viz_K;
+        }
+        else if (fo_type == 6u && show_em) {
+            float phi = fo_str / (fo_dist * fo_dist + 2.0);
+            float viz_K = 15000.0;
+            if (phi > 0.0)
+                fo_color += vec3(phi * 1.0, phi * 0.25, phi * 0.03) * viz_K;
+            else
+                fo_color += vec3(-phi * 0.03, -phi * 0.35, -phi * 1.0) * viz_K;
+        }
+        else if (fo_type == 1u && show_strong) {
+            float yukawa = exp(-fo_dist / (YUKAWA_RANGE * 3.0)) / max(fo_dist, 0.5);
+            fo_color += vec3(yukawa * 0.08, yukawa * 0.6, yukawa * 0.35)
+                      * YUKAWA_COUPLING * abs(fo_str) * 3.0;
+        }
+        else if (fo_type == 2u && show_weak) {
+            float weak_V = abs(fo_str) * exp(-fo_dist / 5.0);
+            fo_color += vec3(weak_V * 0.5, weak_V * 0.1, weak_V * 0.9) * 1200.0;
+        }
+        else if (fo_type == 3u && show_grav) {
+            float grav_phi = abs(fo_str) / (fo_dist * fo_dist + 4.0);
+            fo_color += vec3(grav_phi * 0.2, grav_phi * 0.25, grav_phi * 0.5) * 800.0;
+        }
+        else if (fo_type == 8u && show_grav) {
+            float harm_phi = abs(fo_str) * fo_dist / fo_radius;
+            float falloff = 1.0 - fo_t;
+            fo_color += vec3(harm_phi * 0.3, harm_phi * 0.3, harm_phi * 0.1)
+                      * falloff * 400.0;
+        }
+        field_total += fo_color * fo_scale;
+    }
+
+    // Write accumulated field to pixel (single write — no contention)
+    if (dot(field_total, field_total) > 0.0) {
+        vec4 existing = imageLoad(out_render_texture, pixel);
+        imageStore(out_render_texture, pixel,
+                   vec4(min(existing.rgb + field_total, vec3(1.0)), 1.0));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 //  ENTRY POINT
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2410,9 +2632,13 @@ void render_collision_debug(uint i) {
 void main() {
     uint i = gl_GlobalInvocationID.x;
 
-    // Step 3 (trail fade) uses pixel index, not particle index
+    // Steps 3 and 5 use pixel index, not particle index
     if (params.step == 3u) {
         fade_pixel(i);
+        return;
+    }
+    if (params.step == 5u) {
+        render_field_gather(i);
         return;
     }
 
@@ -2421,7 +2647,7 @@ void main() {
     switch (params.step) {
         case 0: apply_physics(i);    break;
         case 1: render_particle(i);  break;
-        case 2: render_field(i);     break;
+        case 2: render_field(i);     break;  // legacy scatter (unused)
         case 4: render_collision_debug(i); break;
     }
 }

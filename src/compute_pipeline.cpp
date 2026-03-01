@@ -945,14 +945,20 @@ void ComputePipeline::record(VkCommandBuffer cmd,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         0, 0, nullptr, 0, nullptr, 1, &img_barrier);
 
-    // ── Step 2: quantum field visualization (optional) ─────────────────────────
-    // field_flags bitfield: bit0=EM, 1=strong, 2=weak, 3=gravity, 4=Higgs
+    // ── Step 5: gather-based field visualization (optional) ─────────────────────
+    // field_flags bitfield: bit0=EM, 1=strong, 2=weak, 3=gravity, 4=Higgs, 12=DE
     // Bits 5+ (wave_mode, collision_radii, etc.) don't need field rendering
     // Also support legacy density_limit mode for chemistry sim
-    uint32_t field_vis_bits = pc.field_flags & 0x1Fu;  // only bits 0-4
+    uint32_t field_vis_bits = pc.field_flags & 0x101Fu;  // bits 0-4 + bit 12 (dark energy)
     if (field_vis_bits != 0u || (pc.density_limit >= 0.5f && pc.density_limit <= 3.5f)) {
-        pc.step = 2;
-        dispatch(cmd, active_set, pc, particle_count);
+        PushConstants field_pc = pc;
+        field_pc.step = 5;
+        uint32_t pixel_count = render_w * render_h;
+        uint32_t field_groups = pixel_count / 256 + 1;
+        vkCmdPushConstants(cmd, pipeline_layout_,
+                           VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, sizeof(PushConstants), &field_pc);
+        vkCmdDispatch(cmd, field_groups, 1, 1);
 
         // Barrier: field writes → particle render reads
         VkMemoryBarrier field_barrier{};

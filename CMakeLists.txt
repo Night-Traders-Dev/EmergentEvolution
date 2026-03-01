@@ -62,6 +62,21 @@ add_executable(particle_physics
     src/physics/save_load.cpp
     src/physics/achievements.cpp
     src/physics/audio.cpp
+
+    # Physics process modules (split from simulation.cpp)
+    src/physics/nuclear.cpp
+    src/physics/orbital.cpp
+    src/physics/decay.cpp
+    src/physics/quantum.cpp
+    src/physics/spawning.cpp
+
+    # UI component modules (split from interface.cpp)
+    src/physics/ui_panels.cpp
+    src/physics/ui_cards.cpp
+    src/physics/ui_lists.cpp
+    src/physics/ui_dialogs.cpp
+    src/physics/ui_tools.cpp
+    src/physics/ui_overlays.cpp
     src/stb_image_impl.cpp
     src/stb_image_write_impl.cpp
 
