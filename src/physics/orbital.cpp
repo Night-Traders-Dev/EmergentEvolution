@@ -18,12 +18,12 @@ void PhysicsSimulation::update_orbitals() {
     if (readback_positions_.empty()) return;
 
     const uint32_t n = cfg.particle_count;
-    const float NUCLEAR_CLUSTER_RADIUS = 10.0f;
+    const float NUCLEAR_CLUSTER_RADIUS = 16.0f;    // matches shader YUKAWA_RANGE
     const float NUCLEAR_CLUSTER_RADIUS_SQ = NUCLEAR_CLUSTER_RADIUS * NUCLEAR_CLUSTER_RADIUS;
     // Tighter clustering radius for nucleons from different atoms —
     // electron clouds keep distinct atoms apart; only explicit fusion
     // (high energy collision) should merge nucleons from different atoms.
-    const float CROSS_ATOM_CLUSTER_RADIUS = 3.0f;
+    const float CROSS_ATOM_CLUSTER_RADIUS = 5.0f;
     const float CROSS_ATOM_CLUSTER_RADIUS_SQ = CROSS_ATOM_CLUSTER_RADIUS * CROSS_ATOM_CLUSTER_RADIUS;
     const float BINDING_RADIUS = cfg.orbital_binding_radius;
     static const int MAX_ELECTRONS = 2 + 8 + 18 + 32;  // 60

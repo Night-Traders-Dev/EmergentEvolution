@@ -179,11 +179,15 @@ endmacro()
 compile_shader(physics.comp      physics.spv)
 compile_shader(fullscreen.vert   fullscreen.vert.spv)
 compile_shader(fullscreen.frag   fullscreen.frag.spv)
+compile_shader(overlay.vert      overlay.vert.spv)
+compile_shader(overlay.frag      overlay.frag.spv)
 
 add_custom_target(shaders ALL DEPENDS
     ${SHADER_BIN_DIR}/physics.spv
     ${SHADER_BIN_DIR}/fullscreen.vert.spv
     ${SHADER_BIN_DIR}/fullscreen.frag.spv
+    ${SHADER_BIN_DIR}/overlay.vert.spv
+    ${SHADER_BIN_DIR}/overlay.frag.spv
 )
 add_dependencies(particle_physics shaders)
 
@@ -214,6 +218,8 @@ if(PORTABLE_BUILD)
     embed_resource(${SHADER_BIN_DIR}/physics.spv              physics_spv)
     embed_resource(${SHADER_BIN_DIR}/fullscreen.vert.spv      fullscreen_vert_spv)
     embed_resource(${SHADER_BIN_DIR}/fullscreen.frag.spv      fullscreen_frag_spv)
+    embed_resource(${SHADER_BIN_DIR}/overlay.vert.spv         overlay_vert_spv)
+    embed_resource(${SHADER_BIN_DIR}/overlay.frag.spv         overlay_frag_spv)
 
     # Icons
     embed_resource(${CMAKE_SOURCE_DIR}/assets/icon_32.png     icon_32_png)
@@ -224,6 +230,8 @@ if(PORTABLE_BUILD)
         ${EMBED_DIR}/physics_spv.cpp
         ${EMBED_DIR}/fullscreen_vert_spv.cpp
         ${EMBED_DIR}/fullscreen_frag_spv.cpp
+        ${EMBED_DIR}/overlay_vert_spv.cpp
+        ${EMBED_DIR}/overlay_frag_spv.cpp
         ${EMBED_DIR}/icon_32_png.cpp
         ${EMBED_DIR}/icon_64_png.cpp
         ${EMBED_DIR}/icon_256_png.cpp

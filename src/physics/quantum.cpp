@@ -222,12 +222,17 @@ void PhysicsSimulation::check_neutrino_scattering() {
         // Find nearest neutron within 5px
         uint32_t best_n = UINT32_MAX;
         float best_d2 = 25.0f;
-        for (uint32_t j = 0; j < n; ++j) {
-            if (j == i || readback_energies_[j] < 0.01f) continue;
-            if (particles.types[j] != NEUTRON_TYPE) continue;
+        auto nu_cc_search = [&](uint32_t j) {
+            if (j == i || readback_energies_[j] < 0.01f) return;
+            if (particles.types[j] != NEUTRON_TYPE) return;
             glm::vec2 d = readback_positions_[j] - readback_positions_[i];
             float d2 = d.x * d.x + d.y * d.y;
             if (d2 < best_d2) { best_d2 = d2; best_n = j; }
+        };
+        if (iface.prefs.spatial_grid) {
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, 5.0f, nu_cc_search);
+        } else {
+            for (uint32_t j = 0; j < n; ++j) nu_cc_search(j);
         }
         if (best_n == UINT32_MAX) continue;
 
@@ -377,7 +382,7 @@ void PhysicsSimulation::update_entanglement() {
     }
 
     if (any_changed) {
-        compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+        cpu_particles_dirty_ = true;
     }
     entangled_pair_count_ = active_count;
 }

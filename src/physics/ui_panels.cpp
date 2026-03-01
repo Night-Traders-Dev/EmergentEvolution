@@ -464,6 +464,10 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                     ImGui::MenuItem("Gravitational Waves", nullptr, &gr_grav_waves);
                     ImGui::MenuItem("GW Ripples", nullptr, &show_grav_waves);
                     ImGui::Separator();
+                    ImGui::MenuItem("Orbital Drive", nullptr, &orbital_drive);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Orbital tangential drive + velocity boost.\nON = electrons actively driven to orbital speed.\nOFF = natural Coulomb orbits with quantum barrier only.");
+                    ImGui::Separator();
                     ImGui::MenuItem("Force Vectors", nullptr, &show_force_vectors);
                     ImGui::MenuItem("Wave Mode", nullptr, &wave_mode);
                     ImGui::MenuItem("Atom Grid", nullptr, &show_atom_grid);

@@ -24,6 +24,8 @@ void Renderer::init(VulkanContext& ctx, GLFWwindow* window, ComputePipeline& com
     create_quad_pipeline(ctx, "shaders/fullscreen.vert.spv",
                                "shaders/fullscreen.frag.spv");
     create_quad_descriptor_set(ctx, compute);
+    create_overlay_pipeline(ctx);
+    create_overlay_descriptor_set(ctx, compute);
     create_sync_objects(ctx);
     init_imgui(ctx, window);
 }
@@ -44,6 +46,11 @@ void Renderer::destroy(VulkanContext& ctx) {
         vkDestroySemaphore(ctx.device, f.render_finished, nullptr);
         vkDestroyFence(ctx.device, f.in_flight, nullptr);
     }
+
+    if (overlay_desc_pool_   != VK_NULL_HANDLE) vkDestroyDescriptorPool(ctx.device, overlay_desc_pool_, nullptr);
+    if (overlay_pipeline_    != VK_NULL_HANDLE) vkDestroyPipeline(ctx.device, overlay_pipeline_, nullptr);
+    if (overlay_pipe_layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(ctx.device, overlay_pipe_layout_, nullptr);
+    if (overlay_dset_layout_ != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(ctx.device, overlay_dset_layout_, nullptr);
 
     if (quad_desc_pool_   != VK_NULL_HANDLE) vkDestroyDescriptorPool(ctx.device, quad_desc_pool_, nullptr);
     if (quad_pipeline_    != VK_NULL_HANDLE) vkDestroyPipeline(ctx.device, quad_pipeline_, nullptr);
@@ -265,6 +272,162 @@ void Renderer::create_quad_descriptor_set(VulkanContext& ctx, ComputePipeline& c
     write.descriptorCount = 1;
     write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     write.pImageInfo      = &img_info;
+    vkUpdateDescriptorSets(ctx.device, 1, &write, 0, nullptr);
+}
+
+// ── Overlay pipeline (force objects / mirrors) ───────────────────────────────
+
+void Renderer::create_overlay_pipeline(VulkanContext& ctx) {
+    // Descriptor set layout: binding 0 = SSBO (force object buffer)
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding            = 0;
+    binding.descriptorType     = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    binding.descriptorCount    = 1;
+    binding.stageFlags         = VK_SHADER_STAGE_VERTEX_BIT;
+
+    VkDescriptorSetLayoutCreateInfo dsl_ci{};
+    dsl_ci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dsl_ci.bindingCount = 1;
+    dsl_ci.pBindings    = &binding;
+    VK_CHECK(vkCreateDescriptorSetLayout(ctx.device, &dsl_ci, nullptr, &overlay_dset_layout_));
+
+    // Push constant range for overlay params
+    VkPushConstantRange pc_range{};
+    pc_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pc_range.offset     = 0;
+    pc_range.size       = sizeof(OverlayPushConstants);
+
+    VkPipelineLayoutCreateInfo pl_ci{};
+    pl_ci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pl_ci.setLayoutCount         = 1;
+    pl_ci.pSetLayouts            = &overlay_dset_layout_;
+    pl_ci.pushConstantRangeCount = 1;
+    pl_ci.pPushConstantRanges    = &pc_range;
+    VK_CHECK(vkCreatePipelineLayout(ctx.device, &pl_ci, nullptr, &overlay_pipe_layout_));
+
+    // Shaders
+    VkShaderModule vert = ctx.create_shader_module("shaders/overlay.vert.spv");
+    VkShaderModule frag = ctx.create_shader_module("shaders/overlay.frag.spv");
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vert;
+    stages[0].pName  = "main";
+    stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = frag;
+    stages[1].pName  = "main";
+
+    // No vertex input (all data from SSBO + push constants)
+    VkPipelineVertexInputStateCreateInfo vert_input{};
+    vert_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+    VkPipelineInputAssemblyStateCreateInfo input_asm{};
+    input_asm.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    input_asm.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+
+    VkViewport viewport{};
+    viewport.width    = static_cast<float>(ctx.swapchain_extent.width);
+    viewport.height   = static_cast<float>(ctx.swapchain_extent.height);
+    viewport.maxDepth = 1.0f;
+    VkRect2D scissor{};
+    scissor.extent = ctx.swapchain_extent;
+
+    VkPipelineViewportStateCreateInfo vp_state{};
+    vp_state.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp_state.viewportCount = 1;
+    vp_state.pViewports    = &viewport;
+    vp_state.scissorCount  = 1;
+    vp_state.pScissors     = &scissor;
+
+    VkPipelineRasterizationStateCreateInfo rast{};
+    rast.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rast.polygonMode = VK_POLYGON_MODE_FILL;
+    rast.cullMode    = VK_CULL_MODE_NONE;
+    rast.frontFace   = VK_FRONT_FACE_CLOCKWISE;
+    rast.lineWidth   = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{};
+    ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    // Alpha blending: additive for glow overlay
+    VkPipelineColorBlendAttachmentState blend_attach{};
+    blend_attach.blendEnable         = VK_TRUE;
+    blend_attach.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blend_attach.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;  // additive
+    blend_attach.colorBlendOp        = VK_BLEND_OP_ADD;
+    blend_attach.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    blend_attach.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blend_attach.alphaBlendOp        = VK_BLEND_OP_ADD;
+    blend_attach.colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                       VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendStateCreateInfo blend{};
+    blend.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blend.attachmentCount = 1;
+    blend.pAttachments    = &blend_attach;
+
+    // Dynamic viewport + scissor
+    std::array<VkDynamicState, 2> dyn_states = {
+        VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkPipelineDynamicStateCreateInfo dyn_state{};
+    dyn_state.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dyn_state.dynamicStateCount = static_cast<uint32_t>(dyn_states.size());
+    dyn_state.pDynamicStates    = dyn_states.data();
+
+    VkGraphicsPipelineCreateInfo pipe_ci{};
+    pipe_ci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipe_ci.stageCount          = 2;
+    pipe_ci.pStages             = stages;
+    pipe_ci.pVertexInputState   = &vert_input;
+    pipe_ci.pInputAssemblyState = &input_asm;
+    pipe_ci.pViewportState      = &vp_state;
+    pipe_ci.pRasterizationState = &rast;
+    pipe_ci.pMultisampleState   = &ms;
+    pipe_ci.pColorBlendState    = &blend;
+    pipe_ci.pDynamicState       = &dyn_state;
+    pipe_ci.layout              = overlay_pipe_layout_;
+    pipe_ci.renderPass          = render_pass_;
+    pipe_ci.subpass             = 0;
+
+    VK_CHECK(vkCreateGraphicsPipelines(ctx.device, VK_NULL_HANDLE, 1,
+                                       &pipe_ci, nullptr, &overlay_pipeline_));
+
+    vkDestroyShaderModule(ctx.device, vert, nullptr);
+    vkDestroyShaderModule(ctx.device, frag, nullptr);
+}
+
+void Renderer::create_overlay_descriptor_set(VulkanContext& ctx, ComputePipeline& compute) {
+    // Pool for one SSBO
+    VkDescriptorPoolSize pool_size{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1 };
+    VkDescriptorPoolCreateInfo pool_ci{};
+    pool_ci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_ci.maxSets       = 1;
+    pool_ci.poolSizeCount = 1;
+    pool_ci.pPoolSizes    = &pool_size;
+    VK_CHECK(vkCreateDescriptorPool(ctx.device, &pool_ci, nullptr, &overlay_desc_pool_));
+
+    VkDescriptorSetAllocateInfo alloc{};
+    alloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc.descriptorPool     = overlay_desc_pool_;
+    alloc.descriptorSetCount = 1;
+    alloc.pSetLayouts        = &overlay_dset_layout_;
+    VK_CHECK(vkAllocateDescriptorSets(ctx.device, &alloc, &overlay_desc_set_));
+
+    VkDescriptorBufferInfo buf_info{};
+    buf_info.buffer = compute.get_force_object_buffer();
+    buf_info.offset = 0;
+    buf_info.range  = VK_WHOLE_SIZE;
+
+    VkWriteDescriptorSet write{};
+    write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet          = overlay_desc_set_;
+    write.dstBinding      = 0;
+    write.descriptorCount = 1;
+    write.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    write.pBufferInfo     = &buf_info;
     vkUpdateDescriptorSets(ctx.device, 1, &write, 0, nullptr);
 }
 
@@ -514,6 +677,17 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd,
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             quad_pipe_layout_, 0, 1, &quad_desc_set_, 0, nullptr);
     vkCmdDraw(cmd, 3, 1, 0, 0); // 3 vertices → fullscreen triangle
+
+    // Force object / mirror overlay (graphics pipeline with alpha blending)
+    if (overlay_pipeline_ != VK_NULL_HANDLE && overlay_params.force_object_count > 0) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, overlay_pipeline_);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                overlay_pipe_layout_, 0, 1, &overlay_desc_set_, 0, nullptr);
+        vkCmdPushConstants(cmd, overlay_pipe_layout_,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(OverlayPushConstants), &overlay_params);
+        vkCmdDraw(cmd, 4, overlay_params.force_object_count, 0, 0);
+    }
 
     // ImGui
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);

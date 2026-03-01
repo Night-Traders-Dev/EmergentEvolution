@@ -54,6 +54,12 @@ const float GRID_CELL_SIZE = 100.0;
 const int   GRID_COLS      = 103;  // ceil(10240/100)
 const int   GRID_ROWS      = 58;   // ceil(5760/100)
 
+// ── Shared memory for cooperative grid cell_start caching ───────────────────
+shared uint  wg_cell_start[256]; // cached cell_start values for workgroup neighborhood
+shared int   wg_min_cx, wg_min_cy, wg_max_cx, wg_max_cy;
+shared int   wg_cols_s;          // (wg_max_cx - wg_min_cx + 2) — number of cached columns
+shared bool  wg_use_shared;      // false when bounding box too large for cache
+
 // ── Push Constants (expanded to 100 bytes) ──────────────────────────────────
 layout(push_constant, std430) uniform Params {
     vec2  region_size;
@@ -181,9 +187,10 @@ const uint BEHAVIOR_EXOTIC      = 2147483648u; // 1 << 31
 
 // ── Physics constants ───────────────────────────────────────────────────────
 // Force hierarchy: Strong > EM > Weak > Gravity (at nuclear distances)
-// Yukawa must dominate Coulomb at dist 4-8px for nuclei to form
-const float YUKAWA_RANGE     = 8.0;
-const float YUKAWA_COUPLING  = 2000.0;  // ~10x Coulomb at nuclear distances
+// Yukawa must dominate Coulomb for nuclei up to Z~26 to remain bound
+const float YUKAWA_RANGE     = 16.0;    // extended range so all nucleons in mid-size nuclei interact
+const float YUKAWA_COUPLING  = 2500.0;  // strong enough to bind Z≥3 nuclei against Coulomb repulsion
+const float NUCLEAR_COHESION = 1.0;     // surface tension: edge nucleons pulled toward centroid
 const float PAULI_CORE       = 6.0;     // nucleon hard-core radius (smooth overlap)
 const float PAULI_STRENGTH   = 12000.0; // must dominate Yukawa at close range
 const float K_COULOMB        = 1200.0;  // electromagnetic strength
@@ -255,6 +262,20 @@ float get_zpe(uint type) {
     return mass_zpe_buffer.data[type * 2u + 1u];
 }
 
+// ── Fast transcendental approximations (IEEE 754 bit tricks) ─────────────
+// ~1.5% max relative error — used in physics step only, not rendering.
+// exp(x) = 2^(x/ln2); encode directly into IEEE 754 exponent bits.
+float fast_exp(float x) {
+    x = clamp(x, -80.0, 80.0);
+    return intBitsToFloat(int(x * 12102203.0 + 1065353216.0));
+}
+
+// log(x) = log2(x) * ln(2); decode from IEEE 754 exponent bits.
+float fast_log(float x) {
+    int ix = floatBitsToInt(max(x, 1.175494e-38));
+    return float(ix - 1065353216) * 1.1920929e-7 * 0.6931472;
+}
+
 // Color interaction factor between two colored particles (quark-quark)
 float color_factor(float ca, float cb) {
     // Quark-antiquark: same abs color → strong attraction (meson)
@@ -308,6 +329,24 @@ float color_factor_gluon(float ca, float cb, uint flags_a, uint flags_b) {
 
     // ── Quark-quark: original logic ────────────────────────────────────
     return color_factor(ca, cb);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  GRID CELL LOOKUP (shared memory or global fallback)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Fetch cell_start[cell] and cell_start[cell+1] for a given grid cell.
+// Uses workgroup shared memory cache when the bounding box fits, else global memory.
+void grid_cell_range(int cx, int cy, out uint g_start, out uint g_end) {
+    uint g_cell = uint(cy * GRID_COLS + cx);
+    if (wg_use_shared) {
+        int lc = (cy - wg_min_cy) * wg_cols_s + (cx - wg_min_cx);
+        g_start = wg_cell_start[lc];
+        g_end   = wg_cell_start[lc + 1];
+    } else {
+        g_start = grid_cell_start.data[g_cell];
+        g_end   = grid_cell_start.data[g_cell + 1u];
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -365,8 +404,8 @@ void apply_physics(uint i) {
             int ph_cy = clamp(int(pos_a.y / GRID_CELL_SIZE), 0, GRID_ROWS - 1);
             for (int gy = max(0, ph_cy - 1); gy <= min(GRID_ROWS - 1, ph_cy + 1); gy++) {
             for (int gx = max(0, ph_cx - 1); gx <= min(GRID_COLS - 1, ph_cx + 1); gx++) {
-                uint gc = uint(gy * GRID_COLS + gx);
-                for (uint gk = grid_cell_start.data[gc]; gk < grid_cell_start.data[gc + 1u]; gk++) {
+                uint gs, ge; grid_cell_range(gx, gy, gs, ge);
+                for (uint gk = gs; gk < ge; gk++) {
                 uint j = grid_indices.data[gk];
                 if (j == i) continue;
                 float e_j = in_energy_buffer.data[j];
@@ -434,8 +473,8 @@ void apply_physics(uint i) {
             int glu_cy = clamp(int(pos_a.y / GRID_CELL_SIZE), 0, GRID_ROWS - 1);
             for (int gy = max(0, glu_cy - 1); gy <= min(GRID_ROWS - 1, glu_cy + 1); gy++) {
             for (int gx = max(0, glu_cx - 1); gx <= min(GRID_COLS - 1, glu_cx + 1); gx++) {
-                uint gc = uint(gy * GRID_COLS + gx);
-                for (uint gk = grid_cell_start.data[gc]; gk < grid_cell_start.data[gc + 1u]; gk++) {
+                uint gs, ge; grid_cell_range(gx, gy, gs, ge);
+                for (uint gk = gs; gk < ge; gk++) {
                 uint j = grid_indices.data[gk];
                 if (j == i) continue;
                 float e_j = in_energy_buffer.data[j];
@@ -462,7 +501,7 @@ void apply_physics(uint i) {
                 // Cornell potential: color-Coulomb + linear confinement
                 // Running coupling: asymptotic freedom at short distance
                 float alpha_eff = params.alpha_s_scale * COLOR_ALPHA_S
-                    * max(0.3, 1.0 + 0.3 * log(max(dist, 0.5)));
+                    * max(0.3, 1.0 + 0.3 * fast_log(max(dist, 0.5)));
                 float short_range = alpha_eff * inv_r * inv_r;
                 float confine = params.string_tension * 0.1;
 
@@ -525,8 +564,8 @@ void apply_physics(uint i) {
         int nu_cy = clamp(int(pos_a.y / GRID_CELL_SIZE), 0, GRID_ROWS - 1);
         for (int gy = max(0, nu_cy - 1); gy <= min(GRID_ROWS - 1, nu_cy + 1); gy++) {
         for (int gx = max(0, nu_cx - 1); gx <= min(GRID_COLS - 1, nu_cx + 1); gx++) {
-            uint gc = uint(gy * GRID_COLS + gx);
-            for (uint gk = grid_cell_start.data[gc]; gk < grid_cell_start.data[gc + 1u]; gk++) {
+            uint gs, ge; grid_cell_range(gx, gy, gs, ge);
+            for (uint gk = gs; gk < ge; gk++) {
             uint j = grid_indices.data[gk];
             if (j == i) continue;
             uint type_j = type_buffer.data[j];
@@ -537,7 +576,7 @@ void apply_physics(uint i) {
             float dist = sqrt(d2);
             vec2 n = delta / dist;
             // Weak NC deflection from Z boson
-            nu_vel += n * params.weak_coupling * 150.0 * exp(-dist / 1.5) * params.dt * 0.001;
+            nu_vel += n * params.weak_coupling * 150.0 * fast_exp(-dist / 1.5) * params.dt * 0.001;
         } } }
 
         // Preserve speed (massless)
@@ -564,8 +603,8 @@ void apply_physics(uint i) {
         int wb_cy = clamp(int(pos_a.y / GRID_CELL_SIZE), 0, GRID_ROWS - 1);
         for (int gy = max(0, wb_cy - 1); gy <= min(GRID_ROWS - 1, wb_cy + 1); gy++) {
         for (int gx = max(0, wb_cx - 1); gx <= min(GRID_COLS - 1, wb_cx + 1); gx++) {
-            uint gc = uint(gy * GRID_COLS + gx);
-            for (uint gk = grid_cell_start.data[gc]; gk < grid_cell_start.data[gc + 1u]; gk++) {
+            uint gs, ge; grid_cell_range(gx, gy, gs, ge);
+            for (uint gk = gs; gk < ge; gk++) {
             uint j = grid_indices.data[gk];
             if (j == i) continue;
             vec2 delta = in_pos_buffer.data[j] - pos_a;
@@ -586,7 +625,7 @@ void apply_physics(uint i) {
             // 2. WWγ triple gauge: radiation pressure from photons on charged W±
             if ((flags_j & BEHAVIOR_PHOTON) != 0u && abs(q_a) > 0.01 && dist < 30.0) {
                 float ph_E = in_energy_buffer.data[j];
-                wb_force += n * ph_E * 50.0 * exp(-dist / 10.0) / max(d2, 1.0);
+                wb_force += n * ph_E * 50.0 * fast_exp(-dist / 10.0) / max(d2, 1.0);
             }
 
             // 3. WWZ triple gauge: W-W attraction via Z exchange
@@ -594,7 +633,7 @@ void apply_physics(uint i) {
                 float q_j_wb = genome_buffer.data[j * 4u + 0u];
                 // W+W- attract, same-sign repel, Z mediates
                 float sign_prod = (abs(q_a) > 0.01 && abs(q_j_wb) > 0.01) ? q_a * q_j_wb : 0.0;
-                float gauge_F = params.weak_coupling * 200.0 * sign_prod * exp(-dist / 4.0) / max(d2, 0.1);
+                float gauge_F = params.weak_coupling * 200.0 * sign_prod * fast_exp(-dist / 4.0) / max(d2, 0.1);
                 wb_force += n * gauge_F;
 
                 // 4. Quartic gauge: density enhancement when multiple WBs close
@@ -626,8 +665,8 @@ void apply_physics(uint i) {
         int h_cy = clamp(int(pos_a.y / GRID_CELL_SIZE), 0, GRID_ROWS - 1);
         for (int gy = max(0, h_cy - 1); gy <= min(GRID_ROWS - 1, h_cy + 1); gy++) {
         for (int gx = max(0, h_cx - 1); gx <= min(GRID_COLS - 1, h_cx + 1); gx++) {
-            uint gc = uint(gy * GRID_COLS + gx);
-            for (uint gk = grid_cell_start.data[gc]; gk < grid_cell_start.data[gc + 1u]; gk++) {
+            uint gs, ge; grid_cell_range(gx, gy, gs, ge);
+            for (uint gk = gs; gk < ge; gk++) {
             uint j = grid_indices.data[gk];
             if (j == i) continue;
             vec2 delta = in_pos_buffer.data[j] - pos_a;
@@ -640,16 +679,16 @@ void apply_physics(uint i) {
             float mass_j = get_mass(type_j);
 
             // 1. Yukawa coupling to fermions: F ∝ (m_j / vev) × exp(-r/5)
-            float F = (mass_j / vev) * 300.0 * exp(-dist / 5.0) / max(dist, 0.5);
+            float F = (mass_j / vev) * 300.0 * fast_exp(-dist / 5.0) / max(dist, 0.5);
 
             // 2. Higgs self-coupling (λ=0.13)
             if ((flags_j & BEHAVIOR_HIGGS_FLAG) != 0u) {
-                F += 0.13 * 100.0 * exp(-dist / 8.0) / max(dist, 0.5);
+                F += 0.13 * 100.0 * fast_exp(-dist / 8.0) / max(dist, 0.5);
             }
 
             // 3. W/Z coupling (gauge boson mass generation)
             if ((flags_j & BEHAVIOR_WEAK_BOSON) != 0u) {
-                F += (mass_j / vev) * 500.0 * exp(-dist / 6.0) / max(dist, 0.5);
+                F += (mass_j / vev) * 500.0 * fast_exp(-dist / 6.0) / max(dist, 0.5);
             }
 
             h_force += n * F;
@@ -679,8 +718,14 @@ void apply_physics(uint i) {
     float closest_nuc_dist  = 9999.0;
     vec2  closest_nuc_delta = vec2(0.0);
     vec2  closest_nuc_vel   = vec2(0.0);
+    int   nearby_Z          = 0;         // count of nucleus particles in interaction range (for F_bind scaling)
     float nearby_charge_sum = 0.0;  // sum of nearby charges (for magnetic moment gating)
     float accumulated_Bz    = 0.0;  // total B-field from all neighbors (for spin coupling)
+
+    // Nuclear surface tension + damping tracking (baryons only) — applied ONCE after loop
+    vec2  nuc_centroid_sum = vec2(0.0);  // sum of delta vectors to nearby baryons
+    vec2  nuc_vel_sum      = vec2(0.0);  // sum of velocities of nearby baryons
+    int   nuc_neighbors    = 0;          // count of nearby baryons
 
     // Hard-sphere collision accumulation — corrected after integration
     bool  is_massive_a    = mass_inv_a < 10.0;
@@ -704,9 +749,8 @@ void apply_physics(uint i) {
     int search_r = int(ceil(MAX_RADIUS / GRID_CELL_SIZE));
     for (int cy = max(0, cell_y - search_r); cy <= min(GRID_ROWS - 1, cell_y + search_r); cy++) {
     for (int cx = max(0, cell_x - search_r); cx <= min(GRID_COLS - 1, cell_x + search_r); cx++) {
-        uint g_cell  = uint(cy * GRID_COLS + cx);
-        uint g_start = grid_cell_start.data[g_cell];
-        uint g_end   = grid_cell_start.data[g_cell + 1u];
+        uint g_start, g_end;
+        grid_cell_range(cx, cy, g_start, g_end);
         for (uint g_k = g_start; g_k < g_end; g_k++) {
         int j = int(grid_indices.data[g_k]);
         if (i == uint(j)) continue;
@@ -783,7 +827,7 @@ void apply_physics(uint i) {
                 float partner_mass = de_a ? (1.0 / max(get_mass_inv(type_b), 0.001))
                                           : (1.0 / max(mass_inv_a, 0.001));
                 float screen_range = 30.0;  // screening kicks in within this distance
-                float density_proxy = partner_mass * exp(-dist / screen_range);
+                float density_proxy = partner_mass * fast_exp(-dist / screen_range);
                 float screening = 1.0 / (1.0 + density_proxy * 0.01);  // 0→1: screened→free
                 de_force *= screening;
             }
@@ -796,7 +840,7 @@ void apply_physics(uint i) {
         float charge_b   = get_charge(uint(j));
         float mass_inv_b = get_mass_inv(type_b);
 
-        local_density += exp(-dist / (MAX_RADIUS * 0.5));
+        local_density += fast_exp(-dist / (MAX_RADIUS * 0.5));
 
         // ── 0. Zeroth Law: Thermal conduction (velocity exchange) ────────────
         // Close particles exchange momentum toward thermal equilibrium.
@@ -816,18 +860,17 @@ void apply_physics(uint i) {
         }
 
         // ── 2. Yukawa nuclear force (baryon-baryon, skip for DM) ─────────────
-        // Tighter cutoff than raw exponential: full strength within nucleus
-        // (0–8 px), smooth fade to zero by 12 px.  This prevents nucleons
-        // from separate atoms being dragged together by the Yukawa tail.
+        // Extended range (16px) so all nucleons in mid-size nuclei (up to Z~26)
+        // can feel each other's strong force. Window fades to zero by 16px to
+        // prevent nucleons from separate atoms being dragged together.
         if (is_baryon(type_a) && is_baryon(type_b) && !dm_interaction) {
             if (dist < YUKAWA_RANGE) {
                 float inv_r = 1.0 / max(dist, 0.5);
-                float yukawa_F = params.yukawa_strength * YUKAWA_COUPLING * exp(-dist * inv_yukawa_range)
+                float yukawa_F = params.yukawa_strength * YUKAWA_COUPLING * fast_exp(-dist * inv_yukawa_range)
                                  * (inv_r + inv_yukawa_range) * inv_r;
 
-                // Smooth window: full strength within 4px, fades to 0 by 7px
-                // Tight cutoff prevents nucleons from separate atoms merging
-                float window = 1.0 - smoothstep(YUKAWA_RANGE * 0.5, YUKAWA_RANGE * 0.875, dist);
+                // Smooth window: full strength within 12px, fades to 0 by 16px
+                float window = 1.0 - smoothstep(YUKAWA_RANGE * 0.75, YUKAWA_RANGE, dist);
                 total_force += normal * yukawa_F * window;
 
                 if (dist < PAULI_CORE) {
@@ -836,9 +879,12 @@ void apply_physics(uint i) {
                     total_force -= normal * pauli;
                 }
 
-                if (dist < YUKAWA_RANGE) {
-                    interaction_energy += 0.004 * params.dt;
-                }
+                interaction_energy += 0.004 * params.dt;
+
+                // Accumulate centroid + velocity of nearby baryons for surface tension & damping
+                nuc_centroid_sum += delta;  // vector toward neighbor j
+                nuc_vel_sum += in_vel_buffer.data[j];
+                nuc_neighbors++;
             }
         }
 
@@ -849,14 +895,8 @@ void apply_physics(uint i) {
                 float soften_sq = max(SOFTEN_MIN * SOFTEN_MIN,
                                       params.repulsion_radius * 0.5 * params.repulsion_radius * 0.5);
 
-                // Running QED coupling: α(Q²) increases at short distances
-                // α(Q²) = α₀ / (1 - α₀/(3π) · ln(Q²/mₑ²))
-                float alpha_em = 1.0 / 137.036;
-                float log_Q2 = max(0.0, -log(max(dist_sq, 1.0)));
-                float alpha_run = alpha_em / max(0.5, 1.0 - alpha_em / (3.0 * 3.14159) * log_Q2);
-                float running_scale = alpha_run / alpha_em;
-
-                float coulomb = params.coulomb_strength * K_COULOMB * running_scale * q_prod / (dist_sq + soften_sq);
+                // Coulomb: F = k·q₁q₂/r² (constant α — QED running is negligible at sim scale)
+                float coulomb = params.coulomb_strength * K_COULOMB * q_prod / (dist_sq + soften_sq);
                 total_force -= normal * coulomb;
 
                 if (q_prod < 0.0 && dist < params.interaction_radius * 0.5) {
@@ -877,10 +917,13 @@ void apply_physics(uint i) {
             } else if (charge_a > 0.01) {
                 valid_nucleus = (type_b == ANTIPROTON_TYPE);
             }
-            if (valid_nucleus && dist < closest_nuc_dist) {
-                closest_nuc_dist = dist;
-                closest_nuc_delta = delta;
-                closest_nuc_vel = in_vel_buffer.data[j];
+            if (valid_nucleus) {
+                nearby_Z++;  // count all protons in interaction range as nuclear charge proxy
+                if (dist < closest_nuc_dist) {
+                    closest_nuc_dist = dist;
+                    closest_nuc_delta = delta;
+                    closest_nuc_vel = in_vel_buffer.data[j];
+                }
             }
         }
 
@@ -896,7 +939,7 @@ void apply_physics(uint i) {
 
                 // Short-range color Coulomb with running coupling (asymptotic freedom)
                 // α_s decreases at short distances, increases at long distances
-                float alpha_eff = params.alpha_s_scale * COLOR_ALPHA_S * max(0.3, 1.0 + 0.3 * log(max(dist, 0.5)));
+                float alpha_eff = params.alpha_s_scale * COLOR_ALPHA_S * max(0.3, 1.0 + 0.3 * fast_log(max(dist, 0.5)));
                 float short_range = alpha_eff * inv_r * inv_r;
                 // Linear confinement: V=σr → F=σ (constant string tension)
                 float confine = sigma * 0.1;
@@ -998,6 +1041,10 @@ void apply_physics(uint i) {
         //     Proton:  μ_p = +2.793 μ_N (anomalous, quark substructure)
         //     Neutron: μ_n = −1.913 μ_N (nonzero despite q=0 — key evidence for quarks)
         if (!dm_interaction) {
+            // Skip baryon←lepton Lorentz force: electron B-fields are negligible at
+            // nuclear scale but destabilize nuclei in sim due to compressed length scales
+            bool skip_mag = is_baryon(type_a) && (flags_b & BEHAVIOR_LEPTON) != 0u;
+
             // 6a. Biot-Savart: B from moving charges
             if (abs(charge_b) > 0.01) {
                 vec2  vel_b   = in_vel_buffer.data[j];
@@ -1006,7 +1053,7 @@ void apply_physics(uint i) {
                 float B_z     = coupling * charge_b * cross_j / (dist_sq + 1.0);
                 accumulated_Bz += B_z;  // ALL particles accumulate B (neutrons too)
                 // Charged particles feel direct Lorentz force: F = q(v×B)
-                if (abs(charge_a) > 0.01) {
+                if (abs(charge_a) > 0.01 && !skip_mag) {
                     nearby_charge_sum += abs(charge_b);
                     total_force += charge_a * B_z * vec2(vel_a.y, -vel_a.x);
                 }
@@ -1041,7 +1088,8 @@ void apply_physics(uint i) {
                     accumulated_Bz += B_dip;
 
                     // Charged particles also feel direct Lorentz from dipole B
-                    if (abs(charge_a) > 0.01) {
+                    // (same baryon←lepton gate as Biot-Savart above)
+                    if (abs(charge_a) > 0.01 && !skip_mag) {
                         total_force += charge_a * B_dip * vec2(vel_a.y, -vel_a.x);
                     }
                 }
@@ -1071,7 +1119,7 @@ void apply_physics(uint i) {
 
             // NC (Z-mediated): all fermions, reduced for right-handed
             float nc_coupling = 0.3 + 0.7 * chiral_factor;
-            float nc_F = params.weak_coupling * 100.0 * nc_coupling * exp(-dist / 0.8) / max(dist_sq, 0.1);
+            float nc_F = params.weak_coupling * 100.0 * nc_coupling * fast_exp(-dist / 0.8) / max(dist_sq, 0.1);
             total_force += normal * nc_F;
 
             // CC (W-mediated): only left-handed isospin partners (up-type ↔ down-type)
@@ -1087,7 +1135,7 @@ void apply_physics(uint i) {
                 if ((type_a == MUON_TYPE && type_b == NEUTRINO_MU_TYPE) || (type_a == NEUTRINO_MU_TYPE && type_b == MUON_TYPE)) cc_pair = true;
                 if ((type_a == TAU_TYPE && type_b == NEUTRINO_TAU_TYPE) || (type_a == NEUTRINO_TAU_TYPE && type_b == TAU_TYPE)) cc_pair = true;
                 if (cc_pair) {
-                    float cc_F = params.weak_coupling * 150.0 * exp(-dist / 0.6) / max(dist_sq, 0.1);
+                    float cc_F = params.weak_coupling * 150.0 * fast_exp(-dist / 0.6) / max(dist_sq, 0.1);
                     total_force += normal * cc_F;
                 }
             }
@@ -1141,69 +1189,83 @@ void apply_physics(uint i) {
     } // cx
     } // cy
 
-    // ── Orbital confinement + tangential drive (applied ONCE per electron) ──
+    // ── Nuclear surface tension + damping (applied ONCE per baryon after loop) ──
+    // Edge nucleons in large nuclei have asymmetric neighbor distributions.
+    // Pull them toward the centroid of nearby baryons — like nuclear surface energy.
+    if (is_baryon(type_a) && nuc_neighbors > 1) {
+        vec2 to_center = nuc_centroid_sum / float(nuc_neighbors);
+        float cd = length(to_center);
+        if (cd > 0.5) {
+            float cohesion = NUCLEAR_COHESION * cd * float(nuc_neighbors);
+            total_force += normalize(to_center) * min(cohesion, 150.0);
+        }
+
+        // Nuclear velocity damping: damp relative motion toward mean neighbor velocity.
+        // In real nuclei, random kicks are dissipated via photon emission.
+        // Prevents thermal runaway from electron Coulomb jitter.
+        vec2 mean_vel = nuc_vel_sum / float(nuc_neighbors);
+        vec2 rel_v = vel_a - mean_vel;
+        total_force -= rel_v * 3.0;  // gentle damping, preserves bulk nucleus motion
+    }
+
+    // ── Quantum ground state + orbital drive (applied ONCE per electron) ──
     // genome[2] stores L_ground from CPU orbital assignment (0 = free electron)
+    bool orbital_drive_on = (params.field_flags & (1u << 13)) != 0u;
     if (is_light_particle && closest_nuc_dist < params.interaction_radius) {
+        vec2 nuc_normal = closest_nuc_delta / max(closest_nuc_dist, 0.1);
         float L_ground = get_color(i);  // genome[2] repurposed for orbital L
         if (L_ground < 1.0) L_ground = L_MIN;  // free electron: default
 
-        vec2 nuc_normal = closest_nuc_delta / max(closest_nuc_dist, 0.1);
-        vec2 nuc_tangent = vec2(-nuc_normal.y, nuc_normal.x);
-
-        // Velocity relative to parent nucleus (must not fight bulk atom motion)
-        vec2 rel_vel = vel_a - closest_nuc_vel;
-
-        // Per-electron orbital boost from genome[3] (set by CPU from SimConfig).
-        // Positive value = boost factor; 0 or negative = use steeper default.
-        float stored_boost = get_decay(i);
-        float ORBIT_BOOST = (stored_boost > 0.5) ? stored_boost
-            : mix(1.5, 9.0, clamp((closest_nuc_dist - 8.0) / 72.0, 0.0, 1.0));
-
-        // ── Centrifugal barrier (L_ground only) ───────────────────────
-        // Prevents electron from collapsing into the nucleus.
+        // ── Centrifugal barrier (ALWAYS active — quantum ground state) ──
+        // The Heisenberg uncertainty principle guarantees a minimum angular
+        // momentum that prevents electron collapse.  This L²/r³ barrier is
+        // the simulation's equivalent — it enforces the ground state.
         float r3 = closest_nuc_dist * closest_nuc_dist * closest_nuc_dist + CENTRIFUGAL_SOFTEN;
         float F_centrifugal = min(L_ground * L_ground * mass_inv_a / r3, 300.0);
         total_force -= nuc_normal * F_centrifugal;
 
-        // ── Extra binding for boosted orbital speed ───────────────────
-        // At ORBIT_BOOST× speed, need BOOST²× centripetal. Coulomb gives 1×,
-        // add (BOOST²-1)×. Outer electrons get much stronger binding
-        // (BOOST=5 → 24× extra), keeping the cloud tightly confined.
-        float r2_soft = closest_nuc_dist * closest_nuc_dist + CENTRIFUGAL_SOFTEN;
-        float F_bind = (ORBIT_BOOST * ORBIT_BOOST - 1.0) * K_COULOMB * abs(charge_a) / r2_soft;
-        total_force += nuc_normal * F_bind;
+        // ── Orbital drive (optional — artificial tangential drive + boost) ──
+        if (orbital_drive_on) {
+            vec2 nuc_tangent = vec2(-nuc_normal.y, nuc_normal.x);
+            vec2 rel_vel = vel_a - closest_nuc_vel;
 
-        // ── Asymmetric radial damping (outward only) ──────────────────
-        // Only damp OUTWARD radial motion to prevent escape. Symmetric
-        // damping bleeds orbital energy due to rotating reference frame.
-        float v_rad = dot(rel_vel, nuc_normal);  // positive = moving away
-        if (v_rad > 0.0) {
-            total_force -= nuc_normal * v_rad * 20.0;
+            // Per-electron orbital boost from genome[3] (set by CPU from SimConfig).
+            float stored_boost = get_decay(i);
+            float ORBIT_BOOST = (stored_boost > 0.5) ? stored_boost
+                : mix(1.5, 9.0, clamp((closest_nuc_dist - 8.0) / 72.0, 0.0, 1.0));
+
+            // ── Extra binding for boosted orbital speed ───────────────────
+            float Z_eff = float(max(nearby_Z, 1));
+            float r2_soft = closest_nuc_dist * closest_nuc_dist + CENTRIFUGAL_SOFTEN;
+            float F_bind = (ORBIT_BOOST * ORBIT_BOOST - 1.0) * K_COULOMB * Z_eff * abs(charge_a) / r2_soft;
+            total_force += nuc_normal * F_bind;
+
+            // ── Asymmetric radial damping (outward only) ──────────────────
+            float v_rad = dot(rel_vel, nuc_normal);
+            if (v_rad > 0.0) {
+                total_force -= nuc_normal * v_rad * 10.0;
+            }
+
+            // ── Orbital tangential drive ──────────────────────────────────
+            float mass_e = 1.0 / max(mass_inv_a, 0.001);
+            float target_v_tan = L_ground / (mass_e * max(closest_nuc_dist, 1.0));
+            target_v_tan *= ORBIT_BOOST;
+            float v_tan_rel = dot(rel_vel, nuc_tangent);
+
+            float orbit_sign = (i % 2u == 0u) ? 1.0 : -1.0;
+            if (abs(v_tan_rel) > target_v_tan * 0.1)
+                orbit_sign = sign(v_tan_rel);
+
+            float dv = target_v_tan * orbit_sign - v_tan_rel;
+            float drive_k = 5.0;
+            total_force += nuc_tangent * dv * drive_k;
+
+            // Spin-orbit coupling
+            float L_actual = abs(closest_nuc_delta.x * rel_vel.y - closest_nuc_delta.y * rel_vel.x);
+            float F_SO = spin_a * L_actual * K_SPIN_ORBIT
+                       / (closest_nuc_dist * closest_nuc_dist * closest_nuc_dist * closest_nuc_dist + 1.0);
+            total_force -= nuc_normal * F_SO;
         }
-
-        // ── Orbital tangential drive ──────────────────────────────────
-        // Drive to boosted speed. Uses L_ground only (not L_actual) to
-        // avoid runaway feedback.
-        float mass_e = 1.0 / max(mass_inv_a, 0.001);
-        float target_v_tan = L_ground / (mass_e * max(closest_nuc_dist, 1.0));
-        target_v_tan *= ORBIT_BOOST;
-        float v_tan_rel = dot(rel_vel, nuc_tangent);
-
-        // Consistent orbit direction per particle (half CW, half CCW)
-        float orbit_sign = (i % 2u == 0u) ? 1.0 : -1.0;
-        // If already orbiting in one direction, keep that direction
-        if (abs(v_tan_rel) > target_v_tan * 0.1)
-            orbit_sign = sign(v_tan_rel);
-
-        float dv = target_v_tan * orbit_sign - v_tan_rel;
-        float drive_k = 15.0;
-        total_force += nuc_tangent * dv * drive_k;
-
-        // Spin-orbit coupling
-        float L_actual = abs(closest_nuc_delta.x * rel_vel.y - closest_nuc_delta.y * rel_vel.x);
-        float F_SO = spin_a * L_actual * K_SPIN_ORBIT
-                   / (closest_nuc_dist * closest_nuc_dist * closest_nuc_dist * closest_nuc_dist + 1.0);
-        total_force -= nuc_normal * F_SO;
     }
 
     // ── 9. Spin magnetic moment: μ·∇B (force in external B-field) ─────
@@ -1273,7 +1335,7 @@ void apply_physics(uint i) {
             // STRONG NUCLEAR: Yukawa-like short-range attraction on baryons
             if (is_baryon(type_a)) {
                 float yukawa = fo_str * YUKAWA_COUPLING * 0.5
-                             * exp(-fo_dist / (YUKAWA_RANGE * 3.0))
+                             * fast_exp(-fo_dist / (YUKAWA_RANGE * 3.0))
                              * max(inv_fo_dist, 2.0);
                 total_force += fo_normal * yukawa;
             }
@@ -1282,7 +1344,7 @@ void apply_physics(uint i) {
             // WEAK FORCE: short-range boost on all particles
             float weak_range = min(fo_radius, 30.0);
             if (fo_dist < weak_range) {
-                float weak_F = fo_str * 100.0 * exp(-fo_dist / 5.0) / max(fo_dist_sq, 0.1);
+                float weak_F = fo_str * 100.0 * fast_exp(-fo_dist / 5.0) / max(fo_dist_sq, 0.1);
                 total_force += fo_normal * weak_F;
             }
         }
@@ -1762,14 +1824,8 @@ void render_wave_packet(uint i) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 void render_particle(uint i) {
-    // Render force objects / mirrors (only first N threads)
-    if (i < params.force_object_count && force_objects.data[i].is_active != 0u) {
-        if (force_objects.data[i].force_type == 5u) {
-            render_mirror(i);
-        } else {
-            render_force_object(i);
-        }
-    }
+    // Force objects and mirrors are now rendered via the overlay graphics pipeline
+    // (shaders/overlay.vert + overlay.frag) — no longer done here in compute.
 
     // Wave mode: render as de Broglie wave packet instead of point particle
     if ((params.field_flags & (1u << 5)) != 0u) {
@@ -2649,22 +2705,26 @@ const float BLOOM_INTENSITY = 0.35;
 // 9-tap Gaussian kernel weights (sigma ~1.8)
 const float BLOOM_W[5] = float[](0.227027, 0.194946, 0.121621, 0.054054, 0.016216);
 
-// Step 6: Extract bright pixels from render texture into bloom_tex_a
+// Step 6: Extract bright pixels from full-res render texture into half-res bloom_tex_a
 void bloom_extract(uint pixel_idx) {
-    ivec2 tex_size = imageSize(out_render_texture);
-    int px = int(pixel_idx) % tex_size.x;
-    int py = int(pixel_idx) / tex_size.x;
-    if (py >= tex_size.y) return;
+    ivec2 bloom_size = imageSize(bloom_tex_a);  // half-res
+    int px = int(pixel_idx) % bloom_size.x;
+    int py = int(pixel_idx) / bloom_size.x;
+    if (py >= bloom_size.y) return;
 
-    ivec2 coord = ivec2(px, py);
-    vec4 color = imageLoad(out_render_texture, coord);
+    // Sample from full-res render texture (2×2 average for quality downscale)
+    ivec2 src = ivec2(px * 2, py * 2);
+    vec4 color = (imageLoad(out_render_texture, src)
+                + imageLoad(out_render_texture, src + ivec2(1, 0))
+                + imageLoad(out_render_texture, src + ivec2(0, 1))
+                + imageLoad(out_render_texture, src + ivec2(1, 1))) * 0.25;
 
     // Luminance-based brightness extraction
     float lum = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
     float brightness = max(0.0, lum - BLOOM_THRESHOLD);
     float factor = brightness / max(lum, 0.001);
 
-    imageStore(bloom_tex_a, coord, vec4(color.rgb * factor, 1.0));
+    imageStore(bloom_tex_a, ivec2(px, py), vec4(color.rgb * factor, 1.0));
 }
 
 // Step 7: Horizontal Gaussian blur (bloom_a → bloom_b)
@@ -2697,20 +2757,21 @@ void bloom_blur_v(uint pixel_idx) {
     imageStore(bloom_tex_a, ivec2(px, py), vec4(result, 1.0));
 }
 
-// Step 9: Composite bloom back onto render texture (dual-layer: fine + wide)
+// Step 9: Composite half-res bloom back onto full-res render texture
 void bloom_composite(uint pixel_idx) {
-    ivec2 tex_size = imageSize(out_render_texture);
+    ivec2 tex_size = imageSize(out_render_texture);  // full-res
     int px = int(pixel_idx) % tex_size.x;
     int py = int(pixel_idx) / tex_size.x;
     if (py >= tex_size.y) return;
 
     ivec2 coord = ivec2(px, py);
     vec4 scene = imageLoad(out_render_texture, coord);
-    vec3 fine_bloom = imageLoad(bloom_tex_a, coord).rgb;
-    vec3 wide_bloom = imageLoad(bloom_tex_b, coord).rgb;
 
-    // Additive blend: fine bloom (sharp glow) + wide bloom (soft halo)
-    scene.rgb += fine_bloom * BLOOM_INTENSITY + wide_bloom * 0.15;
+    // Sample bloom at half-res (nearest-neighbor — blur makes it invisible)
+    ivec2 bloom_coord = coord / 2;
+    vec3 bloom = imageLoad(bloom_tex_a, bloom_coord).rgb;
+
+    scene.rgb += bloom * BLOOM_INTENSITY;
 
     imageStore(out_render_texture, coord, scene);
 }
@@ -2756,14 +2817,66 @@ void main() {
     if (params.step == 6u)  { bloom_extract(i);        return; }
     if (params.step == 7u)  { bloom_blur_h(i);         return; }
     if (params.step == 8u)  { bloom_blur_v(i);         return; }
-    if (params.step == 10u) { bloom_blur_wide_h(i);    return; }
-    if (params.step == 11u) { bloom_blur_wide_v(i);    return; }
+    // Steps 10-11 (wide blur) removed — half-res blur naturally produces wider glow
     if (params.step == 9u)  { bloom_composite(i);      return; }
+
+    // ── Step 0 (physics): ALL threads participate in shared memory setup ─────
+    if (params.step == 0u) {
+        // Load position for this thread (out-of-bounds threads use sentinel)
+        vec2 pos_a = (i < params.particle_count)
+            ? in_pos_buffer.data[i] : vec2(-99999.0);
+
+        // Compute this thread's grid cell
+        int my_cx = clamp(int(pos_a.x / GRID_CELL_SIZE), 0, GRID_COLS - 1);
+        int my_cy = clamp(int(pos_a.y / GRID_CELL_SIZE), 0, GRID_ROWS - 1);
+        int sr = int(ceil(params.interaction_radius / GRID_CELL_SIZE));
+
+        // Phase 1: cooperative bounding box reduction
+        if (gl_LocalInvocationIndex == 0u) {
+            wg_min_cx = GRID_COLS;  wg_min_cy = GRID_ROWS;
+            wg_max_cx = 0;          wg_max_cy = 0;
+        }
+        barrier();
+
+        if (i < params.particle_count) {
+            atomicMin(wg_min_cx, max(0, my_cx - sr));
+            atomicMin(wg_min_cy, max(0, my_cy - sr));
+            atomicMax(wg_max_cx, min(GRID_COLS - 1, my_cx + sr));
+            atomicMax(wg_max_cy, min(GRID_ROWS - 1, my_cy + sr));
+        }
+        barrier();
+
+        // Phase 2: cooperative cell_start loading into shared memory
+        int wg_cols = wg_max_cx - wg_min_cx + 2; // +1 for end sentinel
+        int wg_rows = wg_max_cy - wg_min_cy + 1;
+        uint wg_total = uint(wg_cols * wg_rows);
+
+        if (gl_LocalInvocationIndex == 0u) {
+            wg_cols_s = wg_cols;
+            wg_use_shared = (wg_total <= 255u && wg_total > 0u);
+        }
+        barrier();
+
+        if (wg_use_shared) {
+            for (uint t = gl_LocalInvocationIndex; t <= wg_total; t += 256u) {
+                int lr = int(t) / wg_cols_s;
+                int lc = int(t) % wg_cols_s;
+                int gc = (wg_min_cy + lr) * GRID_COLS + (wg_min_cx + lc);
+                wg_cell_start[t] = grid_cell_start.data[min(uint(gc), uint(GRID_COLS * GRID_ROWS))];
+            }
+        }
+        barrier(); // all threads sync after loading
+
+        // Only valid particles proceed to physics computation
+        if (i < params.particle_count) {
+            apply_physics(i);
+        }
+        return;
+    }
 
     if (i >= params.particle_count) return;
 
     switch (params.step) {
-        case 0: apply_physics(i);    break;
         case 1: render_particle(i);  break;
         case 2: render_field(i);     break;  // legacy scatter (unused)
         case 4: render_collision_debug(i); break;

@@ -2023,13 +2023,18 @@ void PhysicsSimulation::check_weak_flavor_change() {
         // Find nearest quark within 3px
         uint32_t best_j = UINT32_MAX;
         float best_d2 = 9.0f;
-        for (uint32_t j = 0; j < n; ++j) {
-            if (j == i || readback_energies_[j] < 0.1f) continue;
+        auto wfc_search = [&](uint32_t j) {
+            if (j == i || readback_energies_[j] < 0.1f) return;
             uint32_t tj = particles.types[j];
-            if (!is_quark(tj) && !is_antiquark(tj)) continue;
+            if (!is_quark(tj) && !is_antiquark(tj)) return;
             glm::vec2 d = readback_positions_[j] - readback_positions_[i];
             float d2 = d.x * d.x + d.y * d.y;
             if (d2 < best_d2) { best_d2 = d2; best_j = j; }
+        };
+        if (iface.prefs.spatial_grid) {
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, 3.0f, wfc_search);
+        } else {
+            for (uint32_t j = 0; j < n; ++j) wfc_search(j);
         }
         if (best_j == UINT32_MAX) continue;
 

@@ -52,6 +52,9 @@ public:
 
     bool is_ready() const { return pos_buffer_a_.handle != VK_NULL_HANDLE; }
 
+    // Expose force object buffer for overlay pipeline rendering
+    VkBuffer get_force_object_buffer() const { return force_obj_buffer_.handle; }
+
     // Upload CPU-built spatial grid for GPU neighbor lookup
     void upload_gpu_grid(VulkanContext& ctx,
                          const std::vector<uint32_t>& cell_start,
@@ -70,6 +73,12 @@ public:
                               const std::vector<glm::vec2>& positions,
                               const std::vector<glm::vec2>& velocities,
                               const std::vector<float>&     energies);
+
+    // Write modified angles and angular velocities into both ping-pong buffers.
+    // Used after type sort permutation. Queue must be idle when called.
+    void write_angle_state(VulkanContext& ctx,
+                           const std::vector<float>& angles,
+                           const std::vector<float>& angular_velocities);
 
 private:
     VkPipeline            pipeline_             = VK_NULL_HANDLE;
@@ -119,9 +128,11 @@ private:
     static constexpr uint32_t GPU_GRID_CELLS   = 103 * 58;  // 5974
     static constexpr uint32_t MAX_GPU_PARTICLES = 200000;
 
-    // Bloom post-processing ping-pong images (bindings 21-22)
+    // Bloom post-processing ping-pong images (bindings 21-22) at half resolution
     Image bloom_image_a_{};
     Image bloom_image_b_{};
+    uint32_t bloom_w_ = REGION_W / 2;
+    uint32_t bloom_h_ = REGION_H / 2;
 
     // Actual particle count the buffers were allocated for (safe dispatch cap)
     uint32_t live_particle_count_ = 0;

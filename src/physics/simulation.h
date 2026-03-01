@@ -209,6 +209,10 @@ private:
     // Auto-save timer
     float autosave_timer_ = 0.0f;
 
+    // Fence for async compute dispatch (avoids vkQueueWaitIdle per frame)
+    VkFence          compute_fence_   = VK_NULL_HANDLE;
+    VkCommandBuffer  compute_cmd_     = VK_NULL_HANDLE;  // in-flight compute cmd (for deferred free)
+
     static constexpr const char* COMPUTE_SPV = "shaders/physics.spv";
     static constexpr const char* VERT_SPV    = "shaders/fullscreen.vert.spv";
     static constexpr const char* FRAG_SPV    = "shaders/fullscreen.frag.spv";
@@ -247,4 +251,9 @@ private:
     // Capture current render texture as a PNG thumbnail
     bool capture_thumbnail(const std::string& png_path,
                            uint32_t thumb_w = 320, uint32_t thumb_h = 180);
+
+    // Type sort: group same-type particles into consecutive indices for GPU warp coherence
+    void sort_particles_by_type();
+    void apply_permutation(const std::vector<uint32_t>& perm);
+    uint32_t type_sort_counter_ = 0;
 };

@@ -30,10 +30,12 @@ void ComputePipeline::init(VulkanContext& ctx, const std::string& shader_spv_pat
 
     particle_texture_view = particle_texture.view;
 
-    // Create bloom ping-pong images (same size and format as render texture)
+    // Create bloom ping-pong images at HALF resolution (blur hides the lower res)
+    bloom_w_ = render_w / 2;
+    bloom_h_ = render_h / 2;
     for (Image* img : { &bloom_image_a_, &bloom_image_b_ }) {
         *img = ctx.create_image(
-            render_w, render_h,
+            bloom_w_, bloom_h_,
             VK_FORMAT_R32G32B32A32_SFLOAT,
             VK_IMAGE_USAGE_STORAGE_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
@@ -101,12 +103,14 @@ void ComputePipeline::resize_render_texture(VulkanContext& ctx, uint32_t w, uint
 
     particle_texture_view = particle_texture.view;
 
-    // Recreate bloom images at new size
+    // Recreate bloom images at half resolution
+    bloom_w_ = render_w / 2;
+    bloom_h_ = render_h / 2;
     ctx.destroy_image(bloom_image_a_);
     ctx.destroy_image(bloom_image_b_);
     for (Image* img : { &bloom_image_a_, &bloom_image_b_ }) {
         *img = ctx.create_image(
-            render_w, render_h,
+            bloom_w_, bloom_h_,
             VK_FORMAT_R32G32B32A32_SFLOAT,
             VK_IMAGE_USAGE_STORAGE_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
@@ -885,6 +889,57 @@ void ComputePipeline::write_particle_state(
     }
 }
 
+void ComputePipeline::write_angle_state(
+    VulkanContext& ctx,
+    const std::vector<float>& angles,
+    const std::vector<float>& angular_velocities)
+{
+    if (angle_buffer_a_.handle == VK_NULL_HANDLE) return;
+
+    uint32_t     n          = static_cast<uint32_t>(angles.size());
+    VkDeviceSize angle_bytes = n * sizeof(float);
+
+    if (use_device_local_) {
+        VkDeviceSize total = angle_bytes * 2;  // angles + angular_vel
+        if (total > staging_upload_.size) return;
+
+        void* mapped = nullptr;
+        vkMapMemory(ctx.device, staging_upload_.memory, 0, total, 0, &mapped);
+        auto* base = static_cast<uint8_t*>(mapped);
+        std::memcpy(base,               angles.data(),              static_cast<size_t>(angle_bytes));
+        std::memcpy(base + angle_bytes,  angular_velocities.data(), static_cast<size_t>(angle_bytes));
+        vkUnmapMemory(ctx.device, staging_upload_.memory);
+
+        auto copy_pair = [&](VkCommandBuffer cmd, const Buffer& dst, VkDeviceSize src_off, VkDeviceSize sz) {
+            VkBufferCopy region{};
+            region.srcOffset = src_off;
+            region.dstOffset = 0;
+            region.size = sz;
+            vkCmdCopyBuffer(cmd, staging_upload_.handle, dst.handle, 1, &region);
+        };
+
+        VkCommandBuffer cmd = ctx.begin_single_command();
+        copy_pair(cmd, angle_buffer_a_,       0,           angle_bytes);
+        copy_pair(cmd, angle_buffer_b_,       0,           angle_bytes);
+        copy_pair(cmd, angular_vel_buffer_a_, angle_bytes, angle_bytes);
+        copy_pair(cmd, angular_vel_buffer_b_, angle_bytes, angle_bytes);
+        ctx.end_single_command(cmd);
+    } else {
+        void* mapped = nullptr;
+        auto write_buf = [&](const Buffer& buf, const void* data, VkDeviceSize sz) {
+            if (buf.handle == VK_NULL_HANDLE || sz == 0) return;
+            vkMapMemory(ctx.device, buf.memory, 0, sz, 0, &mapped);
+            std::memcpy(mapped, data, static_cast<size_t>(sz));
+            vkUnmapMemory(ctx.device, buf.memory);
+        };
+
+        write_buf(angle_buffer_a_,       angles.data(),              angle_bytes);
+        write_buf(angle_buffer_b_,       angles.data(),              angle_bytes);
+        write_buf(angular_vel_buffer_a_, angular_velocities.data(),  angle_bytes);
+        write_buf(angular_vel_buffer_b_, angular_velocities.data(),  angle_bytes);
+    }
+}
+
 // ── Record (called per frame while simulation is active) ──────────────────────
 
 void ComputePipeline::record(VkCommandBuffer cmd,
@@ -1058,10 +1113,13 @@ void ComputePipeline::record(VkCommandBuffer cmd,
         dispatch(cmd, active_set, pc, particle_count);
     }
 
-    // ── Steps 6-9: bloom post-processing (optional) ─────────────────────────
+    // ── Steps 6-9: bloom post-processing at half resolution (optional) ──────
+    // Extract + blur at half-res (4× fewer pixels), composite at full-res.
+    // Wide blur passes dropped — the half-res blur naturally produces a wider glow.
     if (cfg.bloom_enabled && bloom_image_a_.handle != VK_NULL_HANDLE) {
-        uint32_t pixel_count = render_w * render_h;
-        uint32_t bloom_groups = pixel_count / 256 + 1;
+        uint32_t bloom_pixels = bloom_w_ * bloom_h_;
+        uint32_t bloom_groups = bloom_pixels / 256 + 1;
+        uint32_t full_groups  = (render_w * render_h) / 256 + 1;
 
         VkMemoryBarrier bloom_barrier{};
         bloom_barrier.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
@@ -1074,7 +1132,7 @@ void ComputePipeline::record(VkCommandBuffer cmd,
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             0, 1, &bloom_barrier, 0, nullptr, 0, nullptr);
 
-        // Step 6: brightness extract (render_tex → bloom_a)
+        // Step 6: brightness extract (full-res render_tex → half-res bloom_a)
         PushConstants bloom_pc = pc;
         bloom_pc.step = 6;
         vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT,
@@ -1086,7 +1144,7 @@ void ComputePipeline::record(VkCommandBuffer cmd,
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             0, 1, &bloom_barrier, 0, nullptr, 0, nullptr);
 
-        // Step 7: horizontal blur (bloom_a → bloom_b)
+        // Step 7: horizontal blur (half-res bloom_a → bloom_b)
         bloom_pc.step = 7;
         vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT,
                            0, sizeof(PushConstants), &bloom_pc);
@@ -1097,7 +1155,7 @@ void ComputePipeline::record(VkCommandBuffer cmd,
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             0, 1, &bloom_barrier, 0, nullptr, 0, nullptr);
 
-        // Step 8: vertical blur (bloom_b → bloom_a)
+        // Step 8: vertical blur (half-res bloom_b → bloom_a)
         bloom_pc.step = 8;
         vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT,
                            0, sizeof(PushConstants), &bloom_pc);
@@ -1108,33 +1166,11 @@ void ComputePipeline::record(VkCommandBuffer cmd,
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             0, 1, &bloom_barrier, 0, nullptr, 0, nullptr);
 
-        // Step 10: wide horizontal blur (bloom_a → bloom_b, 2× step)
-        bloom_pc.step = 10;
-        vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT,
-                           0, sizeof(PushConstants), &bloom_pc);
-        vkCmdDispatch(cmd, bloom_groups, 1, 1);
-
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            0, 1, &bloom_barrier, 0, nullptr, 0, nullptr);
-
-        // Step 11: wide vertical blur (bloom_b → bloom_b)
-        bloom_pc.step = 11;
-        vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT,
-                           0, sizeof(PushConstants), &bloom_pc);
-        vkCmdDispatch(cmd, bloom_groups, 1, 1);
-
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            0, 1, &bloom_barrier, 0, nullptr, 0, nullptr);
-
-        // Step 9: composite (bloom_a fine + bloom_b wide + render_tex → render_tex)
+        // Step 9: composite (half-res bloom_a → full-res render_tex)
         bloom_pc.step = 9;
         vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT,
                            0, sizeof(PushConstants), &bloom_pc);
-        vkCmdDispatch(cmd, bloom_groups, 1, 1);
+        vkCmdDispatch(cmd, full_groups, 1, 1);
     }
 
     // Memory barrier: compute image write → fragment shader read

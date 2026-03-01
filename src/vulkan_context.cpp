@@ -532,6 +532,24 @@ void VulkanContext::end_single_command(VkCommandBuffer cmd) {
     vkFreeCommandBuffers(device, cmd_pool, 1, &cmd);
 }
 
+void VulkanContext::submit_with_fence(VkCommandBuffer cmd, VkFence fence) {
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo submit{};
+    submit.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers    = &cmd;
+
+    vkResetFences(device, 1, &fence);
+    VK_CHECK(vkQueueSubmit(queue, 1, &submit, fence));
+    // No wait — caller uses wait_and_free_command() when result is needed
+}
+
+void VulkanContext::wait_and_free_command(VkCommandBuffer cmd, VkFence fence) {
+    VK_CHECK(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX));
+    vkFreeCommandBuffers(device, cmd_pool, 1, &cmd);
+}
+
 // ── Shader module ─────────────────────────────────────────────────────────────
 
 VkShaderModule VulkanContext::create_shader_module(const std::string& path) {

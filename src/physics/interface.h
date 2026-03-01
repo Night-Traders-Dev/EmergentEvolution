@@ -33,7 +33,7 @@ struct UserPrefs {
     int   window_mode     = 0;     // 0=borderless fullscreen, 1=windowed
     int   window_w        = 0;     // windowed width (0=monitor default)
     int   window_h        = 0;     // windowed height (0=monitor default)
-    bool  bloom_enabled   = true;  // post-processing bloom
+    bool  bloom_enabled   = false; // post-processing bloom
     bool  wobbly_windows  = true;  // subtle floating UI panel animations
     bool  tutorial_done   = false; // true after tutorial completed or skipped
 };
@@ -275,9 +275,14 @@ public:
     bool  show_grav_waves      = false;  // GW ripple visualization
 
     // General Relativity extensions (GPU gravity)
-    bool  gr_mass_energy    = false;  // E=mc² gravitational mass (bit 9)
-    bool  gr_frame_dragging = false;  // spin-gravity coupling (bit 10)
-    bool  gr_grav_waves     = false;  // finite-speed gravity / GW (bit 11)
+    bool  gr_mass_energy    = true;   // E=mc² gravitational mass (bit 9)
+    bool  gr_frame_dragging = true;   // spin-gravity coupling (bit 10)
+    bool  gr_grav_waves     = true;   // finite-speed gravity / GW (bit 11)
+
+    // Orbital mechanics model
+    bool  orbital_drive       = false;  // artificial orbital confinement (bit 13)
+                                        // ON: centrifugal barrier + tangential drive + radial damping
+                                        // OFF: pure Coulomb + magnetic (classical, electrons spiral in)
 
     bool  show_orbit_paths    = false;
 

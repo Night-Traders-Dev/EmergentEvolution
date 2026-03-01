@@ -13,7 +13,7 @@
 // ── Orbital constants (single source of truth — must match shader K_COULOMB, SOFTEN_MIN²) ──
 inline constexpr float R_BOHR      = 15.0f;   // base Bohr radius (hydrogen ground state in px)
 inline constexpr float K_COULOMB_O = 1200.0f;  // Coulomb constant (px-based units)
-inline constexpr float SOFTEN_SQ_O = 64.0f;    // softening = SOFTEN_MIN² = 8²
+inline constexpr float SOFTEN_SQ_O = 4.0f;     // softening = SOFTEN_MIN² = 2² (matches shader)
 inline constexpr int   SHELL_CAP_O[] = {2, 8, 18, 32};
 inline constexpr int   NUM_SHELLS_O  = 4;
 

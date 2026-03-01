@@ -244,6 +244,12 @@ void PhysicsSimulation::init(GLFWwindow* window) {
     renderer.init(vk, window, compute);
     iface.title_font = renderer.title_font;
 
+    // Create fence for async compute dispatch
+    VkFenceCreateInfo fence_ci{};
+    fence_ci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fence_ci.flags = VK_FENCE_CREATE_SIGNALED_BIT;  // start signaled so first wait succeeds
+    vkCreateFence(vk.device, &fence_ci, nullptr, &compute_fence_);
+
     // Give interface a pointer to VulkanContext for thumbnail loading
     iface.set_vk_ctx(&vk);
 
@@ -260,6 +266,10 @@ void PhysicsSimulation::destroy() {
     audio.destroy();
     achievements.save("saves/achievements.ppach");
     vkDeviceWaitIdle(vk.device);
+    if (compute_fence_ != VK_NULL_HANDLE) {
+        vkDestroyFence(vk.device, compute_fence_, nullptr);
+        compute_fence_ = VK_NULL_HANDLE;
+    }
     compute.destroy(vk);
     renderer.destroy(vk);
     vk.destroy();
@@ -1054,15 +1064,9 @@ void PhysicsSimulation::check_achievements() {
     for (const auto& nuc : detected_nuclei_) {
         if (nuc.Z <= 0 || nuc.Z >= 120) continue;
 
-        // Check if this element has bound electrons (orbital assignment)
-        bool has_electrons = false;
-        for (uint32_t pi = 0; pi < cfg.particle_count; ++pi) {
-            if (particles.orbital_parent[pi] == static_cast<int32_t>(nuc.rep)
-                && particles.types[pi] == ELECTRON_TYPE_PHYS) {
-                has_electrons = true;
-                break;
-            }
-        }
+        // Check if this element has bound electrons (from shell_fill populated by update_orbitals)
+        bool has_electrons = (nuc.shell_fill[0] + nuc.shell_fill[1]
+                            + nuc.shell_fill[2] + nuc.shell_fill[3]) > 0;
 
         if (!achievements.elements_discovered[nuc.Z]) {
             achievements.elements_discovered[nuc.Z] = true;
@@ -1242,6 +1246,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     if (iface.gr_mass_energy)       cfg.field_flags |= (1u << 9);
     if (iface.gr_frame_dragging)    cfg.field_flags |= (1u << 10);
     if (iface.gr_grav_waves)        cfg.field_flags |= (1u << 11);
+    if (iface.orbital_drive)        cfg.field_flags |= (1u << 13);
 
     // Pass field intensity via legacy density_limit/local_density_cap path
     cfg.density_limit    = (cfg.field_flags != 0) ? 1.0f : 0.0f;
@@ -1257,16 +1262,18 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         compute.upload_force_objects(vk, force_objects_);
     }
 
-    // Dispatch compute shader
+    // Dispatch compute shader (async — fence signals when done)
+    bool compute_dispatched = false;
     if (is_active && compute.is_ready()) {
-        VkCommandBuffer compute_cmd = vk.begin_single_command();
+        compute_cmd_ = vk.begin_single_command();
         float scaled_dt = static_cast<float>(dt) * cfg.time_scale;
-        compute.record(compute_cmd, cfg, scaled_dt);
-        vk.end_single_command(compute_cmd);
+        compute.record(compute_cmd_, cfg, scaled_dt);
+        vk.submit_with_fence(compute_cmd_, compute_fence_);
+        compute_dispatched = true;
         readback_fresh_ = false;  // GPU state changed, readback is stale
     }
 
-    // Hover detection (skip when fullscreen UI overlays are active)
+    // Hover detection — runs while GPU compute is in flight
     {
         iface.hover_particle_idx = -1;
         if (!readback_positions_.empty() && !ImGui::GetIO().WantCaptureMouse
@@ -1302,6 +1309,12 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         fps_frame_cnt_ = 0;
     }
 
+    // Wait for compute to finish before readback
+    if (compute_dispatched) {
+        vk.wait_and_free_command(compute_cmd_, compute_fence_);
+        compute_cmd_ = VK_NULL_HANDLE;
+    }
+
     // Readback for statistics, annihilation, and decay
     if (compute.is_ready() && is_active) {
         // Physics quality and skip settings (computed before readback to gate it)
@@ -1322,6 +1335,12 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             readback_energies_.resize(cfg.particle_count);
             compute.read_current_state(vk, readback_positions_, readback_velocities_, readback_energies_);
             readback_fresh_ = true;
+
+            // Periodically sort particles by type for GPU warp coherence
+            if (++type_sort_counter_ >= 60) {
+                type_sort_counter_ = 0;
+                sort_particles_by_type();
+            }
 
             // Build GPU spatial grid and upload for shader neighbor lookup
             gpu_grid_.build(readback_positions_, readback_energies_, cfg.particle_count);
@@ -1409,7 +1428,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
 
             // ── Single batched GPU sync for all CPU physics modifications ──
             if (cpu_particles_dirty_) {
-                vkDeviceWaitIdle(vk.device);
+                vkQueueWaitIdle(vk.queue);
                 compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
                 compute.upload_dynamic_data(vk, particles);
                 cpu_particles_dirty_ = false;
@@ -1788,8 +1807,8 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 iface.energy_drift_rate_display = energy_drift_rate_;
             }
 
-            // ── Second Law: Entropy calculation (2D Sackur-Tetrode) ───────
-            {
+            // ── Second Law: Entropy calculation (2D Sackur-Tetrode, every 5 frames) ──
+            if (frame_counter_ % 5 == 0) {
                 constexpr uint32_t E_GRID_W = 16;
                 constexpr uint32_t E_GRID_H = 9;
                 constexpr uint32_t E_CELLS = E_GRID_W * E_GRID_H;
@@ -3141,12 +3160,22 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         renderer.swapchain_dirty = false;
     }
 
+    // Set overlay params for force object/mirror rendering in graphics pipeline
+    {
+        float rscale = static_cast<float>(compute.render_w) / static_cast<float>(REGION_W);
+        renderer.overlay_params.region_size = {
+            static_cast<float>(compute.render_w) + cfg.radius * rscale * 2.0f,
+            static_cast<float>(compute.render_h) + cfg.radius * rscale * 2.0f
+        };
+        renderer.overlay_params.camera_origin = cfg.current_camera_origin;
+        renderer.overlay_params.camera_zoom   = cfg.current_camera_zoom * rscale;
+        renderer.overlay_params.particle_radius = cfg.radius;
+        renderer.overlay_params.force_object_count = cfg.force_object_count;
+    }
+
     // Draw
     if (!renderer.draw_frame(vk, window, compute, is_active)) {
         renderer.on_resize(vk, window, compute);
-    }
-    if (is_active) {
-        vkQueueWaitIdle(vk.queue);
     }
 }
 
@@ -3243,4 +3272,132 @@ bool PhysicsSimulation::capture_thumbnail(const std::string& png_path,
                                 static_cast<int>(thumb_h), 4, thumb.data(),
                                 static_cast<int>(thumb_w * 4));
     return result != 0;
+}
+
+// ── Type Sort: group same-type particles for GPU warp coherence ─────────────
+
+void PhysicsSimulation::apply_permutation(const std::vector<uint32_t>& perm) {
+    uint32_t n = static_cast<uint32_t>(perm.size());
+    if (n == 0) return;
+
+    // Helper: reorder a vector according to permutation
+    auto reorder_vec = [&](auto& vec) {
+        if (vec.size() < n) return;
+        auto copy = vec;
+        for (uint32_t i = 0; i < n; ++i)
+            vec[i] = copy[perm[i]];
+    };
+
+    // Reorder all per-particle arrays
+    reorder_vec(particles.positions);
+    reorder_vec(particles.velocities);
+    reorder_vec(particles.energies);
+    reorder_vec(particles.types);
+    reorder_vec(particles.angles);
+    reorder_vec(particles.angular_velocities);
+    reorder_vec(particles.birth_frames);
+    reorder_vec(particles.orbital_parent);
+    reorder_vec(particles.orbital_shell);
+    reorder_vec(particles.excitation_timer);
+    reorder_vec(particles.entangled_partner);
+    reorder_vec(particles.cascade_tag);
+
+    // Genomes: stride-4 flat array
+    if (particles.genomes.size() >= n * 4u) {
+        std::vector<float> genome_copy = particles.genomes;
+        for (uint32_t i = 0; i < n; ++i) {
+            uint32_t src = perm[i] * 4u;
+            uint32_t dst = i * 4u;
+            particles.genomes[dst + 0] = genome_copy[src + 0];
+            particles.genomes[dst + 1] = genome_copy[src + 1];
+            particles.genomes[dst + 2] = genome_copy[src + 2];
+            particles.genomes[dst + 3] = genome_copy[src + 3];
+        }
+    }
+
+    // Reorder readback arrays (they mirror GPU particle order)
+    reorder_vec(readback_positions_);
+    reorder_vec(readback_velocities_);
+    reorder_vec(readback_energies_);
+    if (prev_velocities_.size() >= n)
+        reorder_vec(prev_velocities_);
+
+    // Build inverse mapping: inv_map[old_idx] = new_idx
+    std::vector<uint32_t> inv_map(n);
+    for (uint32_t i = 0; i < n; ++i)
+        inv_map[perm[i]] = i;
+
+    // Remap index-based references
+    for (uint32_t i = 0; i < n; ++i) {
+        // Orbital parent
+        if (particles.orbital_parent[i] >= 0 &&
+            static_cast<uint32_t>(particles.orbital_parent[i]) < n) {
+            particles.orbital_parent[i] =
+                static_cast<int32_t>(inv_map[static_cast<uint32_t>(particles.orbital_parent[i])]);
+        }
+        // Entangled partner
+        if (particles.entangled_partner[i] != 0xFFFFFFFFu &&
+            particles.entangled_partner[i] < n) {
+            particles.entangled_partner[i] = inv_map[particles.entangled_partner[i]];
+        }
+    }
+
+    // Remap bond data
+    constexpr uint32_t MAX_BONDS = 6;
+    if (bond_data_.size() >= n * MAX_BONDS) {
+        std::vector<uint32_t> bond_copy = bond_data_;
+        for (uint32_t i = 0; i < n; ++i) {
+            uint32_t old_i = perm[i];
+            for (uint32_t s = 0; s < MAX_BONDS; ++s) {
+                uint32_t partner = bond_copy[old_i * MAX_BONDS + s];
+                if (partner != 0xFFFFFFFFu && partner < n)
+                    partner = inv_map[partner];
+                bond_data_[i * MAX_BONDS + s] = partner;
+            }
+        }
+    }
+
+    // Re-upload all particle state to GPU (buffers unchanged, just data permuted)
+    compute.write_particle_state(vk, particles.positions,
+                                 particles.velocities, particles.energies);
+    compute.write_angle_state(vk, particles.angles, particles.angular_velocities);
+    compute.upload_dynamic_data(vk, particles);
+}
+
+void PhysicsSimulation::sort_particles_by_type() {
+    uint32_t n = cfg.particle_count;
+    if (n < 64) return;  // not worth sorting tiny particle counts
+
+    // Check if already sorted (skip if so)
+    bool already_sorted = true;
+    for (uint32_t i = 1; i < n && already_sorted; ++i) {
+        if (particles.types[i] < particles.types[i - 1])
+            already_sorted = false;
+    }
+    if (already_sorted) return;
+
+    // Counting sort by particle type (O(N), MAX_PARTICLE_TYPES buckets)
+    uint32_t counts[MAX_PARTICLE_TYPES] = {};
+    for (uint32_t i = 0; i < n; ++i)
+        counts[std::min(particles.types[i], static_cast<uint32_t>(MAX_PARTICLE_TYPES - 1))]++;
+
+    uint32_t offsets[MAX_PARTICLE_TYPES];
+    uint32_t acc = 0;
+    for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
+        offsets[t] = acc;
+        acc += counts[t];
+    }
+
+    // Build permutation: perm[new_idx] = old_idx
+    std::vector<uint32_t> perm(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        uint32_t t = std::min(particles.types[i], static_cast<uint32_t>(MAX_PARTICLE_TYPES - 1));
+        perm[offsets[t]++] = i;
+    }
+
+    apply_permutation(perm);
+
+    // Invalidate detected_nuclei_ — indices are stale after permutation.
+    // update_orbitals() will repopulate with correct indices on the next eligible frame.
+    detected_nuclei_.clear();
 }

@@ -97,6 +97,11 @@ public:
     VkCommandBuffer begin_single_command();
     void            end_single_command(VkCommandBuffer cmd);
 
+    // Fence-based async submit: submits command buffer signaling a fence (no CPU wait).
+    // Caller must later call wait_and_free_command() before reusing the fence.
+    void submit_with_fence(VkCommandBuffer cmd, VkFence fence);
+    void wait_and_free_command(VkCommandBuffer cmd, VkFence fence);
+
     // ── Shader helpers ────────────────────────────────────────────────────────
     VkShaderModule create_shader_module(const std::string& path);
     VkShaderModule create_shader_module(const unsigned char* data, size_t size);

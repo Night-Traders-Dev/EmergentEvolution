@@ -4,6 +4,7 @@
 #include "compute_pipeline.h"
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
 #include <vector>
 #include <imgui.h>
 
@@ -18,6 +19,16 @@ struct FrameData {
     VkFence         in_flight        = VK_NULL_HANDLE;
 };
 
+// ── Overlay push constants (force object / mirror rendering) ────────────────
+
+struct OverlayPushConstants {
+    glm::vec2 region_size;        // render texture logical size (with padding)
+    glm::vec2 camera_origin;      // world-space camera center
+    float     camera_zoom;        // render-space zoom (includes rscale)
+    float     particle_radius;    // base particle radius
+    uint32_t  force_object_count; // number of active force objects
+};
+
 // ── Renderer ──────────────────────────────────────────────────────────────────
 // Owns the render pass, framebuffers, fullscreen-quad pipeline, and ImGui.
 
@@ -25,6 +36,9 @@ class Renderer {
 public:
     bool swapchain_dirty = false;
     ImFont* title_font = nullptr;  // 48px font for splash screen title (crisp rendering)
+
+    // Set before draw_frame() to configure overlay rendering
+    OverlayPushConstants overlay_params{};
 
     void init(VulkanContext& ctx,
               GLFWwindow*   window,
@@ -59,6 +73,13 @@ private:
     VkDescriptorPool          quad_desc_pool_      = VK_NULL_HANDLE;
     VkDescriptorSet           quad_desc_set_       = VK_NULL_HANDLE;
 
+    // Force object / mirror overlay pipeline (graphics)
+    VkDescriptorSetLayout     overlay_dset_layout_ = VK_NULL_HANDLE;
+    VkPipelineLayout          overlay_pipe_layout_ = VK_NULL_HANDLE;
+    VkPipeline                overlay_pipeline_    = VK_NULL_HANDLE;
+    VkDescriptorPool          overlay_desc_pool_   = VK_NULL_HANDLE;
+    VkDescriptorSet           overlay_desc_set_    = VK_NULL_HANDLE;
+
     // ImGui descriptor pool
     VkDescriptorPool          imgui_pool_          = VK_NULL_HANDLE;
 
@@ -72,6 +93,8 @@ private:
                               const std::string& vert_spv,
                               const std::string& frag_spv);
     void create_quad_descriptor_set(VulkanContext& ctx, ComputePipeline& compute);
+    void create_overlay_pipeline(VulkanContext& ctx);
+    void create_overlay_descriptor_set(VulkanContext& ctx, ComputePipeline& compute);
     void create_sync_objects(VulkanContext& ctx);
     void init_imgui(VulkanContext& ctx, GLFWwindow* window);
     void destroy_framebuffers(VulkanContext& ctx);

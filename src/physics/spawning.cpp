@@ -176,6 +176,97 @@ uint32_t PhysicsSimulation::spawn_atom_at(glm::vec2 pos, int Z, int N,
         }
     }
 
+    // ── Force relaxation: find equilibrium nucleon positions ─────────────
+    // Start from hex-packed positions and iteratively move each nucleon
+    // along the net Yukawa + Pauli + Coulomb force until forces balance.
+    // This matches the shader constants exactly so nucleons spawn at rest.
+    if (A > 1) {
+        constexpr float YK_RANGE     = 16.0f;
+        constexpr float YK_COUPLING  = 2500.0f;
+        constexpr float YK_INV_RANGE = 1.0f / YK_RANGE;
+        constexpr float PL_CORE      = 6.0f;
+        constexpr float PL_STRENGTH  = 12000.0f;
+        constexpr float KC           = 1200.0f;
+        constexpr float SOFTEN_SQ    = 4.0f;   // SOFTEN_MIN² = 2²
+        constexpr int   MAX_ITERS    = 80;
+        constexpr float STEP_INIT    = 0.001f;
+        constexpr float MAX_MOVE     = 1.5f;   // px per iteration cap
+
+        for (int iter = 0; iter < MAX_ITERS; ++iter) {
+            float alpha = STEP_INIT * (1.0f - 0.6f * static_cast<float>(iter) / MAX_ITERS);
+
+            std::vector<NucPos> forces(A, {0.0f, 0.0f});
+
+            for (int i = 0; i < A; ++i) {
+                for (int j = i + 1; j < A; ++j) {
+                    float dx = nuc_positions[j].x - nuc_positions[i].x;
+                    float dy = nuc_positions[j].y - nuc_positions[i].y;
+                    float d2 = dx * dx + dy * dy;
+                    float dist = std::sqrt(d2 + 0.001f);
+                    float inv_r = 1.0f / std::max(dist, 0.5f);
+                    float nx = dx / dist;
+                    float ny = dy / dist;
+
+                    // Force on i from j (positive component = toward j)
+                    float fx = 0.0f, fy = 0.0f;
+
+                    // Yukawa nuclear attraction (toward j)
+                    if (dist < YK_RANGE) {
+                        float yukawa = YK_COUPLING * std::exp(-dist * YK_INV_RANGE)
+                                     * (inv_r + YK_INV_RANGE) * inv_r;
+                        float t = std::clamp((dist - 12.0f) / 4.0f, 0.0f, 1.0f);
+                        float window = 1.0f - t * t * (3.0f - 2.0f * t);
+                        fx += nx * yukawa * window;
+                        fy += ny * yukawa * window;
+
+                        // Pauli exclusion repulsion (away from j)
+                        if (dist < PL_CORE) {
+                            float overlap = 1.0f - dist / PL_CORE;
+                            float pauli = PL_STRENGTH * overlap * overlap / (d2 + 0.05f);
+                            fx -= nx * pauli;
+                            fy -= ny * pauli;
+                        }
+                    }
+
+                    // Coulomb repulsion between protons (away from j)
+                    if (nuc_types[i] == PROTON_TYPE && nuc_types[j] == PROTON_TYPE) {
+                        float coulomb = KC / (d2 + SOFTEN_SQ);
+                        fx -= nx * coulomb;
+                        fy -= ny * coulomb;
+                    }
+
+                    // Newton's third law
+                    forces[i].x += fx;  forces[i].y += fy;
+                    forces[j].x -= fx;  forces[j].y -= fy;
+                }
+            }
+
+            // Move nucleons along force direction
+            float max_disp = 0.0f;
+            for (int i = 0; i < A; ++i) {
+                float mx = forces[i].x * alpha;
+                float my = forces[i].y * alpha;
+                float mag = std::sqrt(mx * mx + my * my);
+                if (mag > MAX_MOVE) {
+                    mx *= MAX_MOVE / mag;
+                    my *= MAX_MOVE / mag;
+                    mag = MAX_MOVE;
+                }
+                nuc_positions[i].x += mx;
+                nuc_positions[i].y += my;
+                max_disp = std::max(max_disp, mag);
+            }
+
+            // Re-center nucleus at origin
+            float cx = 0.0f, cy = 0.0f;
+            for (int i = 0; i < A; ++i) { cx += nuc_positions[i].x; cy += nuc_positions[i].y; }
+            cx /= A; cy /= A;
+            for (int i = 0; i < A; ++i) { nuc_positions[i].x -= cx; nuc_positions[i].y -= cy; }
+
+            if (max_disp < 0.005f) break;  // converged
+        }
+    }
+
     float nuc_extent = 0.0f;
     for (int k = 0; k < A; ++k) {
         float r2 = nuc_positions[k].x * nuc_positions[k].x
@@ -196,6 +287,10 @@ uint32_t PhysicsSimulation::spawn_atom_at(glm::vec2 pos, int Z, int N,
         readback_energies_[slot] = mev_to_ebuf(PHYS_REST_MASS_MEV[nuc_types[k]]);
 
         write_spawn_genome(particles, slot, nuc_types[k], rng, frame_counter_);
+
+        // Set orbital_parent to the first nucleon (nucleus rep) immediately so
+        // the same-nucleus guard in check_fusion() works before update_orbitals() runs
+        particles.orbital_parent[slot] = static_cast<int32_t>(first_nucleon_slot);
     }
 
     const float NUC_CLEAR = nuc_extent + 4.0f;
@@ -219,9 +314,20 @@ uint32_t PhysicsSimulation::spawn_atom_at(glm::vec2 pos, int Z, int N,
         float R2_soft = R_target * R_target + SOFTEN_SQ_O;
         float L_ground = std::sqrt(Z_eff * K_COULOMB_O * R3 / R2_soft);
 
-        // Per-shell boost from SimConfig
-        float orbit_boost = cfg.orbit_boost[shell];
-        float v_orbital = (L_ground / R_target) * orbit_boost;
+        // The centrifugal barrier (L²/r³) is always active as the quantum ground state.
+        // When orbital_drive ON: use boosted velocity (tangential drive + F_bind maintain it).
+        // When orbital_drive OFF: barrier ≈ Coulomb at R_target, so equilibrium v ≈ 0.
+        //   Give a small tangential velocity for visual rotation; the barrier prevents collapse.
+        float v_keplerian = L_ground / R_target;  // sqrt(K·Z·R/(R²+s))
+        float v_orbital;
+        if (iface.orbital_drive) {
+            v_orbital = v_keplerian * cfg.orbit_boost[shell];
+        } else {
+            // Barrier absorbs most of Coulomb — spawn at ~30% Keplerian for visual orbit.
+            // The barrier will keep the electron from falling below R_target.
+            v_orbital = v_keplerian * 0.3f;
+        }
+        float orbit_boost = iface.orbital_drive ? cfg.orbit_boost[shell] : 1.0f;
 
         // Stagger shells by configurable offset for cloud appearance
         float shell_offset = shell * cfg.orbital_shell_offset;
@@ -472,7 +578,8 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
                 if (shell_fill[s] < SHELL_CAP_O[s]) { shell = s; break; }
             }
             if (shell < 0) {
-                electron_shells.push_back({120.0f, 0, cfg.orbit_boost[0]});
+                float fallback_boost = iface.orbital_drive ? cfg.orbit_boost[0] : 1.0f;
+                electron_shells.push_back({120.0f, 0, fallback_boost});
                 continue;
             }
             shell_fill[shell]++;
@@ -485,7 +592,8 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
             float R3 = R_target * R_target * R_target;
             float R2_soft = R_target * R_target + SOFTEN_SQ_O;
             float L_ground = std::sqrt(Z_eff * K_COULOMB_O * R3 / R2_soft);
-            electron_shells.push_back({L_ground, shell, cfg.orbit_boost[shell]});
+            float boost = iface.orbital_drive ? cfg.orbit_boost[shell] : 1.0f;
+            electron_shells.push_back({L_ground, shell, boost});
         }
 
         // Spawn all particles
@@ -510,14 +618,18 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
                 if (r > 1.0f) {
                     // Find this electron's shell info
                     float L_g = 120.0f;
+                    float e_boost = 1.0f;
                     for (size_t ei = 0; ei < electron_entries.size(); ++ei) {
                         if (std::abs(electron_entries[ei].dx - tmpl.atoms[a].dx) < 0.1f &&
                             std::abs(electron_entries[ei].dy - tmpl.atoms[a].dy) < 0.1f) {
                             L_g = electron_shells[ei].L_ground;
+                            e_boost = electron_shells[ei].boost;
                             break;
                         }
                     }
-                    float v_orbital = L_g / std::max(r, 3.0f);
+                    float v_kep = L_g / std::max(r, 3.0f);
+                    // Barrier always active: with drive ON use full boost, OFF use 30% Keplerian
+                    float v_orbital = iface.orbital_drive ? v_kep * e_boost : v_kep * 0.3f;
                     glm::vec2 radial = to_electron / r;
                     glm::vec2 tangent(-radial.y, radial.x);
                     readback_velocities_[slot] = tangent * v_orbital;

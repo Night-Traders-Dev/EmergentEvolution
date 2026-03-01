@@ -61,8 +61,8 @@ uses a **spatial acceleration grid** with **OpenMP** parallelization for O(n) ne
 | GPU forces | O(n&#178;) pairwise per-frame on Vulkan compute shader |
 | CPU physics | O(n) via **spatial acceleration grid** (30px cells, 342&times;193 = 65,906 cells) |
 | Parallelism | **OpenMP** across all cores for grid builds, entropy, statistics, measurement, B-field visualization |
-| GPU sync | Single `vkDeviceWaitIdle` per frame (batched dirty flag) |
-| GPU post-processing | **Dual-layer bloom** (fine + wide Gaussian blur), zoom-adaptive particle sizing |
+| GPU sync | Single `vkQueueWaitIdle` per frame (batched dirty flag) |
+| GPU post-processing | **Half-resolution bloom** (extract + H/V Gaussian blur + composite), zoom-adaptive particle sizing |
 | World | 10,240 &times; 5,760 px toroidal space |
 | Buffers | Double-buffered ping-pong (position, velocity, angle, angular velocity, energy, genome) |
 | Genome | 4 floats per particle: charge, spin, color charge / orbital L, decay rate |
@@ -176,7 +176,7 @@ All forces act simultaneously in the compute shader. Six have independent **mult
 | Force | Implementation | Multiplier |
 |---|---|---|
 | **Electromagnetic** | Coulomb 1/r&#178; + Biot-Savart B-field + Lorentz force F=q(v&times;B) | `coulomb_strength` |
-| **Strong nuclear** | Yukawa attractive (8px range) + Pauli hard-core repulsion (6px) | `yukawa_strength`, `pauli_multiplier` |
+| **Strong nuclear** | Yukawa attractive (16px range, smoothstep window 12&ndash;16px) + Pauli hard-core repulsion (6px) + nuclear surface tension + velocity damping | `yukawa_strength`, `pauli_multiplier` |
 | **QCD color** | Cornell potential with running coupling &alpha;_eff = &alpha;_s &middot; max(0.3, 1 + 0.3 ln r) | `alpha_s_scale` |
 | **Weak** | Short-range Yukawa (0.8px) + stochastic decay (CPU) | &mdash; |
 | **Gravity** | Newtonian 1/r&#178; with optional GR extensions (see below) | &mdash; |
@@ -196,8 +196,8 @@ Additional force behaviors:
 
 ### General Relativity Extensions
 
-Three optional GR corrections toggled from **Menu > Visualization**. Zero additional push-constant
-bytes (encoded in `field_flags` bits 9&ndash;11).
+Three GR corrections toggled from **Menu > Visualization** (all enabled by default). Zero additional
+push-constant bytes (encoded in `field_flags` bits 9&ndash;11).
 
 | Extension | Physics |
 |---|---|
@@ -219,19 +219,26 @@ propagate at c across the entire simulation (1/r amplitude falloff). These rings
 
 ## Orbital Mechanics
 
-Electrons orbit nuclei via quantum-mechanical centrifugal barriers, not artificial springs.
+Electrons orbit nuclei via a quantum-mechanical centrifugal barrier (always active) that models the
+Heisenberg uncertainty principle &mdash; confining an electron increases its kinetic energy, preventing
+collapse into the nucleus. An optional **Orbital Drive** adds tangential velocity drive and boost.
 
 **GPU** (physics.comp):
-- Centrifugal barrier: F = L&#178;&#8901;m_inv / (r&#179; + 1) &mdash; heavier leptons orbit tighter
+- **Centrifugal barrier** (always active): F = L&#178;&#8901;m_inv / (r&#179; + 1) &mdash; quantum ground state analog, prevents electron collapse
+- **Orbital Drive** (toggle, Menu &gt; Visualization): tangential velocity drive, per-shell boost with compensating F_bind, asymmetric radial damping
 - Spin-orbit coupling: fine structure correction proportional to spin &middot; L / r&#8308;
 - Spin magnetic moment: dipole force &mu;&middot;&nabla;B in external field
 
 **CPU** (update_orbitals):
-- BFS clusters nucleons into nuclei (10px radius)
+- BFS clusters nucleons into nuclei (16px radius)
 - Assigns electrons to nearest nucleus within 60px binding radius
-- Fills shells: **1s** (2), **2s2p** (8), **3s3p3d** (18)
+- Fills shells: **1s** (2), **2s2p** (8), **3s3p3d** (18), **4s4p4d4f** (32)
 - Computes L_ground per shell via Bohr model with Slater screening:
   R_target = n&#178; &middot; R_BOHR / Z_eff, where Z_eff = Z &minus; inner_electrons
+
+**Atom spawning** (spawning.cpp):
+- Nucleons placed via **force-relaxation**: hex-packed initial positions are iteratively adjusted until Yukawa, Pauli, and Coulomb forces balance to near-zero (up to 80 iterations, matches shader constants exactly)
+- Electrons placed at Bohr orbital radii with velocity matching the centrifugal barrier equilibrium (Orbital Drive OFF) or boosted target velocity (Orbital Drive ON)
 
 ---
 
@@ -537,9 +544,7 @@ velocity meter (tracks single particle), distance ruler (nanometer scale), densi
 
 ### Visual Quality
 
-- **Dual-layer bloom**: brightness extract &rarr; fine Gaussian blur &rarr; wide Gaussian blur &rarr; composite.
-  Two bloom layers (fine sharp glow + soft wide halo) produce rich light bleeding from energetic particles.
-  Togglable in Display settings.
+- **Half-resolution bloom**: brightness extract (2&times;2 downsample) &rarr; horizontal Gaussian blur &rarr; vertical Gaussian blur &rarr; full-res composite (nearest-neighbor upscale). Runs at half render resolution for performance. Off by default; togglable in Display settings.
 - **Rim lighting**: particles have bright edge highlights for depth illusion
 - **Sub-pixel anti-aliasing**: adaptive AA band width (`max(1px, 15% radius)`) ensures smooth edges at all zoom levels
 - **Zoom-adaptive sizing**: `mix(zoom, sqrt(zoom), 0.5)` &mdash; particles stay visible when zoomed out, don't overlap when zoomed in
@@ -549,8 +554,9 @@ velocity meter (tracks single particle), distance ruler (nanometer scale), densi
 ### Spawn Picker (F3)
 
 Categorized spawning: leptons, quarks, bosons, hypothetical particles, composite atoms
-(H through Fe as complete atoms with hexagonal nuclei and electron shells), and molecules
-by formula. Configurable count, energy, and scatter radius.
+(H through Fe as complete atoms with force-relaxed nuclei and Bohr-model electron shells), and
+molecules by formula. Nucleon positions are computed via iterative force relaxation matching
+GPU shader constants. Configurable count, energy, and scatter radius.
 
 ### Experiment Presets
 
