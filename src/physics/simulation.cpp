@@ -95,6 +95,37 @@ void SpatialGrid::build(const std::vector<glm::vec2>& positions,
     }
 }
 
+// ── GPU grid build (100px cells, prefix-sum format for shader) ──────────────
+
+void GPUGrid::build(const std::vector<glm::vec2>& positions,
+                    const std::vector<float>& energies, uint32_t n)
+{
+    cell_start.assign(TOTAL_CELLS + 1, 0);
+    sorted_indices.resize(n);
+
+    // Pass 1: count per cell (offset by 1 for prefix-sum)
+    for (uint32_t i = 0; i < n; ++i) {
+        if (energies[i] < 0.001f) continue;  // skip dormant
+        int col = std::clamp(static_cast<int>(positions[i].x / CELL_SIZE), 0, COLS - 1);
+        int row = std::clamp(static_cast<int>(positions[i].y / CELL_SIZE), 0, ROWS - 1);
+        cell_start[static_cast<size_t>(row * COLS + col) + 1]++;
+    }
+
+    // Pass 2: prefix sum
+    for (int c = 1; c <= TOTAL_CELLS; ++c)
+        cell_start[c] += cell_start[c - 1];
+
+    // Pass 3: scatter using temporary offsets
+    std::vector<uint32_t> offsets(cell_start.begin(), cell_start.begin() + TOTAL_CELLS);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (energies[i] < 0.001f) continue;
+        int col = std::clamp(static_cast<int>(positions[i].x / CELL_SIZE), 0, COLS - 1);
+        int row = std::clamp(static_cast<int>(positions[i].y / CELL_SIZE), 0, ROWS - 1);
+        int cell = row * COLS + col;
+        sorted_indices[offsets[cell]++] = i;
+    }
+}
+
 // ── Init / Destroy ───────────────────────────────────────────────────────────
 
 void PhysicsSimulation::init(GLFWwindow* window) {
@@ -173,11 +204,12 @@ void PhysicsSimulation::destroy() {
 UndoSnapshot PhysicsSimulation::capture_snapshot() {
     // Ensure fresh GPU readback
     uint32_t n = cfg.particle_count;
-    if (readback_positions_.size() != n && compute.is_ready()) {
+    if ((readback_positions_.size() != n || !readback_fresh_) && compute.is_ready()) {
         readback_positions_.resize(n);
         readback_velocities_.resize(n);
         readback_energies_.resize(n);
         compute.read_current_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+        readback_fresh_ = true;
     }
 
     UndoSnapshot snap;
@@ -286,6 +318,7 @@ void PhysicsSimulation::apply_snapshot(const UndoSnapshot& snap) {
     readback_positions_.clear();
     readback_velocities_.clear();
     readback_energies_.clear();
+    readback_fresh_ = false;
 }
 
 void PhysicsSimulation::perform_undo() {
@@ -7406,6 +7439,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         float scaled_dt = static_cast<float>(dt) * cfg.time_scale;
         compute.record(compute_cmd, cfg, scaled_dt);
         vk.end_single_command(compute_cmd);
+        readback_fresh_ = false;  // GPU state changed, readback is stale
     }
 
     // Hover detection (skip when fullscreen UI overlays are active)
@@ -7446,15 +7480,29 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
 
     // Readback for statistics, annihilation, and decay
     if (compute.is_ready() && is_active) {
-        readback_positions_.resize(cfg.particle_count);
-        readback_velocities_.resize(cfg.particle_count);
-        readback_energies_.resize(cfg.particle_count);
-        compute.read_current_state(vk, readback_positions_, readback_velocities_, readback_energies_);
-
-        // Physics quality and skip settings
+        // Physics quality and skip settings (computed before readback to gate it)
         int quality = iface.prefs.physics_quality;
         int skip    = iface.prefs.physics_skip;
         bool run_physics = (skip == 0) || (frame_counter_ % static_cast<uint32_t>(skip + 1) == 0);
+
+        // Throttled readback: skip if data is already fresh and no CPU work needed
+        bool need_readback = !readback_fresh_ || run_physics
+            || iface.request_save || iface.request_delete_particle
+            || iface.request_element_delete || iface.request_element_duplicate
+            || iface.request_halt_velocities
+            || iface.request_remove_massless || iface.request_remove_massive;
+
+        if (need_readback) {
+            readback_positions_.resize(cfg.particle_count);
+            readback_velocities_.resize(cfg.particle_count);
+            readback_energies_.resize(cfg.particle_count);
+            compute.read_current_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+            readback_fresh_ = true;
+
+            // Build GPU spatial grid and upload for shader neighbor lookup
+            gpu_grid_.build(readback_positions_, readback_energies_, cfg.particle_count);
+            compute.upload_gpu_grid(vk, gpu_grid_.cell_start, gpu_grid_.sorted_indices);
+        }
 
         if (run_physics) {
             // Build spatial grid for O(N) neighbor queries

@@ -106,16 +106,16 @@ void ComputePipeline::resize_render_texture(VulkanContext& ctx, uint32_t w, uint
 // Bindings 9-12: polar angle/angular-velocity (double-buffered)
 
 void ComputePipeline::create_descriptor_set_layout(VkDevice device) {
-    std::array<VkDescriptorSetLayoutBinding, 19> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 21> bindings{};
 
-    // Bindings 0-6 and 8-18: storage buffers
+    // Bindings 0-6 and 8-20: storage buffers
     for (uint32_t i = 0; i < 7; ++i) {
         bindings[i].binding         = i;
         bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[i].descriptorCount = 1;
         bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
     }
-    for (uint32_t i = 8; i < 19; ++i) {
+    for (uint32_t i = 8; i < 21; ++i) {
         bindings[i].binding         = i;
         bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[i].descriptorCount = 1;
@@ -185,7 +185,7 @@ void ComputePipeline::create_descriptor_pool(VkDevice device) {
     // 2 sets × 16 storage buffers (7 orig + 1 behavior + 4 angle/avel + 2 energy + 1 genome + 1 bond) = 32
     // 2 sets × 1 storage image = 2
     std::array<VkDescriptorPoolSize, 2> pool_sizes{};
-    pool_sizes[0] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 38 };
+    pool_sizes[0] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 42 };
     pool_sizes[1] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,   2 };
 
     VkDescriptorPoolCreateInfo ci{};
@@ -203,9 +203,40 @@ void ComputePipeline::create_descriptor_pool(VkDevice device) {
 void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& particles) {
     live_particle_count_ = static_cast<uint32_t>(particles.positions.size());
 
-    const VkBufferUsageFlags    BUF_USAGE = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-    const VkMemoryPropertyFlags MEM_PROPS =
+    // ── Detect discrete GPU: check for DEVICE_LOCAL-only memory (no HOST_VISIBLE) ──
+    VkPhysicalDeviceMemoryProperties mem_props;
+    vkGetPhysicalDeviceMemoryProperties(ctx.physical_device, &mem_props);
+    bool has_device_only = false;
+    for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
+        auto flags = mem_props.memoryTypes[i].propertyFlags;
+        if ((flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) &&
+            !(flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+            has_device_only = true;
+            break;
+        }
+    }
+
+    const VkMemoryPropertyFlags HOST_PROPS =
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+
+    // For particle buffers on discrete GPUs: DEVICE_LOCAL + transfer flags
+    // On integrated GPUs: HOST_VISIBLE (same as before, no benefit from staging)
+    VkBufferUsageFlags    PARTICLE_USAGE;
+    VkMemoryPropertyFlags PARTICLE_MEM;
+    if (has_device_only) {
+        PARTICLE_USAGE = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+                       | VK_BUFFER_USAGE_TRANSFER_DST_BIT
+                       | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        PARTICLE_MEM   = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        use_device_local_ = true;
+    } else {
+        PARTICLE_USAGE = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        PARTICLE_MEM   = HOST_PROPS;
+        use_device_local_ = false;
+    }
+
+    // Per-frame CPU-written buffers always HOST_VISIBLE (small, CPU-written each frame)
+    const VkBufferUsageFlags CPU_BUF_USAGE = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 
     VkDeviceSize pos_size      = particles.positions.size()  * sizeof(glm::vec2);
     VkDeviceSize vel_size      = particles.velocities.size() * sizeof(glm::vec2);
@@ -214,48 +245,88 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
     VkDeviceSize color_size    = particles.colors.size()      * sizeof(glm::vec4);
     VkDeviceSize behavior_size = MAX_PARTICLE_TYPES            * sizeof(uint32_t);
     VkDeviceSize angle_size    = particles.angles.size()       * sizeof(float);
+    VkDeviceSize energy_size   = particles.energies.size()     * sizeof(float);
 
-    pos_buffer_a_          = ctx.create_buffer(pos_size,      BUF_USAGE, MEM_PROPS);
-    pos_buffer_b_          = ctx.create_buffer(pos_size,      BUF_USAGE, MEM_PROPS);
-    vel_buffer_a_          = ctx.create_buffer(vel_size,      BUF_USAGE, MEM_PROPS);
-    vel_buffer_b_          = ctx.create_buffer(vel_size,      BUF_USAGE, MEM_PROPS);
-    type_buffer_           = ctx.create_buffer(type_size,     BUF_USAGE, MEM_PROPS);
-    force_buffer_          = ctx.create_buffer(force_size,    BUF_USAGE, MEM_PROPS);
-    color_buffer_          = ctx.create_buffer(color_size,    BUF_USAGE, MEM_PROPS);
-    behavior_buffer_       = ctx.create_buffer(behavior_size, BUF_USAGE, MEM_PROPS);
-    angle_buffer_a_        = ctx.create_buffer(angle_size,    BUF_USAGE, MEM_PROPS);
-    angle_buffer_b_        = ctx.create_buffer(angle_size,    BUF_USAGE, MEM_PROPS);
-    angular_vel_buffer_a_  = ctx.create_buffer(angle_size,    BUF_USAGE, MEM_PROPS);
-    angular_vel_buffer_b_  = ctx.create_buffer(angle_size,    BUF_USAGE, MEM_PROPS);
+    // Double-buffered particle buffers (DEVICE_LOCAL on discrete GPU)
+    pos_buffer_a_          = ctx.create_buffer(pos_size,   PARTICLE_USAGE, PARTICLE_MEM);
+    pos_buffer_b_          = ctx.create_buffer(pos_size,   PARTICLE_USAGE, PARTICLE_MEM);
+    vel_buffer_a_          = ctx.create_buffer(vel_size,   PARTICLE_USAGE, PARTICLE_MEM);
+    vel_buffer_b_          = ctx.create_buffer(vel_size,   PARTICLE_USAGE, PARTICLE_MEM);
+    angle_buffer_a_        = ctx.create_buffer(angle_size, PARTICLE_USAGE, PARTICLE_MEM);
+    angle_buffer_b_        = ctx.create_buffer(angle_size, PARTICLE_USAGE, PARTICLE_MEM);
+    angular_vel_buffer_a_  = ctx.create_buffer(angle_size, PARTICLE_USAGE, PARTICLE_MEM);
+    angular_vel_buffer_b_  = ctx.create_buffer(angle_size, PARTICLE_USAGE, PARTICLE_MEM);
+    energy_buffer_a_       = ctx.create_buffer(energy_size, PARTICLE_USAGE, PARTICLE_MEM);
+    energy_buffer_b_       = ctx.create_buffer(energy_size, PARTICLE_USAGE, PARTICLE_MEM);
+
+    // Per-frame CPU-written buffers (always HOST_VISIBLE)
+    type_buffer_           = ctx.create_buffer(type_size,     CPU_BUF_USAGE, HOST_PROPS);
+    force_buffer_          = ctx.create_buffer(force_size,    CPU_BUF_USAGE, HOST_PROPS);
+    color_buffer_          = ctx.create_buffer(color_size,    CPU_BUF_USAGE, HOST_PROPS);
+    behavior_buffer_       = ctx.create_buffer(behavior_size, CPU_BUF_USAGE, HOST_PROPS);
+
+    // Create staging buffers for DEVICE_LOCAL transfers
+    if (use_device_local_) {
+        // Staging size: enough for pos+vel+energy (the largest single transfer)
+        VkDeviceSize staging_size = pos_size + vel_size + energy_size;
+        VkBufferUsageFlags staging_usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT
+                                         | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        staging_upload_   = ctx.create_buffer(staging_size, staging_usage, HOST_PROPS);
+        staging_readback_ = ctx.create_buffer(staging_size, staging_usage, HOST_PROPS);
+    }
 
     // Upload initial data
-    ctx.update_buffer(pos_buffer_a_,  particles.positions.data(),        pos_size);
-    ctx.update_buffer(pos_buffer_b_,  particles.positions.data(),        pos_size);
-    ctx.update_buffer(vel_buffer_a_,  particles.velocities.data(),       vel_size);
-    ctx.update_buffer(vel_buffer_b_,  particles.velocities.data(),       vel_size);
+    if (use_device_local_) {
+        // Stage and copy each buffer pair via command buffer
+        auto stage_copy = [&](const Buffer& dst, const void* data, VkDeviceSize sz) {
+            void* mapped = nullptr;
+            vkMapMemory(ctx.device, staging_upload_.memory, 0, sz, 0, &mapped);
+            std::memcpy(mapped, data, static_cast<size_t>(sz));
+            vkUnmapMemory(ctx.device, staging_upload_.memory);
+
+            VkCommandBuffer cmd = ctx.begin_single_command();
+            VkBufferCopy region{};
+            region.size = sz;
+            vkCmdCopyBuffer(cmd, staging_upload_.handle, dst.handle, 1, &region);
+            ctx.end_single_command(cmd);
+        };
+        stage_copy(pos_buffer_a_,         particles.positions.data(),          pos_size);
+        stage_copy(pos_buffer_b_,         particles.positions.data(),          pos_size);
+        stage_copy(vel_buffer_a_,         particles.velocities.data(),         vel_size);
+        stage_copy(vel_buffer_b_,         particles.velocities.data(),         vel_size);
+        stage_copy(angle_buffer_a_,       particles.angles.data(),             angle_size);
+        stage_copy(angle_buffer_b_,       particles.angles.data(),             angle_size);
+        stage_copy(angular_vel_buffer_a_, particles.angular_velocities.data(), angle_size);
+        stage_copy(angular_vel_buffer_b_, particles.angular_velocities.data(), angle_size);
+        stage_copy(energy_buffer_a_,      particles.energies.data(),           energy_size);
+        stage_copy(energy_buffer_b_,      particles.energies.data(),           energy_size);
+    } else {
+        ctx.update_buffer(pos_buffer_a_,  particles.positions.data(),        pos_size);
+        ctx.update_buffer(pos_buffer_b_,  particles.positions.data(),        pos_size);
+        ctx.update_buffer(vel_buffer_a_,  particles.velocities.data(),       vel_size);
+        ctx.update_buffer(vel_buffer_b_,  particles.velocities.data(),       vel_size);
+        ctx.update_buffer(angle_buffer_a_,  particles.angles.data(),         angle_size);
+        ctx.update_buffer(angle_buffer_b_,  particles.angles.data(),         angle_size);
+        ctx.update_buffer(angular_vel_buffer_a_, particles.angular_velocities.data(), angle_size);
+        ctx.update_buffer(angular_vel_buffer_b_, particles.angular_velocities.data(), angle_size);
+        ctx.update_buffer(energy_buffer_a_, particles.energies.data(), energy_size);
+        ctx.update_buffer(energy_buffer_b_, particles.energies.data(), energy_size);
+    }
+
+    // CPU-written buffers: always direct map
     ctx.update_buffer(type_buffer_,   particles.types.data(),            type_size);
     ctx.update_buffer(force_buffer_,  particles.forces.data(),           force_size);
     ctx.update_buffer(color_buffer_,  particles.colors.data(),           color_size);
     ctx.update_buffer(behavior_buffer_, particles.behavior_flags,        behavior_size);
-    ctx.update_buffer(angle_buffer_a_,  particles.angles.data(),         angle_size);
-    ctx.update_buffer(angle_buffer_b_,  particles.angles.data(),         angle_size);
-    ctx.update_buffer(angular_vel_buffer_a_, particles.angular_velocities.data(), angle_size);
-    ctx.update_buffer(angular_vel_buffer_b_, particles.angular_velocities.data(), angle_size);
-
-    VkDeviceSize energy_size = particles.energies.size() * sizeof(float);
-    energy_buffer_a_ = ctx.create_buffer(energy_size, BUF_USAGE, MEM_PROPS);
-    energy_buffer_b_ = ctx.create_buffer(energy_size, BUF_USAGE, MEM_PROPS);
-    ctx.update_buffer(energy_buffer_a_, particles.energies.data(), energy_size);
-    ctx.update_buffer(energy_buffer_b_, particles.energies.data(), energy_size);
 
     VkDeviceSize genome_size = particles.genomes.size() * sizeof(float);
-    genome_buffer_ = ctx.create_buffer(genome_size, BUF_USAGE, MEM_PROPS);
+    genome_buffer_ = ctx.create_buffer(genome_size, CPU_BUF_USAGE, HOST_PROPS);
     ctx.update_buffer(genome_buffer_, particles.genomes.data(), genome_size);
 
     // Bond buffer: particle_count × MAX_BONDS_PER_PARTICLE uint32_t, all EMPTY
     VkDeviceSize bond_size = static_cast<VkDeviceSize>(particles.positions.size())
                              * MAX_BONDS_PER_PARTICLE * sizeof(uint32_t);
-    bond_buffer_ = ctx.create_buffer(bond_size, BUF_USAGE, MEM_PROPS);
+    bond_buffer_ = ctx.create_buffer(bond_size, CPU_BUF_USAGE, HOST_PROPS);
     {
         std::vector<uint32_t> empty_bonds(particles.positions.size() * MAX_BONDS_PER_PARTICLE, 0xFFFFFFFFu);
         ctx.update_buffer(bond_buffer_, empty_bonds.data(), bond_size);
@@ -263,7 +334,7 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
 
     // Force object buffer (binding 17, not double-buffered)
     VkDeviceSize force_obj_size = MAX_FORCE_OBJECTS * sizeof(ForceObject);
-    force_obj_buffer_ = ctx.create_buffer(force_obj_size, BUF_USAGE, MEM_PROPS);
+    force_obj_buffer_ = ctx.create_buffer(force_obj_size, CPU_BUF_USAGE, HOST_PROPS);
     {
         ForceObject empty_objs[MAX_FORCE_OBJECTS] = {};
         ctx.update_buffer(force_obj_buffer_, empty_objs, force_obj_size);
@@ -363,8 +434,19 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
         set(66, 100.0f,          0.0f);                             // Dyn. Axion QP
 
         VkDeviceSize mzpe_size = mass_zpe.size() * sizeof(float);
-        mass_zpe_buffer_ = ctx.create_buffer(mzpe_size, BUF_USAGE, MEM_PROPS);
+        mass_zpe_buffer_ = ctx.create_buffer(mzpe_size, CPU_BUF_USAGE, HOST_PROPS);
         ctx.update_buffer(mass_zpe_buffer_, mass_zpe.data(), mzpe_size);
+    }
+
+    // GPU spatial grid buffers (binding 19-20, readonly by shader)
+    {
+        VkDeviceSize grid_start_size = (GPU_GRID_CELLS + 1) * sizeof(uint32_t);
+        VkDeviceSize grid_idx_size   = MAX_GPU_PARTICLES * sizeof(uint32_t);
+        grid_cell_start_buffer_ = ctx.create_buffer(grid_start_size, CPU_BUF_USAGE, HOST_PROPS);
+        grid_indices_buffer_    = ctx.create_buffer(grid_idx_size,   CPU_BUF_USAGE, HOST_PROPS);
+        // Zero-initialize (empty grid — all cells have start==0)
+        std::vector<uint32_t> zero_start(GPU_GRID_CELLS + 1, 0);
+        ctx.update_buffer(grid_cell_start_buffer_, zero_start.data(), grid_start_size);
     }
 
     // Pre-size reusable scratch buffer for per-frame force scaling
@@ -403,6 +485,11 @@ void ComputePipeline::clear_buffers(VulkanContext& ctx) {
     ctx.destroy_buffer(bond_buffer_);
     ctx.destroy_buffer(force_obj_buffer_);
     ctx.destroy_buffer(mass_zpe_buffer_);
+    ctx.destroy_buffer(grid_cell_start_buffer_);
+    ctx.destroy_buffer(grid_indices_buffer_);
+    ctx.destroy_buffer(staging_upload_);
+    ctx.destroy_buffer(staging_readback_);
+    use_device_local_ = false;
 }
 
 // ── Write descriptor sets ─────────────────────────────────────────────────────
@@ -457,8 +544,8 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     std::vector<VkWriteDescriptorSet>    writes;
     std::vector<VkDescriptorBufferInfo>  buf_infos;
     std::vector<VkDescriptorImageInfo>   img_infos;
-    writes.reserve(40);
-    buf_infos.reserve(38);
+    writes.reserve(44);
+    buf_infos.reserve(42);
     img_infos.reserve(2);
 
     auto pos_sz  = pos_buffer_a_.size;
@@ -473,6 +560,8 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     auto bnd_sz  = bond_buffer_.size;
     auto fo_sz   = force_obj_buffer_.size;
     auto mzpe_sz = mass_zpe_buffer_.size;
+    auto gcs_sz  = grid_cell_start_buffer_.size;
+    auto gix_sz  = grid_indices_buffer_.size;
 
     // ── Set A: in=a, out=b ────────────────────────────────────────────────────
     write_storage_buffer(writes, buf_infos, desc_set_a_,  0, pos_buffer_a_.handle,         pos_sz);
@@ -494,6 +583,8 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     write_storage_buffer(writes, buf_infos, desc_set_a_, 16, bond_buffer_.handle,          bnd_sz);
     write_storage_buffer(writes, buf_infos, desc_set_a_, 17, force_obj_buffer_.handle,    fo_sz);
     write_storage_buffer(writes, buf_infos, desc_set_a_, 18, mass_zpe_buffer_.handle,    mzpe_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_, 19, grid_cell_start_buffer_.handle, gcs_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_, 20, grid_indices_buffer_.handle,    gix_sz);
 
     // ── Set B: in=b, out=a ────────────────────────────────────────────────────
     write_storage_buffer(writes, buf_infos, desc_set_b_,  0, pos_buffer_b_.handle,         pos_sz);
@@ -515,6 +606,8 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     write_storage_buffer(writes, buf_infos, desc_set_b_, 16, bond_buffer_.handle,          bnd_sz);
     write_storage_buffer(writes, buf_infos, desc_set_b_, 17, force_obj_buffer_.handle,    fo_sz);
     write_storage_buffer(writes, buf_infos, desc_set_b_, 18, mass_zpe_buffer_.handle,    mzpe_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_, 19, grid_cell_start_buffer_.handle, gcs_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_, 20, grid_indices_buffer_.handle,    gix_sz);
 
     vkUpdateDescriptorSets(ctx.device,
                            static_cast<uint32_t>(writes.size()),
@@ -563,10 +656,27 @@ void ComputePipeline::upload_force_objects(VulkanContext& ctx,
                       MAX_FORCE_OBJECTS * sizeof(ForceObject));
 }
 
+void ComputePipeline::upload_gpu_grid(VulkanContext& ctx,
+                                       const std::vector<uint32_t>& cell_start,
+                                       const std::vector<uint32_t>& sorted_indices)
+{
+    if (grid_cell_start_buffer_.handle == VK_NULL_HANDLE) return;
+
+    VkDeviceSize start_bytes = cell_start.size() * sizeof(uint32_t);
+    ctx.update_buffer(grid_cell_start_buffer_, cell_start.data(),
+                      std::min(start_bytes, grid_cell_start_buffer_.size));
+
+    if (!sorted_indices.empty()) {
+        VkDeviceSize idx_bytes = sorted_indices.size() * sizeof(uint32_t);
+        ctx.update_buffer(grid_indices_buffer_, sorted_indices.data(),
+                          std::min(idx_bytes, grid_indices_buffer_.size));
+    }
+}
+
 void ComputePipeline::read_current_state(VulkanContext& ctx,
                                           std::vector<glm::vec2>& out_positions,
                                           std::vector<glm::vec2>& out_velocities,
-                                          std::vector<float>&     out_energies) const
+                                          std::vector<float>&     out_energies)
 {
     if (pos_buffer_a_.handle == VK_NULL_HANDLE) return;
 
@@ -579,21 +689,61 @@ void ComputePipeline::read_current_state(VulkanContext& ctx,
 
     uint32_t n = static_cast<uint32_t>(out_positions.size());
     VkDeviceSize pos_bytes = n * sizeof(glm::vec2);
+    VkDeviceSize vel_bytes = n * sizeof(glm::vec2);
     VkDeviceSize nrg_bytes = static_cast<uint32_t>(out_energies.size()) * sizeof(float);
 
-    void* mapped = nullptr;
-    vkMapMemory(ctx.device, cur_pos.memory, 0, pos_bytes, 0, &mapped);
-    std::memcpy(out_positions.data(), mapped, pos_bytes);
-    vkUnmapMemory(ctx.device, cur_pos.memory);
+    if (use_device_local_) {
+        // Copy from DEVICE_LOCAL → staging readback buffer, then map staging
+        VkDeviceSize offset = 0;
+        VkCommandBuffer cmd = ctx.begin_single_command();
 
-    vkMapMemory(ctx.device, cur_vel.memory, 0, pos_bytes, 0, &mapped);
-    std::memcpy(out_velocities.data(), mapped, pos_bytes);
-    vkUnmapMemory(ctx.device, cur_vel.memory);
+        VkBufferCopy region{};
+        region.srcOffset = 0;
+        region.dstOffset = offset;
+        region.size = pos_bytes;
+        vkCmdCopyBuffer(cmd, cur_pos.handle, staging_readback_.handle, 1, &region);
+        offset += pos_bytes;
 
-    if (cur_nrg.handle != VK_NULL_HANDLE && !out_energies.empty()) {
-        vkMapMemory(ctx.device, cur_nrg.memory, 0, nrg_bytes, 0, &mapped);
-        std::memcpy(out_energies.data(), mapped, nrg_bytes);
-        vkUnmapMemory(ctx.device, cur_nrg.memory);
+        region.srcOffset = 0;
+        region.dstOffset = offset;
+        region.size = vel_bytes;
+        vkCmdCopyBuffer(cmd, cur_vel.handle, staging_readback_.handle, 1, &region);
+        offset += vel_bytes;
+
+        if (cur_nrg.handle != VK_NULL_HANDLE && !out_energies.empty()) {
+            region.srcOffset = 0;
+            region.dstOffset = offset;
+            region.size = nrg_bytes;
+            vkCmdCopyBuffer(cmd, cur_nrg.handle, staging_readback_.handle, 1, &region);
+        }
+
+        ctx.end_single_command(cmd);  // waits for completion
+
+        // Map staging and read back
+        void* mapped = nullptr;
+        vkMapMemory(ctx.device, staging_readback_.memory, 0, staging_readback_.size, 0, &mapped);
+        auto* base = static_cast<uint8_t*>(mapped);
+        std::memcpy(out_positions.data(),  base,             pos_bytes);
+        std::memcpy(out_velocities.data(), base + pos_bytes, vel_bytes);
+        if (cur_nrg.handle != VK_NULL_HANDLE && !out_energies.empty())
+            std::memcpy(out_energies.data(), base + pos_bytes + vel_bytes, nrg_bytes);
+        vkUnmapMemory(ctx.device, staging_readback_.memory);
+    } else {
+        // HOST_VISIBLE path: direct map
+        void* mapped = nullptr;
+        vkMapMemory(ctx.device, cur_pos.memory, 0, pos_bytes, 0, &mapped);
+        std::memcpy(out_positions.data(), mapped, pos_bytes);
+        vkUnmapMemory(ctx.device, cur_pos.memory);
+
+        vkMapMemory(ctx.device, cur_vel.memory, 0, vel_bytes, 0, &mapped);
+        std::memcpy(out_velocities.data(), mapped, vel_bytes);
+        vkUnmapMemory(ctx.device, cur_vel.memory);
+
+        if (cur_nrg.handle != VK_NULL_HANDLE && !out_energies.empty()) {
+            vkMapMemory(ctx.device, cur_nrg.memory, 0, nrg_bytes, 0, &mapped);
+            std::memcpy(out_energies.data(), mapped, nrg_bytes);
+            vkUnmapMemory(ctx.device, cur_nrg.memory);
+        }
     }
 }
 
@@ -607,29 +757,63 @@ void ComputePipeline::write_particle_state(
 {
     if (pos_buffer_a_.handle == VK_NULL_HANDLE) return;
 
-    uint32_t     n        = static_cast<uint32_t>(positions.size());
-    VkDeviceSize pos_bytes = n * sizeof(glm::vec2);
-    VkDeviceSize nrg_bytes = n * sizeof(float);
+    uint32_t     n         = static_cast<uint32_t>(positions.size());
+    VkDeviceSize pos_bytes  = n * sizeof(glm::vec2);
+    VkDeviceSize vel_bytes  = n * sizeof(glm::vec2);
+    VkDeviceSize nrg_bytes  = n * sizeof(float);
 
-    // Write into BOTH ping-pong pairs so the data is present regardless of
-    // which buffer is "active" on the next tick.
-    void* mapped = nullptr;
+    if (use_device_local_) {
+        // Stage data into upload buffer, then copy to both ping-pong pairs
+        VkDeviceSize total = pos_bytes + vel_bytes + (energies.empty() ? 0 : nrg_bytes);
+        if (total > staging_upload_.size) return;  // safety
 
-    auto write_buf = [&](const Buffer& buf, const void* data, VkDeviceSize sz) {
-        if (buf.handle == VK_NULL_HANDLE || sz == 0) return;
-        vkMapMemory(ctx.device, buf.memory, 0, sz, 0, &mapped);
-        std::memcpy(mapped, data, static_cast<size_t>(sz));
-        vkUnmapMemory(ctx.device, buf.memory);
-    };
+        void* mapped = nullptr;
+        vkMapMemory(ctx.device, staging_upload_.memory, 0, total, 0, &mapped);
+        auto* base = static_cast<uint8_t*>(mapped);
+        std::memcpy(base,                         positions.data(),  pos_bytes);
+        std::memcpy(base + pos_bytes,             velocities.data(), vel_bytes);
+        if (!energies.empty())
+            std::memcpy(base + pos_bytes + vel_bytes, energies.data(), nrg_bytes);
+        vkUnmapMemory(ctx.device, staging_upload_.memory);
 
-    write_buf(pos_buffer_a_, positions.data(),  pos_bytes);
-    write_buf(pos_buffer_b_, positions.data(),  pos_bytes);
-    write_buf(vel_buffer_a_, velocities.data(), pos_bytes);
-    write_buf(vel_buffer_b_, velocities.data(), pos_bytes);
+        // Copy staging → both A and B buffers
+        auto copy_pair = [&](VkCommandBuffer cmd, const Buffer& dst, VkDeviceSize src_off, VkDeviceSize sz) {
+            VkBufferCopy region{};
+            region.srcOffset = src_off;
+            region.dstOffset = 0;
+            region.size = sz;
+            vkCmdCopyBuffer(cmd, staging_upload_.handle, dst.handle, 1, &region);
+        };
 
-    if (!energies.empty()) {
-        write_buf(energy_buffer_a_, energies.data(), nrg_bytes);
-        write_buf(energy_buffer_b_, energies.data(), nrg_bytes);
+        VkCommandBuffer cmd = ctx.begin_single_command();
+        copy_pair(cmd, pos_buffer_a_, 0, pos_bytes);
+        copy_pair(cmd, pos_buffer_b_, 0, pos_bytes);
+        copy_pair(cmd, vel_buffer_a_, pos_bytes, vel_bytes);
+        copy_pair(cmd, vel_buffer_b_, pos_bytes, vel_bytes);
+        if (!energies.empty()) {
+            copy_pair(cmd, energy_buffer_a_, pos_bytes + vel_bytes, nrg_bytes);
+            copy_pair(cmd, energy_buffer_b_, pos_bytes + vel_bytes, nrg_bytes);
+        }
+        ctx.end_single_command(cmd);
+    } else {
+        // HOST_VISIBLE path: direct map into both ping-pong pairs
+        void* mapped = nullptr;
+        auto write_buf = [&](const Buffer& buf, const void* data, VkDeviceSize sz) {
+            if (buf.handle == VK_NULL_HANDLE || sz == 0) return;
+            vkMapMemory(ctx.device, buf.memory, 0, sz, 0, &mapped);
+            std::memcpy(mapped, data, static_cast<size_t>(sz));
+            vkUnmapMemory(ctx.device, buf.memory);
+        };
+
+        write_buf(pos_buffer_a_, positions.data(),  pos_bytes);
+        write_buf(pos_buffer_b_, positions.data(),  pos_bytes);
+        write_buf(vel_buffer_a_, velocities.data(), vel_bytes);
+        write_buf(vel_buffer_b_, velocities.data(), vel_bytes);
+
+        if (!energies.empty()) {
+            write_buf(energy_buffer_a_, energies.data(), nrg_bytes);
+            write_buf(energy_buffer_b_, energies.data(), nrg_bytes);
+        }
     }
 }
 

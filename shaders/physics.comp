@@ -41,6 +41,15 @@ layout(set = 0, binding = 18, std430) readonly buffer MassZpeBuffer {
     float data[];
 } mass_zpe_buffer;
 
+// GPU spatial grid (CPU-built prefix-sum, uploaded each frame)
+layout(set = 0, binding = 19, std430) readonly buffer GridCellStart { uint data[]; } grid_cell_start;
+layout(set = 0, binding = 20, std430) readonly buffer GridIndices   { uint data[]; } grid_indices;
+
+// Grid constants (world 10240×5760, cell size 100px)
+const float GRID_CELL_SIZE = 100.0;
+const int   GRID_COLS      = 103;  // ceil(10240/100)
+const int   GRID_ROWS      = 58;   // ceil(5760/100)
+
 // ── Push Constants (expanded to 100 bytes) ──────────────────────────────────
 layout(push_constant, std430) uniform Params {
     vec2  region_size;
@@ -347,11 +356,15 @@ void apply_physics(uint i) {
             vec2  closest_ch_pos  = vec2(0.0);
             float closest_ch_charge = 0.0;
 
-            // Scan particles (strided to cover full array evenly)
-            uint stride = max(1u, (params.particle_count + 1023u) / 1024u);
-            for (uint jj = 0u; jj < min(params.particle_count, 1024u); jj++) {
-                uint j = jj * stride;
-                if (j >= params.particle_count || j == i) continue;
+            // Grid-based scan for nearest charged matter (30px radius)
+            int ph_cx = clamp(int(pos_a.x / GRID_CELL_SIZE), 0, GRID_COLS - 1);
+            int ph_cy = clamp(int(pos_a.y / GRID_CELL_SIZE), 0, GRID_ROWS - 1);
+            for (int gy = max(0, ph_cy - 1); gy <= min(GRID_ROWS - 1, ph_cy + 1); gy++) {
+            for (int gx = max(0, ph_cx - 1); gx <= min(GRID_COLS - 1, ph_cx + 1); gx++) {
+                uint gc = uint(gy * GRID_COLS + gx);
+                for (uint gk = grid_cell_start.data[gc]; gk < grid_cell_start.data[gc + 1u]; gk++) {
+                uint j = grid_indices.data[gk];
+                if (j == i) continue;
                 float e_j = in_energy_buffer.data[j];
                 if (e_j < 0.001) continue;
 
@@ -369,7 +382,7 @@ void apply_physics(uint i) {
                     closest_ch_pos  = p_j;
                     closest_ch_charge = q_j;
                 }
-            }
+            } } }
 
             // Compton recoil: deflect photon and transfer energy
             if (closest_ch_dist < 30.0) {
@@ -412,11 +425,15 @@ void apply_physics(uint i) {
         float interaction_e = 0.0;
 
         if (glu_energy > 0.05) {
-            // Strided scan for colored neighbors (60px QCD confinement range)
-            uint stride = max(1u, (params.particle_count + 1023u) / 1024u);
-            for (uint jj = 0u; jj < min(params.particle_count, 1024u); jj++) {
-                uint j = jj * stride;
-                if (j >= params.particle_count || j == i) continue;
+            // Grid-based scan for colored neighbors (60px QCD confinement range)
+            int glu_cx = clamp(int(pos_a.x / GRID_CELL_SIZE), 0, GRID_COLS - 1);
+            int glu_cy = clamp(int(pos_a.y / GRID_CELL_SIZE), 0, GRID_ROWS - 1);
+            for (int gy = max(0, glu_cy - 1); gy <= min(GRID_ROWS - 1, glu_cy + 1); gy++) {
+            for (int gx = max(0, glu_cx - 1); gx <= min(GRID_COLS - 1, glu_cx + 1); gx++) {
+                uint gc = uint(gy * GRID_COLS + gx);
+                for (uint gk = grid_cell_start.data[gc]; gk < grid_cell_start.data[gc + 1u]; gk++) {
+                uint j = grid_indices.data[gk];
+                if (j == i) continue;
                 float e_j = in_energy_buffer.data[j];
                 if (e_j < 0.001) continue;
 
@@ -467,7 +484,7 @@ void apply_physics(uint i) {
                 if (cf < -0.5 && dist > 40.0) {
                     interaction_e -= 0.2 * params.dt;
                 }
-            }
+            } } }
         }
 
         // Apply color force as momentum deflection (massless kinematics)
@@ -499,11 +516,15 @@ void apply_physics(uint i) {
         float nu_energy = max(energy - NEUTRINO_DRAIN * params.dt, 0.0);
         vec2 nu_vel = vel_a;
 
-        // Sparse scan for nearby Z bosons (512 samples within 10px)
-        uint nu_stride = max(1u, (params.particle_count + 511u) / 512u);
-        for (uint jj = 0u; jj < min(params.particle_count, 512u); jj++) {
-            uint j = jj * nu_stride;
-            if (j >= params.particle_count || j == i) continue;
+        // Grid-based scan for nearby Z bosons (10px range)
+        int nu_cx = clamp(int(pos_a.x / GRID_CELL_SIZE), 0, GRID_COLS - 1);
+        int nu_cy = clamp(int(pos_a.y / GRID_CELL_SIZE), 0, GRID_ROWS - 1);
+        for (int gy = max(0, nu_cy - 1); gy <= min(GRID_ROWS - 1, nu_cy + 1); gy++) {
+        for (int gx = max(0, nu_cx - 1); gx <= min(GRID_COLS - 1, nu_cx + 1); gx++) {
+            uint gc = uint(gy * GRID_COLS + gx);
+            for (uint gk = grid_cell_start.data[gc]; gk < grid_cell_start.data[gc + 1u]; gk++) {
+            uint j = grid_indices.data[gk];
+            if (j == i) continue;
             uint type_j = type_buffer.data[j];
             if (type_j != Z_BOSON_TYPE) continue;
             vec2 delta = in_pos_buffer.data[j] - pos_a;
@@ -513,7 +534,7 @@ void apply_physics(uint i) {
             vec2 n = delta / dist;
             // Weak NC deflection from Z boson
             nu_vel += n * params.weak_coupling * 150.0 * exp(-dist / 1.5) * params.dt * 0.001;
-        }
+        } } }
 
         // Preserve speed (massless)
         float nu_speed = length(nu_vel);
@@ -534,11 +555,15 @@ void apply_physics(uint i) {
         float q_a = get_charge(i); // W+: +1, W-: -1, Z: 0
         uint wb_count = 0u;
 
-        // Sparse strided scan (1024 samples within 100px)
-        uint wb_stride = max(1u, (params.particle_count + 1023u) / 1024u);
-        for (uint jj = 0u; jj < min(params.particle_count, 1024u); jj++) {
-            uint j = jj * wb_stride;
-            if (j >= params.particle_count || j == i) continue;
+        // Grid-based scan (100px range)
+        int wb_cx = clamp(int(pos_a.x / GRID_CELL_SIZE), 0, GRID_COLS - 1);
+        int wb_cy = clamp(int(pos_a.y / GRID_CELL_SIZE), 0, GRID_ROWS - 1);
+        for (int gy = max(0, wb_cy - 1); gy <= min(GRID_ROWS - 1, wb_cy + 1); gy++) {
+        for (int gx = max(0, wb_cx - 1); gx <= min(GRID_COLS - 1, wb_cx + 1); gx++) {
+            uint gc = uint(gy * GRID_COLS + gx);
+            for (uint gk = grid_cell_start.data[gc]; gk < grid_cell_start.data[gc + 1u]; gk++) {
+            uint j = grid_indices.data[gk];
+            if (j == i) continue;
             vec2 delta = in_pos_buffer.data[j] - pos_a;
             float d2 = dot(delta, delta);
             if (d2 > 10000.0 || d2 < 0.01) continue; // 100px range
@@ -571,7 +596,7 @@ void apply_physics(uint i) {
                 // 4. Quartic gauge: density enhancement when multiple WBs close
                 if (dist < 8.0) wb_count++;
             }
-        }
+        } } }
 
         // Quartic gauge density enhancement
         float quartic_scale = 1.0 + 0.3 * float(wb_count);
@@ -592,11 +617,15 @@ void apply_physics(uint i) {
         vec2 h_force = vec2(0.0);
         float vev = max(params.higgs_vev, 1.0);
 
-        // Sparse strided scan (1024 samples within 50px)
-        uint h_stride = max(1u, (params.particle_count + 1023u) / 1024u);
-        for (uint jj = 0u; jj < min(params.particle_count, 1024u); jj++) {
-            uint j = jj * h_stride;
-            if (j >= params.particle_count || j == i) continue;
+        // Grid-based scan (50px range)
+        int h_cx = clamp(int(pos_a.x / GRID_CELL_SIZE), 0, GRID_COLS - 1);
+        int h_cy = clamp(int(pos_a.y / GRID_CELL_SIZE), 0, GRID_ROWS - 1);
+        for (int gy = max(0, h_cy - 1); gy <= min(GRID_ROWS - 1, h_cy + 1); gy++) {
+        for (int gx = max(0, h_cx - 1); gx <= min(GRID_COLS - 1, h_cx + 1); gx++) {
+            uint gc = uint(gy * GRID_COLS + gx);
+            for (uint gk = grid_cell_start.data[gc]; gk < grid_cell_start.data[gc + 1u]; gk++) {
+            uint j = grid_indices.data[gk];
+            if (j == i) continue;
             vec2 delta = in_pos_buffer.data[j] - pos_a;
             float d2 = dot(delta, delta);
             if (d2 > 2500.0 || d2 < 0.01) continue; // 50px range
@@ -620,7 +649,7 @@ void apply_physics(uint i) {
             }
 
             h_force += n * F;
-        }
+        } } }
 
         vec2 h_vel = vel_a * 0.9 + h_force * params.dt * 0.1 * get_mass_inv(type_a);
         out_energy_buffer.data[i] = h_energy;
@@ -665,7 +694,17 @@ void apply_physics(uint i) {
     float inv_yukawa_range     = 1.0 / YUKAWA_RANGE;
     float inv_c_sim            = 1.0 / C_SIM;
 
-    for (int j = 0; j < int(params.particle_count); j++) {
+    // ── Grid-based neighbor iteration (replaces O(N²) brute force) ────────
+    int cell_x = clamp(int(pos_a.x / GRID_CELL_SIZE), 0, GRID_COLS - 1);
+    int cell_y = clamp(int(pos_a.y / GRID_CELL_SIZE), 0, GRID_ROWS - 1);
+    int search_r = int(ceil(MAX_RADIUS / GRID_CELL_SIZE));
+    for (int cy = max(0, cell_y - search_r); cy <= min(GRID_ROWS - 1, cell_y + search_r); cy++) {
+    for (int cx = max(0, cell_x - search_r); cx <= min(GRID_COLS - 1, cell_x + search_r); cx++) {
+        uint g_cell  = uint(cy * GRID_COLS + cx);
+        uint g_start = grid_cell_start.data[g_cell];
+        uint g_end   = grid_cell_start.data[g_cell + 1u];
+        for (uint g_k = g_start; g_k < g_end; g_k++) {
+        int j = int(grid_indices.data[g_k]);
         if (i == uint(j)) continue;
 
         float energy_b = in_energy_buffer.data[j];
@@ -1094,7 +1133,9 @@ void apply_physics(uint i) {
             total_force += normal * ANNIHIL_ATTRACTION * params.annihilation_strength;
             interaction_energy -= energy * ANNIHIL_DRAIN * params.annihilation_strength * params.dt;
         }
-    }
+    } // g_k (particles in cell)
+    } // cx
+    } // cy
 
     // ── Orbital confinement + tangential drive (applied ONCE per electron) ──
     // genome[2] stores L_ground from CPU orbital assignment (0 = free electron)

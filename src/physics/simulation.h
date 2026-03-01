@@ -49,6 +49,20 @@ struct SpatialGrid {
     }
 };
 
+// ── GPU spatial grid (100px cells, uploaded to GPU each frame for O(N·k) neighbor lookup) ──
+struct GPUGrid {
+    static constexpr float CELL_SIZE   = 100.0f;
+    static constexpr int   COLS        = 103;   // ceil(WORLD_W / 100)
+    static constexpr int   ROWS        = 58;    // ceil(WORLD_H / 100)
+    static constexpr int   TOTAL_CELLS = COLS * ROWS;  // 5974
+
+    std::vector<uint32_t> cell_start;      // [TOTAL_CELLS + 1] prefix-sum + sentinel
+    std::vector<uint32_t> sorted_indices;  // [particle_count] indices sorted by cell
+
+    void build(const std::vector<glm::vec2>& positions,
+               const std::vector<float>& energies, uint32_t n);
+};
+
 // ── Undo/Redo snapshot — full simulation state for one point in time ─────────
 struct UndoSnapshot {
     SimConfig cfg;
@@ -110,6 +124,9 @@ public:
     uint32_t     force_object_count_ = 0;
 
 private:
+    // ── GPU spatial grid (uploaded each frame for shader neighbor lookup) ──
+    GPUGrid gpu_grid_;
+
     // ── Undo/Redo ────────────────────────────────────────────────────────
     static constexpr uint32_t MAX_UNDO_SNAPSHOTS = 50;
     std::deque<UndoSnapshot> undo_stack_;
@@ -132,6 +149,7 @@ private:
 
     SpatialGrid grid_;
     bool cpu_particles_dirty_ = false;
+    bool readback_fresh_      = false;   // true when readback data matches current GPU state
     std::uniform_real_distribution<float> angle_dist_{0.0f, 6.2831853f};
 
     float emergent_temperature_ = 1.0f;   // EMA of kinetic temperature (Kelvin)

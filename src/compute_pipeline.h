@@ -52,12 +52,17 @@ public:
 
     bool is_ready() const { return pos_buffer_a_.handle != VK_NULL_HANDLE; }
 
+    // Upload CPU-built spatial grid for GPU neighbor lookup
+    void upload_gpu_grid(VulkanContext& ctx,
+                         const std::vector<uint32_t>& cell_start,
+                         const std::vector<uint32_t>& sorted_indices);
+
     // Read current particle positions, velocities, and energies back to CPU.
     // Safe to call after end_single_command() (queue is idle).
     void read_current_state(VulkanContext& ctx,
                             std::vector<glm::vec2>& out_positions,
                             std::vector<glm::vec2>& out_velocities,
-                            std::vector<float>&     out_energies) const;
+                            std::vector<float>&     out_energies);
 
     // Write modified positions, velocities, and energies into both ping-pong buffers.
     // Used for particle injection (spawn). Queue must be idle when called.
@@ -108,8 +113,19 @@ private:
     // Layout: [type*2+0] = mass_inv, [type*2+1] = zpe
     Buffer mass_zpe_buffer_{};
 
+    // GPU spatial grid (binding 19-20, readonly, CPU-built each frame)
+    Buffer grid_cell_start_buffer_{};  // uint32_t[GPU_GRID_CELLS+1] prefix-sum
+    Buffer grid_indices_buffer_{};     // uint32_t[MAX_GPU_PARTICLES] sorted indices
+    static constexpr uint32_t GPU_GRID_CELLS   = 103 * 58;  // 5974
+    static constexpr uint32_t MAX_GPU_PARTICLES = 200000;
+
     // Actual particle count the buffers were allocated for (safe dispatch cap)
     uint32_t live_particle_count_ = 0;
+
+    // DEVICE_LOCAL optimization: staging buffers for discrete GPUs
+    bool   use_device_local_  = false;   // true when particle buffers are in VRAM
+    Buffer staging_upload_{};            // HOST_VISIBLE for CPU→GPU transfers
+    Buffer staging_readback_{};          // HOST_VISIBLE for GPU→CPU transfers
 
     // Reusable scratch buffer for scaled forces (avoids 18.5KB stack alloc per frame)
     std::vector<float> effective_forces_;
