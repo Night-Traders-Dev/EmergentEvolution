@@ -5,6 +5,7 @@
 #include "physics/scenarios.h"
 #include "physics/ui_data.h"
 #include "physics/audio.h"
+#include "physics/repository.h"
 #include "vulkan_context.h"
 #include "stb_image.h"
 #include <imgui.h>
@@ -434,7 +435,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         float btn_h = 40.0f;
         float btn_spacing = 48.0f;
         float title_h = title_size.y + 20.0f;  // title + gap to first button
-        float menu_h = title_h + btn_spacing * 9 + btn_h + 30.0f; // 10 buttons + hint
+        float menu_h = title_h + btn_spacing * 10 + btn_h + 30.0f; // 11 buttons + hint
         float menu_top = cy - menu_h * 0.5f;
 
         ImGui::SetCursorPos(ImVec2(cx - title_size.x * 0.5f, menu_top));
@@ -491,37 +492,49 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
             browse_needs_refresh = true;
         }
 
-        // About
+        // How To Play
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 5));
-        if (ImGui::Button("About", ImVec2(btn_w, btn_h))) {
-            show_splash = true;
-            splash_inited_ = false;  // re-init animation
+        if (ImGui::Button("How To Play", ImVec2(btn_w, btn_h))) {
+            show_howto = true;
             show_pause_menu = false;
         }
 
-        // Achievements
+        // Repository
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 6));
+        if (ParticleRepository::is_available()) {
+            if (ImGui::Button("Repository", ImVec2(btn_w, btn_h))) {
+                show_repository = true;
+                show_pause_menu = false;
+            }
+        } else {
+            ImGui::BeginDisabled();
+            ImGui::Button("Repository", ImVec2(btn_w, btn_h));
+            ImGui::EndDisabled();
+        }
+
+        // Achievements
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 7));
         if (ImGui::Button("Achievements", ImVec2(btn_w, btn_h))) {
             show_achievements_panel = true;
             show_pause_menu = false;
         }
 
         // Credits
-        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 7));
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 8));
         if (ImGui::Button("Credits", ImVec2(btn_w, btn_h))) {
             show_credits_ = true;
             show_pause_menu = false;
         }
 
         // Settings
-        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 8));
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 9));
         if (ImGui::Button("Settings", ImVec2(btn_w, btn_h))) {
             show_settings_menu = true;
             show_pause_menu = false;
         }
 
         // Quit
-        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 9));
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 10));
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.4f, 0.08f, 0.08f, 0.90f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.6f, 0.15f, 0.15f, 0.95f));
         if (ImGui::Button("Quit", ImVec2(btn_w, btn_h))) {
@@ -533,7 +546,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         ImGui::PopStyleVar();
 
         // Hint text
-        float hint_y = btn_y + btn_spacing * 10 + 10.0f;
+        float hint_y = btn_y + btn_spacing * 11 + 10.0f;
         const char* hint = "Press Escape to resume";
         ImVec2 hint_size = ImGui::CalcTextSize(hint);
         ImGui::SetCursorPos(ImVec2(cx - hint_size.x * 0.5f, hint_y));
@@ -586,8 +599,8 @@ void PhysicsInterface::draw_settings_menu() {
         float panel_bottom = cy + 230.0f;
         float panel_h = panel_bottom - panel_top;
 
-        static const char* TAB_LABELS[] = { "Display", "Performance", "Theme", "Access.", "Audio & Log" };
-        static constexpr int TAB_COUNT = 5;
+        static const char* TAB_LABELS[] = { "Display", "Perf.", "Theme", "Access.", "Audio", "Controls" };
+        static constexpr int TAB_COUNT = 6;
         float tab_w = panel_w / TAB_COUNT;
 
         ImGui::SetCursorPos(ImVec2(panel_x, tab_top));
@@ -1020,6 +1033,98 @@ void PhysicsInterface::draw_settings_menu() {
                 ImGui::SetTooltip("Append all physics events to event_log.txt\nas they occur (timestamped, one per line).");
         }
 
+        // ── Tab 5: Controls ─────────────────────────────────────────────
+        else if (settings_tab == 5) {
+            ImGui::Dummy(ImVec2(0, 6));
+            ImGui::TextColored(tc.accent, "Keyboard Shortcuts");
+            ImGui::Separator();
+            ImGui::Dummy(ImVec2(0, 4));
+
+            if (ImGui::BeginTable("##KeyBindings", 2,
+                    ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
+                ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Key", ImGuiTableColumnFlags_WidthFixed, 180.0f);
+                ImGui::TableHeadersRow();
+
+                for (int i = 0; i < KACT_COUNT; ++i) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::Text("%s", KEY_ACTION_NAMES[i]);
+                    ImGui::TableSetColumnIndex(1);
+
+                    // Fullscreen toggle is non-rebindable (GLFW callback)
+                    if (i == KACT_FULLSCREEN_TOGGLE) {
+                        char label[64];
+                        format_keybinding(keybindings.bindings[i], label, sizeof(label));
+                        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.55f, 0.8f), "%s", label);
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("This shortcut cannot be reassigned.");
+                        continue;
+                    }
+
+                    if (rebinding_action == i) {
+                        // "Press a key..." mode
+                        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Press a key...");
+
+                        // Cancel with Escape
+                        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                            rebinding_action = -1;
+                        } else {
+                            // Scan for any key press
+                            for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k) {
+                                auto ik = static_cast<ImGuiKey>(k);
+                                // Skip mouse buttons and modifier-only keys
+                                if (ik >= ImGuiKey_MouseLeft && ik <= ImGuiKey_MouseMiddle) continue;
+                                if (ik == ImGuiKey_LeftCtrl || ik == ImGuiKey_RightCtrl) continue;
+                                if (ik == ImGuiKey_LeftShift || ik == ImGuiKey_RightShift) continue;
+                                if (ik == ImGuiKey_LeftAlt || ik == ImGuiKey_RightAlt) continue;
+                                if (ik == ImGuiKey_LeftSuper || ik == ImGuiKey_RightSuper) continue;
+
+                                if (ImGui::IsKeyPressed(ik, false)) {
+                                    KeyBinding nb;
+                                    nb.key   = ik;
+                                    nb.ctrl  = ImGui::GetIO().KeyCtrl;
+                                    nb.shift = ImGui::GetIO().KeyShift;
+                                    nb.alt   = ImGui::GetIO().KeyAlt;
+
+                                    // Swap-on-conflict
+                                    for (int j = 0; j < KACT_COUNT; ++j) {
+                                        if (j == i || j == KACT_FULLSCREEN_TOGGLE) continue;
+                                        auto& ob = keybindings.bindings[j];
+                                        if (ob.key == nb.key && ob.ctrl == nb.ctrl
+                                            && ob.shift == nb.shift && ob.alt == nb.alt) {
+                                            ob = keybindings.bindings[i];  // swap
+                                            break;
+                                        }
+                                    }
+                                    keybindings.bindings[i] = nb;
+                                    rebinding_action = -1;
+                                    save_keybindings();
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        // Show current binding as a clickable button
+                        char label[64];
+                        format_keybinding(keybindings.bindings[i], label, sizeof(label));
+                        char btn_id[80];
+                        snprintf(btn_id, sizeof(btn_id), "%s##kb%d", label, i);
+                        if (ImGui::Button(btn_id, ImVec2(170, 0))) {
+                            rebinding_action = i;
+                        }
+                    }
+                }
+                ImGui::EndTable();
+            }
+
+            ImGui::Dummy(ImVec2(0, 12));
+            if (ImGui::Button("Reset to Defaults", ImVec2(panel_w - 20.0f, 0))) {
+                keybindings.set_defaults();
+                save_keybindings();
+            }
+        }
+
         ImGui::PopItemWidth();
         ImGui::EndChild();
 
@@ -1326,16 +1431,9 @@ void PhysicsInterface::push_decay_event(const char* desc, DecayEventType type, I
     decay_log.push_back({std::string(desc), details, type, color, frame_counter_display, std::time(nullptr)});
     if (prefs.event_log_save) save_event_to_disk(desc, type);
 
-    // Trigger SFX for major physics events
-    if (audio_ptr) {
-        switch (type) {
-            case DEVT_FUSION:          audio_ptr->play_fusion();  break;
-            case DEVT_FISSION:         audio_ptr->play_fission(); break;
-            case DEVT_PARTICLE_DECAY:
-            case DEVT_NUCLEAR_DECAY:   audio_ptr->play_decay();   break;
-            default: break;
-        }
-    }
+    // Link the most recent notification to this event (if unlinked)
+    if (!notifications.empty() && notifications.back().event_idx == -1)
+        notifications.back().event_idx = static_cast<int32_t>(decay_log.size()) - 1;
 }
 
 void PhysicsInterface::save_event_to_disk(const char* desc, DecayEventType type) {
@@ -1384,7 +1482,7 @@ void PhysicsInterface::draw_notifications() {
     float card_w = 260.0f;
     float card_pad = 4.0f;
     float start_x = io.DisplaySize.x - card_w - 10.0f;
-    float start_y = 10.0f;
+    float start_y = 40.0f;
 
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
         | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize
@@ -1412,6 +1510,23 @@ void PhysicsInterface::draw_notifications() {
             ImVec4 tc = n.color;
             tc.w = alpha;
             ImGui::TextColored(tc, "%s", n.text.c_str());
+
+            // Click notification → open event log at linked event
+            if (ImGui::IsWindowHovered())
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(0)) {
+                show_decay_log = true;
+                if (n.event_idx >= 0 && n.event_idx < static_cast<int32_t>(decay_log.size())) {
+                    scroll_to_event_idx = n.event_idx;
+                    expanded_event_idx = n.event_idx;
+                }
+                notifications.erase(notifications.begin() + i);
+                ImGui::End();
+                ImGui::PopStyleVar(3);
+                ImGui::PopStyleColor(2);
+                break;  // iterator invalidated, redraw next frame
+            }
+
             start_y += ImGui::GetWindowHeight() + card_pad;
         }
         ImGui::End();
@@ -2333,6 +2448,201 @@ void PhysicsInterface::draw_credits() {
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
         if (ImGui::Button("Back", ImVec2(btn_w, 36.0f))) {
             show_credits_ = false;
+            show_pause_menu = true;
+        }
+        ImGui::PopStyleVar();
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+}
+
+// ── How-To / About Guide ────────────────────────────────────────────────────
+void PhysicsInterface::draw_howto() {
+    const auto& tc = get_theme(prefs.theme);
+    auto& io = ImGui::GetIO();
+
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.04f, 0.06f, 0.97f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::Begin("##howto", nullptr,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBringToFrontOnFocus);
+    {
+        float cx = io.DisplaySize.x * 0.5f;
+        float panel_w = 640.0f;
+        float panel_top = 50.0f;
+        float panel_bottom = io.DisplaySize.y - 80.0f;
+        float panel_h = panel_bottom - panel_top;
+
+        // Title
+        if (title_font) ImGui::PushFont(title_font);
+        const char* title = "How To Play";
+        float tw = ImGui::CalcTextSize(title).x;
+        ImGui::SetCursorPos(ImVec2(cx - tw * 0.5f, 12.0f));
+        ImGui::TextColored(tc.accent_bright, "%s", title);
+        if (title_font) ImGui::PopFont();
+
+        // Scrollable content
+        ImGui::SetCursorPos(ImVec2(cx - panel_w * 0.5f, panel_top));
+        ImGui::BeginChild("##howto_scroll", ImVec2(panel_w, panel_h), false);
+        ImGui::PushTextWrapPos(panel_w - 20.0f);
+
+        auto section_header = [&](const char* text) {
+            ImGui::Dummy(ImVec2(0, 12));
+            ImGui::TextColored(tc.accent, "%s", text);
+            ImGui::Separator();
+            ImGui::Dummy(ImVec2(0, 4));
+        };
+
+        auto body = [&](const char* text) {
+            ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.88f, 1.0f), "%s", text);
+        };
+
+        auto hint = [&](const char* text) {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.65f, 0.9f), "  %s", text);
+        };
+
+        // ── Section 1: Getting Started ──
+        section_header("Getting Started");
+        body("Particle Playground is an interactive particle physics simulator. "
+             "You can spawn fundamental particles — quarks, leptons, and bosons — "
+             "and watch them interact through the fundamental forces of nature.");
+        ImGui::Dummy(ImVec2(0, 4));
+        body("Particles bind into nuclei through the strong force, capture electrons "
+             "to form atoms, and atoms bond into molecules through covalent bonds. "
+             "All interactions emerge from the underlying physics.");
+
+        // ── Section 2: Controls ──
+        section_header("Controls");
+        body("Keyboard shortcuts can be customized in Settings > Controls.");
+        ImGui::Dummy(ImVec2(0, 6));
+
+        if (ImGui::BeginTable("##howto_keys", 2, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 200.0f);
+            ImGui::TableSetupColumn("Key", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableHeadersRow();
+
+            char buf[64];
+            for (int i = 0; i < KACT_COUNT; i++) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted(KEY_ACTION_NAMES[i]);
+                ImGui::TableSetColumnIndex(1);
+                format_keybinding(keybindings.bindings[i], buf, sizeof(buf));
+                ImGui::TextUnformatted(buf);
+            }
+            ImGui::EndTable();
+        }
+        ImGui::Dummy(ImVec2(0, 4));
+        hint("Mouse: Left-click to spawn, Right-drag to pan, Scroll to zoom");
+        hint("Gamepad: Left stick = pan, Triggers = zoom, Bumpers = switch tabs");
+
+        // ── Section 3: Spawning Particles ──
+        section_header("Spawning Particles");
+        body("Click anywhere in the world to spawn particles of the currently "
+             "selected type. Open the Spawn Menu to choose from:");
+        ImGui::Dummy(ImVec2(0, 4));
+        hint("Standard Model particles: quarks, leptons, gauge bosons, Higgs");
+        hint("Composite particles: protons, neutrons, pions, kaons");
+        hint("Periodic Table: click any element to spawn a complete atom");
+        hint("Groups: pre-built structures (alpha particles, deuterium, etc.)");
+        hint("Molecules: import .ppmol files for complex molecular structures");
+
+        // ── Section 4: Nuclear Physics ──
+        section_header("Nuclear Physics");
+        body("Protons and neutrons attract via the Yukawa (strong nuclear) force "
+             "and bind into nuclei when close enough. The simulation supports:");
+        ImGui::Dummy(ImVec2(0, 4));
+        hint("Fusion: light nuclei merge when pushed together with enough energy");
+        hint("Fission: heavy nuclei (Z > 83) can spontaneously split");
+        hint("Decay: unstable particles decay (muons, taus, heavy quarks, W/Z bosons)");
+        hint("Annihilation: particle-antiparticle pairs annihilate into photons");
+        hint("Virtual Pairs: high-energy regions can spontaneously create particle pairs");
+
+        // ── Section 5: Molecules & Bonds ──
+        section_header("Molecules & Bonds");
+        body("Atoms can form covalent bonds when their electron clouds overlap. "
+             "Each element has a valence determining how many bonds it can form.");
+        ImGui::Dummy(ImVec2(0, 4));
+        hint("Bonds form automatically when atoms are within bonding radius");
+        hint("Bond strength and rest length can be tuned in simulation settings");
+        hint("Molecules are tracked and displayed in the bottom status bar");
+
+        // ── Section 6: Molecule Tools ──
+        section_header("Molecule Tools (ppmol_gen)");
+        body("The ppmol_gen tool generates .ppmol molecule files that can be "
+             "imported into the simulation. Two versions are available:");
+        ImGui::Dummy(ImVec2(0, 4));
+        hint("C++ version:  tools/ppmol/ppmol_gen");
+        hint("Python version: tools/ppmol/ppmol_gen.py");
+        ImGui::Dummy(ImVec2(0, 4));
+        body("Usage examples:");
+        hint("ppmol_gen gen water.ppmol H2O        — generate from formula");
+        hint("ppmol_gen dl caffeine.ppmol caffeine  — download from PubChem");
+        hint("ppmol_gen info molecule.ppmol         — inspect a .ppmol file");
+        ImGui::Dummy(ImVec2(0, 4));
+        body("Import molecules via Spawn Menu > Molecules section, or "
+             "File > Import Molecule from the pause menu.");
+
+        // ── Section 7: Force Objects ──
+        section_header("Force Objects");
+        body("Place persistent force-generating objects using the Tools popup "
+             "(wrench icon in the bottom bar):");
+        ImGui::Dummy(ImVec2(0, 4));
+        hint("Gravity Well: attracts all massive particles");
+        hint("EM Field: uniform electric + magnetic field region");
+        hint("Particle Accelerator: high-energy linear beam");
+        hint("Magnetic Bottle: confines charged particles");
+        hint("Heat Source / Cold Sink: local temperature control");
+        hint("Black Hole: extreme gravity with event horizon");
+        hint("Gravitational Wave: periodic spacetime ripple");
+        hint("Dark Energy Void: localized expansion effect");
+        hint("Force Wall: impenetrable barrier");
+
+        // ── Section 8: Environments ──
+        section_header("Environments");
+        body("The Settings menu (F2) offers environment presets that configure "
+             "the simulation for different physical scenarios:");
+        ImGui::Dummy(ImVec2(0, 4));
+        hint("Lab (default), Deep Space, Stellar Core, Neutron Star");
+        hint("Early Universe, Quark Epoch, Electroweak, Cosmic Void");
+        hint("Magnetar, Accretion Disk, Bose-Einstein Condensate");
+        hint("Dark Sector, SUSY Sector");
+
+        // ── Section 9: Save & Load ──
+        section_header("Save & Load");
+        body("Save and load simulation states in .ppsg format:");
+        ImGui::Dummy(ImVec2(0, 4));
+        char save_buf[64], load_buf[64];
+        format_keybinding(keybindings.bindings[KACT_SAVE], save_buf, sizeof(save_buf));
+        format_keybinding(keybindings.bindings[KACT_LOAD], load_buf, sizeof(load_buf));
+        ImGui::Text("  Quick Save: %s    Quick Load: %s", save_buf, load_buf);
+        hint("Also available from the pause menu and bottom bar");
+        hint("Auto-save interval configurable in Settings > Performance");
+
+        // ── Section 10: About ──
+        section_header("About");
+        body("Particle Playground");
+        hint("A real-time particle physics simulator");
+        ImGui::Dummy(ImVec2(0, 4));
+        body("All particle interactions emerge from simulated fundamental forces: "
+             "electromagnetism, strong nuclear (Yukawa + QCD), weak nuclear, "
+             "and gravity. No predefined behaviors — just physics.");
+        ImGui::Dummy(ImVec2(0, 8));
+        hint("See Credits from the pause menu for full attribution.");
+
+        ImGui::PopTextWrapPos();
+        ImGui::EndChild();
+
+        // Back button
+        float btn_w = 160.0f;
+        ImGui::SetCursorPos(ImVec2(cx - btn_w * 0.5f, panel_bottom + 15.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+        if (ImGui::Button("Back##howto", ImVec2(btn_w, 36.0f))) {
+            show_howto = false;
             show_pause_menu = true;
         }
         ImGui::PopStyleVar();

@@ -48,9 +48,9 @@ static const TutorialStep TUTORIAL_STEPS[] = {
     },
     {
         "Spawn Menu",
-        "Press F3 to open the Spawn Menu (bottom-left). Select\n"
-        "different particle types — protons, electrons, photons\n"
-        "and more. Try selecting a different type!",
+        "Press F3 to open the Spawn Menu. Select different\n"
+        "particle types — protons, electrons, photons and\n"
+        "more. Try selecting a different type!",
         check_spawn_menu
     },
     {
@@ -73,6 +73,15 @@ static const TutorialStep TUTORIAL_STEPS[] = {
         "Or use the speed buttons in the bottom bar.\n"
         "Space pauses and unpauses the simulation.",
         check_time_changed
+    },
+    {
+        "Molecule Import",
+        "You can import custom molecules from .ppmol files!\n"
+        "Use the Spawn Menu > Molecules section, or load\n"
+        "directly with File > Import Molecule.\n\n"
+        "Generate .ppmol files with the ppmol_gen tool:\n"
+        "  ppmol_gen gen molecule.ppmol H2O",
+        nullptr  // manual advance
     },
     {
         "Explore!",

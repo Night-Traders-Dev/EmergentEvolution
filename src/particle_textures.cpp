@@ -175,8 +175,8 @@ void ParticleTextureManager::upload_layer(VulkanContext& ctx, uint32_t layer,
 
 // ── Load textures from assets/particles/ ─────────────────────────────────────
 
-void ParticleTextureManager::load_textures(VulkanContext& ctx) {
-    const std::string base_dir = "assets/particles/";
+void ParticleTextureManager::load_textures(VulkanContext& ctx, const std::string& prefix) {
+    const std::string base_dir = prefix + "assets/particles/";
 
     if (!fs::exists(base_dir)) {
         std::cerr << "[textures] assets/particles/ not found — all types procedural\n";

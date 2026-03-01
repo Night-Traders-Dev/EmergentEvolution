@@ -113,6 +113,12 @@ void PhysicsInterface::draw_decay_log() {
 
     ImGui::Separator();
 
+    // If scrolling to a specific event, ensure its type filter is enabled
+    if (scroll_to_event_idx >= 0 && scroll_to_event_idx < static_cast<int>(decay_log.size())) {
+        auto t = decay_log[scroll_to_event_idx].type;
+        if (t < DEVT_COUNT) event_filter[t] = true;
+    }
+
     // Scrollable event list (newest at top)
     ImGui::BeginChild("##DecayLogScroll", ImVec2(0, 0), false);
 
@@ -147,6 +153,12 @@ void PhysicsInterface::draw_decay_log() {
                                                        tag_color.z * 0.15f, 0.5f));
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(tag_color.x * 0.25f, tag_color.y * 0.25f,
                                                               tag_color.z * 0.25f, 0.6f));
+        // Scroll to this event if requested by notification click
+        if (scroll_to_event_idx == idx) {
+            ImGui::SetScrollHereY(0.3f);
+            scroll_to_event_idx = -1;
+        }
+
         if (ImGui::Selectable(row_label, is_expanded, ImGuiSelectableFlags_None, ImVec2(0, 0))) {
             if (has_details)
                 expanded_event_idx = is_expanded ? -1 : idx;
@@ -186,9 +198,7 @@ void PhysicsInterface::draw_nuclear_debug(SimConfig& cfg) {
     if (!show_nuclear_debug) return;
 
     ImGuiIO& io = ImGui::GetIO();
-    {   auto w = wobble_offset(4.0f);
-        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 680 + w.x, 60 + w.y), ImGuiCond_Appearing);
-    }
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 680, 60), ImGuiCond_Appearing);
     ImGui::SetNextWindowSize(ImVec2(320, 540), ImGuiCond_Appearing);
     ImGui::SetNextWindowSizeConstraints(ImVec2(280, 300), ImVec2(500, 800));
 
@@ -197,6 +207,7 @@ void PhysicsInterface::draw_nuclear_debug(SimConfig& cfg) {
     ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.22f, 0.12f, 0.03f, 0.95f));
 
     if (!ImGui::Begin("Nuclear Reactions###NuclearDebug", &show_nuclear_debug)) {
+        wobble_window(4.0f);
         ImGui::End();
         ImGui::PopStyleColor(3);
         return;
@@ -523,6 +534,7 @@ void PhysicsInterface::draw_nuclear_debug(SimConfig& cfg) {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Reset all nuclear reaction parameters to Standard Model defaults");
 
+    wobble_window(4.0f);
     ImGui::End();
     ImGui::PopStyleColor(3);
 }

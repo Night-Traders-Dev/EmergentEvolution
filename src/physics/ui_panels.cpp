@@ -3,6 +3,7 @@
 #include "physics/ui_data.h"
 #include "physics/molecules.h"
 #include "physics/audio.h"
+#include "physics/repository.h"
 #include "particle_textures.h"
 #include <imgui.h>
 #include <cstdio>
@@ -428,6 +429,17 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                         show_tools_popup = false;
                         browse_needs_refresh = true;
                     }
+                    ImGui::Separator();
+                    if (ParticleRepository::is_available()) {
+                        if (ImGui::MenuItem("Online Repository")) {
+                            show_repository = true;
+                            show_tools_popup = false;
+                        }
+                    } else {
+                        ImGui::BeginDisabled();
+                        ImGui::MenuItem("Online Repository (needs libcurl)");
+                        ImGui::EndDisabled();
+                    }
                     ImGui::TreePop();
                 }
 
@@ -602,13 +614,12 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
     ImGuiIO& io = ImGui::GetIO();
     float max_h = io.DisplaySize.y - 64.0f;
 
-    {   auto w = wobble_offset(1.0f);
-        ImGui::SetNextWindowPos(ImVec2(10 + w.x, 10 + w.y), ImGuiCond_FirstUseEver);
-    }
-    ImGui::SetNextWindowSize(ImVec2(300, std::min(680.0f, max_h)), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(10, 40), ImGuiCond_FirstUseEver);  // below 24px top bar
+    ImGui::SetNextWindowSize(ImVec2(300, std::min(700.0f, max_h)), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(280, 200), ImVec2(350, max_h));
 
     if (!ImGui::Begin("Settings", &settings_visible)) {
+        wobble_window(1.0f);
         ImGui::End();
         return;
     }
@@ -1145,6 +1156,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
         }
     }
 
+    wobble_window(1.0f);
     ImGui::End();
 }
 
@@ -1159,20 +1171,19 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
     ImGuiIO& io = ImGui::GetIO();
     float max_h = io.DisplaySize.y - 64.0f;
 
-    {   auto w = wobble_offset(2.0f);
-        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 330 + w.x, 10 + w.y), ImGuiCond_FirstUseEver);
-    }
-    ImGui::SetNextWindowSize(ImVec2(320, std::min(620.0f, max_h)), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(300, 200), ImVec2(360, max_h));
+    ImGui::SetNextWindowPos(ImVec2(10, 29), ImGuiCond_FirstUseEver);  // below 24px top bar
+    ImGui::SetNextWindowSize(ImVec2(380, std::min(720.0f, max_h)), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(340, 200), ImVec2(420, max_h));
 
     if (!ImGui::Begin("Spawn Particles", &spawn_menu_visible)) {
+        wobble_window(2.0f);
         ImGui::End();
         return;
     }
 
     // ── Periodic Table ──────────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Periodic Table", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImVec2 btn_size(27, 22);
+        ImVec2 btn_size(32, 26);
         for (int row = 0; row < 4; ++row) {
             for (int col = 0; col < 10; ++col) {
                 if (col > 0) ImGui::SameLine();
@@ -1930,6 +1941,7 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
         }
     }
 
+    wobble_window(2.0f);
     ImGui::End();
 }
 

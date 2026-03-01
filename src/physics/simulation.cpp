@@ -245,9 +245,19 @@ void PhysicsSimulation::init(GLFWwindow* window) {
 
     compute.init(vk, COMPUTE_SPV);
 
+    // Detect asset directory (CWD may be project root or build/)
+    const char* asset_base = "";
+    {   FILE* f = fopen("assets/sfx/click.wav", "rb");
+        if (f) { fclose(f); }
+        else {
+            f = fopen("../assets/sfx/click.wav", "rb");
+            if (f) { fclose(f); asset_base = "../"; }
+        }
+    }
+
     // Custom particle textures — init and load before first create_buffers()
     particle_textures.init(vk);
-    particle_textures.load_textures(vk);
+    particle_textures.load_textures(vk, asset_base);
     compute.bind_particle_textures(particle_textures.array_view, particle_textures.tex_sampler);
 
     renderer.init(vk, window, compute);
@@ -263,18 +273,20 @@ void PhysicsSimulation::init(GLFWwindow* window) {
     iface.set_vk_ctx(&vk);
     iface.texture_mgr = &particle_textures;
 
-    // Background music — try multiple paths (CWD may be project root or build/)
-    if (!audio.init("assets/sound.mp3"))
-        audio.init("../assets/sound.mp3");
+    audio.init(asset_base);
     audio.set_volume(iface.prefs.music_volume);
     audio.set_sfx_volume(iface.prefs.sfx_volume);
     audio.sfx_muted = iface.prefs.sfx_muted;
     if (iface.prefs.music_muted) audio.pause();
 
+    repository.init();
+    iface.repository_ptr = &repository;
+
     reset();
 }
 
 void PhysicsSimulation::destroy() {
+    repository.destroy();
     audio.destroy();
     achievements.save(get_data_dir() + "achievements.ppach");
     vkDeviceWaitIdle(vk.device);
@@ -574,13 +586,13 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
         cfg.camera_origin -= smooth_mouse_change_ * iface.prefs.mouse_sensitivity / cfg.current_camera_zoom;
     }
 
-    // WASD camera movement
-    if (!ImGui::GetIO().WantCaptureKeyboard) {
+    // WASD camera movement (uses keybinding system for held keys)
+    if (!ImGui::GetIO().WantCaptureKeyboard && iface.rebinding_action < 0) {
         float cam_speed = 400.0f / cfg.current_camera_zoom * static_cast<float>(dt);
-        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) cfg.camera_origin.y -= cam_speed;
-        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) cfg.camera_origin.y += cam_speed;
-        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) cfg.camera_origin.x -= cam_speed;
-        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) cfg.camera_origin.x += cam_speed;
+        if (iface.keybindings.is_down(KACT_CAMERA_UP))    cfg.camera_origin.y -= cam_speed;
+        if (iface.keybindings.is_down(KACT_CAMERA_DOWN))  cfg.camera_origin.y += cam_speed;
+        if (iface.keybindings.is_down(KACT_CAMERA_LEFT))  cfg.camera_origin.x -= cam_speed;
+        if (iface.keybindings.is_down(KACT_CAMERA_RIGHT)) cfg.camera_origin.x += cam_speed;
     }
 
     // ── Gamepad input ──────────────────────────────────────────────────────
@@ -652,80 +664,69 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
             bool rb_down = gp.buttons[GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER];
             if (iface.show_settings_menu) {
                 if (lb_down && !lb_was_down) iface.settings_tab = std::max(0, iface.settings_tab - 1);
-                if (rb_down && !rb_was_down) iface.settings_tab = std::min(4, iface.settings_tab + 1);
+                if (rb_down && !rb_was_down) iface.settings_tab = std::min(5, iface.settings_tab + 1);
             }
             lb_was_down = lb_down;
             rb_was_down = rb_down;
         }
     }
 
-    // F3 toggle spawn menu
-    static bool f3_was_down = false;
-    bool f3_down = glfwGetKey(window, GLFW_KEY_F3) == GLFW_PRESS;
-    if (f3_down && !f3_was_down) {
-        iface.spawn_menu_visible = !iface.spawn_menu_visible;
-    }
-    f3_was_down = f3_down;
+    // ── Keybinding-based input (skip when rebinding a key) ──────────────────
+    if (iface.rebinding_action < 0) {
+        // F3 toggle spawn menu
+        if (iface.keybindings.is_pressed(KACT_TOGGLE_SPAWN_MENU)) {
+            iface.spawn_menu_visible = !iface.spawn_menu_visible;
+        }
 
-    // F4 toggle select mode
-    static bool f4_was_down = false;
-    bool f4_down = glfwGetKey(window, GLFW_KEY_F4) == GLFW_PRESS;
-    if (f4_down && !f4_was_down) {
-        iface.select_mode = !iface.select_mode;
-        if (iface.select_mode) { iface.pending_spawn = false; iface.force_obj_placement_mode = false; }
-    }
-    f4_was_down = f4_down;
+        // F4 toggle select mode
+        if (iface.keybindings.is_pressed(KACT_TOGGLE_SELECT_MODE)) {
+            iface.select_mode = !iface.select_mode;
+            if (iface.select_mode) { iface.pending_spawn = false; iface.force_obj_placement_mode = false; }
+        }
 
-    // Escape to toggle pause/settings menu
-    static bool esc_was = false;
-    bool esc_now = glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
-    if (esc_now && !esc_was) {
-        if (iface.show_settings_menu) {
-            iface.show_settings_menu = false;
-            iface.show_pause_menu = true;
-            iface.save_prefs();
-        } else if (iface.show_achievements_panel) {
-            iface.show_achievements_panel = false;
-            iface.show_pause_menu = true;
-        } else {
-            iface.show_pause_menu = !iface.show_pause_menu;
-            if (iface.show_pause_menu) is_active = false;  // pause on open
+        // Escape to toggle pause/settings/howto menu
+        if (iface.keybindings.is_pressed(KACT_PAUSE_MENU)) {
+            if (iface.show_settings_menu) {
+                iface.show_settings_menu = false;
+                iface.show_pause_menu = true;
+                iface.save_prefs();
+            } else if (iface.show_howto) {
+                iface.show_howto = false;
+                iface.show_pause_menu = true;
+            } else if (iface.show_repository) {
+                iface.show_repository = false;
+            } else if (iface.show_achievements_panel) {
+                iface.show_achievements_panel = false;
+                iface.show_pause_menu = true;
+            } else {
+                iface.show_pause_menu = !iface.show_pause_menu;
+                if (iface.show_pause_menu) is_active = false;  // pause on open
+            }
+        }
+
+        // Space to toggle sim
+        if (iface.keybindings.is_pressed(KACT_PLAY_PAUSE) && !ImGui::GetIO().WantCaptureKeyboard)
+            is_active = !is_active;
+
+        // [ and ] to halve/double time scale
+        if (iface.keybindings.is_pressed(KACT_TIME_SLOWER) && !ImGui::GetIO().WantCaptureKeyboard)
+            cfg.time_scale = std::max(0.0625f, cfg.time_scale * 0.5f);
+        if (iface.keybindings.is_pressed(KACT_TIME_FASTER) && !ImGui::GetIO().WantCaptureKeyboard)
+            cfg.time_scale = std::min(16.0f, cfg.time_scale * 2.0f);
+
+        // F2 reset
+        if (iface.keybindings.is_pressed(KACT_RESET)) {
+            push_undo_snapshot();
+            if (!cfg.start_empty) {
+                int pc = static_cast<int>(std::max(2.0f,
+                    std::pow(iface.particle_count_slider, 2.0f)));
+                cfg.particle_count = static_cast<uint32_t>(pc);
+            } else {
+                cfg.particle_count = cfg.pool_size;
+            }
+            reset();
         }
     }
-    esc_was = esc_now;
-
-    // Space to toggle sim
-    static bool space_was = false;
-    bool space_now = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
-    if (space_now && !space_was && !ImGui::GetIO().WantCaptureKeyboard) is_active = !is_active;
-    space_was = space_now;
-
-    // [ and ] to halve/double time scale
-    static bool lbracket_was = false, rbracket_was = false;
-    bool lb_now = glfwGetKey(window, GLFW_KEY_LEFT_BRACKET) == GLFW_PRESS;
-    bool rb_now = glfwGetKey(window, GLFW_KEY_RIGHT_BRACKET) == GLFW_PRESS;
-    if (lb_now && !lbracket_was && !ImGui::GetIO().WantCaptureKeyboard)
-        cfg.time_scale = std::max(0.0625f, cfg.time_scale * 0.5f);
-    if (rb_now && !rbracket_was && !ImGui::GetIO().WantCaptureKeyboard)
-        cfg.time_scale = std::min(16.0f, cfg.time_scale * 2.0f);
-    lbracket_was = lb_now;
-    rbracket_was = rb_now;
-
-    // F2 reset
-    static bool f2_was = false;
-    bool f2_now = glfwGetKey(window, GLFW_KEY_F2) == GLFW_PRESS;
-    if (f2_now && !f2_was) {
-        push_undo_snapshot();
-        if (!cfg.start_empty) {
-            int pc = static_cast<int>(std::max(2.0f,
-                std::pow(iface.particle_count_slider, 2.0f)));
-            cfg.particle_count = static_cast<uint32_t>(pc);
-        } else {
-            cfg.particle_count = cfg.pool_size;
-        }
-        reset();
-    }
-    f2_was = f2_now;
 
     // Click handling priority:
     // 1. Force obj move  1.5. Element move  2. Particle move  3. Force obj place
@@ -3236,6 +3237,19 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             iface.push_notification(
                 r.message.c_str(),
                 ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
+        }
+    }
+
+    // ── Repository auto-import after download ─────────────────────────────
+    if (iface.repo_auto_import && repository.status() == RepoStatus::Success) {
+        iface.repo_auto_import = false;
+        std::string path = repository.last_downloaded_path();
+        if (!path.empty()) {
+            snprintf(iface.save_filename, sizeof(iface.save_filename), "%s", path.c_str());
+            if (iface.repo_import_category == 0)
+                iface.request_import = true;
+            else
+                iface.request_molecule_import = true;
         }
     }
 

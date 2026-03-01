@@ -30,6 +30,7 @@ void PhysicsInterface::init() {
     std::random_device rd;
     seed_value = static_cast<int>(rd() % 100000);
     load_prefs();
+    load_keybindings();
     load_molecule_bestiary();
     scan_theme_directory();
     for (uint32_t i = 0; i < PHYS_PARTICLE_TYPES; ++i)
@@ -176,6 +177,112 @@ void PhysicsInterface::load_molecule_bestiary() {
             f.read(reinterpret_cast<char*>(&e.first_seen_time), sizeof(int64_t));
         if (f.good()) molecule_bestiary.push_back(std::move(e));
     }
+}
+
+// ── Keybinding system ─────────────────────────────────────────────────────────
+
+const char* const KEY_ACTION_NAMES[KACT_COUNT] = {
+    "Toggle Spawn Menu",       // KACT_TOGGLE_SPAWN_MENU
+    "Toggle Select Mode",      // KACT_TOGGLE_SELECT_MODE
+    "Toggle Settings Panel",   // KACT_TOGGLE_SETTINGS_PANEL
+    "Reset Simulation",        // KACT_RESET
+    "Play / Pause",            // KACT_PLAY_PAUSE
+    "Pause Menu",              // KACT_PAUSE_MENU
+    "Save",                    // KACT_SAVE
+    "Load",                    // KACT_LOAD
+    "Undo",                    // KACT_UNDO
+    "Redo",                    // KACT_REDO
+    "Time Slower",             // KACT_TIME_SLOWER
+    "Time Faster",             // KACT_TIME_FASTER
+    "Camera Up",               // KACT_CAMERA_UP
+    "Camera Down",             // KACT_CAMERA_DOWN
+    "Camera Left",             // KACT_CAMERA_LEFT
+    "Camera Right",            // KACT_CAMERA_RIGHT
+    "Toggle Fullscreen",       // KACT_FULLSCREEN_TOGGLE
+};
+
+void KeyBindings::set_defaults() {
+    bindings[KACT_TOGGLE_SPAWN_MENU]     = { ImGuiKey_F3,           false, false, false };
+    bindings[KACT_TOGGLE_SELECT_MODE]    = { ImGuiKey_F4,           false, false, false };
+    bindings[KACT_TOGGLE_SETTINGS_PANEL] = { ImGuiKey_F1,           false, false, false };
+    bindings[KACT_RESET]                 = { ImGuiKey_F2,           false, false, false };
+    bindings[KACT_PLAY_PAUSE]            = { ImGuiKey_Space,        false, false, false };
+    bindings[KACT_PAUSE_MENU]            = { ImGuiKey_Escape,       false, false, false };
+    bindings[KACT_SAVE]                  = { ImGuiKey_S,            true,  false, false };
+    bindings[KACT_LOAD]                  = { ImGuiKey_L,            true,  false, false };
+    bindings[KACT_UNDO]                  = { ImGuiKey_Z,            true,  false, false };
+    bindings[KACT_REDO]                  = { ImGuiKey_Z,            true,  true,  false };
+    bindings[KACT_TIME_SLOWER]           = { ImGuiKey_LeftBracket,  false, false, false };
+    bindings[KACT_TIME_FASTER]           = { ImGuiKey_RightBracket, false, false, false };
+    bindings[KACT_CAMERA_UP]             = { ImGuiKey_W,            false, false, false };
+    bindings[KACT_CAMERA_DOWN]           = { ImGuiKey_S,            false, false, false };
+    bindings[KACT_CAMERA_LEFT]           = { ImGuiKey_A,            false, false, false };
+    bindings[KACT_CAMERA_RIGHT]          = { ImGuiKey_D,            false, false, false };
+    bindings[KACT_FULLSCREEN_TOGGLE]     = { ImGuiKey_Enter,        false, false, true  };
+}
+
+bool KeyBindings::is_pressed(KeyAction action) const {
+    const auto& b = bindings[action];
+    if (b.key == ImGuiKey_None) return false;
+    if (!ImGui::IsKeyPressed(b.key, false)) return false;
+    const ImGuiIO& io = ImGui::GetIO();
+    if (b.ctrl  != io.KeyCtrl)  return false;
+    if (b.shift != io.KeyShift) return false;
+    if (b.alt   != io.KeyAlt)   return false;
+    return true;
+}
+
+bool KeyBindings::is_down(KeyAction action) const {
+    const auto& b = bindings[action];
+    if (b.key == ImGuiKey_None) return false;
+    if (!ImGui::IsKeyDown(b.key)) return false;
+    // For held keys (WASD), don't require exact modifier match if no modifiers set
+    if (!b.ctrl && !b.shift && !b.alt) return true;
+    const ImGuiIO& io = ImGui::GetIO();
+    if (b.ctrl  != io.KeyCtrl)  return false;
+    if (b.shift != io.KeyShift) return false;
+    if (b.alt   != io.KeyAlt)   return false;
+    return true;
+}
+
+void format_keybinding(const KeyBinding& b, char* buf, size_t buf_size) {
+    if (!buf || buf_size == 0) return;
+    buf[0] = '\0';
+    if (b.key == ImGuiKey_None) { snprintf(buf, buf_size, "(none)"); return; }
+    char tmp[128] = {};
+    if (b.ctrl)  strncat(tmp, "Ctrl+", sizeof(tmp) - strlen(tmp) - 1);
+    if (b.shift) strncat(tmp, "Shift+", sizeof(tmp) - strlen(tmp) - 1);
+    if (b.alt)   strncat(tmp, "Alt+", sizeof(tmp) - strlen(tmp) - 1);
+    strncat(tmp, ImGui::GetKeyName(b.key), sizeof(tmp) - strlen(tmp) - 1);
+    snprintf(buf, buf_size, "%s", tmp);
+}
+
+// Keybinding serialization — separate file to avoid breaking UserPrefs v4
+static constexpr uint32_t PPKEYS_MAGIC   = 0x5359454B;  // "KEYS"
+static constexpr uint32_t PPKEYS_VERSION = 1;
+
+void PhysicsInterface::save_keybindings() {
+    const std::string& data_dir = get_data_dir();
+    std::ofstream f((data_dir + "keybindings.ppkeys").c_str(), std::ios::binary);
+    if (!f.is_open()) return;
+    f.write(reinterpret_cast<const char*>(&PPKEYS_MAGIC), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&PPKEYS_VERSION), sizeof(uint32_t));
+    uint32_t count = KACT_COUNT;
+    f.write(reinterpret_cast<const char*>(&count), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(keybindings.bindings), sizeof(KeyBinding) * KACT_COUNT);
+}
+
+void PhysicsInterface::load_keybindings() {
+    keybindings.set_defaults();
+    std::ifstream f((get_data_dir() + "keybindings.ppkeys").c_str(), std::ios::binary);
+    if (!f.is_open()) return;
+    uint32_t magic = 0, version = 0, count = 0;
+    f.read(reinterpret_cast<char*>(&magic), sizeof(uint32_t));
+    f.read(reinterpret_cast<char*>(&version), sizeof(uint32_t));
+    if (magic != PPKEYS_MAGIC || version != PPKEYS_VERSION) return;
+    f.read(reinterpret_cast<char*>(&count), sizeof(uint32_t));
+    if (count > KACT_COUNT) count = KACT_COUNT;
+    f.read(reinterpret_cast<char*>(keybindings.bindings), sizeof(KeyBinding) * count);
 }
 
 // ── Nucleus / atom group templates ───────────────────────────────────────────
@@ -669,26 +776,24 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         pending_free_thumbnails_ = false;
     }
 
-    // Ctrl+S / Ctrl+L hotkeys
-    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) {
-        show_save_dialog = true;
-        browse_needs_refresh = true;
-    }
-    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_L, false)) {
-        show_load_dialog = true;
-        browse_needs_refresh = true;
-    }
-    // Ctrl+Z undo, Ctrl+Shift+Z redo (check Shift first to avoid double-trigger)
-    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
-        if (ImGui::GetIO().KeyShift)
+    // Keybinding-based hotkeys (skip when rebinding)
+    if (rebinding_action < 0) {
+        if (keybindings.is_pressed(KACT_SAVE)) {
+            show_save_dialog = true;
+            browse_needs_refresh = true;
+        }
+        if (keybindings.is_pressed(KACT_LOAD)) {
+            show_load_dialog = true;
+            browse_needs_refresh = true;
+        }
+        // Check Redo before Undo (Ctrl+Shift+Z vs Ctrl+Z)
+        if (keybindings.is_pressed(KACT_REDO))
             request_redo = true;
-        else
+        else if (keybindings.is_pressed(KACT_UNDO))
             request_undo = true;
+        if (keybindings.is_pressed(KACT_TOGGLE_SETTINGS_PANEL))
+            settings_visible = !settings_visible;
     }
-
-    // F1 toggle settings panel
-    if (ImGui::IsKeyPressed(ImGuiKey_F1, false))
-        settings_visible = !settings_visible;
 
     // Auto-disable select_mode when other modes activate
     if (pending_spawn || force_obj_placement_mode || accel_mode || mirror_placement_mode
@@ -722,6 +827,13 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     // Credits panel (blocks other UI when visible)
     if (show_credits_) {
         draw_credits();
+        pop_theme();
+        return;
+    }
+
+    // How-To guide (blocks other UI when visible)
+    if (show_howto) {
+        draw_howto();
         pop_theme();
         return;
     }
@@ -763,6 +875,10 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     // Save/Load/Import dialog (drawn before cards so cards render on top)
     if (show_save_dialog || show_load_dialog || show_import_dialog || show_molecule_import_dialog)
         draw_save_load_dialog();
+
+    // Repository dialog
+    if (show_repository)
+        draw_repository();
 
     // Draw element list window (center, drawn before cards so cards overlay)
     draw_element_list();

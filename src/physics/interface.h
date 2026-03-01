@@ -12,6 +12,7 @@
 #include <glm/glm.hpp>
 
 class VulkanContext;  // forward declare
+class ParticleRepository;  // forward declare
 
 // ── User preferences (settings menu) ─────────────────────────────────────────
 struct UserPrefs {
@@ -49,6 +50,48 @@ struct UserPrefs {
     float sfx_volume       = 0.7f;   // 0.0-1.0 sound effect volume
     bool  sfx_muted        = false;  // mute SFX toggle
 };
+
+// ── Keybinding system ─────────────────────────────────────────────────────────
+enum KeyAction : uint8_t {
+    KACT_TOGGLE_SPAWN_MENU = 0,
+    KACT_TOGGLE_SELECT_MODE,
+    KACT_TOGGLE_SETTINGS_PANEL,
+    KACT_RESET,
+    KACT_PLAY_PAUSE,
+    KACT_PAUSE_MENU,
+    KACT_SAVE,
+    KACT_LOAD,
+    KACT_UNDO,
+    KACT_REDO,
+    KACT_TIME_SLOWER,
+    KACT_TIME_FASTER,
+    KACT_CAMERA_UP,
+    KACT_CAMERA_DOWN,
+    KACT_CAMERA_LEFT,
+    KACT_CAMERA_RIGHT,
+    KACT_FULLSCREEN_TOGGLE,
+    KACT_COUNT
+};
+
+struct KeyBinding {
+    ImGuiKey key   = ImGuiKey_None;
+    bool     ctrl  = false;
+    bool     shift = false;
+    bool     alt   = false;
+};
+
+struct KeyBindings {
+    KeyBinding bindings[KACT_COUNT] = {};
+    void set_defaults();
+    bool is_pressed(KeyAction action) const;  // single-fire (edge-triggered)
+    bool is_down(KeyAction action) const;     // continuous hold (for WASD camera)
+};
+
+// Human-readable action names (indexed by KeyAction)
+extern const char* const KEY_ACTION_NAMES[KACT_COUNT];
+
+// Format a KeyBinding into a string like "Ctrl+Shift+F3"
+void format_keybinding(const KeyBinding& b, char* buf, size_t buf_size);
 
 // ── Group template for spawning composite structures ─────────────────────────
 struct SubAtomicSpec {
@@ -130,23 +173,45 @@ public:
     bool show_pause_menu = false;
     bool show_settings_menu = false;
     bool show_credits_ = false;
-    int  settings_tab = 0;  // 0=Display, 1=Performance, 2=Theme, 3=Audio & Log
+    bool show_howto = false;
+    bool show_repository = false;
+    int  settings_tab = 0;  // 0=Display, 1=Perf, 2=Theme, 3=Access, 4=Audio, 5=Controls
     bool request_quit = false;
     UserPrefs prefs;
+    KeyBindings keybindings;
+    int rebinding_action = -1;  // -1=not rebinding, else KeyAction index
     bool settings_visible = false;
     bool spawn_menu_visible = true;
     bool pending_spawn = false;
     bool sim_running = true;
 
-    // Wobbly windows animation time
+    // Wobbly windows — continuous floating animation for UI panels.
+    // Works by shifting rendered vertices, not positions — dragging works normally.
     float wobble_time = 0.0f;
 
-    // Get a subtle wobble offset for floating UI windows (unique per window via phase)
     ImVec2 wobble_offset(float phase) const {
         if (!prefs.wobbly_windows) return ImVec2(0, 0);
-        float wx = std::sin(wobble_time * 1.2f + phase) * 2.0f;
-        float wy = std::cos(wobble_time * 0.9f + phase * 1.7f) * 1.5f;
+        float wx = std::sin(wobble_time * 1.2f + phase) * 3.0f;
+        float wy = std::cos(wobble_time * 0.9f + phase * 1.7f) * 2.5f;
         return ImVec2(wx, wy);
+    }
+
+    // Call between Begin() and End() to wobble the current window.
+    // Shifts all rendered vertices + clip rects in the window's draw list.
+    void wobble_window(float phase) {
+        if (!prefs.wobbly_windows) return;
+        ImVec2 w = wobble_offset(phase);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        for (int i = 0; i < dl->VtxBuffer.Size; i++) {
+            dl->VtxBuffer[i].pos.x += w.x;
+            dl->VtxBuffer[i].pos.y += w.y;
+        }
+        for (int i = 0; i < dl->CmdBuffer.Size; i++) {
+            dl->CmdBuffer[i].ClipRect.x += w.x;
+            dl->CmdBuffer[i].ClipRect.y += w.y;
+            dl->CmdBuffer[i].ClipRect.z += w.x;
+            dl->CmdBuffer[i].ClipRect.w += w.y;
+        }
     }
 
     // Loading overlay
@@ -226,6 +291,14 @@ public:
     // Element import
     bool show_import_dialog = false;
     bool request_import     = false;
+
+    // Repository
+    ParticleRepository* repository_ptr = nullptr;
+    bool repo_auto_import = false;   // auto-import after download completes
+    int  repo_import_category = 0;   // 0=element, 1=molecule
+    int  repo_current_tab = 0;       // 0=elements, 1=molecules
+    char repo_upload_path[512] = {};
+    char repo_token_buf[256] = {};   // token input buffer
 
     // Force object interaction
     bool force_obj_placement_mode = false;
@@ -513,10 +586,12 @@ public:
         std::string text;
         ImVec4 color;
         float timer;       // seconds remaining
+        int32_t event_idx = -1;  // linked decay_log index (-1 = no link)
     };
     static constexpr float NOTIFY_DURATION = 5.0f;
     static constexpr int   NOTIFY_MAX = 8;
     std::vector<Notification> notifications;
+    int32_t scroll_to_event_idx = -1;   // event log scroll target (-1 = none)
 
     void push_notification(const char* text, ImVec4 color = ImVec4(1,1,1,1));
 
@@ -617,7 +692,11 @@ private:
     void draw_grav_waves(const SimConfig& cfg);
     void draw_measurement_panel();
     void draw_credits();
+    void draw_howto();
+    void draw_repository();
     void draw_texture_panel();
+    void save_keybindings();
+    void load_keybindings();
 
     // Splash animation state
     struct SplashParticle {

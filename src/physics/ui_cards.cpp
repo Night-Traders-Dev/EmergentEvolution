@@ -34,10 +34,8 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
 
     ImGuiIO& io = ImGui::GetIO();
     // Bottom-right default position — user can drag elsewhere
-    {   auto w = wobble_offset(3.0f);
-        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 260 + w.x, io.DisplaySize.y - 60 + w.y),
-                                ImGuiCond_Appearing, ImVec2(0.0f, 1.0f));
-    }
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 260, io.DisplaySize.y - 60),
+                            ImGuiCond_Appearing, ImVec2(0.0f, 1.0f));
 
     ImGuiWindowFlags card_flags = ImGuiWindowFlags_NoTitleBar
         | ImGuiWindowFlags_AlwaysAutoResize
@@ -449,6 +447,7 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
             }
         }
     }
+    wobble_window(3.0f);
     ImGui::End();
 }
 

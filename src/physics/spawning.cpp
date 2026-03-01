@@ -378,6 +378,7 @@ void PhysicsSimulation::do_spawn_at_world(glm::vec2 world_pos) {
     compute.read_current_state(vk, readback_positions_, readback_velocities_, readback_energies_);
 
     uint32_t type = static_cast<uint32_t>(iface.spawn_type);
+    audio.play(AudioPlayer::SFX_SPAWN, frame_counter_);
 
     int count = iface.spawn_count;
     float scatter = iface.spawn_scatter;

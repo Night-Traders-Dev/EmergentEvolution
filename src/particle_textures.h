@@ -32,7 +32,8 @@ struct ParticleTextureManager {
     void destroy(VulkanContext& ctx);
 
     // Load textures from assets/particles/ (individual PNGs + optional atlas)
-    void load_textures(VulkanContext& ctx);
+    // prefix: path prefix for asset resolution (e.g. "" or "../")
+    void load_textures(VulkanContext& ctx, const std::string& prefix = "");
 
     // Hot-reload a single type's texture at runtime
     void reload_texture(VulkanContext& ctx, uint32_t type_idx, const std::string& png_path);

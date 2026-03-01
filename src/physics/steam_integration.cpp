@@ -4,9 +4,9 @@
 #ifdef HAS_STEAM
 
 #include <steam/steam_api.h>
+#include <cstdlib>
 
 // Steam App ID — set to your real App ID before release.
-// During development with steam_appid.txt, this value is ignored.
 #ifndef STEAM_APP_ID
 #define STEAM_APP_ID 480  // Spacewar (Valve's test app)
 #endif
@@ -16,10 +16,16 @@ namespace steam {
 static bool g_initialized = false;
 
 bool init() {
+    // RestartAppIfNecessary tells the app to quit so Steam can relaunch it.
+    // This only works with a real registered App ID — with test ID 480 it
+    // causes the game to exit and never relaunch. Skip the check entirely
+    // when using the Spacewar test ID; enable for shipped builds with a
+    // real App ID by defining STEAM_APP_ID to your registered ID.
+#if STEAM_APP_ID != 480
     if (SteamAPI_RestartAppIfNecessary(STEAM_APP_ID)) {
-        // Steam client will relaunch us — exit immediately
         return false;
     }
+#endif
     if (!SteamAPI_Init()) {
         fprintf(stderr, "[steam] SteamAPI_Init failed — Steam not running?\n");
         return false;

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(particle_playground VERSION 0.1.0 LANGUAGES CXX)
+project(particle_playground VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -49,6 +49,9 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 find_package(Steamworks QUIET)
 
+# libcurl — optional, for ParticleRepository online features
+find_package(CURL QUIET)
+
 # ImGui via FetchContent (no install needed)
 FetchContent_Declare(imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
@@ -87,6 +90,10 @@ add_executable(particle_physics
     src/physics/ui_dialogs.cpp
     src/physics/ui_tools.cpp
     src/physics/ui_overlays.cpp
+    src/physics/ui_repository.cpp
+
+    # Online repository
+    src/physics/repository.cpp
     src/stb_image_impl.cpp
     src/stb_image_write_impl.cpp
 
@@ -132,6 +139,8 @@ endif()
 if(WIN32)
     target_link_libraries(particle_physics PRIVATE ole32 winmm shell32)
     # .exe icon + version info resource
+    # windres resolves paths relative to CWD (the build dir), so add source root as include path
+    set(CMAKE_RC_FLAGS "${CMAKE_RC_FLAGS} -I ${CMAKE_SOURCE_DIR}")
     target_sources(particle_physics PRIVATE assets/particle_playground.rc)
 endif()
 
@@ -145,6 +154,13 @@ endif()
 if(Steamworks_FOUND)
     target_link_libraries(particle_physics PRIVATE Steamworks::Steamworks)
     target_compile_definitions(particle_physics PRIVATE HAS_STEAM)
+endif()
+
+# libcurl + cJSON — link if available, define HAS_CURL for repository features
+if(CURL_FOUND)
+    target_sources(particle_physics PRIVATE src/cjson/cJSON.c)
+    target_link_libraries(particle_physics PRIVATE CURL::libcurl)
+    target_compile_definitions(particle_physics PRIVATE HAS_CURL)
 endif()
 
 # Platform-specific compiler flags
