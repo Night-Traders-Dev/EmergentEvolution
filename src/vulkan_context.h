@@ -105,6 +105,20 @@ public:
 
     void destroy_image(Image& img);
 
+    // Array image (2D array with multiple layers — used for particle texture atlas)
+    Image create_image_array(uint32_t w, uint32_t h, uint32_t layers,
+                             VkFormat format, VkImageUsageFlags usage,
+                             VkMemoryPropertyFlags props);
+
+    VkImageView create_image_view_array(VkImage image, VkFormat format,
+                                         VkImageAspectFlags aspect,
+                                         uint32_t layer_count);
+
+    // Transition a specific range of array layers
+    void transition_image_layout(VkImage image, VkImageLayout old_layout,
+                                 VkImageLayout new_layout,
+                                 uint32_t base_layer, uint32_t layer_count);
+
     // ── Command helpers ───────────────────────────────────────────────────────
     VkCommandBuffer begin_single_command();
     void            end_single_command(VkCommandBuffer cmd);
@@ -123,6 +137,7 @@ public:
 
     // ── Sampler helpers ───────────────────────────────────────────────────────
     VkSampler create_sampler_nearest();
+    VkSampler create_sampler_linear();
 
     // ── Misc ──────────────────────────────────────────────────────────────────
     uint32_t find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags props);

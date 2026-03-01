@@ -55,6 +55,12 @@ public:
     // Expose force object buffer for overlay pipeline rendering
     VkBuffer get_force_object_buffer() const { return force_obj_buffer_.handle; }
 
+    // Custom particle textures: bind texture array view+sampler before create_buffers()
+    void bind_particle_textures(VkImageView view, VkSampler sampler);
+
+    // Upload per-type render modes (called each frame before record())
+    void upload_render_modes(VulkanContext& ctx, const uint32_t* modes);
+
     // Upload CPU-built spatial grid for GPU neighbor lookup
     void upload_gpu_grid(VulkanContext& ctx,
                          const std::vector<uint32_t>& cell_start,
@@ -131,6 +137,11 @@ private:
     // Bloom post-processing ping-pong images (bindings 21-22) at half resolution
     Image bloom_image_a_{};
     Image bloom_image_b_{};
+
+    // Custom particle textures (binding 23: sampler2DArray, binding 24: render mode SSBO)
+    Buffer render_mode_buffer_{};
+    VkImageView particle_tex_view_    = VK_NULL_HANDLE;  // cached from ParticleTextureManager
+    VkSampler   particle_tex_sampler_ = VK_NULL_HANDLE;
     uint32_t bloom_w_ = REGION_W / 2;
     uint32_t bloom_h_ = REGION_H / 2;
 

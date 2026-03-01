@@ -3,6 +3,7 @@
 #include "physics/ui_data.h"
 #include "physics/molecules.h"
 #include "physics/audio.h"
+#include "particle_textures.h"
 #include <imgui.h>
 #include <cstdio>
 #include <cmath>
@@ -441,6 +442,7 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                     ImGui::MenuItem("Element Bestiary", nullptr, &show_element_bestiary);
                     ImGui::MenuItem("Molecule Bestiary", nullptr, &show_molecule_bestiary);
                     ImGui::MenuItem("Achievements", nullptr, &show_achievements_panel);
+                    ImGui::MenuItem("Particle Textures", nullptr, &show_texture_panel);
                     ImGui::TreePop();
                 }
 
@@ -1928,6 +1930,105 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
         }
     }
 
+    ImGui::End();
+}
+
+// ── Custom Particle Texture Panel ────────────────────────────────────────────
+
+void PhysicsInterface::draw_texture_panel() {
+    if (!show_texture_panel || !texture_mgr) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    float panel_w = 380.0f;
+    float panel_h = io.DisplaySize.y * 0.7f;
+
+    ImGui::SetNextWindowSize(ImVec2(panel_w, panel_h), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - panel_w * 0.5f,
+                                    io.DisplaySize.y * 0.15f), ImGuiCond_FirstUseEver);
+
+    if (!ImGui::Begin("Particle Textures", &show_texture_panel)) {
+        ImGui::End();
+        return;
+    }
+
+    // Convenience buttons
+    if (ImGui::Button("All Procedural")) {
+        for (uint32_t i = 0; i < PHYS_PARTICLE_TYPES; ++i)
+            texture_mgr->render_modes[i] = 0;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("All Textured")) {
+        for (uint32_t i = 0; i < PHYS_PARTICLE_TYPES; ++i)
+            if (texture_mgr->has_texture[i])
+                texture_mgr->render_modes[i] = 1;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("All Blended")) {
+        for (uint32_t i = 0; i < PHYS_PARTICLE_TYPES; ++i)
+            if (texture_mgr->has_texture[i])
+                texture_mgr->render_modes[i] = 2;
+    }
+
+    ImGui::Separator();
+
+    // Type list + per-type controls
+    float avail = ImGui::GetContentRegionAvail().y;
+    ImGui::BeginChild("TypeList", ImVec2(0, avail), true);
+
+    for (uint32_t t = 0; t < PHYS_PARTICLE_TYPES; ++t) {
+        ImGui::PushID(static_cast<int>(t));
+
+        ImVec4 col = PHYS_TYPE_UI_COLORS[t];
+        bool has_tex = texture_mgr->has_texture[t];
+
+        // Color swatch
+        ImGui::ColorButton("##swatch", col, ImGuiColorEditFlags_NoTooltip, ImVec2(14, 14));
+        ImGui::SameLine();
+
+        // Expandable header
+        bool open = ImGui::TreeNodeEx(PHYS_TYPE_NAMES[t], 0);
+
+        // Show status on same line
+        if (!open) {
+            ImGui::SameLine();
+            uint32_t mode = texture_mgr->render_modes[t];
+            const char* mode_str = (mode == 0) ? "[Procedural]" :
+                                   (mode == 1) ? "[Textured]" : "[Blended]";
+            ImVec4 status_col = has_tex ? ImVec4(0.5f, 1.0f, 0.5f, 0.7f)
+                                        : ImVec4(0.6f, 0.6f, 0.6f, 0.5f);
+            ImGui::TextColored(status_col, "%s", mode_str);
+        }
+
+        if (open) {
+            int mode = static_cast<int>(texture_mgr->render_modes[t]);
+            ImGui::RadioButton("Procedural", &mode, 0);
+            ImGui::SameLine();
+            if (!has_tex) ImGui::BeginDisabled();
+            ImGui::RadioButton("Textured", &mode, 1);
+            ImGui::SameLine();
+            ImGui::RadioButton("Blended", &mode, 2);
+            if (!has_tex) ImGui::EndDisabled();
+            texture_mgr->render_modes[t] = static_cast<uint32_t>(mode);
+
+            if (mode == 2) {
+                float bf = texture_mgr->blend_factors[t];
+                if (ImGui::SliderFloat("Blend", &bf, 0.0f, 1.0f, "%.2f"))
+                    texture_mgr->blend_factors[t] = bf;
+            }
+
+            if (has_tex)
+                ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Texture loaded");
+            else
+                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 0.8f), "No texture (assets/particles/%s)",
+                    ParticleTextureManager::type_to_filename(PHYS_TYPE_NAMES[t]).c_str());
+
+            ImGui::TreePop();
+        }
+
+        ImGui::PopID();
+    }
+
+    ImGui::EndChild();
     ImGui::End();
 }
 

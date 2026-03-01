@@ -781,6 +781,9 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     // Draw nuclear reactions debug window
     draw_nuclear_debug(cfg);
 
+    // Draw custom particle texture panel
+    draw_texture_panel();
+
     // Draw particle info card (bottom-right, always on top)
     draw_info_card(particles);
 

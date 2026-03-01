@@ -49,6 +49,12 @@ layout(set = 0, binding = 20, std430) readonly buffer GridIndices   { uint data[
 layout(set = 0, binding = 21, rgba32f) uniform image2D bloom_tex_a;
 layout(set = 0, binding = 22, rgba32f) uniform image2D bloom_tex_b;
 
+// Custom particle textures (2D array, one layer per type)
+layout(set = 0, binding = 23) uniform sampler2DArray particle_textures;
+
+// Per-type render mode: 0=procedural, 1=textured, 2=blended
+layout(set = 0, binding = 24, std430) readonly buffer RenderModes { uint data[]; } render_modes;
+
 // Grid constants (world 10240×5760, cell size 100px)
 const float GRID_CELL_SIZE = 100.0;
 const int   GRID_COLS      = 103;  // ceil(10240/100)
@@ -1904,6 +1910,8 @@ void render_particle(uint i) {
         base_col.a *= 0.6;  // translucent
     }
 
+    uint rmode = render_modes.data[type];
+
     for (int x = -range; x <= range; x++) {
         for (int y = -range; y <= range; y++) {
             ivec2 pixel_pos = ivec2(floor(center)) + ivec2(x, y);
@@ -1911,6 +1919,35 @@ void render_particle(uint i) {
             float d = distance(px_center, center);
 
             if (d >= outer) continue;
+
+            // ── Custom texture rendering (mode 1: pure texture, mode 2: blended) ──
+            if (rmode != 0u) {
+                if (pixel_pos.x < 0 || pixel_pos.x >= int(params.region_size.x)) continue;
+                if (pixel_pos.y < 0 || pixel_pos.y >= int(params.region_size.y)) continue;
+                vec2 local = (px_center - center) / outer;
+                vec2 uv = local * 0.5 + 0.5;
+                vec4 tex_col = texture(particle_textures, vec3(uv, float(type)));
+                tex_col.rgb *= mix(0.15, 1.0, energy);
+                if (is_virtual) {
+                    float flicker = 0.4 + 0.6 * fract(sin(float(gl_GlobalInvocationID.x) * 12.9898 + float(params.step) * 0.7) * 43758.5453);
+                    tex_col.rgb *= flicker;
+                    tex_col.a *= 0.6;
+                }
+                if (rmode == 1u) {
+                    // Pure texture
+                    if (tex_col.a > 0.01) {
+                        vec4 existing = imageLoad(out_render_texture, pixel_pos);
+                        vec3 final_rgb = existing.rgb + tex_col.rgb * tex_col.a;
+                        imageStore(out_render_texture, pixel_pos, vec4(min(final_rgb, vec3(1.0)), 1.0));
+                    }
+                    continue;
+                }
+                if (rmode == 2u && tex_col.a > 0.01) {
+                    // Blended: compute procedural, then mix with texture
+                    // Fall through to procedural code but store tex_col for blending below
+                    // (handled after procedural imageStore)
+                }
+            }
 
             vec4 col = base_col;
 
@@ -2039,6 +2076,15 @@ void render_particle(uint i) {
                     col.rgb = mix(col.rgb, vec3(1.0), hi * 0.45);
                 }
 
+                // Blend with custom texture if mode == 2
+                if (rmode == 2u) {
+                    vec2 local = (px_center - center) / outer;
+                    vec2 uv = local * 0.5 + 0.5;
+                    vec4 tex_col = texture(particle_textures, vec3(uv, float(type)));
+                    if (tex_col.a > 0.01) {
+                        col.rgb = mix(col.rgb, tex_col.rgb * mix(0.3, 1.0, energy), tex_col.a * 0.5);
+                    }
+                }
                 imageStore(out_render_texture, pixel_pos, col);
 
             } else if (!is_photon_p && bloom > 0.01) {

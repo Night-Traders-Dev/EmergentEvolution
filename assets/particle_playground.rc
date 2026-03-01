@@ -2,7 +2,7 @@
 #include <winver.h>
 
 // Application icon (used by Windows Explorer, taskbar, etc.)
-1 ICON "assets/icon_256.ico"
+1 ICON "assets/particle_playground.ico"
 
 // Version information resource
 VS_VERSION_INFO VERSIONINFO

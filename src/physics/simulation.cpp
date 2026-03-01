@@ -244,6 +244,12 @@ void PhysicsSimulation::init(GLFWwindow* window) {
 #endif
 
     compute.init(vk, COMPUTE_SPV);
+
+    // Custom particle textures — init and load before first create_buffers()
+    particle_textures.init(vk);
+    particle_textures.load_textures(vk);
+    compute.bind_particle_textures(particle_textures.array_view, particle_textures.tex_sampler);
+
     renderer.init(vk, window, compute);
     iface.title_font = renderer.title_font;
 
@@ -255,6 +261,7 @@ void PhysicsSimulation::init(GLFWwindow* window) {
 
     // Give interface a pointer to VulkanContext for thumbnail loading
     iface.set_vk_ctx(&vk);
+    iface.texture_mgr = &particle_textures;
 
     // Background music — try multiple paths (CWD may be project root or build/)
     if (!audio.init("assets/sound.mp3"))
@@ -276,6 +283,7 @@ void PhysicsSimulation::destroy() {
         compute_fence_ = VK_NULL_HANDLE;
     }
     compute.destroy(vk);
+    particle_textures.destroy(vk);
     renderer.destroy(vk);
     vk.destroy();
 }
@@ -1351,6 +1359,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     if (is_active) {
         compute.upload_dynamic_data(vk, particles);
         compute.upload_force_objects(vk, force_objects_);
+        compute.upload_render_modes(vk, particle_textures.render_modes.data());
     }
 
     // Dispatch compute shader (async — fence signals when done)

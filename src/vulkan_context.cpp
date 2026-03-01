@@ -523,6 +523,115 @@ void VulkanContext::destroy_image(Image& img) {
     img = {};
 }
 
+Image VulkanContext::create_image_array(uint32_t w, uint32_t h, uint32_t layers,
+                                        VkFormat format, VkImageUsageFlags usage,
+                                        VkMemoryPropertyFlags props)
+{
+    Image img;
+
+    VkImageCreateInfo ci{};
+    ci.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ci.imageType     = VK_IMAGE_TYPE_2D;
+    ci.format        = format;
+    ci.extent        = { w, h, 1 };
+    ci.mipLevels     = 1;
+    ci.arrayLayers   = layers;
+    ci.samples       = VK_SAMPLE_COUNT_1_BIT;
+    ci.tiling        = VK_IMAGE_TILING_OPTIMAL;
+    ci.usage         = usage;
+    ci.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+    ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VK_CHECK(vkCreateImage(device, &ci, nullptr, &img.handle));
+
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(device, img.handle, &req);
+
+    VkMemoryAllocateInfo alloc{};
+    alloc.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize  = req.size;
+    alloc.memoryTypeIndex = find_memory_type(req.memoryTypeBits, props);
+    VK_CHECK(vkAllocateMemory(device, &alloc, nullptr, &img.memory));
+
+    vkBindImageMemory(device, img.handle, img.memory, 0);
+    return img;
+}
+
+VkImageView VulkanContext::create_image_view_array(VkImage image, VkFormat format,
+                                                    VkImageAspectFlags aspect,
+                                                    uint32_t layer_count)
+{
+    VkImageViewCreateInfo ci{};
+    ci.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    ci.image                           = image;
+    ci.viewType                        = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    ci.format                          = format;
+    ci.components                      = { VK_COMPONENT_SWIZZLE_IDENTITY,
+                                           VK_COMPONENT_SWIZZLE_IDENTITY,
+                                           VK_COMPONENT_SWIZZLE_IDENTITY,
+                                           VK_COMPONENT_SWIZZLE_IDENTITY };
+    ci.subresourceRange.aspectMask     = aspect;
+    ci.subresourceRange.baseMipLevel   = 0;
+    ci.subresourceRange.levelCount     = 1;
+    ci.subresourceRange.baseArrayLayer = 0;
+    ci.subresourceRange.layerCount     = layer_count;
+    VkImageView view;
+    VK_CHECK(vkCreateImageView(device, &ci, nullptr, &view));
+    return view;
+}
+
+void VulkanContext::transition_image_layout(VkImage image, VkImageLayout old_layout,
+                                            VkImageLayout new_layout,
+                                            uint32_t base_layer, uint32_t layer_count)
+{
+    VkCommandBuffer cmd = begin_single_command();
+
+    VkImageMemoryBarrier barrier{};
+    barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout           = old_layout;
+    barrier.newLayout           = new_layout;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image               = image;
+    barrier.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, base_layer, layer_count };
+
+    VkPipelineStageFlags src_stage{}, dst_stage{};
+    if (old_layout == VK_IMAGE_LAYOUT_UNDEFINED &&
+        new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        dst_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    } else if (old_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
+               new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+        barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        src_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    } else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
+               new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        dst_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    } else if (old_layout == VK_IMAGE_LAYOUT_UNDEFINED &&
+               new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    } else {
+        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        src_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    }
+
+    vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0,
+                         0, nullptr, 0, nullptr, 1, &barrier);
+
+    end_single_command(cmd);
+}
+
 // ── Command helpers ───────────────────────────────────────────────────────────
 
 VkCommandBuffer VulkanContext::begin_single_command() {
@@ -628,6 +737,20 @@ VkSampler VulkanContext::create_sampler_nearest() {
     ci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     ci.magFilter    = VK_FILTER_LINEAR;
     ci.minFilter    = VK_FILTER_LINEAR;
+    ci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    VkSampler sampler;
+    VK_CHECK(vkCreateSampler(device, &ci, nullptr, &sampler));
+    return sampler;
+}
+
+VkSampler VulkanContext::create_sampler_linear() {
+    VkSamplerCreateInfo ci{};
+    ci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    ci.magFilter    = VK_FILTER_LINEAR;
+    ci.minFilter    = VK_FILTER_LINEAR;
+    ci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
     ci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     ci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     ci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;

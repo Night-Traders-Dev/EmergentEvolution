@@ -165,7 +165,7 @@ void ComputePipeline::resize_render_texture(VulkanContext& ctx, uint32_t w, uint
 // Bindings 9-12: polar angle/angular-velocity (double-buffered)
 
 void ComputePipeline::create_descriptor_set_layout(VkDevice device) {
-    std::array<VkDescriptorSetLayoutBinding, 23> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 25> bindings{};
 
     // Bindings 0-6 and 8-20: storage buffers
     for (uint32_t i = 0; i < 7; ++i) {
@@ -194,6 +194,16 @@ void ComputePipeline::create_descriptor_set_layout(VkDevice device) {
     bindings[22].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[22].descriptorCount = 1;
     bindings[22].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+    // Binding 23: particle texture array (combined image sampler)
+    bindings[23].binding         = 23;
+    bindings[23].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[23].descriptorCount = 1;
+    bindings[23].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+    // Binding 24: per-type render mode (storage buffer)
+    bindings[24].binding         = 24;
+    bindings[24].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[24].descriptorCount = 1;
+    bindings[24].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
 
     VkDescriptorSetLayoutCreateInfo ci{};
     ci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -250,11 +260,13 @@ void ComputePipeline::create_compute_pipeline(VulkanContext& ctx,
 // ── Descriptor pool ───────────────────────────────────────────────────────────
 
 void ComputePipeline::create_descriptor_pool(VkDevice device) {
-    // 2 sets × 20 storage buffers = 40 (+2 spare)
+    // 2 sets × 21 storage buffers = 42 (+2 spare = 44)
     // 2 sets × 3 storage images (render + bloom_a + bloom_b) = 6
-    std::array<VkDescriptorPoolSize, 2> pool_sizes{};
-    pool_sizes[0] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 42 };
-    pool_sizes[1] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,   6 };
+    // 2 sets × 1 combined image sampler (particle textures) = 2
+    std::array<VkDescriptorPoolSize, 3> pool_sizes{};
+    pool_sizes[0] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         44 };
+    pool_sizes[1] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,           6 };
+    pool_sizes[2] = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,  2 };
 
     VkDescriptorPoolCreateInfo ci{};
     ci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -517,6 +529,14 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
         ctx.update_buffer(grid_cell_start_buffer_, zero_start.data(), grid_start_size);
     }
 
+    // Per-type render mode buffer (binding 24, small, HOST_VISIBLE)
+    {
+        VkDeviceSize mode_size = MAX_PARTICLE_TYPES * sizeof(uint32_t);
+        render_mode_buffer_ = ctx.create_buffer(mode_size, CPU_BUF_USAGE, HOST_PROPS);
+        std::vector<uint32_t> default_modes(MAX_PARTICLE_TYPES, 0);  // all RENDER_PROCEDURAL
+        ctx.update_buffer(render_mode_buffer_, default_modes.data(), mode_size);
+    }
+
     // Pre-size reusable scratch buffer for per-frame force scaling
     effective_forces_.resize(MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES);
 
@@ -555,6 +575,7 @@ void ComputePipeline::clear_buffers(VulkanContext& ctx) {
     ctx.destroy_buffer(mass_zpe_buffer_);
     ctx.destroy_buffer(grid_cell_start_buffer_);
     ctx.destroy_buffer(grid_indices_buffer_);
+    ctx.destroy_buffer(render_mode_buffer_);
     ctx.destroy_buffer(staging_upload_);
     ctx.destroy_buffer(staging_readback_);
     use_device_local_ = false;
@@ -594,6 +615,22 @@ static void write_storage_image(std::vector<VkWriteDescriptorSet>& writes,
     writes.push_back(w);
 }
 
+static void write_combined_image_sampler(std::vector<VkWriteDescriptorSet>& writes,
+                                          std::vector<VkDescriptorImageInfo>& img_infos,
+                                          VkDescriptorSet set, uint32_t binding,
+                                          VkSampler sampler, VkImageView view)
+{
+    img_infos.push_back({ sampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL });
+    VkWriteDescriptorSet w{};
+    w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet          = set;
+    w.dstBinding      = binding;
+    w.descriptorCount = 1;
+    w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w.pImageInfo      = &img_infos.back();
+    writes.push_back(w);
+}
+
 void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     std::array<VkDescriptorSetLayout, 2> layouts = { desc_set_layout_, desc_set_layout_ };
     VkDescriptorSetAllocateInfo alloc{};
@@ -612,9 +649,9 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     std::vector<VkWriteDescriptorSet>    writes;
     std::vector<VkDescriptorBufferInfo>  buf_infos;
     std::vector<VkDescriptorImageInfo>   img_infos;
-    writes.reserve(50);
-    buf_infos.reserve(42);
-    img_infos.reserve(6);
+    writes.reserve(54);
+    buf_infos.reserve(46);
+    img_infos.reserve(10);
 
     auto pos_sz  = pos_buffer_a_.size;
     auto vel_sz  = vel_buffer_a_.size;
@@ -630,6 +667,7 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     auto mzpe_sz = mass_zpe_buffer_.size;
     auto gcs_sz  = grid_cell_start_buffer_.size;
     auto gix_sz  = grid_indices_buffer_.size;
+    auto rmode_sz = render_mode_buffer_.size;
 
     // ── Set A: in=a, out=b ────────────────────────────────────────────────────
     write_storage_buffer(writes, buf_infos, desc_set_a_,  0, pos_buffer_a_.handle,         pos_sz);
@@ -655,6 +693,9 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     write_storage_buffer(writes, buf_infos, desc_set_a_, 20, grid_indices_buffer_.handle,    gix_sz);
     write_storage_image (writes, img_infos, desc_set_a_, 21, bloom_image_a_.view);
     write_storage_image (writes, img_infos, desc_set_a_, 22, bloom_image_b_.view);
+    if (particle_tex_view_ != VK_NULL_HANDLE)
+        write_combined_image_sampler(writes, img_infos, desc_set_a_, 23, particle_tex_sampler_, particle_tex_view_);
+    write_storage_buffer(writes, buf_infos, desc_set_a_, 24, render_mode_buffer_.handle, rmode_sz);
 
     // ── Set B: in=b, out=a ────────────────────────────────────────────────────
     write_storage_buffer(writes, buf_infos, desc_set_b_,  0, pos_buffer_b_.handle,         pos_sz);
@@ -680,6 +721,9 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     write_storage_buffer(writes, buf_infos, desc_set_b_, 20, grid_indices_buffer_.handle,    gix_sz);
     write_storage_image (writes, img_infos, desc_set_b_, 21, bloom_image_a_.view);
     write_storage_image (writes, img_infos, desc_set_b_, 22, bloom_image_b_.view);
+    if (particle_tex_view_ != VK_NULL_HANDLE)
+        write_combined_image_sampler(writes, img_infos, desc_set_b_, 23, particle_tex_sampler_, particle_tex_view_);
+    write_storage_buffer(writes, buf_infos, desc_set_b_, 24, render_mode_buffer_.handle, rmode_sz);
 
     vkUpdateDescriptorSets(ctx.device,
                            static_cast<uint32_t>(writes.size()),
@@ -743,6 +787,16 @@ void ComputePipeline::upload_gpu_grid(VulkanContext& ctx,
         ctx.update_buffer(grid_indices_buffer_, sorted_indices.data(),
                           std::min(idx_bytes, grid_indices_buffer_.size));
     }
+}
+
+void ComputePipeline::bind_particle_textures(VkImageView view, VkSampler samp) {
+    particle_tex_view_    = view;
+    particle_tex_sampler_ = samp;
+}
+
+void ComputePipeline::upload_render_modes(VulkanContext& ctx, const uint32_t* modes) {
+    if (render_mode_buffer_.handle == VK_NULL_HANDLE) return;
+    ctx.update_buffer(render_mode_buffer_, modes, MAX_PARTICLE_TYPES * sizeof(uint32_t));
 }
 
 void ComputePipeline::read_current_state(VulkanContext& ctx,

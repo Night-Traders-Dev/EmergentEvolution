@@ -95,6 +95,7 @@ add_executable(particle_physics
     src/compute_pipeline.cpp
     src/renderer.cpp
     src/particles.cpp
+    src/particle_textures.cpp
 
     # ImGui core
     ${imgui_SOURCE_DIR}/imgui.cpp

@@ -553,6 +553,12 @@ public:
     bool show_decay_log = false;
     void save_event_to_disk(const char* desc, DecayEventType type);
     bool show_nuclear_debug = false;
+
+    // Custom particle texture panel
+    bool show_texture_panel = false;
+    int  texture_panel_type = 0;         // selected type index
+    struct ParticleTextureManager* texture_mgr = nullptr;  // set by simulation
+
     int32_t expanded_event_idx = -1;  // which event is expanded in log
     bool event_filter[DEVT_COUNT] = {true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true};
 
@@ -611,6 +617,7 @@ private:
     void draw_grav_waves(const SimConfig& cfg);
     void draw_measurement_panel();
     void draw_credits();
+    void draw_texture_panel();
 
     // Splash animation state
     struct SplashParticle {

@@ -10,6 +10,7 @@
 #include "physics/audio.h"
 #include "physics/tutorial.h"
 #include "physics/scenarios.h"
+#include "particle_textures.h"
 #include <GLFW/glfw3.h>
 #include <vector>
 #include <deque>
@@ -122,6 +123,7 @@ public:
     AudioPlayer        audio{};
     TutorialManager    tutorial{};
     ScenarioManager    scenarios{};
+    ParticleTextureManager particle_textures{};
 
     // Force objects (stationary force emitters)
     ForceObject  force_objects_[MAX_FORCE_OBJECTS] = {};
