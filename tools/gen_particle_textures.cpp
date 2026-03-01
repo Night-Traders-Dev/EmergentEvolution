@@ -569,82 +569,112 @@ static void render_tachyon(Image& img, Color col) {
 
 // ── Particle type definitions ────────────────────────────────────────────────
 
-struct ParticleType {
-    const char* name;
-    Color col;  // r, g, b
+// Match PHYS_TYPE_NAMES exactly from ui_data.h
+static const char* const PHYS_TYPE_NAMES[67] = {
+    "Proton", "Neutron", "Electron", "Photon", "Positron", "Antiproton",
+    "Neutrino_e",
+    "Muon", "Anti-muon", "Tau", "Anti-tau", "Neutrino_mu", "Neutrino_tau",
+    "Up", "Down", "Strange", "Charm", "Top", "Bottom",
+    "Anti-up", "Anti-down", "Anti-strange", "Anti-charm", "Anti-top", "Anti-bottom",
+    "Gluon", "W+", "W-", "Z0", "Higgs",
+    "Graviton", "Dark Matter", "Dark Energy",
+    "Axino", "WIMPzilla", "SIMP", "Sterile Neutrino", "Dark Photon", "Q-Ball",
+    "Selectron", "Smuon", "Stau", "Squark", "Gluino", "Photino",
+    "Wino", "Zino", "Higgsino", "Neutralino", "Sneutrino",
+    "Gravitino", "X Boson", "Y Boson", "Monopole", "Radion", "Dilaton",
+    "Tachyon", "Preon", "Inflaton", "Majoron", "Odderon",
+    "Glueball", "Skyrmion", "X17", "Chameleon",
+    "Paraparticle", "Dyn. Axion QP",
 };
 
-static const ParticleType TYPES[] = {
-    { "proton",            {0.9f, 0.2f, 0.2f} },
-    { "neutron",           {0.7f, 0.7f, 0.7f} },
-    { "electron",          {0.2f, 0.5f, 1.0f} },
-    { "photon",            {1.0f, 1.0f, 0.6f} },
-    { "positron",          {1.0f, 0.3f, 0.8f} },
-    { "antiproton",        {0.2f, 0.85f, 0.7f} },
-    { "neutrino_e",        {0.6f, 0.9f, 0.6f} },
-    { "muon",              {0.6f, 0.3f, 0.9f} },
-    { "anti_minus_muon",   {0.8f, 0.5f, 1.0f} },
-    { "tau",               {0.4f, 0.2f, 0.7f} },
-    { "anti_minus_tau",    {0.6f, 0.4f, 0.9f} },
-    { "neutrino_mu",       {0.5f, 0.8f, 0.5f} },
-    { "neutrino_tau",      {0.4f, 0.7f, 0.4f} },
-    { "up",                {0.9f, 0.5f, 0.2f} },
-    { "down",              {0.4f, 0.7f, 0.2f} },
-    { "strange",           {0.2f, 0.8f, 0.6f} },
-    { "charm",             {0.9f, 0.8f, 0.2f} },
-    { "top",               {1.0f, 0.3f, 0.3f} },
-    { "bottom",            {0.5f, 0.3f, 0.8f} },
-    { "anti_minus_up",     {1.0f, 0.7f, 0.5f} },
-    { "anti_minus_down",   {0.7f, 0.9f, 0.5f} },
-    { "anti_minus_strange",{0.5f, 1.0f, 0.8f} },
-    { "anti_minus_charm",  {1.0f, 0.9f, 0.5f} },
-    { "anti_minus_top",    {1.0f, 0.6f, 0.6f} },
-    { "anti_minus_bottom", {0.7f, 0.6f, 1.0f} },
-    { "gluon",             {0.3f, 0.9f, 0.3f} },
-    { "w_plus",            {0.9f, 0.9f, 1.0f} },
-    { "w_minus",           {0.7f, 0.7f, 1.0f} },
-    { "z0",                {0.8f, 0.8f, 0.9f} },
-    { "higgs",             {1.0f, 0.85f, 0.3f} },
-    { "graviton",          {0.7f, 0.8f, 1.0f} },
-    { "dark_matter",       {0.3f, 0.1f, 0.5f} },
-    { "dark_energy",       {0.6f, 0.1f, 0.2f} },
-    { "axino",             {0.4f, 0.2f, 0.6f} },
-    { "wimpzilla",         {0.2f, 0.05f, 0.35f} },
-    { "simp",              {0.35f, 0.25f, 0.55f} },
-    { "sterile_neutrino",  {0.45f, 0.55f, 0.45f} },
-    { "dark_photon",       {0.5f, 0.2f, 0.7f} },
-    { "q_minus_ball",      {0.55f, 0.3f, 0.75f} },
-    { "selectron",         {0.5f, 0.8f, 1.0f} },
-    { "smuon",             {0.7f, 0.6f, 1.0f} },
-    { "stau",              {0.6f, 0.5f, 0.9f} },
-    { "squark",            {1.0f, 0.7f, 0.4f} },
-    { "gluino",            {0.4f, 1.0f, 0.5f} },
-    { "photino",           {1.0f, 1.0f, 0.8f} },
-    { "wino",              {0.9f, 0.9f, 1.0f} },
-    { "zino",              {0.8f, 0.8f, 0.95f} },
-    { "higgsino",          {1.0f, 0.9f, 0.6f} },
-    { "neutralino",        {0.4f, 0.2f, 0.65f} },
-    { "sneutrino",         {0.55f, 0.85f, 0.55f} },
-    { "gravitino",         {0.6f, 0.7f, 1.0f} },
-    { "x_boson",           {1.0f, 0.4f, 0.4f} },
-    { "y_boson",           {1.0f, 0.5f, 0.3f} },
-    { "monopole",          {0.95f, 0.95f, 0.95f} },
-    { "radion",            {0.7f, 0.6f, 0.4f} },
-    { "dilaton",           {0.6f, 0.55f, 0.45f} },
-    { "tachyon",           {0.0f, 1.0f, 1.0f} },
-    { "preon",             {1.0f, 0.0f, 0.5f} },
-    { "inflaton",          {1.0f, 0.7f, 0.1f} },
-    { "majoron",           {0.55f, 0.6f, 0.55f} },
-    { "odderon",           {0.7f, 0.3f, 1.0f} },
-    { "glueball",          {0.5f, 1.0f, 0.3f} },
-    { "skyrmion",          {0.9f, 0.4f, 0.2f} },
-    { "x17",               {0.2f, 0.9f, 0.8f} },
-    { "chameleon",         {0.7f, 0.5f, 0.3f} },
-    { "paraparticle",      {0.9f, 0.2f, 1.0f} },
-    { "dyn_axion_qp",      {0.4f, 0.7f, 0.95f} },
-};
+// Replicate type_to_filename() from particle_textures.cpp exactly
+static std::string type_to_filename(const char* name) {
+    std::string s(name);
+    std::transform(s.begin(), s.end(), s.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        char c = s[i];
+        if (c == ' ')       out += '_';
+        else if (c == '+')  out += "_plus";
+        else if (c == '-')  out += "_minus";
+        else if (c == '.')  { /* skip dots */ }
+        else if (c == '\'') out += "_prime";
+        else                out += c;
+    }
+    return out + ".png";
+}
 
-static_assert(sizeof(TYPES) / sizeof(TYPES[0]) == 67, "Must have 67 particle types");
+static const Color TYPE_COLORS[67] = {
+    {0.9f, 0.2f, 0.2f},   // Proton
+    {0.7f, 0.7f, 0.7f},   // Neutron
+    {0.2f, 0.5f, 1.0f},   // Electron
+    {1.0f, 1.0f, 0.6f},   // Photon
+    {1.0f, 0.3f, 0.8f},   // Positron
+    {0.2f, 0.85f, 0.7f},  // Antiproton
+    {0.6f, 0.9f, 0.6f},   // Neutrino_e
+    {0.6f, 0.3f, 0.9f},   // Muon
+    {0.8f, 0.5f, 1.0f},   // Anti-muon
+    {0.4f, 0.2f, 0.7f},   // Tau
+    {0.6f, 0.4f, 0.9f},   // Anti-tau
+    {0.5f, 0.8f, 0.5f},   // Neutrino_mu
+    {0.4f, 0.7f, 0.4f},   // Neutrino_tau
+    {0.9f, 0.5f, 0.2f},   // Up
+    {0.4f, 0.7f, 0.2f},   // Down
+    {0.2f, 0.8f, 0.6f},   // Strange
+    {0.9f, 0.8f, 0.2f},   // Charm
+    {1.0f, 0.3f, 0.3f},   // Top
+    {0.5f, 0.3f, 0.8f},   // Bottom
+    {1.0f, 0.7f, 0.5f},   // Anti-up
+    {0.7f, 0.9f, 0.5f},   // Anti-down
+    {0.5f, 1.0f, 0.8f},   // Anti-strange
+    {1.0f, 0.9f, 0.5f},   // Anti-charm
+    {1.0f, 0.6f, 0.6f},   // Anti-top
+    {0.7f, 0.6f, 1.0f},   // Anti-bottom
+    {0.3f, 0.9f, 0.3f},   // Gluon
+    {0.9f, 0.9f, 1.0f},   // W+
+    {0.7f, 0.7f, 1.0f},   // W-
+    {0.8f, 0.8f, 0.9f},   // Z0
+    {1.0f, 0.85f, 0.3f},  // Higgs
+    {0.7f, 0.8f, 1.0f},   // Graviton
+    {0.3f, 0.1f, 0.5f},   // Dark Matter
+    {0.6f, 0.1f, 0.2f},   // Dark Energy
+    {0.4f, 0.2f, 0.6f},   // Axino
+    {0.2f, 0.05f, 0.35f}, // WIMPzilla
+    {0.35f, 0.25f, 0.55f},// SIMP
+    {0.45f, 0.55f, 0.45f},// Sterile Neutrino
+    {0.5f, 0.2f, 0.7f},   // Dark Photon
+    {0.55f, 0.3f, 0.75f}, // Q-Ball
+    {0.5f, 0.8f, 1.0f},   // Selectron
+    {0.7f, 0.6f, 1.0f},   // Smuon
+    {0.6f, 0.5f, 0.9f},   // Stau
+    {1.0f, 0.7f, 0.4f},   // Squark
+    {0.4f, 1.0f, 0.5f},   // Gluino
+    {1.0f, 1.0f, 0.8f},   // Photino
+    {0.9f, 0.9f, 1.0f},   // Wino
+    {0.8f, 0.8f, 0.95f},  // Zino
+    {1.0f, 0.9f, 0.6f},   // Higgsino
+    {0.4f, 0.2f, 0.65f},  // Neutralino
+    {0.55f, 0.85f, 0.55f},// Sneutrino
+    {0.6f, 0.7f, 1.0f},   // Gravitino
+    {1.0f, 0.4f, 0.4f},   // X Boson
+    {1.0f, 0.5f, 0.3f},   // Y Boson
+    {0.95f, 0.95f, 0.95f},// Monopole
+    {0.7f, 0.6f, 0.4f},   // Radion
+    {0.6f, 0.55f, 0.45f}, // Dilaton
+    {0.0f, 1.0f, 1.0f},   // Tachyon
+    {1.0f, 0.0f, 0.5f},   // Preon
+    {1.0f, 0.7f, 0.1f},   // Inflaton
+    {0.55f, 0.6f, 0.55f}, // Majoron
+    {0.7f, 0.3f, 1.0f},   // Odderon
+    {0.5f, 1.0f, 0.3f},   // Glueball
+    {0.9f, 0.4f, 0.2f},   // Skyrmion
+    {0.2f, 0.9f, 0.8f},   // X17
+    {0.7f, 0.5f, 0.3f},   // Chameleon
+    {0.9f, 0.2f, 1.0f},   // Paraparticle
+    {0.4f, 0.7f, 0.95f},  // Dyn. Axion QP
+};
 
 int main() {
     std::filesystem::create_directories("assets/particles");
@@ -654,8 +684,9 @@ int main() {
 
     for (int t = 0; t < 67; ++t) {
         img.clear();
-        Color c = TYPES[t].col;
-        std::string path = std::string("assets/particles/") + TYPES[t].name + ".png";
+        Color c = TYPE_COLORS[t];
+        std::string filename = type_to_filename(PHYS_TYPE_NAMES[t]);
+        std::string path = std::string("assets/particles/") + filename;
 
         switch (t) {
         case 0: // Proton: red with uud quark structure

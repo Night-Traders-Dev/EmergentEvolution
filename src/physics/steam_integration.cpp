@@ -26,10 +26,7 @@ bool init() {
     }
     g_initialized = true;
 
-    // Request current stats so achievements work
-    ISteamUserStats* stats = SteamUserStats();
-    if (stats) stats->RequestCurrentStats();
-
+    // Stats are auto-synced by Steam client before process start (SDK 1.60+)
     return true;
 }
 
