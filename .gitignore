@@ -1,0 +1,7 @@
+# Build directories
+build/
+build-win64/
+dist-win64/
+
+# Nested repos
+tools/ParticleRepository/
