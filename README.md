@@ -43,6 +43,7 @@ uses a **spatial acceleration grid** with **OpenMP** parallelization for O(n) ne
 - [Quantum Entanglement](#quantum-entanglement)
 - [Emergent Thermodynamics](#emergent-thermodynamics)
 - [UI & Visualization](#ui--visualization)
+  - [Custom Particle Textures](#custom-particle-textures)
   - [Display Settings](#display-settings)
   - [Accessibility](#accessibility)
   - [Achievements](#achievements)
@@ -559,6 +560,52 @@ velocity meter (tracks single particle), distance ruler (nanometer scale), densi
 - **Camera shake**: fusion, fission, and annihilation events trigger exponentially decaying camera shake (8&ndash;12px intensity)
 - **Wobbly windows**: subtle sinusoidal floating animation on UI panels (2px amplitude, togglable)
 
+### Custom Particle Textures
+
+Each of the 67 particle types can be rendered with a custom PNG texture instead of (or blended
+with) the default procedural shader rendering. Textures are stored as a Vulkan `sampler2DArray`
+(128&times;128 per layer, RGBA8, ~4.5 MB total VRAM).
+
+**Render modes** (per-type, switchable at runtime via Settings &rarr; Particle Textures):
+
+| Mode | Description |
+|---|---|
+| **Procedural** | Default compute shader rendering (circles, glow, effects) |
+| **Textured** | Custom PNG texture only, energy-modulated brightness |
+| **Blended** | Texture blended with procedural lighting (adjustable blend factor) |
+
+**Included textures** &mdash; 67 procedurally generated PNGs in `assets/particles/`, each with a
+unique visual style:
+
+| Category | Style |
+|---|---|
+| Proton, Neutron, Antiproton | 3D sphere with visible quark color spots (uud/udd) |
+| Electron, Muon, Tau | Solid sphere with specular highlight and rim lighting |
+| Positron, Anti-quarks, Anti-leptons | Sphere with distinctive antimatter halo ring |
+| Neutrinos | Translucent wispy ghost effect (FBM noise) |
+| Quarks (u, d, s, c, t, b) | Small sphere with color-charge glow ring |
+| Photon, Gluon, Graviton | Starburst with radial rays and white-hot core |
+| W&plusmn;, Z&deg; | Concentric wave rings with angular modulation |
+| Higgs, Inflaton | Golden sphere with pulsing concentric field rings |
+| Dark Matter, Dark Energy | Turbulent halo with fractal Brownian motion noise |
+| SUSY sparticles | Wobbled-edge sphere with shimmer (tilde distortion) |
+| Exotic / BSM | Fractal-edge turbulent sphere with FBM noise |
+| Monopole | Sphere with 12 radial magnetic field lines |
+| Tachyon | Elongated speed-streaked glow (motion blur) |
+
+**Custom textures**: drop any 128&times;128 (or larger) RGBA PNG into `assets/particles/` using
+the naming convention from `type_to_filename()` (lowercase, spaces &rarr; `_`,
+`+` &rarr; `_plus`, `-` &rarr; `_minus`). Example: `dark_matter.png`, `w_plus.png`.
+Hot-reload supported at runtime.
+
+**Texture generator**: `tools/gen_particle_textures.cpp` &mdash; standalone C++ program that
+regenerates all 67 textures procedurally using value noise, FBM, and per-type rendering styles.
+
+```bash
+g++ -O2 -std=c++17 -o build/gen_textures tools/gen_particle_textures.cpp -lm
+./build/gen_textures   # outputs to assets/particles/
+```
+
 ### Spawn Picker (F3)
 
 Categorized spawning: leptons, quarks, bosons, hypothetical particles, composite atoms
@@ -811,12 +858,19 @@ background music.
 ### Steam Integration (Optional)
 
 Steam achievements and cloud saves are supported via optional Steamworks SDK linkage.
-The build compiles and runs without the SDK &mdash; all Steam calls are no-ops when
-`HAS_STEAM` is not defined.
+The SDK is bundled at `steam/sdk/`. The build compiles and runs without it &mdash; all
+Steam calls are no-ops when `HAS_STEAM` is not defined.
 
 ```bash
+# Build with Steam support (using bundled SDK)
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSTEAMWORKS_SDK_DIR="$(pwd)/steam/sdk"
+
+# Or point to an external SDK
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSTEAMWORKS_SDK_DIR=/path/to/sdk
 ```
+
+For development testing, place a `steam_appid.txt` (containing your App ID) next to the
+executable. The bundled default uses App ID 480 (Spacewar, Valve's test app).
 
 ---
 
@@ -828,8 +882,9 @@ EmergentEvolution/
 │   ├── types.h                  # SimConfig, PushConstants, shared constants
 │   ├── particles.h/.cpp         # CPU particle arrays and type data
 │   ├── vulkan_context.h/.cpp    # Vulkan instance, device, swapchain, buffers
-│   ├── compute_pipeline.h/.cpp  # 23-binding descriptor layout, buffer lifecycle, readback, bloom
+│   ├── compute_pipeline.h/.cpp  # 25-binding descriptor layout, buffer lifecycle, readback, bloom
 │   ├── renderer.h/.cpp          # Fullscreen-quad pipeline, ImGui integration
+│   ├── particle_textures.h/.cpp # Per-type custom texture array (sampler2DArray, hot-reload)
 │   ├── stb_image*.h/.cpp        # Image loading/writing (icons, thumbnails)
 │   └── miniaudio.h              # Single-header audio (MP3 decode + playback)
 ├── src/physics/
@@ -867,6 +922,10 @@ EmergentEvolution/
 │   ├── physics.comp             # GPU: forces, collisions, bonds, fields, bloom, wave rendering
 │   ├── fullscreen.vert/.frag    # Render pipeline
 ├── assets/                      # Icons, music, SFX, Windows resources
+│   └── particles/              # 67 custom particle texture PNGs (128x128 RGBA)
+├── tools/
+│   └── gen_particle_textures.cpp # Standalone texture generator (stb_image_write)
+├── steam/sdk/                   # Steamworks SDK (headers + redistributable binaries)
 ├── cmake/                       # FindSteamworks.cmake, embed_resource.cmake
 ├── CREDITS.md                   # Third-party library credits and licenses
 └── CMakeLists.txt
@@ -894,6 +953,8 @@ EmergentEvolution/
 | 20 | GPU spatial grid sorted indices | read (CPU-built) |
 | 21 | Bloom texture A (fine) | image read/write |
 | 22 | Bloom texture B (wide) | image read/write |
+| 23 | Particle texture array (sampler2DArray) | sampled read |
+| 24 | Per-type render modes | read (CPU-managed) |
 
 Particle buffers use DEVICE_LOCAL memory on discrete GPUs with staging buffers for CPU
 readback. A/B buffers ping-pong each tick.
