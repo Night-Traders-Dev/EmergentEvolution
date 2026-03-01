@@ -669,15 +669,29 @@ EmergentEvolution/
 │   ├── types.h                  # SimConfig, PushConstants, shared constants
 │   ├── particles.h/.cpp         # CPU particle arrays and type data
 │   ├── vulkan_context.h/.cpp    # Vulkan instance, device, swapchain, buffers
-│   ├── compute_pipeline.h/.cpp  # 18-binding descriptor layout, buffer lifecycle, readback
+│   ├── compute_pipeline.h/.cpp  # 20-binding descriptor layout, buffer lifecycle, readback
 │   ├── renderer.h/.cpp          # Fullscreen-quad pipeline, ImGui integration
 │   ├── stb_image*.h/.cpp        # Image loading/writing (icons, thumbnails)
 │   └── miniaudio.h              # Single-header audio (MP3 decode + playback)
 ├── src/physics/
-│   ├── simulation.h/.cpp        # Tick loop: forces, reactions, decay, orbitals, bonds,
-│   │                            #   hadronization, gluon interactions, spatial grid
-│   ├── interface.h/.cpp         # ImGui: splash, spawn picker, element/molecule cards,
-│   │                            #   force multipliers, tools, event log, achievements, save/load UI
+│   ├── simulation.h             # PhysicsSimulation class definition
+│   ├── simulation.cpp           # Core: tick loop, init, reset, input, spatial grid, achievements
+│   ├── nuclear.cpp              # Annihilation, fusion, fission, nuclear decay, photoelectric,
+│   │                            #   pion decay, spallation
+│   ├── orbital.cpp              # Orbital assignment, nucleus repulsion, bonds, shell transitions
+│   ├── decay.cpp                # Particle decay, hadronization, bremsstrahlung, weak flavor change
+│   ├── quantum.cpp              # Virtual pairs, neutrino scattering/oscillations, entanglement
+│   ├── spawning.cpp             # Accelerator fire, atom/particle spawning
+│   ├── sim_helpers.h            # Shared inline helpers (Lorentz gamma, energy conversion, etc.)
+│   ├── interface.h              # PhysicsInterface class definition
+│   ├── interface.cpp            # Core: init, preferences, themes, render_imgui dispatcher
+│   ├── ui_panels.cpp            # Top bar, bottom bar, settings panel, spawn menu
+│   ├── ui_cards.cpp             # Particle info card, element card, molecule card
+│   ├── ui_lists.cpp             # Element/particle lists, bestiaries
+│   ├── ui_dialogs.cpp           # Splash screen, pause menu, settings menu, save/load dialog
+│   ├── ui_tools.cpp             # Decay log, nuclear debug, accelerator, force objects, measurement
+│   ├── ui_overlays.cpp          # Visualization overlays (heatmap, fields, trajectories, etc.)
+│   ├── ui_data.h                # Shared UI data tables (elements, particle names/colors, formatting)
 │   ├── phys_particles.h/.cpp    # 67 particle types, masses, charges, environments
 │   ├── molecules.h              # ~50 molecule templates with geometry
 │   ├── achievements.h/.cpp      # 64 achievements, persistence
@@ -709,8 +723,11 @@ EmergentEvolution/
 | 16 | Bond partners | read (CPU-managed) |
 | 17 | Force objects | read |
 | 18 | Mass inverse + ZPE table | read |
+| 19 | GPU spatial grid cell starts | read (CPU-built) |
+| 20 | GPU spatial grid sorted indices | read (CPU-built) |
 
-All buffers are HOST_VISIBLE + HOST_COHERENT for CPU readback. A/B buffers ping-pong each tick.
+Particle buffers use DEVICE_LOCAL memory on discrete GPUs with staging buffers for CPU
+readback. A/B buffers ping-pong each tick.
 
 </details>
 
