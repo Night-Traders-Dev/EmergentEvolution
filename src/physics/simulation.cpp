@@ -1,4 +1,6 @@
 #include "physics/simulation.h"
+#include "physics/paths.h"
+#include "physics/steam_integration.h"
 #include "physics/phys_particles.h"
 #include "physics/molecules.h"
 #include "physics/save_load.h"
@@ -228,8 +230,7 @@ void PhysicsSimulation::init(GLFWwindow* window) {
     cfg.generation_seed = static_cast<uint32_t>(iface.seed_value);
 
     // Load persistent achievements from disk
-    fs::create_directories("saves");
-    achievements.load("saves/achievements.ppach");
+    achievements.load(get_data_dir() + "achievements.ppach");
 
     vk.preferred_gpu_index = iface.prefs.preferred_gpu;
     vk.vsync_requested = iface.prefs.vsync;
@@ -268,7 +269,7 @@ void PhysicsSimulation::init(GLFWwindow* window) {
 
 void PhysicsSimulation::destroy() {
     audio.destroy();
-    achievements.save("saves/achievements.ppach");
+    achievements.save(get_data_dir() + "achievements.ppach");
     vkDeviceWaitIdle(vk.device);
     if (compute_fence_ != VK_NULL_HANDLE) {
         vkDestroyFence(vk.device, compute_fence_, nullptr);
@@ -1024,8 +1025,10 @@ void PhysicsSimulation::try_unlock(AchievementID id) {
         snprintf(buf, sizeof(buf), "Achievement Unlocked: %s — %s", def.name, def.description);
         iface.push_notification(buf, ImVec4(1.0f, 0.843f, 0.0f, 1.0f));
         audio.play_achievement();
+        // Sync to Steam (no-op when HAS_STEAM is not defined)
+        steam::unlock_achievement(def.steam_api_name);
         // Auto-save achievements on unlock
-        achievements.save("saves/achievements.ppach");
+        achievements.save(get_data_dir() + "achievements.ppach");
     }
 }
 
@@ -2777,7 +2780,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 compute.read_current_state(vk, readback_positions_, readback_velocities_, readback_energies_);
             }
             auto result = save_simulation(
-                "saves/autosave.ppsg", cfg, particles,
+                get_data_dir() + "autosave.ppsg", cfg, particles,
                 readback_positions_, readback_velocities_, readback_energies_,
                 force_objects_, force_object_count_,
                 iface.field_em, iface.field_strong, iface.field_weak,
@@ -2869,9 +2872,8 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 }
             }
 
-            // Build filename: saves/Element_Symbol_A.ppel
-            std::error_code ec;
-            fs::create_directories("saves", ec);
+            // Build filename: <data_dir>/Element_Symbol_A.ppel
+            const std::string& data_dir = get_data_dir();
 
             // Element symbol lookup
             static const char* SYM[] = {
@@ -2884,8 +2886,8 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             };
             int Z = nuc->Z, N = nuc->N, A = Z + N;
             const char* sym = (Z >= 0 && Z <= 60) ? SYM[Z] : "X";
-            char fname[128];
-            snprintf(fname, sizeof(fname), "saves/%s-%d.ppel", sym, A);
+            char fname[256];
+            snprintf(fname, sizeof(fname), "%s%s-%d.ppel", data_dir.c_str(), sym, A);
 
             auto result = export_element(fname, Z, N, electron_count, edata);
             iface.push_notification(
@@ -3046,10 +3048,9 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             }
 
             // Save file
-            std::error_code ec;
-            fs::create_directories("saves", ec);
-            char fname[128];
-            snprintf(fname, sizeof(fname), "saves/%s.ppmol", formula.c_str());
+            const std::string& mol_dir = get_data_dir();
+            char fname[256];
+            snprintf(fname, sizeof(fname), "%s%s.ppmol", mol_dir.c_str(), formula.c_str());
 
             auto result = export_molecule(fname, formula, atom_data, bond_list);
             if (result.success) try_unlock(ACH_FIRST_MOLECULE_EXPORT);

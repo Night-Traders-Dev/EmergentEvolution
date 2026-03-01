@@ -1,4 +1,6 @@
 #include "physics/simulation.h"
+#include "physics/error_dialog.h"
+#include "physics/steam_integration.h"
 #include "stb_image.h"
 #include <GLFW/glfw3.h>
 #include <stdexcept>
@@ -95,8 +97,17 @@ int main() {
     setenv("LIBDECOR_PLUGIN_DIR", "/nonexistent", 0);
 #endif
 
+    // Steam integration — init before window creation.
+    // Non-Steam builds: init() is a no-op that returns true.
+    if (!steam::init()) {
+        // Steam requested app relaunch via Steam client — exit immediately
+        return 0;
+    }
+
     if (!glfwInit()) {
-        std::cerr << "Failed to initialise GLFW\n";
+        show_error_dialog("Startup Error",
+            "Failed to initialize GLFW.\n\n"
+            "Please ensure your graphics drivers are installed and up to date.");
         return 1;
     }
 
@@ -116,7 +127,9 @@ int main() {
 
     if (!window) {
         glfwTerminate();
-        std::cerr << "Failed to create GLFW window\n";
+        show_error_dialog("Startup Error",
+            "Failed to create application window.\n\n"
+            "Your system may not support Vulkan or the display may be unavailable.");
         return 1;
     }
 
@@ -153,7 +166,10 @@ int main() {
     try {
         sim.init(window);
     } catch (const std::exception& e) {
-        std::cerr << "Init error: " << e.what() << "\n";
+        std::string msg = std::string("Initialization failed:\n\n") + e.what() +
+            "\n\nThis usually means your GPU does not support Vulkan, "
+            "or the Vulkan driver is not installed.";
+        show_error_dialog("Vulkan Error", msg.c_str());
         return 1;
     }
 
@@ -195,6 +211,7 @@ int main() {
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
+        steam::run_callbacks();
 
         auto now = Clock::now();
         double dt = std::chrono::duration<double>(now - last_time).count();
@@ -216,6 +233,9 @@ int main() {
                 } catch (...) {}
                 continue;
             }
+            show_error_dialog("Runtime Error",
+                "The simulation encountered an unrecoverable error.\n\n"
+                "This may be caused by a GPU driver crash or hardware issue.");
             break;
         }
         device_lost_recovery = false;
@@ -244,5 +264,6 @@ int main() {
 
     glfwDestroyWindow(window);
     glfwTerminate();
+    steam::shutdown();
     return 0;
 }

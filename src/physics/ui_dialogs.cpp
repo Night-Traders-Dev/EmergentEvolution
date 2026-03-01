@@ -1,4 +1,5 @@
 #include "physics/interface.h"
+#include "physics/paths.h"
 #include "physics/phys_particles.h"
 #include "physics/tutorial.h"
 #include "physics/scenarios.h"
@@ -868,7 +869,7 @@ void PhysicsInterface::draw_settings_menu() {
                 if (ImGui::Combo("Auto-Save Interval", &autosave_idx, autosave_labels, 4))
                     prefs.autosave_interval = autosave_values[autosave_idx];
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Automatically save to saves/autosave.ppsg\nat the chosen interval");
+                    ImGui::SetTooltip("Automatically save at the chosen interval");
             }
         }
 
@@ -1016,7 +1017,7 @@ void PhysicsInterface::draw_settings_menu() {
             ImGui::Dummy(ImVec2(0, 4));
             ImGui::Checkbox("Save events to disk", &prefs.event_log_save);
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Append all physics events to saves/event_log.txt\nas they occur (timestamped, one per line).");
+                ImGui::SetTooltip("Append all physics events to event_log.txt\nas they occur (timestamped, one per line).");
         }
 
         ImGui::PopItemWidth();
@@ -1344,9 +1345,8 @@ void PhysicsInterface::save_event_to_disk(const char* desc, DecayEventType type)
         "PHOTOELECTRIC", "SPALLATION", "PAIR_PROD", "PION_PROD",
         "VMD", "PHOTODISINT", "BOND_FORM", "BOND_BREAK"
     };
-    std::error_code ec;
-    fs::create_directories("saves", ec);
-    std::ofstream f("saves/event_log.txt", std::ios::app);
+    const std::string& data_dir = get_data_dir();
+    std::ofstream f((data_dir + "event_log.txt").c_str(), std::ios::app);
     if (!f.is_open()) return;
     auto now = std::time(nullptr);
     auto* tm = std::localtime(&now);
@@ -1620,9 +1620,9 @@ void PhysicsInterface::draw_save_load_dialog() {
     // Initialize browse directory on first open
     if (browse_current_dir.empty()) {
         std::error_code ec;
-        fs::path saves_dir = fs::current_path(ec) / "saves";
-        if (fs::is_directory(saves_dir, ec))
-            browse_current_dir = saves_dir.string();
+        std::string data_dir = get_data_dir();
+        if (fs::is_directory(data_dir, ec))
+            browse_current_dir = data_dir;
         else
             browse_current_dir = fs::current_path(ec).string();
     }

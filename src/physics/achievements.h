@@ -113,7 +113,8 @@ struct AchievementDef {
     AchievementCategory category;
     const char* name;
     const char* description;
-    const char* icon;       // short emoji-like symbol for display
+    const char* icon;           // short emoji-like symbol for display
+    const char* steam_api_name; // Steam API achievement name (e.g., "ACH_FIRST_FUSION")
 };
 
 // Defined in achievements.cpp

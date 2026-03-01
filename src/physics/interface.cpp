@@ -1,4 +1,5 @@
 #include "physics/interface.h"
+#include "physics/paths.h"
 #include "physics/tutorial.h"
 #include "physics/scenarios.h"
 #include "physics/audio.h"
@@ -45,9 +46,8 @@ static constexpr size_t PPCFG_V2_SIZE = 52;   // temp_unit .. event_log_save
 static constexpr size_t PPCFG_V3_SIZE = 72;   // + autosave_interval .. tutorial_done
 
 void PhysicsInterface::save_prefs() {
-    std::error_code ec;
-    fs::create_directories("saves", ec);
-    std::ofstream f("saves/settings.ppcfg", std::ios::binary);
+    const std::string& data_dir = get_data_dir();
+    std::ofstream f((data_dir + "settings.ppcfg").c_str(), std::ios::binary);
     if (!f.is_open()) return;
     f.write(reinterpret_cast<const char*>(&PPCFG_MAGIC), sizeof(uint32_t));
     f.write(reinterpret_cast<const char*>(&PPCFG_VERSION), sizeof(uint32_t));
@@ -55,7 +55,28 @@ void PhysicsInterface::save_prefs() {
 }
 
 void PhysicsInterface::load_prefs() {
-    std::ifstream f("saves/settings.ppcfg", std::ios::binary);
+    // One-time migration: copy old saves/ to new data dir if needed
+    #ifndef PORTABLE_PATHS
+    {
+        std::error_code ec;
+        const std::string& new_dir = get_data_dir();
+        fs::path old_file = "saves/settings.ppcfg";
+        fs::path new_file = fs::path(new_dir) / "settings.ppcfg";
+        if (fs::exists(old_file, ec) && !fs::exists(new_file, ec)) {
+            // Old dir exists but new dir has no settings — migrate
+            fs::path old_dir = "saves";
+            for (auto& entry : fs::directory_iterator(old_dir, ec)) {
+                if (entry.is_regular_file(ec)) {
+                    fs::copy_file(entry.path(),
+                                  fs::path(new_dir) / entry.path().filename(),
+                                  fs::copy_options::skip_existing, ec);
+                }
+            }
+        }
+    }
+    #endif
+
+    std::ifstream f((get_data_dir() + "settings.ppcfg").c_str(), std::ios::binary);
     if (!f.is_open()) return;
     uint32_t magic = 0, version = 0;
     f.read(reinterpret_cast<char*>(&magic), sizeof(uint32_t));
@@ -103,9 +124,8 @@ static constexpr uint32_t PPBST_MAGIC   = 0x42535450;  // "PBST" little-endian
 static constexpr uint32_t PPBST_VERSION = 2;
 
 void PhysicsInterface::save_molecule_bestiary() {
-    std::error_code ec;
-    fs::create_directories("saves", ec);
-    std::ofstream f("saves/bestiary_molecules.ppbst", std::ios::binary);
+    const std::string& data_dir = get_data_dir();
+    std::ofstream f((data_dir + "bestiary_molecules.ppbst").c_str(), std::ios::binary);
     if (!f.is_open()) return;
     f.write(reinterpret_cast<const char*>(&PPBST_MAGIC), sizeof(uint32_t));
     f.write(reinterpret_cast<const char*>(&PPBST_VERSION), sizeof(uint32_t));
@@ -126,7 +146,7 @@ void PhysicsInterface::save_molecule_bestiary() {
 }
 
 void PhysicsInterface::load_molecule_bestiary() {
-    std::ifstream f("saves/bestiary_molecules.ppbst", std::ios::binary);
+    std::ifstream f((get_data_dir() + "bestiary_molecules.ppbst").c_str(), std::ios::binary);
     if (!f.is_open()) return;
     uint32_t magic = 0, version = 0;
     f.read(reinterpret_cast<char*>(&magic), sizeof(uint32_t));

@@ -45,6 +45,10 @@ if(NOT CMAKE_CROSSCOMPILING)
     find_package(OpenMP QUIET)
 endif()
 
+# Steamworks SDK — optional, for Steam achievements and cloud saves
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+find_package(Steamworks QUIET)
+
 # ImGui via FetchContent (no install needed)
 FetchContent_Declare(imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
@@ -62,6 +66,8 @@ add_executable(particle_physics
     src/physics/save_load.cpp
     src/physics/achievements.cpp
     src/physics/audio.cpp
+    src/physics/error_dialog.cpp
+    src/physics/steam_integration.cpp
 
     # Physics process modules (split from simulation.cpp)
     src/physics/nuclear.cpp
@@ -123,7 +129,7 @@ if(NOT MSVC)
 endif()
 # Windows: link system libs for audio (WASAPI), windowing, etc.
 if(WIN32)
-    target_link_libraries(particle_physics PRIVATE ole32 winmm)
+    target_link_libraries(particle_physics PRIVATE ole32 winmm shell32)
     # .exe icon + version info resource
     target_sources(particle_physics PRIVATE assets/particle_playground.rc)
 endif()
@@ -132,6 +138,12 @@ endif()
 if(OpenMP_FOUND)
     target_link_libraries(particle_physics PRIVATE OpenMP::OpenMP_CXX)
     target_compile_definitions(particle_physics PRIVATE HAS_OPENMP)
+endif()
+
+# Steamworks — link if available, define HAS_STEAM so source can guard Steam API calls
+if(Steamworks_FOUND)
+    target_link_libraries(particle_physics PRIVATE Steamworks::Steamworks)
+    target_compile_definitions(particle_physics PRIVATE HAS_STEAM)
 endif()
 
 # Platform-specific compiler flags
@@ -204,6 +216,10 @@ add_dependencies(particle_physics shaders)
 # ── Portable build: embed shaders + icons into the binary ─────────────────────
 
 option(PORTABLE_BUILD "Embed shaders and icons into the executable" OFF)
+option(PORTABLE_PATHS "Use relative saves/ directory instead of platform-standard paths" OFF)
+if(PORTABLE_PATHS)
+    target_compile_definitions(particle_physics PRIVATE PORTABLE_PATHS)
+endif()
 
 if(PORTABLE_BUILD)
     set(EMBED_DIR ${CMAKE_BINARY_DIR}/generated)
