@@ -99,6 +99,7 @@ void PhysicsInterface::init() {
     std::random_device rd;
     seed_value = static_cast<int>(rd() % 100000);
     load_prefs();
+    load_molecule_bestiary();
     scan_theme_directory();
     for (uint32_t i = 0; i < PHYS_PARTICLE_TYPES; ++i)
         particle_type_filter[i] = true;
@@ -129,6 +130,67 @@ void PhysicsInterface::load_prefs() {
     UserPrefs loaded{};
     f.read(reinterpret_cast<char*>(&loaded), sizeof(UserPrefs));
     if (f.good()) prefs = loaded;
+}
+
+// ── Molecule bestiary persistence ─────────────────────────────────────────────
+
+static constexpr uint32_t PPBST_MAGIC   = 0x42535450;  // "PBST" little-endian
+static constexpr uint32_t PPBST_VERSION = 2;
+
+void PhysicsInterface::save_molecule_bestiary() {
+    std::error_code ec;
+    fs::create_directories("saves", ec);
+    std::ofstream f("saves/bestiary_molecules.ppbst", std::ios::binary);
+    if (!f.is_open()) return;
+    f.write(reinterpret_cast<const char*>(&PPBST_MAGIC), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&PPBST_VERSION), sizeof(uint32_t));
+    uint32_t count = static_cast<uint32_t>(molecule_bestiary.size());
+    f.write(reinterpret_cast<const char*>(&count), sizeof(uint32_t));
+    for (const auto& e : molecule_bestiary) {
+        uint32_t flen = static_cast<uint32_t>(e.formula.size());
+        uint32_t nlen = static_cast<uint32_t>(e.name.size());
+        f.write(reinterpret_cast<const char*>(&flen), sizeof(uint32_t));
+        f.write(e.formula.data(), flen);
+        f.write(reinterpret_cast<const char*>(&nlen), sizeof(uint32_t));
+        f.write(e.name.data(), nlen);
+        f.write(reinterpret_cast<const char*>(&e.times_seen), sizeof(uint32_t));
+        f.write(reinterpret_cast<const char*>(&e.atom_count), sizeof(uint32_t));
+        f.write(reinterpret_cast<const char*>(&e.first_seen_session), sizeof(uint32_t));
+        f.write(reinterpret_cast<const char*>(&e.first_seen_time), sizeof(int64_t));
+    }
+}
+
+void PhysicsInterface::load_molecule_bestiary() {
+    std::ifstream f("saves/bestiary_molecules.ppbst", std::ios::binary);
+    if (!f.is_open()) return;
+    uint32_t magic = 0, version = 0;
+    f.read(reinterpret_cast<char*>(&magic), sizeof(uint32_t));
+    f.read(reinterpret_cast<char*>(&version), sizeof(uint32_t));
+    if (magic != PPBST_MAGIC) return;
+    if (version != 1 && version != 2) return;
+    uint32_t count = 0;
+    f.read(reinterpret_cast<char*>(&count), sizeof(uint32_t));
+    if (count > 10000) return;
+    molecule_bestiary.clear();
+    molecule_bestiary.reserve(count);
+    for (uint32_t i = 0; i < count && f.good(); ++i) {
+        MoleculeBestiaryEntry e;
+        uint32_t flen = 0, nlen = 0;
+        f.read(reinterpret_cast<char*>(&flen), sizeof(uint32_t));
+        if (flen > 256) break;
+        e.formula.resize(flen);
+        f.read(e.formula.data(), flen);
+        f.read(reinterpret_cast<char*>(&nlen), sizeof(uint32_t));
+        if (nlen > 256) break;
+        e.name.resize(nlen);
+        f.read(e.name.data(), nlen);
+        f.read(reinterpret_cast<char*>(&e.times_seen), sizeof(uint32_t));
+        f.read(reinterpret_cast<char*>(&e.atom_count), sizeof(uint32_t));
+        f.read(reinterpret_cast<char*>(&e.first_seen_session), sizeof(uint32_t));
+        if (version >= 2)
+            f.read(reinterpret_cast<char*>(&e.first_seen_time), sizeof(int64_t));
+        if (f.good()) molecule_bestiary.push_back(std::move(e));
+    }
 }
 
 // ── Nucleus / atom group templates ───────────────────────────────────────────
@@ -900,6 +962,13 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         show_load_dialog = true;
         browse_needs_refresh = true;
     }
+    // Ctrl+Z undo, Ctrl+Shift+Z redo (check Shift first to avoid double-trigger)
+    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+        if (ImGui::GetIO().KeyShift)
+            request_redo = true;
+        else
+            request_undo = true;
+    }
 
     // F1 toggle settings panel
     if (ImGui::IsKeyPressed(ImGuiKey_F1, false))
@@ -971,6 +1040,11 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     // Draw particle list window
     draw_particle_list(particles);
 
+    // Draw bestiary windows
+    draw_particle_bestiary();
+    draw_element_bestiary();
+    draw_molecule_bestiary();
+
     // Draw decay log window
     draw_decay_log();
 
@@ -993,7 +1067,8 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         save_load_msg_timer -= ImGui::GetIO().DeltaTime;
 
     // ── Accelerator aim visualization overlay ──
-    if (accel_mode && accel_phase == 1 && accel_source_idx >= 0) {
+    if (accel_mode && accel_phase == 1 && accel_source_idx >= 0
+        && accel_fire_type >= 0 && accel_fire_type < PHYS_PARTICLE_TYPES) {
         ImGuiIO& io = ImGui::GetIO();
         float win_w = io.DisplaySize.x;
         float win_h = io.DisplaySize.y;
@@ -2670,6 +2745,15 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                         browse_needs_refresh = true;
                     }
                     ImGui::Separator();
+                    if (ImGui::MenuItem("Undo (Ctrl+Z)")) {
+                        request_undo = true;
+                        show_tools_popup = false;
+                    }
+                    if (ImGui::MenuItem("Redo (Ctrl+Shift+Z)")) {
+                        request_redo = true;
+                        show_tools_popup = false;
+                    }
+                    ImGui::Separator();
                     if (ImGui::MenuItem("Import Element (.ppel)")) {
                         show_import_dialog = true;
                         show_tools_popup = false;
@@ -2690,6 +2774,9 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                     ImGui::MenuItem("Event Log", nullptr, &show_decay_log);
                     ImGui::MenuItem("Particle List", nullptr, &show_particle_list);
                     ImGui::MenuItem("Element List", nullptr, &show_element_list);
+                    ImGui::MenuItem("Particle Bestiary", nullptr, &show_particle_bestiary);
+                    ImGui::MenuItem("Element Bestiary", nullptr, &show_element_bestiary);
+                    ImGui::MenuItem("Molecule Bestiary", nullptr, &show_molecule_bestiary);
                     ImGui::MenuItem("Achievements", nullptr, &show_achievements_panel);
                     ImGui::TreePop();
                 }
@@ -2778,9 +2865,10 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                 if (ImGui::TreeNodeEx("Tools")) {
                     if (ImGui::MenuItem("Accelerator", nullptr, accel_mode)) {
                         accel_mode = !accel_mode;
+                        accel_phase = 0;
+                        accel_source_idx = -1;
+                        accel_stream_timer = 0;
                         if (accel_mode) {
-                            accel_phase = 0;
-                            accel_source_idx = -1;
                             pending_spawn = false;
                             select_mode = false;
                             force_obj_placement_mode = false;
@@ -3289,10 +3377,13 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
         ImGui::Checkbox("Higgs##field", &field_higgs);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show Higgs field coupling to massive particles");
         ImGui::SameLine();
+        ImGui::Checkbox("Dark Energy##field", &field_dark_energy);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show dark energy repulsive field\nCrimson glow growing with distance\nInflaton = 20x stronger, Chameleon = screened");
+
         ImGui::Checkbox("Collision##field", &show_collision_radii);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show collision detection radii\nGreen = hard-sphere, Yellow = Pauli core, Red = Yukawa range");
 
-        if (field_em || field_strong || field_weak || field_gravity || field_higgs) {
+        if (field_em || field_strong || field_weak || field_gravity || field_higgs || field_dark_energy) {
             ImGui::SliderFloat("Brightness", &field_intensity, 0.05f, 2.0f, "%.2f");
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Field visualization brightness");
         }
@@ -3934,13 +4025,21 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
     if (ImGui::CollapsingHeader("Force Objects")) {
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Click to place in world:");
 
-        static const char* fo_labels[] = { "EM", "Strong", "Weak", "Gravity", "Heat" };
+        static const char* fo_labels[] = {
+            "EM", "Strong", "Weak", "Gravity", "Heat",
+            nullptr, // 5 = mirror (handled separately)
+            "Coulomb", "Vortex", "Well"
+        };
         static const char* fo_tips[] = {
-            "Electromagnetic field\nPushes/pulls charged particles",
+            "Electromagnetic field\nElectric (radial) + Magnetic (deflection)\non charged particles",
             "Strong nuclear force\nYukawa-like on baryons",
             "Weak nuclear force\nShort-range on all particles",
             "Gravity well\nAttracts all massive particles",
-            "Heat source\nAdds thermal energy to nearby particles"
+            "Heat source\nAdds thermal energy to nearby particles",
+            nullptr, // mirror
+            "Coulomb source\nPure electrostatic point charge\nRepels same-sign, attracts opposite",
+            "Vortex field\nTangential force creating circular flow\nLike a cyclotron or whirlpool",
+            "Potential well\nHarmonic restoring force toward center\nTraps particles in oscillation"
         };
         static const ImVec4 fo_colors[] = {
             ImVec4(0.3f, 0.5f, 1.0f, 1.0f),   // EM — blue
@@ -3948,8 +4047,13 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
             ImVec4(0.7f, 0.3f, 0.9f, 1.0f),   // Weak — purple
             ImVec4(0.9f, 0.7f, 0.2f, 1.0f),   // Gravity — amber
             ImVec4(1.0f, 0.4f, 0.2f, 1.0f),   // Heat — orange-red
+            ImVec4(0.7f, 0.7f, 0.8f, 1.0f),   // Mirror — grey (unused here)
+            ImVec4(0.9f, 0.3f, 0.3f, 1.0f),   // Coulomb — red
+            ImVec4(0.2f, 0.8f, 0.9f, 1.0f),   // Vortex — cyan
+            ImVec4(0.9f, 0.9f, 0.2f, 1.0f),   // Well — yellow
         };
 
+        // First row: fundamental forces (0-4)
         for (int fi = 0; fi < 5; ++fi) {
             if (fi > 0) ImGui::SameLine();
 
@@ -3984,6 +4088,45 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
             }
             ImGui::PopStyleColor(3);
         }
+
+        // Second row: utility force objects (6-8) + Mirror
+        static const int fo_row2[] = { 6, 7, 8 };
+        for (int ri = 0; ri < 3; ++ri) {
+            int fi = fo_row2[ri];
+            if (ri > 0) ImGui::SameLine();
+
+            bool active = (force_obj_placement_mode && force_obj_placement_type == fi);
+            ImVec4 c = fo_colors[fi];
+
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                ImVec4(c.x * 0.3f, c.y * 0.3f, c.z * 0.3f, 0.80f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                ImVec4(c.x * 0.5f, c.y * 0.5f, c.z * 0.5f, 0.90f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                ImVec4(c.x * 0.7f, c.y * 0.7f, c.z * 0.7f, 1.0f));
+
+            if (active) {
+                ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(c.x, c.y, c.z, 1.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
+            }
+
+            char fid[32];
+            snprintf(fid, sizeof(fid), "%s##fo%d", fo_labels[fi], fi);
+            if (ImGui::Button(fid, ImVec2(52, 30))) {
+                force_obj_placement_mode = !active;
+                force_obj_placement_type = fi;
+                pending_spawn = false;
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", fo_tips[fi]);
+
+            if (active) {
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor();
+            }
+            ImGui::PopStyleColor(3);
+        }
+        ImGui::SameLine();
 
         // Mirror button (separate — uses two-click placement)
         {
@@ -4025,7 +4168,7 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
 
     // ── Spawn Settings (shared, outside headers) ─────────────────────────────
     ImGui::Separator();
-    ImGui::SliderInt("Count", &spawn_count, 1, 100);
+    ImGui::SliderInt("Count", &spawn_count, 1, 5000);
     {
         // Energy slider: 0 eV to 9999 TeV (stored in MeV)
         // 9999 TeV = 9.999e9 MeV
@@ -4035,7 +4178,7 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
         ImGui::SliderFloat("Energy", &spawn_energy_mev, 0.0f, MAX_ENERGY_MEV, e_label,
                            ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
     }
-    ImGui::SliderFloat("Scatter", &spawn_scatter, 1.0f, 100.0f, "%.0f");
+    ImGui::SliderFloat("Scatter", &spawn_scatter, 1.0f, 5000.0f, "%.0f");
 
     // Status text
     if (pending_spawn) {
@@ -5696,6 +5839,7 @@ void PhysicsInterface::draw_accelerator_panel() {
             accel_mode = false;
             accel_phase = 0;
             accel_source_idx = -1;
+            accel_stream_timer = 0;
         }
         return;
     }
@@ -5703,15 +5847,30 @@ void PhysicsInterface::draw_accelerator_panel() {
         accel_mode = false;
         accel_phase = 0;
         accel_source_idx = -1;
+        accel_stream_timer = 0;
     }
 
     // ── Status ──
     if (accel_phase == 0) {
         ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.3f, 1.0f), "Click a particle to set as target");
-    } else {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Skip##notgt")) {
+            accel_phase = 1;
+            accel_source_idx = -1;  // free-fire mode (no target)
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Fire without a target\n(particles fly in click direction)");
+    } else if (accel_source_idx >= 0) {
         ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "Click to fire at target!");
         ImGui::SameLine();
         if (ImGui::SmallButton("Change Target")) {
+            accel_phase = 0;
+            accel_source_idx = -1;
+        }
+    } else {
+        ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "Click to fire (free aim)");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Set Target")) {
             accel_phase = 0;
             accel_source_idx = -1;
         }
@@ -6443,6 +6602,553 @@ void PhysicsInterface::save_event_to_disk(const char* desc, DecayEventType type)
     f << "[" << ts << "] [" << tag << "] " << desc << "\n";
 }
 
+// ── Particle Bestiary Window ─────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_particle_bestiary() {
+    if (!show_particle_bestiary) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    float win_w = 920.0f;
+    float max_h = io.DisplaySize.y - 80.0f;
+
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
+                                    io.DisplaySize.y * 0.5f - max_h * 0.4f),
+                            ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(win_w, max_h * 0.75f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(600, 300), ImVec2(1200, max_h));
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.04f, 0.08f, 0.96f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.06f, 0.05f, 0.12f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.10f, 0.08f, 0.18f, 0.95f));
+
+    // Count active types
+    int active_types = 0;
+    for (uint32_t t = 0; t < PHYS_PARTICLE_TYPES; ++t)
+        if (type_counts_display[t] > 0) active_types++;
+
+    char title[80];
+    snprintf(title, sizeof(title), "Particle Bestiary (%d active types)###Bestiary", active_types);
+
+    if (!ImGui::Begin(title, &show_particle_bestiary)) {
+        ImGui::End();
+        ImGui::PopStyleColor(3);
+        return;
+    }
+
+    // Grid layout
+    const float cell_w = 110.0f;
+    const float cell_h = 130.0f;
+    const float padding = 4.0f;
+    float avail_w = ImGui::GetContentRegionAvail().x;
+    int cols = std::max(1, static_cast<int>(avail_w / (cell_w + padding)));
+
+    ImGui::BeginChild("##BestiaryScroll", ImVec2(0, 0), false);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    int col = 0;
+
+    for (uint32_t t = 0; t < PHYS_PARTICLE_TYPES; ++t) {
+        if (col > 0) ImGui::SameLine(0, padding);
+
+        ImVec2 cursor = ImGui::GetCursorScreenPos();
+        ImVec4 pcol = PHYS_TYPE_UI_COLORS[t];
+        uint32_t count = type_counts_display[t];
+        const auto& stats = type_stats[t];
+        bool active = (count > 0);
+        bool ever = (stats.total_spawned > 0);
+        float alpha = active ? 1.0f : (ever ? 0.6f : 0.35f);
+
+        // Cell background
+        ImVec2 cell_min = cursor;
+        ImVec2 cell_max = ImVec2(cursor.x + cell_w, cursor.y + cell_h);
+
+        if (active) {
+            // Subtle colored border for active particles
+            dl->AddRect(cell_min, cell_max,
+                        ImGui::ColorConvertFloat4ToU32(ImVec4(pcol.x * 0.5f, pcol.y * 0.5f, pcol.z * 0.5f, 0.6f)),
+                        3.0f, 0, 1.5f);
+        }
+        dl->AddRectFilled(cell_min, cell_max,
+                          ImGui::ColorConvertFloat4ToU32(ImVec4(0.08f, 0.08f, 0.12f, alpha * 0.5f)),
+                          3.0f);
+
+        // Invisible button for hover/tooltip
+        ImGui::InvisibleButton(PHYS_TYPE_LABELS[t], ImVec2(cell_w, cell_h));
+        bool hovered = ImGui::IsItemHovered();
+
+        // Colored circle (particle thumbnail)
+        float circle_r = 14.0f;
+        ImVec2 center(cell_min.x + cell_w * 0.5f, cell_min.y + 22.0f);
+        dl->AddCircleFilled(center, circle_r,
+                            ImGui::ColorConvertFloat4ToU32(ImVec4(pcol.x, pcol.y, pcol.z, alpha)));
+        // Glow ring for active
+        if (active) {
+            dl->AddCircle(center, circle_r + 2.0f,
+                          ImGui::ColorConvertFloat4ToU32(ImVec4(pcol.x, pcol.y, pcol.z, 0.3f)),
+                          0, 1.5f);
+        }
+
+        // Label (centered, bold)
+        {
+            const char* label = PHYS_TYPE_LABELS[t];
+            ImVec2 sz = ImGui::CalcTextSize(label);
+            dl->AddText(ImVec2(cell_min.x + (cell_w - sz.x) * 0.5f, cell_min.y + 40.0f),
+                        ImGui::ColorConvertFloat4ToU32(ImVec4(pcol.x, pcol.y, pcol.z, alpha)),
+                        label);
+        }
+
+        // Name (centered, dim)
+        {
+            const char* name = PHYS_TYPE_NAMES[t];
+            ImVec2 sz = ImGui::CalcTextSize(name);
+            float name_x = cell_min.x + (cell_w - sz.x) * 0.5f;
+            if (sz.x > cell_w - 4.0f) name_x = cell_min.x + 2.0f; // left-align if too wide
+            dl->AddText(ImVec2(name_x, cell_min.y + 56.0f),
+                        ImGui::ColorConvertFloat4ToU32(ImVec4(0.6f, 0.6f, 0.7f, alpha * 0.8f)),
+                        name);
+        }
+
+        // Stats lines
+        float sy = cell_min.y + 74.0f;
+        ImU32 stat_col = ImGui::ColorConvertFloat4ToU32(ImVec4(0.5f, 0.5f, 0.6f, alpha));
+        ImU32 count_col = active
+            ? ImGui::ColorConvertFloat4ToU32(ImVec4(0.8f, 0.9f, 0.8f, 1.0f))
+            : stat_col;
+
+        char buf[48];
+        snprintf(buf, sizeof(buf), "Count: %u", count);
+        dl->AddText(ImVec2(cell_min.x + 4.0f, sy), count_col, buf);
+
+        snprintf(buf, sizeof(buf), "Total: %u", stats.total_spawned);
+        dl->AddText(ImVec2(cell_min.x + 4.0f, sy + 14.0f), stat_col, buf);
+
+        if (stats.lifetime_count > 0) {
+            double avg_life = stats.lifetime_sum / stats.lifetime_count;
+            // Convert frames to real time using current FPS
+            float fps = (fps_display > 1.0f) ? fps_display : 60.0f;
+            double avg_sec = avg_life / fps;
+            char time_buf[24];
+            if (avg_sec < 0.001)        snprintf(time_buf, sizeof(time_buf), "%.0f us", avg_sec * 1e6);
+            else if (avg_sec < 1.0)     snprintf(time_buf, sizeof(time_buf), "%.0f ms", avg_sec * 1000.0);
+            else if (avg_sec < 60.0)    snprintf(time_buf, sizeof(time_buf), "%.1fs", avg_sec);
+            else if (avg_sec < 3600.0)  snprintf(time_buf, sizeof(time_buf), "%.1fm", avg_sec / 60.0);
+            else                        snprintf(time_buf, sizeof(time_buf), "%.1fh", avg_sec / 3600.0);
+            snprintf(buf, sizeof(buf), "Life: %.0ff (%s)", avg_life, time_buf);
+        } else if (count > 0) {
+            snprintf(buf, sizeof(buf), "Avg life: --");
+        } else {
+            snprintf(buf, sizeof(buf), "Peak: %u", stats.peak_count);
+        }
+        dl->AddText(ImVec2(cell_min.x + 4.0f, sy + 28.0f), stat_col, buf);
+
+        // Tooltip with physical properties
+        if (hovered) {
+            ImGui::BeginTooltip();
+            ImGui::TextColored(pcol, "%s (%s)", PHYS_TYPE_NAMES[t], PHYS_TYPE_LABELS[t]);
+            ImGui::Separator();
+
+            float m0 = rest_mass_MeV(t);
+            if (m0 < 0.001f)           ImGui::Text("Mass: massless");
+            else if (m0 < 1.0f)        ImGui::Text("Mass: %.3f keV", m0 * 1000.0f);
+            else if (m0 < 1000.0f)     ImGui::Text("Mass: %.2f MeV", m0);
+            else if (m0 < 1.0e6f)      ImGui::Text("Mass: %.2f GeV", m0 / 1000.0f);
+            else if (m0 < 1.0e9f)      ImGui::Text("Mass: %.2f TeV", m0 / 1.0e6f);
+            else                        ImGui::Text("Mass: %.0e MeV", m0);
+
+            if (t < PHYS_PARTICLE_TYPES) {
+                ImGui::Text("Charge: %+.2f e", PHYS_CHARGE[t]);
+                ImGui::Text("Spin: %.1f", PHYS_SPIN[t]);
+            }
+            ImGui::Separator();
+            ImGui::Text("Current: %u", count);
+            ImGui::Text("Total spawned: %u", stats.total_spawned);
+            ImGui::Text("Peak: %u", stats.peak_count);
+
+            if (stats.lifetime_count > 0) {
+                double avg_life = stats.lifetime_sum / stats.lifetime_count;
+                float fps = (fps_display > 1.0f) ? fps_display : 60.0f;
+                double avg_sec = avg_life / fps;
+                if (avg_sec < 0.001)
+                    ImGui::Text("Avg lifetime: %.0f frames (%.0f us)", avg_life, avg_sec * 1e6);
+                else if (avg_sec < 1.0)
+                    ImGui::Text("Avg lifetime: %.0f frames (%.0f ms)", avg_life, avg_sec * 1000.0);
+                else if (avg_sec < 60.0)
+                    ImGui::Text("Avg lifetime: %.0f frames (%.1f s)", avg_life, avg_sec);
+                else if (avg_sec < 3600.0)
+                    ImGui::Text("Avg lifetime: %.0f frames (%.1f min)", avg_life, avg_sec / 60.0);
+                else
+                    ImGui::Text("Avg lifetime: %.0f frames (%.1f hr)", avg_life, avg_sec / 3600.0);
+            }
+            if (count > 0) {
+                ImGui::Text("Avg energy: %.2f", stats.energy_sum / count);
+                ImGui::Text("Avg speed: %.2f px/f", stats.speed_sum / count);
+            }
+            ImGui::EndTooltip();
+        }
+
+        col++;
+        if (col >= cols) col = 0;
+    }
+
+    ImGui::EndChild();
+    ImGui::End();
+    ImGui::PopStyleColor(3);
+}
+
+// ── Element Bestiary Window ──────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+// CPK-inspired element colors by group
+static ImVec4 element_color_for_Z(int Z) {
+    // Periodic table group coloring
+    if (Z == 1)  return ImVec4(0.9f, 0.9f, 0.9f, 1.0f);   // hydrogen — white
+    if (Z == 2)  return ImVec4(0.6f, 1.0f, 1.0f, 1.0f);    // helium — cyan
+    // Alkali metals (Li, Na, K, Rb, Cs, Fr)
+    if (Z==3||Z==11||Z==19||Z==37||Z==55||Z==87)
+        return ImVec4(0.7f, 0.3f, 0.9f, 1.0f);   // violet
+    // Alkaline earth (Be, Mg, Ca, Sr, Ba, Ra)
+    if (Z==4||Z==12||Z==20||Z==38||Z==56||Z==88)
+        return ImVec4(0.3f, 0.8f, 0.3f, 1.0f);    // green
+    // Noble gases (Ne, Ar, Kr, Xe, Rn, Og)
+    if (Z==10||Z==18||Z==36||Z==54||Z==86||Z==118)
+        return ImVec4(0.4f, 0.9f, 0.9f, 1.0f);    // cyan
+    // Halogens (F, Cl, Br, I, At, Ts)
+    if (Z==9||Z==17||Z==35||Z==53||Z==85||Z==117)
+        return ImVec4(0.4f, 0.9f, 0.5f, 1.0f);    // green-cyan
+    // Carbon group
+    if (Z==6) return ImVec4(0.5f, 0.5f, 0.5f, 1.0f);      // dark grey
+    if (Z==7) return ImVec4(0.2f, 0.3f, 0.9f, 1.0f);      // nitrogen — blue
+    if (Z==8) return ImVec4(0.9f, 0.2f, 0.2f, 1.0f);      // oxygen — red
+    if (Z==15) return ImVec4(0.9f, 0.5f, 0.1f, 1.0f);     // phosphorus — orange
+    if (Z==16) return ImVec4(0.9f, 0.8f, 0.2f, 1.0f);     // sulfur — yellow
+    // Transition metals
+    if ((Z>=21&&Z<=30)||(Z>=39&&Z<=48)||(Z>=72&&Z<=80)||(Z>=104&&Z<=112))
+        return ImVec4(0.9f, 0.6f, 0.3f, 1.0f);    // orange
+    // Lanthanides
+    if (Z>=57&&Z<=71) return ImVec4(0.6f, 0.8f, 0.5f, 1.0f);  // sage
+    // Actinides
+    if (Z>=89&&Z<=103) return ImVec4(0.7f, 0.5f, 0.7f, 1.0f); // mauve
+    // Post-transition metals, metalloids
+    if (Z==13||Z==31||Z==49||Z==50||Z==81||Z==82||Z==83||Z==84||Z==113||Z==114||Z==115||Z==116)
+        return ImVec4(0.6f, 0.7f, 0.7f, 1.0f);    // grey-blue
+    // Metalloids
+    if (Z==5||Z==14||Z==32||Z==33||Z==34||Z==51||Z==52)
+        return ImVec4(0.7f, 0.7f, 0.5f, 1.0f);    // khaki
+    return ImVec4(0.6f, 0.6f, 0.7f, 1.0f);         // default grey
+}
+
+void PhysicsInterface::draw_element_bestiary() {
+    if (!show_element_bestiary) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    float win_w = 960.0f;
+    float max_h = io.DisplaySize.y - 80.0f;
+
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
+                                    io.DisplaySize.y * 0.5f - max_h * 0.4f),
+                            ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(win_w, max_h * 0.75f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(600, 300), ImVec2(1200, max_h));
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.03f, 0.04f, 0.07f, 0.96f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.05f, 0.06f, 0.10f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.08f, 0.09f, 0.16f, 0.95f));
+
+    int active_elements = 0, discovered_elements = 0;
+    for (int z = 1; z <= FULL_ELEMENT_COUNT; ++z) {
+        if (element_stats[z].current_count > 0) active_elements++;
+        if (element_stats[z].total_spawned > 0) discovered_elements++;
+    }
+
+    char title[96];
+    snprintf(title, sizeof(title), "Element Bestiary (%d/%d discovered)###ElemBestiary",
+             discovered_elements, FULL_ELEMENT_COUNT);
+
+    if (!ImGui::Begin(title, &show_element_bestiary)) {
+        ImGui::End();
+        ImGui::PopStyleColor(3);
+        return;
+    }
+
+    const float cell_w = 88.0f;
+    const float cell_h = 105.0f;
+    const float padding = 3.0f;
+    float avail_w = ImGui::GetContentRegionAvail().x;
+    int cols = std::max(1, static_cast<int>(avail_w / (cell_w + padding)));
+
+    ImGui::BeginChild("##ElemBestiaryScroll", ImVec2(0, 0), false);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    int col = 0;
+
+    for (int Z = 1; Z <= FULL_ELEMENT_COUNT; ++Z) {
+        if (col > 0) ImGui::SameLine(0, padding);
+
+        ImVec2 cursor = ImGui::GetCursorScreenPos();
+        const auto& stats = element_stats[Z];
+        ImVec4 ecol = element_color_for_Z(Z);
+        bool active = (stats.current_count > 0);
+        bool discovered = (stats.total_spawned > 0);
+        float alpha = active ? 1.0f : (discovered ? 0.6f : 0.25f);
+
+        ImVec2 cell_min = cursor;
+        ImVec2 cell_max = ImVec2(cursor.x + cell_w, cursor.y + cell_h);
+
+        // Cell background
+        dl->AddRectFilled(cell_min, cell_max,
+                          ImGui::ColorConvertFloat4ToU32(ImVec4(0.07f, 0.07f, 0.11f, alpha * 0.6f)),
+                          3.0f);
+        if (active) {
+            dl->AddRect(cell_min, cell_max,
+                        ImGui::ColorConvertFloat4ToU32(ImVec4(ecol.x * 0.6f, ecol.y * 0.6f, ecol.z * 0.6f, 0.7f)),
+                        3.0f, 0, 1.5f);
+        }
+
+        // Invisible button for hover
+        char iid[16];
+        snprintf(iid, sizeof(iid), "##ez%d", Z);
+        ImGui::InvisibleButton(iid, ImVec2(cell_w, cell_h));
+        bool hovered = ImGui::IsItemHovered();
+
+        // Z number (top-left, small)
+        char zbuf[8];
+        snprintf(zbuf, sizeof(zbuf), "%d", Z);
+        dl->AddText(ImVec2(cell_min.x + 3.0f, cell_min.y + 2.0f),
+                    ImGui::ColorConvertFloat4ToU32(ImVec4(0.4f, 0.4f, 0.5f, alpha)), zbuf);
+
+        // Element symbol (large, centered, colored)
+        {
+            const char* sym = ELEMENT_SYMBOLS[Z];
+            ImVec2 sz = ImGui::CalcTextSize(sym);
+            dl->AddText(ImVec2(cell_min.x + (cell_w - sz.x) * 0.5f, cell_min.y + 14.0f),
+                        ImGui::ColorConvertFloat4ToU32(ImVec4(ecol.x, ecol.y, ecol.z, alpha)),
+                        sym);
+        }
+
+        // Element name (dim, centered)
+        {
+            const char* name = ELEMENT_NAMES[Z];
+            ImVec2 sz = ImGui::CalcTextSize(name);
+            float nx = cell_min.x + (cell_w - sz.x) * 0.5f;
+            if (sz.x > cell_w - 4.0f) nx = cell_min.x + 2.0f;
+            dl->AddText(ImVec2(nx, cell_min.y + 32.0f),
+                        ImGui::ColorConvertFloat4ToU32(ImVec4(0.5f, 0.5f, 0.6f, alpha * 0.8f)),
+                        name);
+        }
+
+        // Stats
+        ImU32 stat_col = ImGui::ColorConvertFloat4ToU32(ImVec4(0.5f, 0.5f, 0.6f, alpha));
+        char buf[48];
+
+        if (active || discovered) {
+            snprintf(buf, sizeof(buf), "Count: %u", stats.current_count);
+            ImU32 cc = active
+                ? ImGui::ColorConvertFloat4ToU32(ImVec4(0.8f, 0.9f, 0.8f, 1.0f))
+                : stat_col;
+            dl->AddText(ImVec2(cell_min.x + 3.0f, cell_min.y + 50.0f), cc, buf);
+
+            snprintf(buf, sizeof(buf), "Total: %u", stats.total_spawned);
+            dl->AddText(ImVec2(cell_min.x + 3.0f, cell_min.y + 64.0f), stat_col, buf);
+
+            if (stats.lifetime_count > 0) {
+                double avg_life = stats.lifetime_sum / stats.lifetime_count;
+                float fps = (fps_display > 1.0f) ? fps_display : 60.0f;
+                double avg_sec = avg_life / fps;
+                char time_buf[24];
+                if (avg_sec < 0.001)        snprintf(time_buf, sizeof(time_buf), "%.0f us", avg_sec * 1e6);
+                else if (avg_sec < 1.0)     snprintf(time_buf, sizeof(time_buf), "%.0f ms", avg_sec * 1000.0);
+                else if (avg_sec < 60.0)    snprintf(time_buf, sizeof(time_buf), "%.1fs", avg_sec);
+                else                        snprintf(time_buf, sizeof(time_buf), "%.1fm", avg_sec / 60.0);
+                snprintf(buf, sizeof(buf), "Life: %.0ff (%s)", avg_life, time_buf);
+            } else {
+                snprintf(buf, sizeof(buf), "Peak: %u", stats.peak_count);
+            }
+            dl->AddText(ImVec2(cell_min.x + 3.0f, cell_min.y + 78.0f), stat_col, buf);
+        }
+
+        // Tooltip
+        if (hovered) {
+            ImGui::BeginTooltip();
+            ImGui::TextColored(ecol, "%s (%s) — Z=%d", ELEMENT_NAMES[Z], ELEMENT_SYMBOLS[Z], Z);
+            ImGui::Separator();
+            ImGui::Text("Current: %u", stats.current_count);
+            ImGui::Text("Total spawned: %u", stats.total_spawned);
+            ImGui::Text("Peak: %u", stats.peak_count);
+            if (stats.lifetime_count > 0) {
+                double avg_life = stats.lifetime_sum / stats.lifetime_count;
+                float fps = (fps_display > 1.0f) ? fps_display : 60.0f;
+                double avg_sec = avg_life / fps;
+                if (avg_sec < 1.0)
+                    ImGui::Text("Avg lifetime: %.0f frames (%.0f ms)", avg_life, avg_sec * 1000.0);
+                else
+                    ImGui::Text("Avg lifetime: %.0f frames (%.1f s)", avg_life, avg_sec);
+            }
+            if (stats.current_count > 0)
+                ImGui::Text("Avg energy: %.2f MeV", stats.energy_sum / stats.current_count);
+            ImGui::EndTooltip();
+        }
+
+        col++;
+        if (col >= cols) col = 0;
+    }
+
+    ImGui::EndChild();
+    ImGui::End();
+    ImGui::PopStyleColor(3);
+}
+
+// ── Molecule Bestiary Window ────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::draw_molecule_bestiary() {
+    if (!show_molecule_bestiary) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    float win_w = 740.0f;
+    float max_h = io.DisplaySize.y - 80.0f;
+
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
+                                    io.DisplaySize.y * 0.5f - max_h * 0.4f),
+                            ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(win_w, max_h * 0.65f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(500, 200), ImVec2(1000, max_h));
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.03f, 0.05f, 0.06f, 0.96f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.04f, 0.07f, 0.09f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.07f, 0.11f, 0.15f, 0.95f));
+
+    char title[64];
+    snprintf(title, sizeof(title), "Molecule Bestiary (%d discovered)###MolBestiary",
+             static_cast<int>(molecule_bestiary.size()));
+
+    if (!ImGui::Begin(title, &show_molecule_bestiary)) {
+        ImGui::End();
+        ImGui::PopStyleColor(3);
+        return;
+    }
+
+    if (molecule_bestiary.empty()) {
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+        const char* msg = "No molecules discovered yet";
+        ImVec2 sz = ImGui::CalcTextSize(msg);
+        ImGui::SetCursorPos(ImVec2((avail.x - sz.x) * 0.5f, avail.y * 0.4f));
+        ImGui::TextColored(ImVec4(0.4f, 0.4f, 0.5f, 1.0f), "%s", msg);
+        const char* hint = "Create bonds between atoms to discover molecules";
+        ImVec2 hsz = ImGui::CalcTextSize(hint);
+        ImGui::SetCursorPosX((avail.x - hsz.x) * 0.5f);
+        ImGui::TextColored(ImVec4(0.3f, 0.3f, 0.4f, 1.0f), "%s", hint);
+        ImGui::End();
+        ImGui::PopStyleColor(3);
+        return;
+    }
+
+    // Sort by times_seen descending for display
+    std::vector<size_t> sorted_idx(molecule_bestiary.size());
+    for (size_t i = 0; i < sorted_idx.size(); ++i) sorted_idx[i] = i;
+    std::sort(sorted_idx.begin(), sorted_idx.end(), [&](size_t a, size_t b) {
+        return molecule_bestiary[a].times_seen > molecule_bestiary[b].times_seen;
+    });
+
+    const float cell_w = 120.0f;
+    const float cell_h = 95.0f;
+    const float padding = 4.0f;
+    float avail_w = ImGui::GetContentRegionAvail().x;
+    int cols = std::max(1, static_cast<int>(avail_w / (cell_w + padding)));
+
+    ImGui::BeginChild("##MolBestiaryScroll", ImVec2(0, 0), false);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    int col = 0;
+
+    for (size_t si = 0; si < sorted_idx.size(); ++si) {
+        const auto& entry = molecule_bestiary[sorted_idx[si]];
+        if (col > 0) ImGui::SameLine(0, padding);
+
+        ImVec2 cursor = ImGui::GetCursorScreenPos();
+        ImVec2 cell_min = cursor;
+        ImVec2 cell_max = ImVec2(cursor.x + cell_w, cursor.y + cell_h);
+
+        // Cell background
+        dl->AddRectFilled(cell_min, cell_max,
+                          ImGui::ColorConvertFloat4ToU32(ImVec4(0.06f, 0.08f, 0.10f, 0.7f)),
+                          3.0f);
+        dl->AddRect(cell_min, cell_max,
+                    ImGui::ColorConvertFloat4ToU32(ImVec4(0.2f, 0.3f, 0.4f, 0.4f)),
+                    3.0f, 0, 1.0f);
+
+        char iid[32];
+        snprintf(iid, sizeof(iid), "##mb%zu", si);
+        ImGui::InvisibleButton(iid, ImVec2(cell_w, cell_h));
+        bool hovered = ImGui::IsItemHovered();
+
+        // Formula (large, colored)
+        {
+            ImVec4 fcol(0.6f, 0.9f, 1.0f, 1.0f);
+            ImVec2 sz = ImGui::CalcTextSize(entry.formula.c_str());
+            float fx = cell_min.x + (cell_w - sz.x) * 0.5f;
+            dl->AddText(ImVec2(fx, cell_min.y + 6.0f),
+                        ImGui::ColorConvertFloat4ToU32(fcol),
+                        entry.formula.c_str());
+        }
+
+        // Name (if known)
+        if (!entry.name.empty()) {
+            ImVec2 sz = ImGui::CalcTextSize(entry.name.c_str());
+            float nx = cell_min.x + (cell_w - sz.x) * 0.5f;
+            if (sz.x > cell_w - 4.0f) nx = cell_min.x + 2.0f;
+            dl->AddText(ImVec2(nx, cell_min.y + 24.0f),
+                        ImGui::ColorConvertFloat4ToU32(ImVec4(0.8f, 0.8f, 0.6f, 0.9f)),
+                        entry.name.c_str());
+        }
+
+        // Stats
+        float sy = entry.name.empty() ? (cell_min.y + 28.0f) : (cell_min.y + 42.0f);
+        ImU32 stat_col = ImGui::ColorConvertFloat4ToU32(ImVec4(0.5f, 0.5f, 0.6f, 1.0f));
+        char buf[48];
+
+        snprintf(buf, sizeof(buf), "Seen: %u", entry.times_seen);
+        dl->AddText(ImVec2(cell_min.x + 4.0f, sy), stat_col, buf);
+
+        snprintf(buf, sizeof(buf), "Atoms: %u", entry.atom_count);
+        dl->AddText(ImVec2(cell_min.x + 4.0f, sy + 14.0f), stat_col, buf);
+
+        if (entry.first_seen_time > 0) {
+            auto t = static_cast<time_t>(entry.first_seen_time);
+            auto* tm = std::localtime(&t);
+            char ts[24];
+            std::strftime(ts, sizeof(ts), "%m/%d %H:%M", tm);
+            dl->AddText(ImVec2(cell_min.x + 4.0f, sy + 28.0f),
+                        ImGui::ColorConvertFloat4ToU32(ImVec4(0.4f, 0.4f, 0.5f, 0.8f)), ts);
+        }
+
+        // Tooltip
+        if (hovered) {
+            ImGui::BeginTooltip();
+            ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "%s", entry.formula.c_str());
+            if (!entry.name.empty())
+                ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.6f, 1.0f), "%s", entry.name.c_str());
+            ImGui::Separator();
+            ImGui::Text("Times seen: %u", entry.times_seen);
+            ImGui::Text("Atoms: %u", entry.atom_count);
+            if (entry.first_seen_time > 0) {
+                auto t = static_cast<time_t>(entry.first_seen_time);
+                auto* tm = std::localtime(&t);
+                char ts[48];
+                std::strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm);
+                ImGui::Text("Discovered: %s", ts);
+            }
+            ImGui::Text("Session: %u", entry.first_seen_session);
+            ImGui::EndTooltip();
+        }
+
+        col++;
+        if (col >= cols) col = 0;
+    }
+
+    ImGui::EndChild();
+    ImGui::End();
+    ImGui::PopStyleColor(3);
+}
+
 void PhysicsInterface::draw_notifications() {
     if (notifications.empty()) return;
     // Don't draw toasts when the event log is already visible
@@ -6518,14 +7224,20 @@ void PhysicsInterface::draw_force_object_panel(ForceObject* objects) {
 
     ForceObject& obj = objects[idx];
 
-    static const char* fo_type_names[] = { "EM Field", "Strong Force", "Weak Force", "Gravity Well", "Heat Source", "Mirror" };
+    static const char* fo_type_names[] = {
+        "EM Field", "Strong Force", "Weak Force", "Gravity Well", "Heat Source",
+        "Mirror", "Coulomb Source", "Vortex", "Potential Well"
+    };
     static const ImVec4 fo_type_colors[] = {
-        ImVec4(0.3f, 0.5f, 1.0f, 1.0f),
-        ImVec4(0.3f, 0.9f, 0.4f, 1.0f),
-        ImVec4(0.7f, 0.3f, 0.9f, 1.0f),
-        ImVec4(0.9f, 0.7f, 0.2f, 1.0f),
-        ImVec4(1.0f, 0.4f, 0.2f, 1.0f),
-        ImVec4(0.7f, 0.7f, 0.8f, 1.0f),
+        ImVec4(0.3f, 0.5f, 1.0f, 1.0f),   // EM
+        ImVec4(0.3f, 0.9f, 0.4f, 1.0f),   // Strong
+        ImVec4(0.7f, 0.3f, 0.9f, 1.0f),   // Weak
+        ImVec4(0.9f, 0.7f, 0.2f, 1.0f),   // Gravity
+        ImVec4(1.0f, 0.4f, 0.2f, 1.0f),   // Heat
+        ImVec4(0.7f, 0.7f, 0.8f, 1.0f),   // Mirror
+        ImVec4(0.9f, 0.3f, 0.3f, 1.0f),   // Coulomb
+        ImVec4(0.2f, 0.8f, 0.9f, 1.0f),   // Vortex
+        ImVec4(0.9f, 0.9f, 0.2f, 1.0f),   // Well
     };
 
     const char* type_name = (obj.force_type < FORCE_OBJ_COUNT) ? fo_type_names[obj.force_type] : "Unknown";

@@ -4,6 +4,7 @@
 #include "particles.h"
 #include <glm/glm.hpp>
 #include <cstdint>
+#include <string>
 
 // ── Sub-atomic particle type indices (within the shared MAX_PARTICLE_TYPES=36 space) ─
 
@@ -484,6 +485,116 @@ inline const char* element_symbol(int Z) {
     };
     if (Z < 0 || Z >= static_cast<int>(sizeof(SYM)/sizeof(SYM[0]))) return "?";
     return SYM[Z];
+}
+
+// Full element name lookup (Z=0..118)
+inline const char* element_name(int Z) {
+    static const char* const NAMES[] = {
+        "?",
+        "Hydrogen","Helium","Lithium","Beryllium","Boron",
+        "Carbon","Nitrogen","Oxygen","Fluorine","Neon",
+        "Sodium","Magnesium","Aluminium","Silicon","Phosphorus",
+        "Sulfur","Chlorine","Argon","Potassium","Calcium",
+        "Scandium","Titanium","Vanadium","Chromium","Manganese",
+        "Iron","Cobalt","Nickel","Copper","Zinc",
+        "Gallium","Germanium","Arsenic","Selenium","Bromine",
+        "Krypton","Rubidium","Strontium","Yttrium","Zirconium",
+        "Niobium","Molybdenum","Technetium","Ruthenium","Rhodium",
+        "Palladium","Silver","Cadmium","Indium","Tin",
+        "Antimony","Tellurium","Iodine","Xenon","Cesium",
+        "Barium","Lanthanum","Cerium","Praseodymium","Neodymium",
+        "Promethium","Samarium","Europium","Gadolinium","Terbium",
+        "Dysprosium","Holmium","Erbium","Thulium","Ytterbium",
+        "Lutetium","Hafnium","Tantalum","Tungsten","Rhenium",
+        "Osmium","Iridium","Platinum","Gold","Mercury",
+        "Thallium","Lead","Bismuth","Polonium","Astatine",
+        "Radon","Francium","Radium","Actinium","Thorium",
+        "Protactinium","Uranium","Neptunium","Plutonium","Americium",
+        "Curium","Berkelium","Californium","Einsteinium","Fermium",
+        "Mendelevium","Nobelium","Lawrencium","Rutherfordium","Dubnium",
+        "Seaborgium","Bohrium","Hassium","Meitnerium","Darmstadtium",
+        "Roentgenium","Copernicium","Nihonium","Flerovium","Moscovium",
+        "Livermorium","Tennessine","Oganesson",
+    };
+    if (Z < 0 || Z >= static_cast<int>(sizeof(NAMES)/sizeof(NAMES[0]))) return "?";
+    return NAMES[Z];
+}
+
+// Dynamic molecule naming for binary compounds
+// components: vector of (Z, count) pairs
+inline std::string name_molecule_dynamic(const std::vector<std::pair<int,int>>& components) {
+    if (components.empty()) return "";
+
+    auto is_metal = [](int Z) -> bool {
+        if (Z==3||Z==11||Z==19||Z==37||Z==55||Z==87) return true;
+        if (Z==4||Z==12||Z==20||Z==38||Z==56||Z==88) return true;
+        if ((Z>=21&&Z<=30)||(Z>=39&&Z<=48)||(Z>=72&&Z<=80)||(Z>=104&&Z<=112)) return true;
+        if (Z==13||Z==31||Z==49||Z==50||Z==81||Z==82||Z==83||Z==84) return true;
+        if (Z>=57&&Z<=71) return true;
+        if (Z>=89&&Z<=103) return true;
+        return false;
+    };
+
+    auto ide_name = [](int Z) -> const char* {
+        switch (Z) {
+            case 1: return "Hydride";   case 5: return "Boride";
+            case 6: return "Carbide";   case 7: return "Nitride";
+            case 8: return "Oxide";     case 9: return "Fluoride";
+            case 14:return "Silicide";  case 15:return "Phosphide";
+            case 16:return "Sulfide";   case 17:return "Chloride";
+            case 33:return "Arsenide";  case 34:return "Selenide";
+            case 35:return "Bromide";   case 52:return "Telluride";
+            case 53:return "Iodide";    case 85:return "Astatide";
+            default: return nullptr;
+        }
+    };
+
+    auto prefix = [](int n) -> const char* {
+        switch (n) {
+            case 1: return "Mono"; case 2: return "Di";    case 3: return "Tri";
+            case 4: return "Tetra";case 5: return "Penta"; case 6: return "Hexa";
+            case 7: return "Hepta";case 8: return "Octa";  case 9: return "Nona";
+            case 10:return "Deca"; default: return nullptr;
+        }
+    };
+
+    // Monatomic homonuclear
+    if (components.size() == 1) {
+        int Z = components[0].first, n = components[0].second;
+        if (Z < 1 || Z > 118) return "";
+        if (n == 1) return element_name(Z);
+        const char* pfx = prefix(n);
+        if (!pfx) return "";
+        return std::string(pfx) + element_name(Z);
+    }
+
+    // Binary compounds
+    if (components.size() == 2) {
+        int Z1 = components[0].first, n1 = components[0].second;
+        int Z2 = components[1].first, n2 = components[1].second;
+        if (Z1 < 1 || Z1 > 118 || Z2 < 1 || Z2 > 118) return "";
+        const char* ide = ide_name(Z2);
+        if (!ide) return "";
+
+        if (is_metal(Z1)) {
+            std::string name = element_name(Z1);
+            name += " ";
+            if (n2 > 1) { const char* p = prefix(n2); if (p) name += p; }
+            name += ide;
+            return name;
+        }
+
+        std::string name;
+        if (n1 > 1) { const char* p = prefix(n1); if (p) name += p; }
+        name += element_name(Z1);
+        name += " ";
+        if (n2 > 1) { const char* p = prefix(n2); if (p) name += p; }
+        else name += "Mono";
+        name += ide;
+        return name;
+    }
+
+    return "";
 }
 
 // Populate a Particles object for the sub-atomic physics simulation.

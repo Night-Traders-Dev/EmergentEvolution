@@ -118,6 +118,8 @@ public:
     bool show_load_dialog = false;
     bool request_save = false;
     bool request_load = false;
+    bool request_undo = false;
+    bool request_redo = false;
     char save_load_message[256] = {};
     float save_load_msg_timer = 0.0f;
 
@@ -294,15 +296,50 @@ public:
     float    avg_energy_display       = 0.0f;
     uint32_t type_counts_display[MAX_PARTICLE_TYPES] = {};
 
+    // Per-type simulation statistics (accumulated across simulation lifetime)
+    struct ParticleTypeStats {
+        uint32_t total_spawned = 0;     // cumulative ever existed
+        uint32_t peak_count = 0;        // highest simultaneous count
+        double   lifetime_sum = 0.0;    // sum of lifetimes (frames) of dead particles
+        uint32_t lifetime_count = 0;    // number that have died
+        double   energy_sum = 0.0;      // sum of current energies (living)
+        double   speed_sum = 0.0;       // sum of current speeds (living)
+    };
+    ParticleTypeStats type_stats[MAX_PARTICLE_TYPES] = {};
+
+    // Per-element (Z=0..118) simulation stats — reset each simulation
+    struct ElementBestiaryStats {
+        uint32_t current_count = 0;
+        uint32_t total_spawned = 0;
+        uint32_t peak_count = 0;
+        double   lifetime_sum = 0.0;
+        uint32_t lifetime_count = 0;
+        double   energy_sum = 0.0;
+    };
+    ElementBestiaryStats element_stats[119] = {};
+
+    // Molecule bestiary — persists to disk across sessions
+    struct MoleculeBestiaryEntry {
+        std::string formula;
+        std::string name;
+        uint32_t times_seen = 0;
+        uint32_t atom_count = 0;
+        uint32_t first_seen_session = 0;
+        int64_t  first_seen_time = 0;       // unix timestamp (time_t)
+    };
+    std::vector<MoleculeBestiaryEntry> molecule_bestiary;
+    uint32_t molecule_bestiary_session = 0;
+
     // Wave-particle duality
     bool  wave_mode = false;
 
-    // Field visualization (5 independent toggles)
-    bool  field_em      = false;
-    bool  field_strong  = false;
-    bool  field_weak    = false;
-    bool  field_gravity = false;
-    bool  field_higgs   = false;
+    // Field visualization (6 independent toggles)
+    bool  field_em          = false;
+    bool  field_strong      = false;
+    bool  field_weak        = false;
+    bool  field_gravity     = false;
+    bool  field_higgs       = false;
+    bool  field_dark_energy = false;
     float field_intensity = 0.5f;
     bool  show_collision_radii = false;
     bool  hide_virtual_trails  = false;
@@ -361,6 +398,9 @@ public:
 
     // Particle list (all active particles, populated each tick)
     bool show_particle_list = false;
+    bool show_particle_bestiary = false;
+    bool show_element_bestiary = false;
+    bool show_molecule_bestiary = false;
     bool particle_type_filter[MAX_PARTICLE_TYPES] = {}; // all true by default (initialized in init())
 
     // Element list filter
@@ -454,6 +494,8 @@ public:
     void render_imgui(SimConfig& cfg, Particles& particles, ForceObject* force_objects, bool& request_reset);
     void save_prefs();
     void load_prefs();
+    void save_molecule_bestiary();
+    void load_molecule_bestiary();
     void set_vk_ctx(VulkanContext* ctx) { vk_ctx_ = ctx; }
 
 private:
@@ -479,6 +521,9 @@ private:
     void draw_settings_menu();
     void draw_achievements_panel();
     void draw_decay_log();
+    void draw_particle_bestiary();
+    void draw_element_bestiary();
+    void draw_molecule_bestiary();
     void draw_nuclear_debug(SimConfig& cfg);
     void draw_measurement_overlays(const SimConfig& cfg);
     void draw_energy_heatmap(const SimConfig& cfg);

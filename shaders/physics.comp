@@ -714,11 +714,38 @@ void apply_physics(uint i) {
         bool dm_b = (flags_b & BEHAVIOR_DARK_MATTER) != 0u;
         bool dm_interaction = dm_a || dm_b;
 
-        // Dark energy: universal repulsion
-        if ((flags_a & BEHAVIOR_DARK_ENERGY) != 0u || (flags_b & BEHAVIOR_DARK_ENERGY) != 0u) {
-            // Cosmological-constant-like repulsion: grows with distance
-            float de_force = 0.5 * dist / (MAX_RADIUS + 1.0);
-            total_force -= normal * de_force * params.dt;
+        // ── Dark energy: cosmological-constant-like universal repulsion ────────
+        // Lambda-CDM: effective repulsive acceleration a = (Λ/3)·r, so F = m·(Λ/3)·r
+        // Force grows linearly with distance (opposite of gravity).
+        // Dark energy does NOT interact via EM, strong, or weak forces.
+        bool de_a = (flags_a & BEHAVIOR_DARK_ENERGY) != 0u;
+        bool de_b = (flags_b & BEHAVIOR_DARK_ENERGY) != 0u;
+        if (de_a || de_b) {
+            // Base cosmological constant: F = Λ_eff · m · r
+            float lambda_eff = 0.8 / (MAX_RADIUS + 1.0);
+            float de_force = lambda_eff * mass * dist;
+
+            // Inflaton: drives exponential inflation (much stronger than late-time DE)
+            // de Sitter expansion: a ∝ H²·r with H_inflation >> H_0
+            if (type_a == INFLATON_TYPE || type_b == INFLATON_TYPE) {
+                de_force *= 20.0;  // inflationary era ~10^50× stronger; capped for sim
+            }
+
+            // Chameleon scalar field: environment-dependent screening
+            // In dense matter (short-range pairs), the chameleon mass increases
+            // and the force is exponentially suppressed (thin-shell effect).
+            // In vacuum (long-range pairs), full DE repulsion applies.
+            if (type_a == CHAMELEON_TYPE || type_b == CHAMELEON_TYPE) {
+                // Screening factor: suppressed when pair partner is massive and close
+                float partner_mass = de_a ? (1.0 / max(get_mass_inv(type_b), 0.001))
+                                          : (1.0 / max(mass_inv_a, 0.001));
+                float screen_range = 30.0;  // screening kicks in within this distance
+                float density_proxy = partner_mass * exp(-dist / screen_range);
+                float screening = 1.0 / (1.0 + density_proxy * 0.01);  // 0→1: screened→free
+                de_force *= screening;
+            }
+
+            total_force -= normal * de_force;
             continue;  // dark energy doesn't participate in other forces
         }
 
@@ -1181,12 +1208,18 @@ void apply_physics(uint i) {
         vec2  fo_normal      = fo_delta * inv_fo_dist;
 
         if (fo_type == 0u) {
-            // EM FIELD: magnetic field region (Lorentz force, perpendicular to velocity)
-            // B-field points out of 2D plane, smooth quadratic falloff from center
-            // F = q(v×B) — does zero work, only curves trajectory (conserves speed)
+            // EM FIELD: electric (Coulomb) + magnetic (Lorentz) on charged particles
+            // E-field: radial, F = qE/r² — does work, accelerates/decelerates
+            // B-field: perpendicular, F = q(v×B) — no work, only deflects
             if (abs(charge_a) > 0.01) {
                 float fo_t = fo_dist / fo_radius;
                 float falloff = max(0.0, 1.0 - fo_t * fo_t);  // smooth quadratic
+
+                // Electric component: Coulomb-like radial force
+                float E_r = fo_str * 500.0 * falloff / (fo_dist_sq + 4.0);
+                total_force += charge_a * E_r * fo_normal;
+
+                // Magnetic component: Lorentz deflection
                 float B_z = fo_str * falloff;
                 total_force += charge_a * B_z * vec2(vel_a.y, -vel_a.x);
             }
@@ -1226,6 +1259,30 @@ void apply_physics(uint i) {
             vec2  heat_dir = vec2(cos(heat_angle), sin(heat_angle));
             // Apply as force (will be integrated via relativistic momentum update)
             total_force += heat_dir * fo_str * 3.0 * falloff * mass;
+        }
+        else if (fo_type == 6u) {
+            // COULOMB SOURCE: pure electrostatic point charge
+            // F = kqQ/r² radially — positive strength = positive charge
+            // (repels same-sign, attracts opposite-sign charged particles)
+            if (abs(charge_a) > 0.01) {
+                float E_coulomb = fo_str * 800.0 / (fo_dist_sq + 4.0);
+                total_force += charge_a * E_coulomb * fo_normal;
+            }
+        }
+        else if (fo_type == 7u) {
+            // VORTEX: tangential force creating circular motion (cyclotron)
+            // F ∝ mass/r toward tangent direction — heavier particles orbit wider
+            // Positive strength = counterclockwise, negative = clockwise
+            vec2 tangent = vec2(-fo_normal.y, fo_normal.x);
+            float vortex_F = fo_str * mass * 50.0 / (fo_dist + 5.0);
+            total_force += tangent * vortex_F;
+        }
+        else if (fo_type == 8u) {
+            // POTENTIAL WELL: harmonic trap F = -k*r (restoring force)
+            // All particles attracted toward center proportional to displacement
+            // Creates oscillatory motion — useful as a particle trap
+            float spring_F = fo_str * mass * 8.0 * fo_dist / fo_radius;
+            total_force += fo_normal * spring_F;
         }
     }
 
@@ -1303,9 +1360,15 @@ void apply_physics(uint i) {
         momentum += total_force * params.dt;
 
         // Viscosity damping on momentum (radiation/medium losses)
+        // Bethe-Bloch MIP effect: high-energy particles penetrate with less
+        // energy loss — dE/dx ∝ 1/β² at low speed, minimum at βγ≈3-4.
+        // Scale damping loss inversely with γ so relativistic particles
+        // pass through dense regions without artificial deceleration.
         float viscosity_factor = clamp(local_density * params.viscosity_strength, 0.0, 0.9);
         float effective_damp = params.dampening * (1.0 - viscosity_factor);
-        momentum *= clamp(effective_damp, 0.0, 0.99);
+        float damp_loss = 1.0 - clamp(effective_damp, 0.0, 0.99);
+        damp_loss /= max(gamma, 1.0);
+        momentum *= (1.0 - damp_loss);
 
         // Thermal noise as momentum impulse (equipartition: δp ∝ √m)
         if (params.temperature > 0.001) {
@@ -1432,6 +1495,12 @@ void render_force_object(uint fo_idx) {
         aura_color = vec3(0.6, 0.2, 0.9);   core_color = vec3(0.7, 0.3, 1.0);   // Weak: purple
     } else if (fo_type == 3u) {
         aura_color = vec3(0.8, 0.5, 0.2);   core_color = vec3(0.9, 0.6, 0.3);   // Gravity: amber
+    } else if (fo_type == 6u) {
+        aura_color = vec3(0.9, 0.3, 0.3);   core_color = vec3(1.0, 0.4, 0.3);   // Coulomb: red
+    } else if (fo_type == 7u) {
+        aura_color = vec3(0.2, 0.8, 0.9);   core_color = vec3(0.3, 0.9, 1.0);   // Vortex: cyan
+    } else if (fo_type == 8u) {
+        aura_color = vec3(0.9, 0.9, 0.2);   core_color = vec3(1.0, 1.0, 0.3);   // Well: yellow
     } else {
         aura_color = vec3(1.0, 0.3, 0.1);   core_color = vec3(1.0, 0.5, 0.2);   // Heat: red-orange
     }
@@ -1939,7 +2008,123 @@ const float FIELD_MAX_WORLD_RADIUS = 60.0;
 const float FIELD_MAX_SCREEN_RADIUS = 60.0;
 const float FIELD_SCALE = 0.00025;
 
+// ── Force object field visualization ─────────────────────────────────────────
+// Renders force object contributions to the field overlay so they appear
+// alongside particle fields when the corresponding visualization is enabled.
+void render_force_object_field(uint fo_idx, uint fflags) {
+    if (force_objects.data[fo_idx].is_active == 0u) return;
+    uint  fo_type   = force_objects.data[fo_idx].force_type;
+    float fo_str    = force_objects.data[fo_idx].strength;
+    float fo_radius = force_objects.data[fo_idx].radius;
+    vec2  fo_pos    = vec2(force_objects.data[fo_idx].x, force_objects.data[fo_idx].y);
+    if (fo_type == 5u) return;  // mirror — no field
+
+    // Determine which field flags this force object contributes to
+    bool show_em     = (fflags & 1u) != 0u;
+    bool show_strong = (fflags & 2u) != 0u;
+    bool show_weak   = (fflags & 4u) != 0u;
+    bool show_grav   = (fflags & 8u) != 0u;
+
+    // Only render if the corresponding field visualization is enabled
+    bool contributes = false;
+    if (show_em     && (fo_type == 0u || fo_type == 6u)) contributes = true;
+    if (show_strong && fo_type == 1u) contributes = true;
+    if (show_weak   && fo_type == 2u) contributes = true;
+    if (show_grav   && (fo_type == 3u || fo_type == 8u)) contributes = true;
+    if (!contributes) return;
+
+    float intensity = params.local_density_cap;
+    float scale = FIELD_SCALE * intensity * 4.0;  // force objects are brighter sources
+
+    vec2 screen_center = params.region_size * 0.5;
+    vec2 center = screen_center + (fo_pos - params.camera_origin) * params.camera_zoom;
+
+    float screen_range = min(fo_radius * params.camera_zoom, FIELD_MAX_SCREEN_RADIUS * 2.0);
+    int range = int(ceil(screen_range));
+
+    if (center.x + float(range) < 0.0 || center.x - float(range) > params.region_size.x) return;
+    if (center.y + float(range) < 0.0 || center.y - float(range) > params.region_size.y) return;
+
+    for (int x = -range; x <= range; x++) {
+        for (int y = -range; y <= range; y++) {
+            ivec2 pixel = ivec2(floor(center)) + ivec2(x, y);
+            if (pixel.x < 0 || pixel.x >= int(params.region_size.x)) continue;
+            if (pixel.y < 0 || pixel.y >= int(params.region_size.y)) continue;
+
+            float screen_dist = length(vec2(x, y));
+            if (screen_dist > screen_range) continue;
+
+            float world_dist = max(screen_dist / params.camera_zoom, 1.0);
+            float fo_t = world_dist / fo_radius;
+            if (fo_t > 1.0) continue;
+
+            vec3 field_color = vec3(0.0);
+
+            if (fo_type == 0u && show_em) {
+                // EM field: Coulomb potential pattern (red positive / blue negative)
+                float phi = fo_str / (world_dist * world_dist + 4.0);
+                float viz_K = 12000.0;
+                if (phi > 0.0)
+                    field_color += vec3(phi * 1.0, phi * 0.25, phi * 0.03) * viz_K;
+                else
+                    field_color += vec3(-phi * 0.03, -phi * 0.35, -phi * 1.0) * viz_K;
+            }
+            else if (fo_type == 6u && show_em) {
+                // Coulomb source: same Coulomb pattern, stronger point-charge look
+                float phi = fo_str / (world_dist * world_dist + 2.0);
+                float viz_K = 15000.0;
+                if (phi > 0.0)
+                    field_color += vec3(phi * 1.0, phi * 0.25, phi * 0.03) * viz_K;
+                else
+                    field_color += vec3(-phi * 0.03, -phi * 0.35, -phi * 1.0) * viz_K;
+            }
+            else if (fo_type == 1u && show_strong) {
+                // Strong: Yukawa potential
+                float yukawa = exp(-world_dist / (YUKAWA_RANGE * 3.0)) / max(world_dist, 0.5);
+                field_color += vec3(yukawa * 0.08, yukawa * 0.6, yukawa * 0.35)
+                             * YUKAWA_COUPLING * abs(fo_str) * 3.0;
+            }
+            else if (fo_type == 2u && show_weak) {
+                // Weak: short-range exponential
+                float weak_V = abs(fo_str) * exp(-world_dist / 5.0);
+                field_color += vec3(weak_V * 0.5, weak_V * 0.1, weak_V * 0.9) * 1200.0;
+            }
+            else if (fo_type == 3u && show_grav) {
+                // Gravity well: 1/r² potential
+                float grav_phi = abs(fo_str) / (world_dist * world_dist + 4.0);
+                field_color += vec3(grav_phi * 0.2, grav_phi * 0.25, grav_phi * 0.5) * 800.0;
+            }
+            else if (fo_type == 8u && show_grav) {
+                // Potential well: harmonic potential (shows under gravity viz)
+                float harm_phi = abs(fo_str) * world_dist / fo_radius;
+                float falloff = 1.0 - fo_t;
+                field_color += vec3(harm_phi * 0.3, harm_phi * 0.3, harm_phi * 0.1)
+                             * falloff * 400.0;
+            }
+
+            field_color *= scale;
+
+            vec4 existing = imageLoad(out_render_texture, pixel);
+            imageStore(out_render_texture, pixel,
+                       vec4(min(existing.rgb + field_color, vec3(1.0)), 1.0));
+        }
+    }
+}
+
 void render_field(uint i) {
+    // Render force object fields (first N threads handle force objects)
+    if (i < params.force_object_count) {
+        uint fo_fflags = params.field_flags;
+        if (fo_fflags == 0u) {
+            float fm = params.density_limit;
+            if (fm > 0.5 && fm < 1.5) fo_fflags = 1u;
+            else if (fm > 1.5 && fm < 2.5) fo_fflags = 2u;
+            else if (fm > 2.5 && fm < 3.5) fo_fflags = 3u;
+        }
+        if (fo_fflags != 0u)
+            render_force_object_field(i, fo_fflags);
+    }
+
     vec2  pos    = in_pos_buffer.data[i];
     uint  type   = type_buffer.data[i];
     float energy = in_energy_buffer.data[i];
@@ -1964,6 +2149,7 @@ void render_field(uint i) {
     bool show_weak   = (fflags & 4u) != 0u;
     bool show_grav   = (fflags & 8u) != 0u;
     bool show_higgs  = (fflags & 16u) != 0u;
+    bool show_de     = (fflags & (1u << 12)) != 0u;
 
     float charge     = get_charge(i);
     bool has_charge  = abs(charge) > 0.01;
@@ -1971,6 +2157,7 @@ void render_field(uint i) {
     bool is_colored_p = is_colored(flags);
     bool is_weak_b   = (flags & BEHAVIOR_WEAK_BOSON) != 0u;
     bool is_massive  = get_mass_inv(type) < 10.0;
+    bool is_de       = (flags & BEHAVIOR_DARK_ENERGY) != 0u;
 
     float intensity  = params.local_density_cap;
 
@@ -1981,6 +2168,7 @@ void render_field(uint i) {
     if (show_weak && (is_weak_b || is_massive)) contributes = true;  // all massive feel weak
     if (show_grav && is_massive) contributes = true;
     if (show_higgs && is_massive) contributes = true;
+    if (show_de && is_de) contributes = true;
     if (!contributes) return;
 
     vec2 screen_center = params.region_size * 0.5;
@@ -1992,6 +2180,7 @@ void render_field(uint i) {
     if (show_weak && (is_weak_b || is_massive)) world_range = max(world_range, 15.0);
     if (show_grav && is_massive) world_range = max(world_range, FIELD_MAX_WORLD_RADIUS);
     if (show_higgs && is_massive) world_range = max(world_range, 40.0);
+    if (show_de && is_de) world_range = max(world_range, FIELD_MAX_WORLD_RADIUS);
 
     float screen_range = min(world_range * params.camera_zoom, FIELD_MAX_SCREEN_RADIUS);
     int range = int(ceil(screen_range));
@@ -2061,6 +2250,22 @@ void render_field(uint i) {
                 float mass = get_mass(type);
                 float higgs_d = mass * exp(-world_dist / 30.0) / (world_dist + 1.0);
                 field_color += vec3(higgs_d * 0.7, higgs_d * 0.6, higgs_d * 0.15) * 400.0;
+            }
+
+            // ── Dark Energy (repulsive — grows with distance, Lambda-CDM) ────
+            if (show_de && is_de) {
+                float lambda_eff = 0.8 / (params.interaction_radius + 1.0);
+                // DE field strength grows linearly with distance (cosmological expansion)
+                float de_phi = lambda_eff * world_dist / (world_dist + 2.0);
+                // Inflaton: 20x stronger (inflationary epoch)
+                if (type == INFLATON_TYPE) de_phi *= 20.0;
+                // Chameleon: screened at short range (thin-shell mechanism)
+                if (type == CHAMELEON_TYPE) {
+                    float screen = world_dist / (world_dist + 8.0);
+                    de_phi *= screen;
+                }
+                // Crimson-red glow — repulsive field expanding outward
+                field_color += vec3(de_phi * 0.9, de_phi * 0.12, de_phi * 0.18) * 3000.0;
             }
 
             field_color *= scale;

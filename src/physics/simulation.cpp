@@ -168,6 +168,164 @@ void PhysicsSimulation::destroy() {
     vk.destroy();
 }
 
+// ── Undo/Redo ────────────────────────────────────────────────────────────────
+
+UndoSnapshot PhysicsSimulation::capture_snapshot() {
+    // Ensure fresh GPU readback
+    uint32_t n = cfg.particle_count;
+    if (readback_positions_.size() != n && compute.is_ready()) {
+        readback_positions_.resize(n);
+        readback_velocities_.resize(n);
+        readback_energies_.resize(n);
+        compute.read_current_state(vk, readback_positions_, readback_velocities_, readback_energies_);
+    }
+
+    UndoSnapshot snap;
+    snap.cfg = cfg;
+    snap.positions = readback_positions_;
+    snap.velocities = readback_velocities_;
+    snap.energies = readback_energies_;
+    snap.types = particles.types;
+    snap.angles = particles.angles;
+    snap.angular_velocities = particles.angular_velocities;
+    snap.genomes = particles.genomes;
+    snap.birth_frames = particles.birth_frames;
+    snap.orbital_parent = particles.orbital_parent;
+    snap.orbital_shell = particles.orbital_shell;
+    snap.excitation_timer = particles.excitation_timer;
+    snap.entangled_partner = particles.entangled_partner;
+    snap.cascade_tag = particles.cascade_tag;
+    snap.forces = particles.forces;
+    snap.colors = particles.colors;
+    std::memcpy(snap.behavior_flags, particles.behavior_flags, sizeof(snap.behavior_flags));
+    std::memcpy(snap.trait_scales, particles.trait_scales, sizeof(snap.trait_scales));
+    std::memcpy(snap.structure_integrity, particles.structure_integrity, sizeof(snap.structure_integrity));
+    std::memcpy(snap.force_objects, force_objects_, sizeof(snap.force_objects));
+    snap.force_object_count = force_object_count_;
+    snap.bond_data = bond_data_;
+    snap.frame_counter = frame_counter_;
+    snap.field_em = iface.field_em;
+    snap.field_strong = iface.field_strong;
+    snap.field_weak = iface.field_weak;
+    snap.field_gravity = iface.field_gravity;
+    snap.field_higgs = iface.field_higgs;
+    snap.field_dark_energy = iface.field_dark_energy;
+    snap.field_intensity = iface.field_intensity;
+    snap.log_temperature = iface.log_temperature;
+    return snap;
+}
+
+void PhysicsSimulation::push_undo_snapshot() {
+    undo_stack_.push_back(capture_snapshot());
+    if (undo_stack_.size() > MAX_UNDO_SNAPSHOTS)
+        undo_stack_.pop_front();
+    redo_stack_.clear();
+}
+
+void PhysicsSimulation::apply_snapshot(const UndoSnapshot& snap) {
+    vkDeviceWaitIdle(vk.device);
+    cfg = snap.cfg;
+    // Restore per-particle CPU data
+    particles.positions = snap.positions;
+    particles.velocities = snap.velocities;
+    particles.types = snap.types;
+    particles.energies = snap.energies;
+    particles.angles = snap.angles;
+    particles.angular_velocities = snap.angular_velocities;
+    particles.genomes = snap.genomes;
+    particles.birth_frames = snap.birth_frames;
+    particles.orbital_parent = snap.orbital_parent;
+    particles.orbital_shell = snap.orbital_shell;
+    particles.excitation_timer = snap.excitation_timer;
+    particles.entangled_partner = snap.entangled_partner;
+    particles.cascade_tag = snap.cascade_tag;
+    // Restore per-type data
+    std::memcpy(particles.forces.data(), snap.forces.data(),
+                MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES * sizeof(float));
+    std::memcpy(particles.colors.data(), snap.colors.data(),
+                MAX_PARTICLE_TYPES * sizeof(glm::vec4));
+    std::memcpy(particles.behavior_flags, snap.behavior_flags,
+                MAX_PARTICLE_TYPES * sizeof(uint32_t));
+    std::memcpy(particles.trait_scales, snap.trait_scales,
+                MAX_PARTICLE_TYPES * sizeof(float));
+    std::memcpy(particles.structure_integrity, snap.structure_integrity,
+                MAX_PARTICLE_TYPES * sizeof(float));
+    // Restore force objects
+    std::memcpy(force_objects_, snap.force_objects, sizeof(force_objects_));
+    force_object_count_ = snap.force_object_count;
+    // Restore bond data
+    bond_data_ = snap.bond_data;
+    if (!bond_data_.empty()) {
+        particles.bond_partners_ptr = bond_data_.data();
+        particles.bond_partners_count = static_cast<uint32_t>(bond_data_.size());
+    } else {
+        particles.bond_partners_ptr = nullptr;
+        particles.bond_partners_count = 0;
+    }
+    // Restore frame counter
+    frame_counter_ = snap.frame_counter;
+    // Restore UI field state
+    iface.field_em = snap.field_em;
+    iface.field_strong = snap.field_strong;
+    iface.field_weak = snap.field_weak;
+    iface.field_gravity = snap.field_gravity;
+    iface.field_higgs = snap.field_higgs;
+    iface.field_dark_energy = snap.field_dark_energy;
+    iface.field_intensity = snap.field_intensity;
+    iface.log_temperature = snap.log_temperature;
+    // Re-upload to GPU
+    compute.clear_buffers(vk);
+    compute.create_buffers(vk, particles);
+    // Reset interaction state
+    iface.selected_force_obj_idx = -1;
+    iface.force_obj_placement_mode = false;
+    iface.force_obj_move_mode = false;
+    iface.selected_particle_idx = -1;
+    iface.particle_move_mode = false;
+    iface.select_mode = false;
+    readback_positions_.clear();
+    readback_velocities_.clear();
+    readback_energies_.clear();
+}
+
+void PhysicsSimulation::perform_undo() {
+    if (undo_stack_.empty()) {
+        std::memset(iface.save_load_message, 0, sizeof(iface.save_load_message));
+        strncpy(iface.save_load_message, "Nothing to undo", sizeof(iface.save_load_message) - 1);
+        iface.save_load_msg_timer = 2.0f;
+        return;
+    }
+    redo_stack_.push_back(capture_snapshot());
+    UndoSnapshot snap = std::move(undo_stack_.back());
+    undo_stack_.pop_back();
+    apply_snapshot(snap);
+
+    char msg[64];
+    snprintf(msg, sizeof(msg), "Undo (%d remaining)", static_cast<int>(undo_stack_.size()));
+    std::memset(iface.save_load_message, 0, sizeof(iface.save_load_message));
+    strncpy(iface.save_load_message, msg, sizeof(iface.save_load_message) - 1);
+    iface.save_load_msg_timer = 2.0f;
+}
+
+void PhysicsSimulation::perform_redo() {
+    if (redo_stack_.empty()) {
+        std::memset(iface.save_load_message, 0, sizeof(iface.save_load_message));
+        strncpy(iface.save_load_message, "Nothing to redo", sizeof(iface.save_load_message) - 1);
+        iface.save_load_msg_timer = 2.0f;
+        return;
+    }
+    undo_stack_.push_back(capture_snapshot());
+    UndoSnapshot snap = std::move(redo_stack_.back());
+    redo_stack_.pop_back();
+    apply_snapshot(snap);
+
+    char msg[64];
+    snprintf(msg, sizeof(msg), "Redo (%d remaining)", static_cast<int>(redo_stack_.size()));
+    std::memset(iface.save_load_message, 0, sizeof(iface.save_load_message));
+    strncpy(iface.save_load_message, msg, sizeof(iface.save_load_message) - 1);
+    iface.save_load_msg_timer = 2.0f;
+}
+
 // ── Reset ────────────────────────────────────────────────────────────────────
 
 void PhysicsSimulation::reset() {
@@ -217,6 +375,9 @@ void PhysicsSimulation::reset() {
     iface.trajectory_history.clear();
     iface.force_contributions.clear();
     iface.gw_rings.clear();
+    for (auto& s : iface.type_stats) s = {};
+    for (auto& s : iface.element_stats) s = {};
+    iface.molecule_bestiary_session++;
     prev_velocities_.clear();
     iface.show_trajectory_tracer = false;
     iface.show_energy_heatmap = false;
@@ -332,6 +493,7 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
     static bool f2_was = false;
     bool f2_now = glfwGetKey(window, GLFW_KEY_F2) == GLFW_PRESS;
     if (f2_now && !f2_was) {
+        push_undo_snapshot();
         if (!cfg.start_empty) {
             int pc = static_cast<int>(std::max(2.0f,
                 std::pow(iface.particle_count_slider, 2.0f)));
@@ -356,6 +518,7 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
             + (mouse_pos - glm::vec2(win_w * 0.5f, win_h * 0.5f)) * glm::vec2(sx, sy) / cfg.current_camera_zoom;
 
         if (iface.force_obj_move_mode && iface.selected_force_obj_idx >= 0) {
+            push_undo_snapshot();
             // 1. Reposition selected force object
             int idx = iface.selected_force_obj_idx;
             if (force_objects_[idx].force_type == FORCE_OBJ_MIRROR) {
@@ -374,6 +537,7 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
             iface.force_obj_move_mode = false;
         }
         else if (iface.element_move_mode && iface.element_card_nucleus_rep >= 0) {
+            push_undo_snapshot();
             // 1.5. Move entire element to click position
             int32_t nuc_rep = iface.element_card_nucleus_rep;
             glm::vec2 center(0.0f);
@@ -404,6 +568,7 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
             iface.element_move_mode = false;
         }
         else if (iface.particle_move_mode && iface.selected_particle_idx >= 0) {
+            push_undo_snapshot();
             // 2. Reposition selected particle
             uint32_t pi = static_cast<uint32_t>(iface.selected_particle_idx);
             if (pi < readback_positions_.size()) {
@@ -414,7 +579,7 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
             iface.particle_move_mode = false;
         }
         else if (iface.accel_mode) {
-            // 3.5. Particle Accelerator (fire AT the selected target)
+            // 3.5. Particle Accelerator (fire AT the selected target or free-fire)
             if (iface.accel_phase == 0) {
                 // Select target particle
                 float snap_r = std::max(cfg.radius * 3.0f + 4.0f, 15.0f / cfg.current_camera_zoom);
@@ -434,6 +599,7 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
                 }
             } else if (iface.accel_phase == 1 && iface.accel_fire_mode != 2) {
                 // Single or Triple shot on click
+                push_undo_snapshot();
                 do_accelerator_fire(world_pos);
             }
         }
@@ -443,6 +609,7 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
                 iface.mirror_endpoint1 = world_pos;
                 iface.mirror_placement_phase = 1;
             } else {
+                push_undo_snapshot();
                 place_mirror(iface.mirror_endpoint1, world_pos);
                 iface.mirror_placement_phase = 0;
                 iface.mirror_placement_mode = false;
@@ -501,11 +668,13 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
         }
         else if (iface.force_obj_placement_mode) {
             // 3. Place new force object
+            push_undo_snapshot();
             place_force_object(world_pos, static_cast<ForceObjectType>(iface.force_obj_placement_type));
             iface.force_obj_placement_mode = false;
         }
         else if (iface.pending_spawn) {
             // 4. Spawn particle
+            push_undo_snapshot();
             do_spawn_at_world(world_pos);
         }
         else if (iface.select_mode) {
@@ -636,7 +805,6 @@ static void write_spawn_genome(Particles& particles, uint32_t slot, uint32_t typ
 void PhysicsSimulation::do_accelerator_fire(glm::vec2 aim_world_pos) {
     if (!compute.is_ready()) return;
     int32_t src = iface.accel_source_idx;
-    if (src < 0 || src >= static_cast<int32_t>(cfg.particle_count)) return;
 
     uint32_t n = cfg.particle_count;
     if (readback_positions_.size() != n) {
@@ -646,19 +814,27 @@ void PhysicsSimulation::do_accelerator_fire(glm::vec2 aim_world_pos) {
     }
     compute.read_current_state(vk, readback_positions_, readback_velocities_, readback_energies_);
 
-    // Validate target is still alive
-    if (readback_energies_[src] < 0.01f) {
-        iface.accel_phase = 0;
-        iface.accel_source_idx = -1;
-        iface.push_notification("Target particle died!", ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
-        return;
+    glm::vec2 dir;
+    if (src >= 0 && src < static_cast<int32_t>(cfg.particle_count)) {
+        // Targeted mode: fire toward selected target
+        if (readback_energies_[src] < 0.01f) {
+            iface.accel_phase = 0;
+            iface.accel_source_idx = -1;
+            iface.push_notification("Target particle died!", ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+            return;
+        }
+        glm::vec2 target_pos = readback_positions_[src];
+        dir = target_pos - aim_world_pos;
+        float dist = glm::length(dir);
+        if (dist < 1.0f) return;
+        dir /= dist;
+    } else {
+        // Free-fire mode: fire outward from camera center through click point
+        dir = aim_world_pos - cfg.camera_origin;
+        float dist = glm::length(dir);
+        if (dist < 1.0f) dir = glm::vec2(1.0f, 0.0f);
+        else dir /= dist;
     }
-
-    glm::vec2 target_pos = readback_positions_[src];
-    glm::vec2 dir = target_pos - aim_world_pos;  // from click toward target
-    float dist = glm::length(dir);
-    if (dist < 1.0f) return;  // too close
-    dir /= dist;
 
     uint32_t fire_type = static_cast<uint32_t>(iface.accel_fire_type);
     float speed = iface.accel_speed;
@@ -695,7 +871,8 @@ void PhysicsSimulation::do_accelerator_fire(glm::vec2 aim_world_pos) {
         if (slot == UINT32_MAX) break;
         search_from = slot + 1;
 
-        glm::vec2 spawn_pos = aim_world_pos + sd * offset_dist;
+        // Spawn behind click point (away from target) so particle flies through
+        glm::vec2 spawn_pos = aim_world_pos - sd * offset_dist;
         spawn_pos.x = std::fmod(spawn_pos.x + rw, rw);
         spawn_pos.y = std::fmod(spawn_pos.y + rh, rh);
 
@@ -7206,6 +7383,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     if (iface.show_collision_radii) cfg.field_flags |= (1u << 6);
     if (iface.hide_virtual_trails)  cfg.field_flags |= (1u << 7);
     if (iface.hide_bond_visuals)    cfg.field_flags |= (1u << 8);
+    if (iface.field_dark_energy) cfg.field_flags |= (1u << 12);
     // GR gravity extensions
     if (iface.gr_mass_energy)       cfg.field_flags |= (1u << 9);
     if (iface.gr_frame_dragging)    cfg.field_flags |= (1u << 10);
@@ -7610,6 +7788,71 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             iface.avg_energy_display = (active > 0) ? total_energy / active : 0.0f;
             for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t)
                 iface.type_counts_display[t] = type_counts[t];
+
+            // ── Per-type bestiary stats ──────────────────────────────────
+            {
+                static uint32_t prev_type_counts[MAX_PARTICLE_TYPES] = {};
+                for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
+                    auto& s = iface.type_stats[t];
+                    // New spawns this tick
+                    if (type_counts[t] > prev_type_counts[t])
+                        s.total_spawned += (type_counts[t] - prev_type_counts[t]);
+                    // Deaths this tick — accumulate approximate lifetime
+                    if (prev_type_counts[t] > type_counts[t]) {
+                        uint32_t deaths = prev_type_counts[t] - type_counts[t];
+                        s.lifetime_count += deaths;
+                        // Use frame_counter as rough upper-bound age estimate
+                        s.lifetime_sum += deaths * static_cast<double>(frame_counter_);
+                    }
+                    s.peak_count = std::max(s.peak_count, type_counts[t]);
+                    prev_type_counts[t] = type_counts[t];
+                }
+                // Per-type energy and speed (from living particles)
+                double type_energy[MAX_PARTICLE_TYPES] = {};
+                double type_speed[MAX_PARTICLE_TYPES] = {};
+                for (uint32_t i = 0; i < n; ++i) {
+                    if (readback_energies_[i] < 0.01f) continue;
+                    uint32_t t = particles.types[i];
+                    if (t >= MAX_PARTICLE_TYPES) continue;
+                    type_energy[t] += readback_energies_[i];
+                    type_speed[t] += glm::length(readback_velocities_[i]);
+                }
+                for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
+                    iface.type_stats[t].energy_sum = type_energy[t];
+                    iface.type_stats[t].speed_sum = type_speed[t];
+                }
+            }
+
+            // ── Per-element bestiary stats ───────────────────────────────
+            {
+                // Reset per-tick fields
+                for (int z = 0; z < 119; ++z) {
+                    iface.element_stats[z].current_count = 0;
+                    iface.element_stats[z].energy_sum = 0.0;
+                }
+                // Accumulate from current element_list
+                for (const auto& elem : iface.element_list) {
+                    int z = elem.Z;
+                    if (z < 1 || z > 118) continue;
+                    iface.element_stats[z].current_count++;
+                    iface.element_stats[z].energy_sum += elem.energy_MeV;
+                }
+                // Track spawns/deaths via frame-over-frame delta
+                static uint32_t prev_elem_counts[119] = {};
+                for (int z = 1; z <= 118; ++z) {
+                    auto& s = iface.element_stats[z];
+                    uint32_t cur = s.current_count;
+                    if (cur > prev_elem_counts[z])
+                        s.total_spawned += (cur - prev_elem_counts[z]);
+                    if (prev_elem_counts[z] > cur) {
+                        uint32_t deaths = prev_elem_counts[z] - cur;
+                        s.lifetime_count += deaths;
+                        s.lifetime_sum += deaths * static_cast<double>(frame_counter_);
+                    }
+                    s.peak_count = std::max(s.peak_count, cur);
+                    prev_elem_counts[z] = cur;
+                }
+            }
 
             float avg_ke = (ke_count > 0) ? total_ke / ke_count : 0.0f;
             float measured_temp = avg_ke * 0.1f;
@@ -8278,6 +8521,65 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                      const PhysicsInterface::MoleculeSummary& b) {
             return a.atom_indices.size() > b.atom_indices.size();
         });
+
+        // ── Molecule bestiary discovery tracking ─────────────────────────
+        bool bestiary_changed = false;
+        for (const auto& mol : iface.molecule_list) {
+            if (mol.atom_indices.size() < 2) continue;
+            // Build formula: count Z values, sort C first, H second, then alphabetical
+            std::map<int, int> z_counts;
+            for (uint32_t ei : mol.atom_indices)
+                z_counts[iface.element_list[ei].Z]++;
+            struct FE { const char* sym; int count; int Z; };
+            std::vector<FE> entries;
+            for (auto& [z, cnt] : z_counts) {
+                const char* sym = (z >= 1 && z <= 118) ? element_symbol(z) : "?";
+                entries.push_back({sym, cnt, z});
+            }
+            std::sort(entries.begin(), entries.end(), [](const FE& a, const FE& b) {
+                if (a.Z == 6 && b.Z != 6) return true;
+                if (b.Z == 6 && a.Z != 6) return false;
+                if (a.Z == 1 && b.Z != 1) return true;
+                if (b.Z == 1 && a.Z != 1) return false;
+                return a.Z < b.Z;
+            });
+            std::string formula;
+            for (auto& e : entries) {
+                formula += e.sym;
+                if (e.count > 1) formula += std::to_string(e.count);
+            }
+            // Search existing bestiary
+            bool found = false;
+            for (auto& be : iface.molecule_bestiary) {
+                if (be.formula == formula) {
+                    be.times_seen++;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                PhysicsInterface::MoleculeBestiaryEntry entry;
+                entry.formula = formula;
+                // Try template lookup first, then dynamic naming
+                int tmpl = find_molecule_template(formula.c_str());
+                if (tmpl >= 0) {
+                    entry.name = MOLECULE_TEMPLATES[tmpl].name;
+                } else {
+                    std::vector<std::pair<int,int>> components;
+                    for (auto& e : entries)
+                        components.push_back({e.Z, e.count});
+                    entry.name = name_molecule_dynamic(components);
+                }
+                entry.times_seen = 1;
+                entry.atom_count = static_cast<uint32_t>(mol.atom_indices.size());
+                entry.first_seen_session = iface.molecule_bestiary_session;
+                entry.first_seen_time = static_cast<int64_t>(std::time(nullptr));
+                iface.molecule_bestiary.push_back(std::move(entry));
+                bestiary_changed = true;
+            }
+        }
+        if (bestiary_changed)
+            iface.save_molecule_bestiary();
     }
 
     // ── Accelerator: track source particle position ─────────────────────────
@@ -8319,6 +8621,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     is_active = iface.sim_running;
 
     if (request_reset) {
+        push_undo_snapshot();
         if (!cfg.start_empty) {
             int pc = static_cast<int>(std::max(2.0f,
                 std::pow(iface.particle_count_slider, 2.0f)));
@@ -8349,7 +8652,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             readback_positions_, readback_velocities_, readback_energies_,
             force_objects_, force_object_count_,
             iface.field_em, iface.field_strong, iface.field_weak,
-            iface.field_gravity, iface.field_higgs,
+            iface.field_gravity, iface.field_higgs, iface.field_dark_energy,
             iface.field_intensity, iface.log_temperature);
         std::memset(iface.save_load_message, 0, sizeof(iface.save_load_message));
         strncpy(iface.save_load_message, result.message.c_str(), sizeof(iface.save_load_message) - 1);
@@ -8367,6 +8670,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         iface.request_load = false;
         auto r = load_simulation(iface.save_filename);
         if (r.success) {
+            push_undo_snapshot();
             try_unlock(ACH_FIRST_LOAD);
             vkDeviceWaitIdle(vk.device);
             cfg = r.cfg;
@@ -8394,7 +8698,8 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             iface.field_strong    = r.field_strong;
             iface.field_weak      = r.field_weak;
             iface.field_gravity   = r.field_gravity;
-            iface.field_higgs     = r.field_higgs;
+            iface.field_higgs       = r.field_higgs;
+            iface.field_dark_energy = r.field_dark_energy;
             iface.field_intensity = r.field_intensity;
             iface.log_temperature = r.log_temperature;
             // Re-upload to GPU
@@ -8415,6 +8720,16 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         std::memset(iface.save_load_message, 0, sizeof(iface.save_load_message));
         strncpy(iface.save_load_message, r.message.c_str(), sizeof(iface.save_load_message) - 1);
         iface.save_load_msg_timer = 3.0f;
+    }
+
+    // ── Undo/Redo requests ─────────────────────────────────────────────────
+    if (iface.request_undo) {
+        iface.request_undo = false;
+        perform_undo();
+    }
+    if (iface.request_redo) {
+        iface.request_redo = false;
+        perform_redo();
     }
 
     // ── Element export request ───────────────────────────────────────────────

@@ -23,7 +23,7 @@ SaveResult save_simulation(
     uint32_t force_object_count,
     // UI state
     bool field_em, bool field_strong, bool field_weak,
-    bool field_gravity, bool field_higgs,
+    bool field_gravity, bool field_higgs, bool field_dark_energy,
     float field_intensity, float log_temperature
 );
 
@@ -45,7 +45,7 @@ struct LoadResult {
     std::vector<ForceObject> force_objects; // MAX_FORCE_OBJECTS
     uint32_t force_object_count = 0;
     // UI state
-    bool field_em, field_strong, field_weak, field_gravity, field_higgs;
+    bool field_em, field_strong, field_weak, field_gravity, field_higgs, field_dark_energy;
     float field_intensity, log_temperature;
 };
 

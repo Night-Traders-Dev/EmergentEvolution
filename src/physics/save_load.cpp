@@ -48,7 +48,7 @@ SaveResult save_simulation(
     const ForceObject* force_objects,
     uint32_t force_object_count,
     bool field_em, bool field_strong, bool field_weak,
-    bool field_gravity, bool field_higgs,
+    bool field_gravity, bool field_higgs, bool field_dark_energy,
     float field_intensity, float log_temperature)
 {
     std::ofstream f(filepath, std::ios::binary);
@@ -94,7 +94,8 @@ SaveResult save_simulation(
     if (field_strong)  field_bits |= (1 << 1);
     if (field_weak)    field_bits |= (1 << 2);
     if (field_gravity) field_bits |= (1 << 3);
-    if (field_higgs)   field_bits |= (1 << 4);
+    if (field_higgs)       field_bits |= (1 << 4);
+    if (field_dark_energy) field_bits |= (1 << 5);
     write_val(f, field_bits);
     write_val(f, field_intensity);
     write_val(f, log_temperature);
@@ -218,7 +219,8 @@ LoadResult load_simulation(const std::string& filepath) {
     r.field_strong  = (field_bits & (1 << 1)) != 0;
     r.field_weak    = (field_bits & (1 << 2)) != 0;
     r.field_gravity = (field_bits & (1 << 3)) != 0;
-    r.field_higgs   = (field_bits & (1 << 4)) != 0;
+    r.field_higgs       = (field_bits & (1 << 4)) != 0;
+    r.field_dark_energy = (field_bits & (1 << 5)) != 0;
     read_val(f, r.field_intensity);
     read_val(f, r.log_temperature);
 

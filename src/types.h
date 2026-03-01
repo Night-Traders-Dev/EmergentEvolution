@@ -96,13 +96,16 @@ enum ParticleBehavior : uint32_t {
 static constexpr uint32_t MAX_FORCE_OBJECTS = 8;
 
 enum ForceObjectType : uint32_t {
-    FORCE_OBJ_EM_FIELD     = 0,   // Coulomb-like radial force on charged particles
+    FORCE_OBJ_EM_FIELD     = 0,   // EM field: Coulomb radial + Lorentz deflection on charged particles
     FORCE_OBJ_STRONG       = 1,   // Yukawa short-range attraction on baryons
     FORCE_OBJ_WEAK         = 2,   // Short-range weak force boost
     FORCE_OBJ_GRAVITY_WELL = 3,   // Gravitational attraction on massive particles
     FORCE_OBJ_HEAT_SOURCE  = 4,   // Local thermal noise / temperature boost
     FORCE_OBJ_MIRROR       = 5,   // Reflective line segment (endpoints in x,y and _pad0,_pad1)
-    FORCE_OBJ_COUNT        = 6
+    FORCE_OBJ_COULOMB      = 6,   // Pure electrostatic point charge (Coulomb only, no magnetic)
+    FORCE_OBJ_VORTEX       = 7,   // Tangential force creating circular flow (cyclotron)
+    FORCE_OBJ_POTENTIAL_WELL = 8, // Harmonic trap: F = -k*r restoring force toward center
+    FORCE_OBJ_COUNT        = 9
 };
 
 // GPU-aligned struct (must match GLSL std430 layout). 32 bytes per object.

@@ -10,6 +10,7 @@
 #include "physics/audio.h"
 #include <GLFW/glfw3.h>
 #include <vector>
+#include <deque>
 #include <random>
 #include <cstring>
 #include <cmath>
@@ -48,6 +49,41 @@ struct SpatialGrid {
     }
 };
 
+// ── Undo/Redo snapshot — full simulation state for one point in time ─────────
+struct UndoSnapshot {
+    SimConfig cfg;
+    // Per-particle data (from GPU readback + CPU)
+    std::vector<glm::vec2> positions;
+    std::vector<glm::vec2> velocities;
+    std::vector<float>     energies;
+    std::vector<uint32_t>  types;
+    std::vector<float>     angles;
+    std::vector<float>     angular_velocities;
+    std::vector<float>     genomes;
+    std::vector<uint32_t>  birth_frames;
+    std::vector<int32_t>   orbital_parent;
+    std::vector<int8_t>    orbital_shell;
+    std::vector<uint16_t>  excitation_timer;
+    std::vector<uint32_t>  entangled_partner;
+    std::vector<uint8_t>   cascade_tag;
+    // Per-type data
+    std::vector<float>     forces;           // MAX_PARTICLE_TYPES²
+    std::vector<glm::vec4> colors;           // MAX_PARTICLE_TYPES
+    uint32_t behavior_flags[MAX_PARTICLE_TYPES];
+    float    trait_scales[MAX_PARTICLE_TYPES];
+    float    structure_integrity[MAX_PARTICLE_TYPES];
+    // Force objects
+    ForceObject force_objects[MAX_FORCE_OBJECTS];
+    uint32_t    force_object_count;
+    // Bond data
+    std::vector<uint32_t> bond_data;
+    // Frame counter
+    uint32_t frame_counter;
+    // UI field state
+    bool  field_em, field_strong, field_weak, field_gravity, field_higgs, field_dark_energy;
+    float field_intensity, log_temperature;
+};
+
 class PhysicsSimulation;
 void PhysicsSim_RegisterScrollCallback(GLFWwindow* window, PhysicsSimulation* sim);
 
@@ -74,6 +110,16 @@ public:
     uint32_t     force_object_count_ = 0;
 
 private:
+    // ── Undo/Redo ────────────────────────────────────────────────────────
+    static constexpr uint32_t MAX_UNDO_SNAPSHOTS = 50;
+    std::deque<UndoSnapshot> undo_stack_;
+    std::deque<UndoSnapshot> redo_stack_;
+    UndoSnapshot capture_snapshot();
+    void push_undo_snapshot();
+    void apply_snapshot(const UndoSnapshot& snap);
+    void perform_undo();
+    void perform_redo();
+
     glm::vec2 last_mouse_pos_      = {};
     glm::vec2 mouse_change_        = {};
     glm::vec2 smooth_mouse_change_ = {};
