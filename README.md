@@ -43,12 +43,20 @@ uses a **spatial acceleration grid** with **OpenMP** parallelization for O(n) ne
 - [Quantum Entanglement](#quantum-entanglement)
 - [Emergent Thermodynamics](#emergent-thermodynamics)
 - [UI & Visualization](#ui--visualization)
+  - [Display Settings](#display-settings)
+  - [Accessibility](#accessibility)
+  - [Achievements](#achievements)
+  - [Sound Effects](#sound-effects)
+  - [Gamepad Support](#gamepad-support)
+  - [Error Dialogs](#error-dialogs)
 - [Tutorial & Onboarding](#tutorial--onboarding)
 - [Scenarios & Gameplay](#scenarios--gameplay)
 - [Environment Presets](#environment-presets)
 - [Save / Load](#save--load)
 - [Controls](#controls)
 - [Build](#build)
+  - [CMake Options](#cmake-options)
+  - [Steam Integration](#steam-integration-optional)
 - [Architecture](#architecture)
 
 ---
@@ -574,13 +582,53 @@ Quick-apply buttons in the Environment settings panel:
 
 14 built-in color themes (Dark Navy, Midnight, Slate, Ember, Synthwave, Forest, Arctic, Solar,
 High Contrast, Solarized Dark, Dracula, Monokai, Universe Sandbox, Ubuntu Yaru) plus custom
-theme import via `.pptheme` files in the `themes/` directory. Settings are organized into four
-tabs: Display, Performance, Theme, and Audio & Log. User preferences persist across sessions.
+theme import via `.pptheme` files in the `themes/` directory. Settings are organized into five
+tabs: Display, Performance, Theme, Accessibility, and Audio & Log. User preferences persist
+across sessions in platform-appropriate locations (`~/.local/share/particle_playground/` on
+Linux, `%APPDATA%\ParticlePlayground\` on Windows).
+
+### Display Settings
+
+- **Quality presets**: Low, Medium, High, Ultra (auto-sets render scale, bloom, physics quality)
+- **VSync**: toggle between FIFO (vsync on) and MAILBOX (vsync off) present modes
+- **Multi-monitor**: select which display to use for fullscreen (when multiple monitors detected)
+- **GPU selection**: choose which Vulkan-capable GPU to use, with VRAM display
+
+### Accessibility
+
+- **Colorblind modes**: Protanopia, Deuteranopia, Tritanopia (Daltonize-style color correction)
+- **High contrast**: brighter text, stronger borders for improved readability
+- **Reduced motion**: disables wobbly windows, splash animations, and GW ripple effects
+- **Mouse sensitivity**: adjustable camera pan speed (0.1&ndash;3.0&times;)
 
 ### Achievements
 
 64 milestones across 6 categories (Nuclear Physics, Element Creation, Particle Zoo,
-Thermodynamics, Milestones, Chemistry). Persist via `.ppach` file.
+Thermodynamics, Milestones, Chemistry). Persist via `.ppach` file. Steam achievement
+integration ready (optional, builds without Steamworks SDK).
+
+### Sound Effects
+
+Six one-shot sound effects (achievement unlock, spawn, decay, fusion, fission, UI click)
+with independent volume and mute controls. Background music loops via miniaudio.
+
+### Gamepad Support
+
+GLFW gamepad polling with standard mapping:
+
+| Input | Action |
+|---|---|
+| Left stick | Camera pan |
+| Triggers | Zoom in / out |
+| Start | Pause menu |
+| A | Play / pause |
+| B | Back / escape |
+| Bumpers | Cycle settings tabs |
+
+### Error Dialogs
+
+Fatal errors (Vulkan init failure, no GPU, device lost) show native OS message boxes
+(MessageBox on Windows, zenity/kdialog/xmessage on Linux) instead of silent stderr output.
 
 ---
 
@@ -680,8 +728,15 @@ Simulation saves capture a 320&times;180 PNG thumbnail. The load dialog displays
 card grid with preview images, names, dates, and file sizes. Element and molecule files store
 positions as offsets from centroid for portability.
 
-**Auto-save**: configurable interval (Off / 2 / 5 / 10 minutes) saves to `saves/autosave.ppsg`
-automatically during simulation. Interval is set in **Settings > Performance**.
+**Auto-save**: configurable interval (Off / 2 / 5 / 10 minutes) saves automatically during
+simulation. Interval is set in **Settings > Performance**.
+
+**Data directory**: saves, settings, and achievements are stored in platform-standard locations:
+- **Linux**: `~/.local/share/particle_playground/`
+- **Windows**: `%APPDATA%\ParticlePlayground\`
+- **Portable**: `saves/` relative to executable (build with `-DPORTABLE_PATHS=ON`)
+
+Existing saves in the old `saves/` directory are automatically migrated on first run.
 
 ---
 
@@ -702,6 +757,8 @@ automatically during simulation. Interval is set in **Settings > Performance**.
 | Left drag | Pan camera |
 | Scroll wheel | Zoom |
 | Left click | Spawn / select / fire / place (context-dependent) |
+
+Gamepad support is automatic when a controller is connected (see [Gamepad Support](#gamepad-support)).
 
 ---
 
@@ -743,6 +800,24 @@ The Windows portable exe bundles SPIR-V shaders and icons via `PORTABLE_BUILD`.
 Users need Vulkan GPU drivers installed. Place `assets/sound.mp3` next to the exe for
 background music.
 
+### CMake Options
+
+| Option | Default | Description |
+|---|---|---|
+| `PORTABLE_BUILD` | OFF | Embed shaders and icons into the executable |
+| `PORTABLE_PATHS` | OFF | Use relative `saves/` directory instead of platform-standard paths |
+| `STEAMWORKS_SDK_DIR` | &mdash; | Path to Steamworks SDK for optional Steam integration |
+
+### Steam Integration (Optional)
+
+Steam achievements and cloud saves are supported via optional Steamworks SDK linkage.
+The build compiles and runs without the SDK &mdash; all Steam calls are no-ops when
+`HAS_STEAM` is not defined.
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSTEAMWORKS_SDK_DIR=/path/to/sdk
+```
+
 ---
 
 ## Architecture
@@ -778,9 +853,12 @@ EmergentEvolution/
 │   ├── ui_data.h                # Shared UI data tables (elements, particle names/colors, formatting)
 │   ├── phys_particles.h/.cpp    # 67 particle types, masses, charges, environments
 │   ├── molecules.h              # ~50 molecule templates with geometry
-│   ├── achievements.h/.cpp      # 64 achievements, persistence
-│   ├── audio.h/.cpp             # Background music via miniaudio
+│   ├── achievements.h/.cpp      # 64 achievements, persistence, Steam API names
+│   ├── audio.h/.cpp             # Background music + 6 SFX channels via miniaudio
 │   ├── save_load.h/.cpp         # Binary .ppsg/.ppel/.ppmol serialization
+│   ├── paths.h                  # Platform-appropriate data directory (XDG / AppData)
+│   ├── error_dialog.h/.cpp      # Native OS error dialogs (MessageBox / zenity)
+│   ├── steam_integration.h/.cpp # Optional Steamworks SDK wrapper (no-op stubs)
 │   ├── tutorial.h/.cpp          # 10-step interactive tutorial system
 │   ├── scenarios.h/.cpp         # 12 guided scenarios with goals
 │   ├── encyclopedia.h           # Particle type descriptions and metadata
@@ -788,7 +866,9 @@ EmergentEvolution/
 ├── shaders/
 │   ├── physics.comp             # GPU: forces, collisions, bonds, fields, bloom, wave rendering
 │   ├── fullscreen.vert/.frag    # Render pipeline
-├── assets/                      # Icons, music, splash reference
+├── assets/                      # Icons, music, SFX, Windows resources
+├── cmake/                       # FindSteamworks.cmake, embed_resource.cmake
+├── CREDITS.md                   # Third-party library credits and licenses
 └── CMakeLists.txt
 ```
 
