@@ -338,11 +338,21 @@ build_tools() {
         ok "ppmol_gen -> ${BUILD_LINUX}/ppmol_gen"
     fi
 
+    if [[ -f "${SCRIPT_DIR}/tools/ppel/ppel_gen.cpp" ]]; then
+        info "Building ppel_gen..."
+        g++ -std=c++17 ${tool_cxx} \
+            -I"${SCRIPT_DIR}/src" \
+            -o "${BUILD_LINUX}/ppel_gen" \
+            "${SCRIPT_DIR}/tools/ppel/ppel_gen.cpp" -lm
+        ok "ppel_gen -> ${BUILD_LINUX}/ppel_gen"
+    fi
+
     echo ""
     info "Run generators:"
     [[ -f "${BUILD_LINUX}/gen_sfx" ]]      && echo "  ${BUILD_LINUX}/gen_sfx         -> assets/sfx/*.wav"
     [[ -f "${BUILD_LINUX}/gen_textures" ]]  && echo "  ${BUILD_LINUX}/gen_textures    -> assets/particles/*.png"
     [[ -f "${BUILD_LINUX}/ppmol_gen" ]]    && echo "  ${BUILD_LINUX}/ppmol_gen       -> .ppmol molecule files"
+    [[ -f "${BUILD_LINUX}/ppel_gen" ]]     && echo "  ${BUILD_LINUX}/ppel_gen        -> .ppel element files"
 }
 
 # ── Package ──────────────────────────────────────────────────────────────────
