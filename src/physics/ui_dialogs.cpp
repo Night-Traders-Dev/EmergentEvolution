@@ -2667,6 +2667,14 @@ void PhysicsInterface::draw_achievements_panel() {
             ImGui::Text("Bremsstrahlung:    %llu", (unsigned long long)ls.total_bremsstrahlung);
             ImGui::Text("Neutrino Osc.:     %llu", (unsigned long long)ls.total_neutrino_oscillations);
             ImGui::Text("Meson Decays:      %llu", (unsigned long long)ls.total_meson_decays);
+            ImGui::Text("L-H Weak Decays:   %llu", (unsigned long long)ls.total_left_handed_weak_decays);
+            ImGui::Spacing();
+
+            ImGui::TextColored(ImVec4(1.0f, 0.843f, 0.0f, 1.0f), "Chirality & Symmetry");
+            ImGui::Separator();
+            ImGui::Text("Chiral Molecules:  %llu found", (unsigned long long)ls.total_chiral_molecules_found);
+            ImGui::Text("Chiral Formulas:   %u distinct", ls.distinct_chiral_formulas);
+            ImGui::Text("Parity Violations: %llu", (unsigned long long)ls.total_left_handed_weak_decays);
             ImGui::Spacing();
 
             ImGui::TextColored(ImVec4(1.0f, 0.843f, 0.0f, 1.0f), "Chemistry");

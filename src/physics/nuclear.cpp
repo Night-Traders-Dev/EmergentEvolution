@@ -742,6 +742,8 @@ void PhysicsSimulation::check_nuclear_decay() {
                 nuclear_decay_count_++;
                 achievements.total_nuclear_decays++;
                 achievements.total_beta_decays++;
+                achievements.seen_parity_violation = true;
+                achievements.total_left_handed_weak_decays++;
                 try_unlock(ACH_FIRST_BETA_DECAY);
                 {
                     char msg[128];
@@ -796,6 +798,8 @@ void PhysicsSimulation::check_nuclear_decay() {
                 nuclear_decay_count_++;
                 achievements.total_nuclear_decays++;
                 achievements.total_beta_decays++;
+                achievements.seen_parity_violation = true;
+                achievements.total_left_handed_weak_decays++;
                 try_unlock(ACH_FIRST_BETA_DECAY);
                 {
                     char msg[128];

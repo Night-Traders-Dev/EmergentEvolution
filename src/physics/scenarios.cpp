@@ -806,6 +806,135 @@ static const ScenarioTask TASKS_THE_COLLIDER[] = {
       check_15_types },
 };
 
+// ── Chirality scenario setups ─────────────────────────────────────────────
+
+static void setup_chirality_lab(PhysicsSimulation& sim) {
+    sim.cfg.environment_mode = 0;
+    sim.cfg.start_empty = true;
+    sim.cfg.pool_size = 80000;
+    sim.cfg.temperature_kelvin = 150.0f;
+    sim.cfg.bonds_enabled = true;
+    sim.reset();
+    std::mt19937 rng(314159);
+    uint32_t search = 0;
+    float cx = WORLD_W * 0.5f, cy = WORLD_H * 0.5f;
+    // Mix of C, H, N, O, F, Cl — maximizes chirality opportunities
+    int z_list[] = {6, 6, 6, 6, 1, 1, 1, 1, 1, 1, 7, 8, 8, 9, 17};
+    int n_list[] = {6, 6, 6, 6, 0, 0, 0, 0, 0, 0, 7, 8, 8, 10, 18};
+    for (int i = 0; i < 50; i++) {
+        int pick = rng() % 15;
+        sim.spawn_atom_at(glm::vec2(cx + (rng() % 700) - 350, cy + (rng() % 500) - 250),
+                          z_list[pick], n_list[pick], rng, search);
+    }
+}
+
+static void setup_parity_lab(PhysicsSimulation& sim) {
+    sim.cfg.environment_mode = 4;  // Particle Soup
+    sim.cfg.start_empty = false;
+    sim.cfg.particle_count = 25000;
+    sim.cfg.temperature_kelvin = 10000.0f;
+    sim.cfg.bonds_enabled = true;
+    sim.cfg.carrier_mode_enabled = true;
+    sim.reset();
+}
+
+// ── Chirality check functions ────────────────────────────────────────────
+
+static bool check_first_chiral(const PhysicsSimulation& sim) {
+    for (const auto& m : sim.iface.molecule_list)
+        if (m.is_chiral) return true;
+    return false;
+}
+static bool check_3_chiral(const PhysicsSimulation& sim) {
+    int count = 0;
+    for (const auto& m : sim.iface.molecule_list)
+        if (m.is_chiral) count++;
+    return count >= 3;
+}
+static bool check_chiral_bestiary(const PhysicsSimulation& sim) {
+    int count = 0;
+    for (const auto& m : sim.iface.molecule_bestiary)
+        if (m.is_chiral) count++;
+    return count >= 3;
+}
+static bool check_4_atom_molecule(const PhysicsSimulation& sim) {
+    for (const auto& m : sim.iface.molecule_list)
+        if (m.atom_indices.size() >= 4) return true;
+    return false;
+}
+static bool check_parity_observed(const PhysicsSimulation& sim) {
+    return sim.achievements.seen_parity_violation;
+}
+static bool check_beta_decay_seen(const PhysicsSimulation& sim) {
+    return sim.achievements.total_beta_decays > 0;
+}
+static bool check_weak_boson_seen(const PhysicsSimulation& sim) {
+    return sim.iface.type_counts_display[W_PLUS_TYPE_PHYS] > 0
+        || sim.iface.type_counts_display[W_MINUS_TYPE_PHYS] > 0
+        || sim.iface.type_counts_display[Z_BOSON_TYPE_PHYS] > 0;
+}
+static bool check_5_weak_decays(const PhysicsSimulation& sim) {
+    return sim.achievements.total_left_handed_weak_decays >= 5;
+}
+
+// ── Chirality task arrays ────────────────────────────────────────────────
+
+static const int TYPES_CHIRALITY[] = {0, 1, 2, 3};
+static const int TYPES_PARITY[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 25, 26, 27, 28};
+
+static const ScenarioTask TASKS_CHIRALITY_LAB[] = {
+    { "In chemistry, some molecules possess a remarkable property: they cannot be "
+      "superimposed on their mirror image, just as your left hand cannot perfectly "
+      "overlap your right. This is chirality — the handedness of molecules.",
+      "Create a molecule with 4+ atoms",
+      "Bring different atoms close together to form bonds",
+      check_4_atom_molecule },
+    { "A chiral center forms when a carbon atom bonds to three or more different "
+      "types of atoms. The resulting molecule comes in two mirror-image forms — "
+      "enantiomers — like a left glove and a right glove.",
+      "Create a chiral molecule",
+      "Bond a carbon to different atom types (H, N, O, F, Cl)",
+      check_first_chiral },
+    { "Life itself chose chirality. Nearly all amino acids in living organisms "
+      "are left-handed (L-form). Nearly all sugars are right-handed (D-form). "
+      "This homochirality is one of biology's deepest mysteries.",
+      "Create 3 chiral molecules simultaneously",
+      "Build more complex molecules with carbon centers and mixed substituents",
+      check_3_chiral },
+    { "Your collection grows. Each chiral molecule you discover adds to the "
+      "stereochemical library — a catalogue of molecular handedness.",
+      "Discover 3 distinct chiral molecule formulas",
+      "Try building molecules with different elemental compositions",
+      check_chiral_bestiary },
+};
+
+static const ScenarioTask TASKS_PARITY_LAB[] = {
+    { "In 1956, Chien-Shiung Wu shattered a fundamental assumption of physics. "
+      "She proved that the weak nuclear force — unlike gravity, electromagnetism, "
+      "and the strong force — does NOT treat left and right equally.",
+      "Observe a weak force boson (W or Z)",
+      "High-energy collisions can produce W and Z bosons",
+      check_weak_boson_seen },
+    { "Beta decay is the weak force in action: a neutron transforms into a proton, "
+      "emitting an electron and an antineutrino. But the emitted electron is always "
+      "left-handed — parity is maximally violated.",
+      "Observe beta decay",
+      "Neutron-rich nuclei undergo beta minus decay",
+      check_beta_decay_seen },
+    { "The weak force only couples to left-handed particles and right-handed "
+      "antiparticles. This parity violation is not a small effect — it is absolute. "
+      "Nature has a preferred handedness at its most fundamental level.",
+      "Observe parity violation in a weak decay",
+      "Any beta decay or weak flavor change demonstrates parity violation",
+      check_parity_observed },
+    { "Wu's experiment used cobalt-60 nuclei aligned in a magnetic field. "
+      "The electrons from beta decay preferentially flew in one direction — "
+      "proof that the universe itself is not ambidextrous.",
+      "Trigger 5 parity-violating weak decays",
+      "More weak interactions give more parity violations",
+      check_5_weak_decays },
+};
+
 // ── Scenario definitions ────────────────────────────────────────────────────
 
 static const Scenario SCENARIOS[] = {
@@ -918,6 +1047,20 @@ static const Scenario SCENARIOS[] = {
       "Cosmology", "Smashing the Frontier",
       setup_the_collider, TASKS_THE_COLLIDER, 4,
       rules_sm_all(26, false, true, true) },
+
+    // ── Chirality arc (indices 18-19) ─────────────────────────────────
+
+    { "Chirality Lab",
+      "Explore molecular handedness — create chiral molecules with mirror-image forms.",
+      "Chemistry", "The Mirror Molecule",
+      setup_chirality_lab, TASKS_CHIRALITY_LAB, 4,
+      make_rules(TYPES_CHIRALITY, ARRLEN(TYPES_CHIRALITY), 17, true, false, false) },
+
+    { "Parity Violation",
+      "Discover why the universe is not symmetric — the weak force breaks the mirror.",
+      "Nuclear", "Wu's Experiment",
+      setup_parity_lab, TASKS_PARITY_LAB, 4,
+      make_rules(TYPES_PARITY, ARRLEN(TYPES_PARITY), 26, true, true, true) },
 };
 
 static constexpr int SCENARIO_COUNT = sizeof(SCENARIOS) / sizeof(SCENARIOS[0]);

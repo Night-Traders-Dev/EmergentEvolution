@@ -499,6 +499,8 @@ public:
         uint32_t atom_count = 0;
         uint32_t first_seen_session = 0;
         int64_t  first_seen_time = 0;       // unix timestamp (time_t)
+        bool     is_chiral = false;         // has at least one chiral center
+        uint32_t chiral_centers = 0;        // number of chiral centers
     };
     std::vector<MoleculeBestiaryEntry> molecule_bestiary;
     uint32_t molecule_bestiary_session = 0;
@@ -523,6 +525,8 @@ public:
     uint32_t ls_snap_neutrino_osc      = 0;
     uint32_t ls_snap_accel_fires       = 0;
     uint32_t ls_snap_molecules_formed  = 0;
+    uint32_t ls_snap_chiral_mol     = 0;
+    uint32_t ls_snap_lh_weak_decays = 0;
     uint32_t ls_snap_type_spawned[LIFETIME_PARTICLE_TYPES] = {};
     uint32_t ls_snap_elem_created[119] = {};
 
@@ -620,6 +624,8 @@ public:
         float total_energy_MeV = 0.0f;
         uint32_t oldest_birth = UINT32_MAX;
         int total_charge = 0;       // net ionic charge of molecule
+        bool is_chiral = false;     // has at least one chiral center
+        uint32_t chiral_centers = 0;
     };
     std::vector<MoleculeSummary> molecule_list;
 

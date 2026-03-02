@@ -81,6 +81,21 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
         ImGui::SameLine(col_w);
         ImGui::Text("%+.1f", spin);
 
+        // Helicity / chirality for fermions (spin-1/2 particles)
+        if (std::abs(std::abs(spin) - 0.5f) < 0.1f && readback_velocities && idx < readback_count) {
+            glm::vec2 vel = readback_velocities[idx];
+            float spd = glm::length(vel);
+            if (spd > 0.1f) {
+                // In 2D, helicity = sign of spin × angular direction of velocity
+                // Simplified: sign(spin) gives handedness state
+                const char* hand = (spin > 0.0f) ? "Right-handed" : "Left-handed";
+                ImVec4 hcol = (spin > 0.0f) ? ImVec4(0.4f, 0.8f, 1.0f, 1.0f) : ImVec4(1.0f, 0.6f, 0.4f, 1.0f);
+                ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Helicity");
+                ImGui::SameLine(col_w);
+                ImGui::TextColored(hcol, "%s", hand);
+            }
+        }
+
         // Color charge for quarks
         if (ptype >= UP_QUARK_TYPE && ptype <= ANTI_BOTTOM_TYPE) {
             int cc = static_cast<int>(color_charge);
@@ -1064,6 +1079,16 @@ void PhysicsInterface::draw_molecule_card(const Particles& particles) {
 
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Bonds");
         ImGui::SameLine(col_w); ImGui::Text("%d", bond_count);
+
+        // Chirality
+        ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Chirality");
+        ImGui::SameLine(col_w);
+        if (mol.is_chiral) {
+            ImGui::TextColored(ImVec4(0.9f, 0.7f, 1.0f, 1.0f), "Chiral (%u center%s)",
+                mol.chiral_centers, mol.chiral_centers == 1 ? "" : "s");
+        } else {
+            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 0.8f), "Achiral");
+        }
 
         ImGui::Spacing();
         ImGui::Separator();

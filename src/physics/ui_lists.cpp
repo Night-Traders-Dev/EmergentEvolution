@@ -1043,6 +1043,13 @@ void PhysicsInterface::draw_element_bestiary() {
             }
             if (stats.current_count > 0)
                 ImGui::Text("Avg energy: %.2f MeV", stats.energy_sum / stats.current_count);
+            // Chirality info for common chiral-center atoms
+            if (Z == 6 || Z == 14 || Z == 7 || Z == 15 || Z == 16) {
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.9f, 0.7f, 1.0f, 1.0f), "Chiral center atom");
+                ImGui::TextWrapped("Can form chiral centers when bonded to 3+ "
+                    "different substituent types in a molecule.");
+            }
             ImGui::EndTooltip();
         }
 
@@ -1165,6 +1172,18 @@ void PhysicsInterface::draw_molecule_bestiary() {
                         entry.name.c_str());
         }
 
+        // Chirality badge (top-right corner)
+        if (entry.is_chiral) {
+            const char* badge = "Chiral";
+            ImVec2 bsz = ImGui::CalcTextSize(badge);
+            float bx = cell_max.x - bsz.x - 4.0f;
+            dl->AddRectFilled(ImVec2(bx - 2.0f, cell_min.y + 2.0f),
+                              ImVec2(bx + bsz.x + 2.0f, cell_min.y + bsz.y + 4.0f),
+                              ImGui::ColorConvertFloat4ToU32(ImVec4(0.6f, 0.2f, 0.8f, 0.5f)), 2.0f);
+            dl->AddText(ImVec2(bx, cell_min.y + 3.0f),
+                        ImGui::ColorConvertFloat4ToU32(ImVec4(0.9f, 0.7f, 1.0f, 1.0f)), badge);
+        }
+
         // Stats
         float sy = entry.name.empty() ? (cell_min.y + 28.0f) : (cell_min.y + 42.0f);
         ImU32 stat_col = ImGui::ColorConvertFloat4ToU32(ImVec4(0.5f, 0.5f, 0.6f, 1.0f));
@@ -1202,6 +1221,14 @@ void PhysicsInterface::draw_molecule_bestiary() {
                 ImGui::Text("Discovered: %s", ts);
             }
             ImGui::Text("Session: %u", entry.first_seen_session);
+            if (entry.is_chiral) {
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.9f, 0.7f, 1.0f, 1.0f),
+                    "Chiral (%u center%s)", entry.chiral_centers,
+                    entry.chiral_centers == 1 ? "" : "s");
+                ImGui::TextWrapped("Non-superimposable on its mirror image. "
+                    "Chiral molecules are fundamental to biochemistry.");
+            }
             ImGui::EndTooltip();
         }
 

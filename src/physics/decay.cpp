@@ -2243,6 +2243,9 @@ void PhysicsSimulation::check_weak_flavor_change() {
             iface.push_decay_event(msg, PhysicsInterface::DEVT_WEAK_SCATTER, ImVec4(0.7f, 0.8f, 1.0f, 1.0f), std::string(detail));
         }
         achievements.seen_weak_decay = true;
+        // Weak interaction only couples to left-handed particles → parity violation
+        achievements.seen_parity_violation = true;
+        achievements.total_left_handed_weak_decays++;
         cpu_particles_dirty_ = true;
     }
 }

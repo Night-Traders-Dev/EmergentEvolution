@@ -175,6 +175,13 @@ AchievementDef ACHIEVEMENT_DEFS[ACH_COUNT] = {
     // ── Cutscenes & Lore ────────────────────────────────────────────
     { ACH_FIRST_CUTSCENE,      ACAT_MILESTONES, "Storyteller",     "Watch your first cutscene",                                "[Cs]", "ACH_FIRST_CUTSCENE"             },
     { ACH_ALL_INTROS_WATCHED,  ACAT_MILESTONES, "Lore Master",     "Watch all intro cutscenes",                                "[LM]", "ACH_ALL_INTROS_WATCHED"         },
+
+    // ── Chirality ───────────────────────────────────────────────────
+    { ACH_FIRST_CHIRAL_MOLECULE, ACAT_CHEMISTRY, "Mirror Molecule",  "Create a molecule with a chiral center",                   "[Ch]", "ACH_FIRST_CHIRAL_MOLECULE"      },
+    { ACH_CHIRAL_MOLECULES_5,    ACAT_CHEMISTRY, "Stereochemist",    "Discover 5 distinct chiral molecules",                     "[C5]", "ACH_CHIRAL_MOLECULES_5"         },
+    { ACH_PARITY_VIOLATION,      ACAT_NUCLEAR,   "Broken Mirror",    "Observe parity violation in a weak decay",                 "[PV]", "ACH_PARITY_VIOLATION"           },
+    { ACH_HOMOCHIRAL,            ACAT_CHEMISTRY, "Homochiral World", "Have 10+ chiral molecules simultaneously",                 "[HC]", "ACH_HOMOCHIRAL"                 },
+    { ACH_MIRROR_IMAGE,          ACAT_CHEMISTRY, "Enantiomer",       "Create both enantiomers of a chiral molecule",             "[LR]", "ACH_MIRROR_IMAGE"               },
 };
 
 // ── Runtime initialization for element achievements ─────────────────────────
@@ -256,7 +263,7 @@ int AchievementManager::unlocked_count() const {
 // ── Persistence (.ppach file) ───────────────────────────────────────────────
 
 static constexpr uint32_t PPACH_MAGIC   = 0x48434150;  // "PACH" little-endian
-static constexpr uint32_t PPACH_VERSION = 5;
+static constexpr uint32_t PPACH_VERSION = 6;
 
 bool AchievementManager::save(const std::string& filepath) const {
     std::ofstream f(filepath, std::ios::binary);
@@ -326,6 +333,11 @@ bool AchievementManager::save(const std::string& filepath) const {
     f.write(reinterpret_cast<const char*>(&total_neutrino_oscillations), sizeof(uint32_t));
     f.write(reinterpret_cast<const char*>(&total_molecules_formed), sizeof(uint32_t));
 
+    // v6: chirality counters
+    f.write(reinterpret_cast<const char*>(&total_left_handed_weak_decays), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&total_chiral_molecules_found), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&seen_parity_violation), sizeof(bool));
+
     return f.good();
 }
 
@@ -336,7 +348,7 @@ bool AchievementManager::load(const std::string& filepath) {
     uint32_t magic = 0, version = 0;
     f.read(reinterpret_cast<char*>(&magic), sizeof(uint32_t));
     f.read(reinterpret_cast<char*>(&version), sizeof(uint32_t));
-    if (magic != PPACH_MAGIC || version < 1 || version > 5)
+    if (magic != PPACH_MAGIC || version < 1 || version > 6)
         return false;
 
     // Clear all bitfield slots first
@@ -418,13 +430,20 @@ bool AchievementManager::load(const std::string& filepath) {
         f.read(reinterpret_cast<char*>(&total_molecules_formed), sizeof(uint32_t));
     }
 
+    if (version >= 6) {
+        // v6: chirality counters
+        f.read(reinterpret_cast<char*>(&total_left_handed_weak_decays), sizeof(uint32_t));
+        f.read(reinterpret_cast<char*>(&total_chiral_molecules_found), sizeof(uint32_t));
+        f.read(reinterpret_cast<char*>(&seen_parity_violation), sizeof(bool));
+    }
+
     return f.good();
 }
 
 // ── LifetimeStats persistence (.ppstats file) ──────────────────────────────
 
 static constexpr uint32_t PPST_MAGIC   = 0x54535050;  // "PPST" little-endian
-static constexpr uint32_t PPST_VERSION = 2;
+static constexpr uint32_t PPST_VERSION = 3;
 
 bool LifetimeStats::save(const std::string& filepath) const {
     std::ofstream f(filepath, std::ios::binary);
@@ -486,6 +505,11 @@ bool LifetimeStats::save(const std::string& filepath) const {
     f.write(reinterpret_cast<const char*>(&total_scenarios_completed), sizeof(uint32_t));
     f.write(reinterpret_cast<const char*>(&environments_explored), sizeof(uint32_t));
 
+    // v3: chirality stats
+    f.write(reinterpret_cast<const char*>(&total_chiral_molecules_found), sizeof(uint64_t));
+    f.write(reinterpret_cast<const char*>(&total_left_handed_weak_decays), sizeof(uint64_t));
+    f.write(reinterpret_cast<const char*>(&distinct_chiral_formulas), sizeof(uint32_t));
+
     return f.good();
 }
 
@@ -496,7 +520,7 @@ bool LifetimeStats::load(const std::string& filepath) {
     uint32_t magic = 0, version = 0;
     f.read(reinterpret_cast<char*>(&magic), sizeof(uint32_t));
     f.read(reinterpret_cast<char*>(&version), sizeof(uint32_t));
-    if (magic != PPST_MAGIC || version < 1 || version > 2)
+    if (magic != PPST_MAGIC || version < 1 || version > 3)
         return false;
 
     // Global totals
@@ -552,6 +576,13 @@ bool LifetimeStats::load(const std::string& filepath) {
         // v2: gameplay stats
         f.read(reinterpret_cast<char*>(&total_scenarios_completed), sizeof(uint32_t));
         f.read(reinterpret_cast<char*>(&environments_explored), sizeof(uint32_t));
+    }
+
+    if (version >= 3) {
+        // v3: chirality stats
+        f.read(reinterpret_cast<char*>(&total_chiral_molecules_found), sizeof(uint64_t));
+        f.read(reinterpret_cast<char*>(&total_left_handed_weak_decays), sizeof(uint64_t));
+        f.read(reinterpret_cast<char*>(&distinct_chiral_formulas), sizeof(uint32_t));
     }
 
     return f.good();

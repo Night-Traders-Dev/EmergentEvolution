@@ -169,6 +169,13 @@ enum AchievementID : uint32_t {
     ACH_FIRST_CUTSCENE,         // Watch your first cutscene
     ACH_ALL_INTROS_WATCHED,     // Watch all intro cutscenes
 
+    // ── Chirality ───────────────────────────────────────────────────────
+    ACH_FIRST_CHIRAL_MOLECULE,  // Create a molecule with a chiral center
+    ACH_CHIRAL_MOLECULES_5,     // Discover 5 distinct chiral molecules
+    ACH_PARITY_VIOLATION,       // Observe left-handed weak decay
+    ACH_HOMOCHIRAL,             // Have 10+ chiral molecules simultaneously
+    ACH_MIRROR_IMAGE,           // Create both L and R forms of a chiral molecule
+
     // ── Periodic Table Collection (Z=1..118) ────────────────────────────
     // One achievement per element — contiguous range for easy indexing
     ACH_ELEMENT_BASE,                           // = first element achievement slot
@@ -287,6 +294,12 @@ public:
     bool seen_roton       = false;
     bool seen_electron_hole = false;
 
+    // Chirality tracking
+    uint32_t total_left_handed_weak_decays = 0;
+    uint32_t total_chiral_molecules_found  = 0;  // distinct chiral formulas
+    uint32_t chiral_molecules_current      = 0;  // current chiral molecule count
+    bool     seen_parity_violation         = false;
+
     // Process observation flags
     bool seen_bremsstrahlung       = false;
     bool seen_hadronization        = false;
@@ -346,6 +359,11 @@ struct LifetimeStats {
     uint32_t total_molecules_discovered = 0;  // distinct molecule formulas
     uint64_t total_molecules_formed     = 0;  // every molecule detection
     uint32_t largest_molecule_atoms     = 0;  // most atoms in a single molecule
+
+    // Chirality
+    uint64_t total_chiral_molecules_found = 0;  // distinct chiral molecule formulas
+    uint64_t total_left_handed_weak_decays = 0;
+    uint32_t distinct_chiral_formulas      = 0;
 
     // Gameplay
     uint32_t total_scenarios_completed = 0;

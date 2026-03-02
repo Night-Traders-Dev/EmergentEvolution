@@ -1466,12 +1466,37 @@ void PhysicsSimulation::check_achievements() {
     if (achievements.seen_meson_decay)          try_unlock(ACH_FIRST_MESON_DECAY);
     if (achievements.seen_weak_decay)           try_unlock(ACH_FIRST_WEAK_DECAY);
 
+    // ── Chirality achievements ─────────────────────────────────────
+    {
+        uint32_t chiral_distinct = 0, chiral_active = 0;
+        for (const auto& m : iface.molecule_bestiary) {
+            if (m.is_chiral) chiral_distinct++;
+        }
+        for (const auto& m : iface.molecule_list) {
+            if (m.is_chiral) chiral_active++;
+        }
+        achievements.chiral_molecules_current = chiral_active;
+        if (chiral_distinct >= 1) try_unlock(ACH_FIRST_CHIRAL_MOLECULE);
+        if (chiral_distinct >= 5) try_unlock(ACH_CHIRAL_MOLECULES_5);
+        if (chiral_active >= 10)  try_unlock(ACH_HOMOCHIRAL);
+        if (achievements.seen_parity_violation) try_unlock(ACH_PARITY_VIOLATION);
+        // Mirror Image: check if any formula appears with both chiral and achiral forms
+        // (in 2D, different chirality detected by different chiral center counts)
+        // Simplified: if any chiral molecule has been seen 2+ times (could be different enantiomers)
+        for (const auto& m : iface.molecule_bestiary) {
+            if (m.is_chiral && m.times_seen >= 2) {
+                try_unlock(ACH_MIRROR_IMAGE);
+                break;
+            }
+        }
+    }
+
     // ── Cutscene achievements ────────────────────────────────────────
     if (achievements.cutscene_intros_seen != 0) try_unlock(ACH_FIRST_CUTSCENE);
     {
         // Check if all non-sandbox scenario intros have been watched
         // Scenarios: 0-9, 12-17 (skip sandbox 10,11)
-        static const int INTRO_SCENARIOS[] = {0,1,2,3,4,5,6,7,8,9,12,13,14,15,16,17};
+        static const int INTRO_SCENARIOS[] = {0,1,2,3,4,5,6,7,8,9,12,13,14,15,16,17,18,19};
         bool all_watched = true;
         for (int s : INTRO_SCENARIOS) {
             if (!(achievements.cutscene_intros_seen & (1u << s))) { all_watched = false; break; }
@@ -1509,6 +1534,8 @@ void PhysicsSimulation::check_achievements() {
         SNAP_DELTA(total_neutrino_oscillations, total_neutrino_oscillations, ls_snap_neutrino_osc);
         SNAP_DELTA(total_accelerator_fires, total_accelerator_fires, ls_snap_accel_fires);
         SNAP_DELTA(total_molecules_formed,  total_molecules_formed,  ls_snap_molecules_formed);
+        SNAP_DELTA(total_chiral_molecules_found, total_chiral_molecules_found, ls_snap_chiral_mol);
+        SNAP_DELTA(total_left_handed_weak_decays, total_left_handed_weak_decays, ls_snap_lh_weak_decays);
 
         #undef SNAP_DELTA
 
@@ -1548,6 +1575,15 @@ void PhysicsSimulation::check_achievements() {
         for (const auto& be : iface.molecule_bestiary) {
             if (be.atom_count > ls.largest_molecule_atoms)
                 ls.largest_molecule_atoms = be.atom_count;
+        }
+
+        // Chirality stats
+        {
+            uint32_t chiral_count = 0;
+            for (const auto& be : iface.molecule_bestiary)
+                if (be.is_chiral) chiral_count++;
+            if (chiral_count > ls.distinct_chiral_formulas)
+                ls.distinct_chiral_formulas = chiral_count;
         }
 
         // Gameplay stats
@@ -2967,6 +3003,39 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 mol.total_charge += elem.Z - elem.electrons;
             }
 
+            // ── Chirality detection: check for chiral centers ──────────
+            // A chiral center is an atom (typically C, Si, N, P, S) bonded
+            // to 3+ substituents of different element types.
+            if (members.size() >= 4) {
+                uint32_t chiral_count = 0;
+                for (uint32_t ei : members) {
+                    auto& elem = iface.element_list[ei];
+                    int Z = elem.Z;
+                    // Only check common chiral center atoms
+                    if (Z != 6 && Z != 14 && Z != 7 && Z != 15 && Z != 16) continue;
+                    // Count distinct bonded Z types
+                    uint32_t rep = elem.rep;
+                    uint32_t base = rep * MAX_BONDS_PER_PARTICLE;
+                    if (base + MAX_BONDS_PER_PARTICLE > bond_data_.size()) continue;
+                    std::vector<int> bonded_z;
+                    for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+                        uint32_t partner_rep = bond_data_[base + s];
+                        if (partner_rep == 0xFFFFFFFFu) continue;
+                        auto pit = rep_to_elem.find(partner_rep);
+                        if (pit == rep_to_elem.end()) continue;
+                        bonded_z.push_back(iface.element_list[pit->second].Z);
+                    }
+                    if (bonded_z.size() >= 3) {
+                        // Count distinct Z types among bonds
+                        std::sort(bonded_z.begin(), bonded_z.end());
+                        bonded_z.erase(std::unique(bonded_z.begin(), bonded_z.end()), bonded_z.end());
+                        if (bonded_z.size() >= 3) chiral_count++;
+                    }
+                }
+                mol.is_chiral = (chiral_count > 0);
+                mol.chiral_centers = chiral_count;
+            }
+
             iface.molecule_list.push_back(std::move(mol));
         }
 
@@ -3033,8 +3102,11 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 }
                 entry.times_seen = 1;
                 entry.atom_count = static_cast<uint32_t>(mol.atom_indices.size());
+                entry.is_chiral = mol.is_chiral;
+                entry.chiral_centers = mol.chiral_centers;
                 entry.first_seen_session = iface.molecule_bestiary_session;
                 entry.first_seen_time = static_cast<int64_t>(std::time(nullptr));
+                if (mol.is_chiral) achievements.total_chiral_molecules_found++;
                 iface.molecule_bestiary.push_back(std::move(entry));
                 bestiary_changed = true;
             }
