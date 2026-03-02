@@ -1,6 +1,8 @@
 #include "physics/achievements.h"
+#include "physics/ui_data.h"
 #include <fstream>
 #include <cstring>
+#include <cstdio>
 
 // ── Achievement definitions ─────────────────────────────────────────────────
 
@@ -11,10 +13,11 @@ const char* ACHIEVEMENT_CATEGORY_NAMES[ACAT_COUNT] = {
     "Thermodynamics",
     "Milestones",
     "Chemistry",
-    "Scenarios"
+    "Scenarios",
+    "Periodic Table"
 };
 
-const AchievementDef ACHIEVEMENT_DEFS[ACH_COUNT] = {
+AchievementDef ACHIEVEMENT_DEFS[ACH_COUNT] = {
     // ── Nuclear Physics ─────────────────────────────────────────────────────
     { ACH_FIRST_FUSION,        ACAT_NUCLEAR,   "First Light",           "Trigger your first fusion reaction",                 "[F]",  "ACH_FIRST_FUSION"        },
     { ACH_FIRST_FISSION,       ACAT_NUCLEAR,   "Splitting the Atom",    "Trigger your first fission reaction",                "[X]",  "ACH_FIRST_FISSION"       },
@@ -126,7 +129,86 @@ const AchievementDef ACHIEVEMENT_DEFS[ACH_COUNT] = {
     { ACH_FORCE_OBJECTS_5, ACAT_MILESTONES,"Field Architect",     "Place 5 force objects",                                      "[F5]", "ACH_FORCE_OBJECTS_5"        },
     { ACH_ACCELERATOR_50,  ACAT_MILESTONES,"Collider Veteran",    "Fire the particle accelerator 50 times",                     "[A50]","ACH_ACCELERATOR_50"         },
     { ACH_PLAY_1_HOUR,     ACAT_MILESTONES,"Marathon Physicist",   "Run a simulation for 1+ hour",                              "[1h]", "ACH_PLAY_1_HOUR"            },
+
+    // ── Quasiparticles ──────────────────────────────────────────────
+    { ACH_FIRST_PLASMON,       ACAT_PARTICLES, "Plasma Wave",       "Observe a plasmon",                                        "[Pl]", "ACH_FIRST_PLASMON"          },
+    { ACH_FIRST_PHONON,        ACAT_PARTICLES, "Good Vibrations",   "Observe a phonon",                                         "[Ph]", "ACH_FIRST_PHONON"           },
+    { ACH_FIRST_MAGNON,        ACAT_PARTICLES, "Spin Wave",         "Observe a magnon",                                         "[Mg]", "ACH_FIRST_MAGNON"           },
+    { ACH_FIRST_POLARON,       ACAT_PARTICLES, "Dressed Electron",  "Observe a polaron",                                        "[Po]", "ACH_FIRST_POLARON"          },
+    { ACH_FIRST_COOPER_PAIR,   ACAT_PARTICLES, "Superconductor",    "Observe a Cooper pair",                                    "[CP]", "ACH_FIRST_COOPER_PAIR"      },
+    { ACH_FIRST_ROTON,         ACAT_PARTICLES, "Quantum Vortex",    "Observe a roton",                                          "[Ro]", "ACH_FIRST_ROTON"            },
+    { ACH_FIRST_ELECTRON_HOLE, ACAT_PARTICLES, "Missing Electron",  "Observe an electron hole",                                 "[h+]", "ACH_FIRST_ELECTRON_HOLE"    },
+
+    // ── Advanced Processes ──────────────────────────────────────────
+    { ACH_FIRST_BREMSSTRAHLUNG,      ACAT_NUCLEAR,   "Braking Radiation",  "Observe bremsstrahlung radiation",                  "[Br]", "ACH_FIRST_BREMSSTRAHLUNG"       },
+    { ACH_FIRST_HADRONIZATION,       ACAT_NUCLEAR,   "Quark Confinement",  "Observe quark hadronization",                       "[Hd]", "ACH_FIRST_HADRONIZATION"        },
+    { ACH_FIRST_CARRIER_EXCHANGE,    ACAT_PARTICLES, "Force Mediator",     "Observe a force carrier exchange",                  "[Fc]", "ACH_FIRST_CARRIER_EXCHANGE"     },
+    { ACH_FIRST_NEUTRINO_OSCILLATION,ACAT_PARTICLES, "Flavor Change",      "Observe neutrino flavor oscillation",               "[Nv]", "ACH_FIRST_NEUTRINO_OSCILLATION" },
+    { ACH_FIRST_SHELL_TRANSITION,    ACAT_NUCLEAR,   "Quantum Leap",       "Observe an electron shell transition",              "[QL]", "ACH_FIRST_SHELL_TRANSITION"     },
+    { ACH_FIRST_RECOMBINATION,       ACAT_NUCLEAR,   "Recombination",      "Observe electron-hole recombination",               "[Rc]", "ACH_FIRST_RECOMBINATION"        },
+    { ACH_FIRST_MESON_DECAY,         ACAT_NUCLEAR,   "Meson Unstable",     "Observe a meson decay",                             "[Md]", "ACH_FIRST_MESON_DECAY"          },
+    { ACH_FIRST_WEAK_DECAY,          ACAT_NUCLEAR,   "Weak Force",         "Observe a weak flavor change",                      "[Wk]", "ACH_FIRST_WEAK_DECAY"           },
+
+    // ── More Elements ───────────────────────────────────────────────
+    { ACH_NITROGEN,       ACAT_ELEMENTS,  "The Air We Breathe",  "Create Nitrogen (Z=7)",                                      "[N]",  "ACH_NITROGEN"                   },
+    { ACH_NEON,           ACAT_ELEMENTS,  "Bright Lights",       "Create Neon (Z=10)",                                         "[Ne]", "ACH_NEON"                       },
+    { ACH_SILICON,        ACAT_ELEMENTS,  "Silicon Valley",      "Create Silicon (Z=14)",                                      "[Si]", "ACH_SILICON"                    },
+    { ACH_ELEMENTS_50,    ACAT_ELEMENTS,  "Half the Table",      "Discover 50 distinct elements",                              "[50]", "ACH_ELEMENTS_50"                },
+
+    // ── Specific Molecules ──────────────────────────────────────────
+    { ACH_WATER,          ACAT_CHEMISTRY, "Universal Solvent",   "Create water (H2O)",                                         "[W]",  "ACH_WATER"                      },
+    { ACH_METHANE,        ACAT_CHEMISTRY, "Greenhouse Gas",      "Create methane (CH4)",                                       "[CH4]","ACH_METHANE"                    },
+    { ACH_AMMONIA,        ACAT_CHEMISTRY, "Pungent",             "Create ammonia (NH3)",                                       "[NH3]","ACH_AMMONIA"                    },
+    { ACH_MOLECULES_25,   ACAT_CHEMISTRY, "Chemistry Library",   "Discover 25 distinct molecules",                             "[M25]","ACH_MOLECULES_25"               },
+
+    // ── Higher Thresholds ───────────────────────────────────────────
+    { ACH_ANNIHILATIONS_500, ACAT_MILESTONES, "Matter Eraser",     "Achieve 500 total annihilations",                          "[500]","ACH_ANNIHILATIONS_500"           },
+    { ACH_NUCLEAR_DECAYS_200,ACAT_MILESTONES, "Radiation Zone",    "Witness 200 nuclear decay events",                         "[200]","ACH_NUCLEAR_DECAYS_200"          },
+    { ACH_FUSIONS_5000,      ACAT_NUCLEAR,    "Stellar Furnace",   "Trigger 5000 fusion events",                               "[5k]", "ACH_FUSIONS_5000"               },
+    { ACH_BONDS_50,          ACAT_CHEMISTRY,  "Bond Builder",      "Form 50 total covalent bonds",                             "[B50]","ACH_BONDS_50"                   },
+
+    // ── BSM Extras ──────────────────────────────────────────────────
+    { ACH_FIRST_MONOPOLE,    ACAT_PARTICLES, "Dirac's Dream",      "Observe a magnetic monopole",                              "[MP]", "ACH_FIRST_MONOPOLE"             },
+    { ACH_FIRST_NEUTRALINO,  ACAT_PARTICLES, "Dark Candidate",     "Observe a neutralino",                                     "[N1]", "ACH_FIRST_NEUTRALINO"           },
+    { ACH_FIRST_GRAVITINO,   ACAT_PARTICLES, "SUSY Graviton",      "Observe a gravitino",                                      "[G~]", "ACH_FIRST_GRAVITINO"            },
+
+    // ── Cutscenes & Lore ────────────────────────────────────────────
+    { ACH_FIRST_CUTSCENE,      ACAT_MILESTONES, "Storyteller",     "Watch your first cutscene",                                "[Cs]", "ACH_FIRST_CUTSCENE"             },
+    { ACH_ALL_INTROS_WATCHED,  ACAT_MILESTONES, "Lore Master",     "Watch all intro cutscenes",                                "[LM]", "ACH_ALL_INTROS_WATCHED"         },
 };
+
+// ── Runtime initialization for element achievements ─────────────────────────
+
+// Static storage for element achievement strings (must outlive ACHIEVEMENT_DEFS)
+static char s_element_names[118][64];
+static char s_element_descs[118][80];
+static char s_element_icons[118][8];
+static char s_element_steam[118][32];
+
+void init_achievement_defs() {
+    for (int z = 1; z <= 118; ++z) {
+        int idx = z - 1;  // 0-based index into element arrays
+        AchievementID aid = static_cast<AchievementID>(ACH_ELEMENT_BASE + idx);
+
+        snprintf(s_element_names[idx], sizeof(s_element_names[idx]),
+                 "Discover %s", ELEMENT_NAMES[z]);
+        snprintf(s_element_descs[idx], sizeof(s_element_descs[idx]),
+                 "Create %s (Z=%d)", ELEMENT_NAMES[z], z);
+        snprintf(s_element_icons[idx], sizeof(s_element_icons[idx]),
+                 "[%s]", ELEMENT_SYMBOLS[z]);
+        snprintf(s_element_steam[idx], sizeof(s_element_steam[idx]),
+                 "ACH_ELEMENT_%d", z);
+
+        ACHIEVEMENT_DEFS[aid] = {
+            aid,
+            ACAT_PERIODIC_TABLE,
+            s_element_names[idx],
+            s_element_descs[idx],
+            s_element_icons[idx],
+            s_element_steam[idx]
+        };
+    }
+}
 
 // ── AchievementManager implementation ───────────────────────────────────────
 
@@ -161,7 +243,7 @@ bool AchievementManager::is_unlocked(AchievementID id) const {
 
 int AchievementManager::unlocked_count() const {
     int count = 0;
-    for (int s = 0; s < 2; s++) {
+    for (uint32_t s = 0; s < ACH_ELEMENT_SLOTS; s++) {
         uint64_t bits = unlocked_bits_[s];
         while (bits) {
             count += (bits & 1);
@@ -174,7 +256,7 @@ int AchievementManager::unlocked_count() const {
 // ── Persistence (.ppach file) ───────────────────────────────────────────────
 
 static constexpr uint32_t PPACH_MAGIC   = 0x48434150;  // "PACH" little-endian
-static constexpr uint32_t PPACH_VERSION = 2;
+static constexpr uint32_t PPACH_VERSION = 4;
 
 bool AchievementManager::save(const std::string& filepath) const {
     std::ofstream f(filepath, std::ios::binary);
@@ -183,9 +265,9 @@ bool AchievementManager::save(const std::string& filepath) const {
     f.write(reinterpret_cast<const char*>(&PPACH_MAGIC), sizeof(uint32_t));
     f.write(reinterpret_cast<const char*>(&PPACH_VERSION), sizeof(uint32_t));
 
-    // v2: two uint64_t bitfield slots
-    f.write(reinterpret_cast<const char*>(&unlocked_bits_[0]), sizeof(uint64_t));
-    f.write(reinterpret_cast<const char*>(&unlocked_bits_[1]), sizeof(uint64_t));
+    // v4: four uint64_t bitfield slots (256 achievement capacity)
+    for (uint32_t s = 0; s < ACH_ELEMENT_SLOTS; s++)
+        f.write(reinterpret_cast<const char*>(&unlocked_bits_[s]), sizeof(uint64_t));
 
     // Counters
     f.write(reinterpret_cast<const char*>(&total_fusions), sizeof(uint32_t));
@@ -213,6 +295,25 @@ bool AchievementManager::save(const std::string& filepath) const {
     // v2: scenario completion
     f.write(reinterpret_cast<const char*>(scenarios_completed), sizeof(scenarios_completed));
 
+    // v3: bonds counter, cutscene tracking, observation flags
+    f.write(reinterpret_cast<const char*>(&total_bonds_formed), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&cutscene_intros_seen), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&seen_plasmon), sizeof(bool));
+    f.write(reinterpret_cast<const char*>(&seen_phonon), sizeof(bool));
+    f.write(reinterpret_cast<const char*>(&seen_magnon), sizeof(bool));
+    f.write(reinterpret_cast<const char*>(&seen_polaron), sizeof(bool));
+    f.write(reinterpret_cast<const char*>(&seen_cooper_pair), sizeof(bool));
+    f.write(reinterpret_cast<const char*>(&seen_roton), sizeof(bool));
+    f.write(reinterpret_cast<const char*>(&seen_electron_hole), sizeof(bool));
+    f.write(reinterpret_cast<const char*>(&seen_bremsstrahlung), sizeof(bool));
+    f.write(reinterpret_cast<const char*>(&seen_hadronization), sizeof(bool));
+    f.write(reinterpret_cast<const char*>(&seen_carrier_exchange), sizeof(bool));
+    f.write(reinterpret_cast<const char*>(&seen_neutrino_oscillation), sizeof(bool));
+    f.write(reinterpret_cast<const char*>(&seen_shell_transition), sizeof(bool));
+    f.write(reinterpret_cast<const char*>(&seen_recombination), sizeof(bool));
+    f.write(reinterpret_cast<const char*>(&seen_meson_decay), sizeof(bool));
+    f.write(reinterpret_cast<const char*>(&seen_weak_decay), sizeof(bool));
+
     return f.good();
 }
 
@@ -223,17 +324,24 @@ bool AchievementManager::load(const std::string& filepath) {
     uint32_t magic = 0, version = 0;
     f.read(reinterpret_cast<char*>(&magic), sizeof(uint32_t));
     f.read(reinterpret_cast<char*>(&version), sizeof(uint32_t));
-    if (magic != PPACH_MAGIC || (version != 1 && version != 2))
+    if (magic != PPACH_MAGIC || version < 1 || version > 4)
         return false;
+
+    // Clear all bitfield slots first
+    for (uint32_t s = 0; s < ACH_ELEMENT_SLOTS; s++)
+        unlocked_bits_[s] = 0;
 
     if (version == 1) {
         // v1: single uint64_t bitfield
         f.read(reinterpret_cast<char*>(&unlocked_bits_[0]), sizeof(uint64_t));
-        unlocked_bits_[1] = 0;
-    } else {
-        // v2: two uint64_t bitfield slots
+    } else if (version <= 3) {
+        // v2-v3: two uint64_t bitfield slots
         f.read(reinterpret_cast<char*>(&unlocked_bits_[0]), sizeof(uint64_t));
         f.read(reinterpret_cast<char*>(&unlocked_bits_[1]), sizeof(uint64_t));
+    } else {
+        // v4: four uint64_t bitfield slots
+        for (uint32_t s = 0; s < ACH_ELEMENT_SLOTS; s++)
+            f.read(reinterpret_cast<char*>(&unlocked_bits_[s]), sizeof(uint64_t));
     }
 
     // Counters
@@ -262,6 +370,107 @@ bool AchievementManager::load(const std::string& filepath) {
         // v2: scenario completion
         f.read(reinterpret_cast<char*>(scenarios_completed), sizeof(scenarios_completed));
     }
+
+    if (version >= 3) {
+        // v3: bonds counter, cutscene tracking, observation flags
+        f.read(reinterpret_cast<char*>(&total_bonds_formed), sizeof(uint32_t));
+        f.read(reinterpret_cast<char*>(&cutscene_intros_seen), sizeof(uint32_t));
+        f.read(reinterpret_cast<char*>(&seen_plasmon), sizeof(bool));
+        f.read(reinterpret_cast<char*>(&seen_phonon), sizeof(bool));
+        f.read(reinterpret_cast<char*>(&seen_magnon), sizeof(bool));
+        f.read(reinterpret_cast<char*>(&seen_polaron), sizeof(bool));
+        f.read(reinterpret_cast<char*>(&seen_cooper_pair), sizeof(bool));
+        f.read(reinterpret_cast<char*>(&seen_roton), sizeof(bool));
+        f.read(reinterpret_cast<char*>(&seen_electron_hole), sizeof(bool));
+        f.read(reinterpret_cast<char*>(&seen_bremsstrahlung), sizeof(bool));
+        f.read(reinterpret_cast<char*>(&seen_hadronization), sizeof(bool));
+        f.read(reinterpret_cast<char*>(&seen_carrier_exchange), sizeof(bool));
+        f.read(reinterpret_cast<char*>(&seen_neutrino_oscillation), sizeof(bool));
+        f.read(reinterpret_cast<char*>(&seen_shell_transition), sizeof(bool));
+        f.read(reinterpret_cast<char*>(&seen_recombination), sizeof(bool));
+        f.read(reinterpret_cast<char*>(&seen_meson_decay), sizeof(bool));
+        f.read(reinterpret_cast<char*>(&seen_weak_decay), sizeof(bool));
+    }
+
+    return f.good();
+}
+
+// ── LifetimeStats persistence (.ppstats file) ──────────────────────────────
+
+static constexpr uint32_t PPST_MAGIC   = 0x54535050;  // "PPST" little-endian
+static constexpr uint32_t PPST_VERSION = 1;
+
+bool LifetimeStats::save(const std::string& filepath) const {
+    std::ofstream f(filepath, std::ios::binary);
+    if (!f.is_open()) return false;
+
+    f.write(reinterpret_cast<const char*>(&PPST_MAGIC), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&PPST_VERSION), sizeof(uint32_t));
+
+    // Global totals
+    f.write(reinterpret_cast<const char*>(&total_ticks), sizeof(uint64_t));
+    f.write(reinterpret_cast<const char*>(&total_play_time), sizeof(double));
+    f.write(reinterpret_cast<const char*>(&total_simulations), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&total_fusions), sizeof(uint64_t));
+    f.write(reinterpret_cast<const char*>(&total_fissions), sizeof(uint64_t));
+    f.write(reinterpret_cast<const char*>(&total_annihilations), sizeof(uint64_t));
+    f.write(reinterpret_cast<const char*>(&total_decays), sizeof(uint64_t));
+    f.write(reinterpret_cast<const char*>(&total_bonds_formed), sizeof(uint64_t));
+
+    // Per-particle-type arrays
+    f.write(reinterpret_cast<const char*>(particles_spawned), sizeof(particles_spawned));
+    f.write(reinterpret_cast<const char*>(particles_peak), sizeof(particles_peak));
+
+    // Per-element arrays
+    f.write(reinterpret_cast<const char*>(elements_created), sizeof(elements_created));
+    f.write(reinterpret_cast<const char*>(elements_peak), sizeof(elements_peak));
+
+    // Molecules
+    f.write(reinterpret_cast<const char*>(&total_molecules_discovered), sizeof(uint32_t));
+
+    // All-time peaks
+    f.write(reinterpret_cast<const char*>(&peak_temperature), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&peak_particles), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&peak_entangled), sizeof(uint32_t));
+
+    return f.good();
+}
+
+bool LifetimeStats::load(const std::string& filepath) {
+    std::ifstream f(filepath, std::ios::binary);
+    if (!f.is_open()) return false;
+
+    uint32_t magic = 0, version = 0;
+    f.read(reinterpret_cast<char*>(&magic), sizeof(uint32_t));
+    f.read(reinterpret_cast<char*>(&version), sizeof(uint32_t));
+    if (magic != PPST_MAGIC || version < 1 || version > 1)
+        return false;
+
+    // Global totals
+    f.read(reinterpret_cast<char*>(&total_ticks), sizeof(uint64_t));
+    f.read(reinterpret_cast<char*>(&total_play_time), sizeof(double));
+    f.read(reinterpret_cast<char*>(&total_simulations), sizeof(uint32_t));
+    f.read(reinterpret_cast<char*>(&total_fusions), sizeof(uint64_t));
+    f.read(reinterpret_cast<char*>(&total_fissions), sizeof(uint64_t));
+    f.read(reinterpret_cast<char*>(&total_annihilations), sizeof(uint64_t));
+    f.read(reinterpret_cast<char*>(&total_decays), sizeof(uint64_t));
+    f.read(reinterpret_cast<char*>(&total_bonds_formed), sizeof(uint64_t));
+
+    // Per-particle-type arrays
+    f.read(reinterpret_cast<char*>(particles_spawned), sizeof(particles_spawned));
+    f.read(reinterpret_cast<char*>(particles_peak), sizeof(particles_peak));
+
+    // Per-element arrays
+    f.read(reinterpret_cast<char*>(elements_created), sizeof(elements_created));
+    f.read(reinterpret_cast<char*>(elements_peak), sizeof(elements_peak));
+
+    // Molecules
+    f.read(reinterpret_cast<char*>(&total_molecules_discovered), sizeof(uint32_t));
+
+    // All-time peaks
+    f.read(reinterpret_cast<char*>(&peak_temperature), sizeof(float));
+    f.read(reinterpret_cast<char*>(&peak_particles), sizeof(uint32_t));
+    f.read(reinterpret_cast<char*>(&peak_entangled), sizeof(uint32_t));
 
     return f.good();
 }

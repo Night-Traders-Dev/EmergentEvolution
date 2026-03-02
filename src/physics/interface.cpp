@@ -867,7 +867,57 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         || ruler_placement_mode || density_counter_placement_mode)
         select_mode = false;
 
+    // ── Inactivity timeout ──────────────────────────────────────────────────
+    // After 10 minutes of no input, pause simulation and show splash screen.
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        bool any_input = false;
+        // Mouse moved
+        if (last_mouse_pos_.x >= 0.0f) {
+            float dx = io.MousePos.x - last_mouse_pos_.x;
+            float dy = io.MousePos.y - last_mouse_pos_.y;
+            if (dx * dx + dy * dy > 4.0f) any_input = true;
+        }
+        last_mouse_pos_ = io.MousePos;
+        // Mouse clicked
+        if (io.MouseClicked[0] || io.MouseClicked[1] || io.MouseClicked[2])
+            any_input = true;
+        // Mouse wheel
+        if (io.MouseWheel != 0.0f || io.MouseWheelH != 0.0f)
+            any_input = true;
+        // Any key pressed
+        for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k) {
+            if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(k), false)) {
+                any_input = true;
+                break;
+            }
+        }
+
+        if (any_input) {
+            inactivity_timer_ = 0.0f;
+        } else if (!show_splash) {
+            inactivity_timer_ += io.DeltaTime;
+            if (inactivity_timer_ >= INACTIVITY_TIMEOUT) {
+                inactivity_timer_ = 0.0f;
+                sim_running = false;
+                show_splash = true;
+                splash_inited_ = false;
+                splash_time_ = 0.0f;
+                splash_variant_ = -1;  // pick new random variant
+            }
+        }
+    }
+
     push_theme();
+
+    // Shared animated background for all fullscreen overlays
+    {
+        bool any_overlay = show_splash || cutscene_state_ != CS_INACTIVE
+            || show_cutscene_gallery || show_pause_menu || show_settings_menu
+            || show_credits_ || show_howto || show_scenario_menu
+            || show_achievements_panel;
+        if (any_overlay) draw_menu_background();
+    }
 
     // Splash screen (blocks all other UI until dismissed)
     if (show_splash) {

@@ -231,8 +231,13 @@ void PhysicsSimulation::init(GLFWwindow* window) {
     }
     cfg.generation_seed = static_cast<uint32_t>(iface.seed_value);
 
-    // Load persistent achievements from disk
+    // Initialize runtime achievement definitions (element entries)
+    init_achievement_defs();
+
+    // Load persistent achievements and lifetime stats from disk
     achievements.load(get_data_dir() + "achievements.ppach");
+    iface.lifetime_stats.load(get_data_dir() + "stats.ppstats");
+    iface.lifetime_stats.total_simulations++;
 
     vk.preferred_gpu_index = iface.prefs.preferred_gpu;
     vk.vsync_requested = iface.prefs.vsync;
@@ -293,6 +298,7 @@ void PhysicsSimulation::destroy() {
     repository.destroy();
     audio.destroy();
     achievements.save(get_data_dir() + "achievements.ppach");
+    iface.lifetime_stats.save(get_data_dir() + "stats.ppstats");
     vkDeviceWaitIdle(vk.device);
     if (compute_fence_ != VK_NULL_HANDLE) {
         vkDestroyFence(vk.device, compute_fence_, nullptr);
@@ -1206,12 +1212,19 @@ void PhysicsSimulation::check_achievements() {
             case 2:  try_unlock(ACH_HELIUM);   break;
             case 3:  try_unlock(ACH_LITHIUM);  break;
             case 6:  try_unlock(ACH_CARBON);   break;
+            case 7:  try_unlock(ACH_NITROGEN);  break;
             case 8:  try_unlock(ACH_OXYGEN);   break;
+            case 10: try_unlock(ACH_NEON);      break;
+            case 14: try_unlock(ACH_SILICON);   break;
             case 26: try_unlock(ACH_IRON);     break;
             case 79: try_unlock(ACH_GOLD);     break;
             case 92: try_unlock(ACH_URANIUM);  break;
             default: break;
         }
+
+        // Periodic table achievement for every element Z=1..118
+        if (nuc.Z >= 1 && nuc.Z <= 118)
+            try_unlock(static_cast<AchievementID>(ACH_ELEMENT_BASE + nuc.Z - 1));
 
         // Check for antimatter element
         if (nuc.is_anti && has_electrons) try_unlock(ACH_ANTIMATTER_ELEMENT);
@@ -1404,6 +1417,124 @@ void PhysicsSimulation::check_achievements() {
         if (all_chem)    try_unlock(ACH_ALL_CHEMISTRY_SCENARIOS);
         if (all_cosmo)   try_unlock(ACH_ALL_COSMOLOGY_SCENARIOS);
         if (all_nuclear && all_chem && all_cosmo) try_unlock(ACH_SCENARIO_MASTER);
+    }
+
+    // ── Quasiparticle observations ───────────────────────────────────
+    if (tc[PLASMON_TYPE_PHYS] > 0)       { achievements.seen_plasmon = true;       try_unlock(ACH_FIRST_PLASMON); }
+    if (tc[PHONON_TYPE_PHYS] > 0)        { achievements.seen_phonon = true;        try_unlock(ACH_FIRST_PHONON); }
+    if (tc[MAGNON_TYPE_PHYS] > 0)        { achievements.seen_magnon = true;        try_unlock(ACH_FIRST_MAGNON); }
+    if (tc[POLARON_TYPE_PHYS] > 0)       { achievements.seen_polaron = true;       try_unlock(ACH_FIRST_POLARON); }
+    if (tc[COOPER_PAIR_TYPE_PHYS] > 0)   { achievements.seen_cooper_pair = true;   try_unlock(ACH_FIRST_COOPER_PAIR); }
+    if (tc[ROTON_TYPE_PHYS] > 0)         { achievements.seen_roton = true;         try_unlock(ACH_FIRST_ROTON); }
+    if (tc[ELECTRON_HOLE_TYPE_PHYS] > 0) { achievements.seen_electron_hole = true; try_unlock(ACH_FIRST_ELECTRON_HOLE); }
+
+    // ── BSM extras ───────────────────────────────────────────────────
+    if (tc[MONOPOLE_TYPE_PHYS] > 0)    try_unlock(ACH_FIRST_MONOPOLE);
+    if (tc[NEUTRALINO_TYPE_PHYS] > 0)  try_unlock(ACH_FIRST_NEUTRALINO);
+    if (tc[GRAVITINO_TYPE_PHYS] > 0)   try_unlock(ACH_FIRST_GRAVITINO);
+
+    // ── More element count thresholds ────────────────────────────────
+    if (achievements.distinct_elements_count >= 50) try_unlock(ACH_ELEMENTS_50);
+
+    // ── Higher counter thresholds ────────────────────────────────────
+    if (achievements.total_annihilations >= 500)    try_unlock(ACH_ANNIHILATIONS_500);
+    if (achievements.total_nuclear_decays >= 200)   try_unlock(ACH_NUCLEAR_DECAYS_200);
+    if (achievements.total_fusions >= 5000)         try_unlock(ACH_FUSIONS_5000);
+    if (achievements.total_bonds_formed >= 50)      try_unlock(ACH_BONDS_50);
+
+    // ── Specific molecule achievements ───────────────────────────────
+    for (const auto& m : iface.molecule_bestiary) {
+        if (m.formula == "H2O")  try_unlock(ACH_WATER);
+        if (m.formula == "CH4")  try_unlock(ACH_METHANE);
+        if (m.formula == "NH3")  try_unlock(ACH_AMMONIA);
+    }
+    {
+        int distinct_mol2 = 0;
+        for (const auto& m : iface.molecule_bestiary) {
+            if (!m.formula.empty()) distinct_mol2++;
+        }
+        if (distinct_mol2 >= 25) try_unlock(ACH_MOLECULES_25);
+    }
+
+    // ── Process observation achievements (set by physics functions) ──
+    if (achievements.seen_bremsstrahlung)       try_unlock(ACH_FIRST_BREMSSTRAHLUNG);
+    if (achievements.seen_hadronization)        try_unlock(ACH_FIRST_HADRONIZATION);
+    if (achievements.seen_carrier_exchange)     try_unlock(ACH_FIRST_CARRIER_EXCHANGE);
+    if (achievements.seen_neutrino_oscillation) try_unlock(ACH_FIRST_NEUTRINO_OSCILLATION);
+    if (achievements.seen_shell_transition)     try_unlock(ACH_FIRST_SHELL_TRANSITION);
+    if (achievements.seen_recombination)        try_unlock(ACH_FIRST_RECOMBINATION);
+    if (achievements.seen_meson_decay)          try_unlock(ACH_FIRST_MESON_DECAY);
+    if (achievements.seen_weak_decay)           try_unlock(ACH_FIRST_WEAK_DECAY);
+
+    // ── Cutscene achievements ────────────────────────────────────────
+    if (achievements.cutscene_intros_seen != 0) try_unlock(ACH_FIRST_CUTSCENE);
+    {
+        // Check if all non-sandbox scenario intros have been watched
+        // Scenarios: 0-9, 12-17 (skip sandbox 10,11)
+        static const int INTRO_SCENARIOS[] = {0,1,2,3,4,5,6,7,8,9,12,13,14,15,16,17};
+        bool all_watched = true;
+        for (int s : INTRO_SCENARIOS) {
+            if (!(achievements.cutscene_intros_seen & (1u << s))) { all_watched = false; break; }
+        }
+        if (all_watched) try_unlock(ACH_ALL_INTROS_WATCHED);
+    }
+
+    // ── Lifetime stats accumulation ─────────────────────────────────────
+    {
+        LifetimeStats& ls = iface.lifetime_stats;
+        ls.total_ticks++;
+        ls.total_play_time += ImGui::GetIO().DeltaTime;
+
+        // Merge event counters from session (delta since last snapshot)
+        ls.total_fusions       += (achievements.total_fusions       - iface.ls_snap_fusions);
+        ls.total_fissions      += (achievements.total_fissions      - iface.ls_snap_fissions);
+        ls.total_annihilations += (achievements.total_annihilations - iface.ls_snap_annihilations);
+        ls.total_decays        += (achievements.total_nuclear_decays - iface.ls_snap_decays);
+        ls.total_bonds_formed  += (achievements.total_bonds_formed  - iface.ls_snap_bonds);
+        iface.ls_snap_fusions       = achievements.total_fusions;
+        iface.ls_snap_fissions      = achievements.total_fissions;
+        iface.ls_snap_annihilations = achievements.total_annihilations;
+        iface.ls_snap_decays        = achievements.total_nuclear_decays;
+        iface.ls_snap_bonds         = achievements.total_bonds_formed;
+
+        // Per-type spawned (delta) and per-type peak
+        for (int t = 0; t < LIFETIME_PARTICLE_TYPES; t++) {
+            uint32_t spawned_now = iface.type_stats[t].total_spawned;
+            if (spawned_now > iface.ls_snap_type_spawned[t]) {
+                ls.particles_spawned[t] += (spawned_now - iface.ls_snap_type_spawned[t]);
+                iface.ls_snap_type_spawned[t] = spawned_now;
+            }
+            uint32_t cur = iface.type_counts_display[t];
+            if (cur > ls.particles_peak[t]) ls.particles_peak[t] = cur;
+        }
+
+        // Per-element created (delta) and peak
+        for (int z = 1; z < 119; z++) {
+            uint32_t created = iface.element_stats[z].total_spawned;
+            if (created > iface.ls_snap_elem_created[z]) {
+                ls.elements_created[z] += (created - iface.ls_snap_elem_created[z]);
+                iface.ls_snap_elem_created[z] = created;
+            }
+            uint32_t cur = iface.element_stats[z].current_count;
+            if (cur > ls.elements_peak[z]) ls.elements_peak[z] = cur;
+        }
+
+        // Molecule count
+        uint32_t mol_count = static_cast<uint32_t>(iface.molecule_bestiary.size());
+        if (mol_count > ls.total_molecules_discovered) ls.total_molecules_discovered = mol_count;
+
+        // All-time peaks
+        if (temp > ls.peak_temperature)        ls.peak_temperature = temp;
+        if (active > ls.peak_particles)              ls.peak_particles = active;
+        if (entangled_pair_count_ > ls.peak_entangled) ls.peak_entangled = entangled_pair_count_;
+
+        // Periodic stats auto-save (every 30 seconds)
+        static float ls_save_timer = 0.0f;
+        ls_save_timer += ImGui::GetIO().DeltaTime;
+        if (ls_save_timer >= 30.0f) {
+            ls.save(get_data_dir() + "stats.ppstats");
+            ls_save_timer = 0.0f;
+        }
     }
 }
 

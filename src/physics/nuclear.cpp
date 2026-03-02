@@ -2273,6 +2273,7 @@ void PhysicsSimulation::check_recombination() {
 
         any_changed = true;
         recomb_count++;
+        achievements.seen_recombination = true;
         iface.push_decay_event("Electron hole recombined: h\xe2\x81\xba + e\xe2\x81\xbb \xe2\x86\x92 \xce\xb3",
             PhysicsInterface::DEVT_ELECTRON_HOLE, ImVec4(1.0f, 0.75f, 0.25f, 1.0f), "");
     }
@@ -2548,6 +2549,7 @@ void PhysicsSimulation::check_carrier_exchange() {
                      E_carrier, dist);
             iface.push_decay_event(msg, final_evt, col, std::string(detail));
         }
+        achievements.seen_carrier_exchange = true;
 
         ++spawned;
     }

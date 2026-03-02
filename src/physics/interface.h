@@ -503,6 +503,18 @@ public:
     std::vector<MoleculeBestiaryEntry> molecule_bestiary;
     uint32_t molecule_bestiary_session = 0;
 
+    // ── Lifetime stats (persistent across sessions) ───────────────────────
+    LifetimeStats lifetime_stats{};
+
+    // Snapshot values for delta computation (comparing session counters to last-accumulated)
+    uint32_t ls_snap_fusions       = 0;
+    uint32_t ls_snap_fissions      = 0;
+    uint32_t ls_snap_annihilations = 0;
+    uint32_t ls_snap_decays        = 0;
+    uint32_t ls_snap_bonds         = 0;
+    uint32_t ls_snap_type_spawned[LIFETIME_PARTICLE_TYPES] = {};
+    uint32_t ls_snap_elem_created[119] = {};
+
     // Wave-particle duality
     bool  wave_mode = false;
 
@@ -515,6 +527,11 @@ public:
     bool  field_dark_energy = false;
     float field_intensity = 0.5f;
     bool  show_collision_radii = false;
+
+    // Inactivity timeout — pause + splash after 10 minutes idle
+    float inactivity_timer_ = 0.0f;
+    ImVec2 last_mouse_pos_ = ImVec2(-1, -1);
+    static constexpr float INACTIVITY_TIMEOUT = 600.0f;  // 10 minutes
 
     // Bottom bar auto-hide
     float bottom_bar_offset = 0.0f;  // 0.0 = fully visible, 1.0 = fully hidden
@@ -825,6 +842,14 @@ private:
     void draw_cutscene();
     void draw_cutscene_gallery();
     void init_cutscene_particles(int scene, uint32_t color1, uint32_t color2);
+
+    // Shared animated menu background (cosmic starfield/nebula)
+    std::vector<SplashParticle> menu_bg_particles_;
+    std::vector<std::vector<ImVec2>> menu_bg_trails_;
+    float menu_bg_time_ = 0.0f;
+    bool  menu_bg_inited_ = false;
+    void init_menu_background();
+    void draw_menu_background();
 
     // Thumbnail cache for save/load dialog
     struct ThumbnailEntry {

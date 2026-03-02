@@ -782,6 +782,7 @@ void PhysicsSimulation::update_bonds() {
                 current_bonds_a++;
                 new_bonds++;
                 any_changed = true;
+                achievements.total_bonds_formed++;
                 try_unlock(ACH_FIRST_BOND);
                 {
                     char desc[128], detail[384];
@@ -942,6 +943,7 @@ void PhysicsSimulation::check_shell_transitions() {
                     }
 
                     transition_count++;
+                    achievements.seen_shell_transition = true;
                     iface.push_decay_event(
                         "De-excitation: e\xe2\x81\xbb \xe2\x86\x92 lower shell + \xce\xb3",
                         PhysicsInterface::DEVT_PHOTOELECTRIC,

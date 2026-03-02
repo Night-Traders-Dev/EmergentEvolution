@@ -123,10 +123,63 @@ enum AchievementID : uint32_t {
     ACH_ACCELERATOR_50,         // Fire accelerator 50 times
     ACH_PLAY_1_HOUR,            // Run simulation for 1+ hour
 
+    // ── Quasiparticles ──────────────────────────────────────────────────
+    ACH_FIRST_PLASMON,          // Observe a plasmon (collective electron oscillation)
+    ACH_FIRST_PHONON,           // Observe a phonon (lattice vibration)
+    ACH_FIRST_MAGNON,           // Observe a magnon (spin wave)
+    ACH_FIRST_POLARON,          // Observe a polaron (dressed electron)
+    ACH_FIRST_COOPER_PAIR,      // Observe a Cooper pair (superconductivity)
+    ACH_FIRST_ROTON,            // Observe a roton (quantum vortex)
+    ACH_FIRST_ELECTRON_HOLE,    // Observe an electron hole
+
+    // ── Advanced Processes ──────────────────────────────────────────────
+    ACH_FIRST_BREMSSTRAHLUNG,   // Observe bremsstrahlung radiation
+    ACH_FIRST_HADRONIZATION,    // Observe quark hadronization
+    ACH_FIRST_CARRIER_EXCHANGE, // Observe force carrier exchange
+    ACH_FIRST_NEUTRINO_OSCILLATION, // Observe neutrino flavor oscillation
+    ACH_FIRST_SHELL_TRANSITION, // Observe electron shell transition
+    ACH_FIRST_RECOMBINATION,    // Observe electron-hole recombination
+    ACH_FIRST_MESON_DECAY,      // Observe meson decay
+    ACH_FIRST_WEAK_DECAY,       // Observe weak flavor change
+
+    // ── More Elements ───────────────────────────────────────────────────
+    ACH_NITROGEN,               // Create Nitrogen (Z=7)
+    ACH_NEON,                   // Create Neon (Z=10)
+    ACH_SILICON,                // Create Silicon (Z=14)
+    ACH_ELEMENTS_50,            // Discover 50 distinct elements
+
+    // ── Specific Molecules ──────────────────────────────────────────────
+    ACH_WATER,                  // Create water (H2O)
+    ACH_METHANE,                // Create methane (CH4)
+    ACH_AMMONIA,                // Create ammonia (NH3)
+    ACH_MOLECULES_25,           // Discover 25 distinct molecules
+
+    // ── Higher Thresholds ───────────────────────────────────────────────
+    ACH_ANNIHILATIONS_500,      // 500 total annihilations
+    ACH_NUCLEAR_DECAYS_200,     // 200 nuclear decay events
+    ACH_FUSIONS_5000,           // 5000 fusion events
+    ACH_BONDS_50,               // Form 50 total covalent bonds
+
+    // ── BSM Extras ──────────────────────────────────────────────────────
+    ACH_FIRST_MONOPOLE,         // Observe a magnetic monopole
+    ACH_FIRST_NEUTRALINO,       // Observe a neutralino (LSP)
+    ACH_FIRST_GRAVITINO,        // Observe a gravitino
+
+    // ── Cutscenes & Lore ────────────────────────────────────────────────
+    ACH_FIRST_CUTSCENE,         // Watch your first cutscene
+    ACH_ALL_INTROS_WATCHED,     // Watch all intro cutscenes
+
+    // ── Periodic Table Collection (Z=1..118) ────────────────────────────
+    // One achievement per element — contiguous range for easy indexing
+    ACH_ELEMENT_BASE,                           // = first element achievement slot
+    ACH_ELEMENT_1   = ACH_ELEMENT_BASE,         // Hydrogen
+    ACH_ELEMENT_118 = ACH_ELEMENT_BASE + 117,   // Oganesson
+
     ACH_COUNT                   // Total number of achievements
 };
 
-static_assert(ACH_COUNT <= 128, "Achievement count exceeds dual uint64_t bitfield capacity");
+static constexpr uint32_t ACH_ELEMENT_SLOTS = 4;  // number of uint64_t slots in bitfield
+static_assert(ACH_COUNT <= 256, "Achievement count exceeds quad uint64_t bitfield capacity");
 
 // ── Achievement metadata ────────────────────────────────────────────────────
 
@@ -138,6 +191,7 @@ enum AchievementCategory : uint8_t {
     ACAT_MILESTONES,
     ACAT_CHEMISTRY,
     ACAT_SCENARIOS,
+    ACAT_PERIODIC_TABLE,    // Rendered as grid, not list
     ACAT_COUNT
 };
 
@@ -150,9 +204,10 @@ struct AchievementDef {
     const char* steam_api_name; // Steam API achievement name (e.g., "ACH_FIRST_FUSION")
 };
 
-// Defined in achievements.cpp
-extern const AchievementDef ACHIEVEMENT_DEFS[ACH_COUNT];
+// Defined in achievements.cpp — element entries filled at runtime by init_achievement_defs()
+extern AchievementDef ACHIEVEMENT_DEFS[ACH_COUNT];
 extern const char* ACHIEVEMENT_CATEGORY_NAMES[ACAT_COUNT];
+void init_achievement_defs();  // Must be called once at startup
 
 // ── AchievementManager ──────────────────────────────────────────────────────
 
@@ -203,6 +258,7 @@ public:
     // Advanced counters
     uint32_t total_accelerator_fires    = 0;
     uint32_t total_force_objects_placed = 0;
+    uint32_t total_bonds_formed         = 0;
 
     // Scenario completion tracking (indexed by scenario_idx)
     bool scenarios_completed[20] = {};
@@ -210,7 +266,64 @@ public:
     // Cutscene tracking: bit i = intro for scenario i has been watched
     uint32_t cutscene_intros_seen = 0;
 
+    // Quasiparticle observation flags (one bit each — have we ever seen one?)
+    bool seen_plasmon     = false;
+    bool seen_phonon      = false;
+    bool seen_magnon      = false;
+    bool seen_polaron     = false;
+    bool seen_cooper_pair = false;
+    bool seen_roton       = false;
+    bool seen_electron_hole = false;
+
+    // Process observation flags
+    bool seen_bremsstrahlung       = false;
+    bool seen_hadronization        = false;
+    bool seen_carrier_exchange     = false;
+    bool seen_neutrino_oscillation = false;
+    bool seen_shell_transition     = false;
+    bool seen_recombination        = false;
+    bool seen_meson_decay          = false;
+    bool seen_weak_decay           = false;
+
 private:
-    // Bitfield for unlocked achievements (ACH_COUNT <= 128, two uint64_t slots)
-    uint64_t unlocked_bits_[2] = {};
+    // Bitfield for unlocked achievements (ACH_COUNT <= 256, four uint64_t slots)
+    uint64_t unlocked_bits_[ACH_ELEMENT_SLOTS] = {};
+};
+
+// ── Lifetime Stats ──────────────────────────────────────────────────────────
+// Persistent career statistics accumulated across all sessions.
+
+static constexpr int LIFETIME_PARTICLE_TYPES = 74;
+static constexpr int LIFETIME_ELEMENT_COUNT  = 119;  // Z=0..118
+
+struct LifetimeStats {
+    // Global totals
+    uint64_t total_ticks           = 0;
+    double   total_play_time       = 0.0;   // seconds
+    uint32_t total_simulations     = 0;
+    uint64_t total_fusions         = 0;
+    uint64_t total_fissions        = 0;
+    uint64_t total_annihilations   = 0;
+    uint64_t total_decays          = 0;
+    uint64_t total_bonds_formed    = 0;
+
+    // Per-particle-type (74 types)
+    uint64_t particles_spawned[LIFETIME_PARTICLE_TYPES] = {};
+    uint32_t particles_peak[LIFETIME_PARTICLE_TYPES]    = {};
+
+    // Per-element (Z=0..118)
+    uint64_t elements_created[LIFETIME_ELEMENT_COUNT] = {};
+    uint32_t elements_peak[LIFETIME_ELEMENT_COUNT]    = {};
+
+    // Molecules
+    uint32_t total_molecules_discovered = 0;
+
+    // All-time peaks
+    float    peak_temperature    = 0.0f;
+    uint32_t peak_particles      = 0;
+    uint32_t peak_entangled      = 0;
+
+    // Persistence
+    bool save(const std::string& filepath) const;
+    bool load(const std::string& filepath);
 };

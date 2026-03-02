@@ -1734,6 +1734,7 @@ void PhysicsSimulation::check_hadronization() {
             consumed[best_k] = true;
             any_changed = true;
             ++baryons_formed;
+            achievements.seen_hadronization = true;
 
             char msg[64];
             snprintf(msg, sizeof(msg), "Hadronization \xe2\x86\x92 %s", baryon_name);
@@ -2135,6 +2136,7 @@ void PhysicsSimulation::check_bremsstrahlung() {
                      name, i, PHYS_CHARGE[type], compute_gamma(readback_velocities_[i]), E_photon, slot);
             iface.push_decay_event(msg, PhysicsInterface::DEVT_BREMSSTRAHLUNG, ImVec4(0.8f, 0.8f, 1.0f, 1.0f), std::string(detail));
         }
+        achievements.seen_bremsstrahlung = true;
     }
 
     if (photons_spawned > 0)
@@ -2239,6 +2241,7 @@ void PhysicsSimulation::check_weak_flavor_change() {
                      i, old_name, new_name, best_j, roll);
             iface.push_decay_event(msg, PhysicsInterface::DEVT_WEAK_SCATTER, ImVec4(0.7f, 0.8f, 1.0f, 1.0f), std::string(detail));
         }
+        achievements.seen_weak_decay = true;
         cpu_particles_dirty_ = true;
     }
 }

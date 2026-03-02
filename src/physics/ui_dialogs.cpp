@@ -69,6 +69,161 @@ static void draw_vignette(ImDrawList* dl, float W, float H) {
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Shared Animated Menu Background ──────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::init_menu_background() {
+    ImGuiIO& io = ImGui::GetIO();
+    float W = io.DisplaySize.x, H = io.DisplaySize.y;
+
+    menu_bg_particles_.clear();
+    menu_bg_trails_.clear();
+
+    // Color palette: deep cosmic blues, purples, teals
+    static const ImU32 PALETTE[] = {
+        IM_COL32(60, 120, 220, 140),   // blue
+        IM_COL32(100, 80, 200, 120),   // purple
+        IM_COL32(40, 180, 200, 110),   // teal
+        IM_COL32(80, 100, 240, 100),   // indigo
+        IM_COL32(140, 100, 220, 90),   // lavender
+        IM_COL32(30, 160, 180, 100),   // cyan
+        IM_COL32(200, 180, 255, 60),   // faint white-purple (star)
+        IM_COL32(255, 220, 200, 50),   // faint warm (star)
+    };
+    static const int NCOLORS = sizeof(PALETTE) / sizeof(PALETTE[0]);
+
+    std::mt19937 rng(42);  // deterministic seed for consistency
+    auto randf = [&]() { return std::uniform_real_distribution<float>(0.0f, 1.0f)(rng); };
+
+    constexpr int N = 80;
+    menu_bg_particles_.resize(N);
+    menu_bg_trails_.resize(N);
+
+    for (int i = 0; i < N; ++i) {
+        auto& p = menu_bg_particles_[i];
+        p.x = randf() * W;
+        p.y = randf() * H;
+        // Very slow drift
+        float angle = randf() * 6.2832f;
+        float speed = 0.15f + randf() * 0.35f;
+        p.vx = cosf(angle) * speed;
+        p.vy = sinf(angle) * speed;
+        // Larger, softer particles
+        p.base_r = 2.0f + randf() * 4.0f;
+        p.r = p.base_r;
+        p.pulse_phase = randf() * 6.2832f;
+        p.orbit = false;
+        // Pick color from palette
+        ImU32 c = PALETTE[i % NCOLORS];
+        p.color = c;
+        // Glow version: same hue but more transparent
+        int cr = (c >> IM_COL32_R_SHIFT) & 0xFF;
+        int cg = (c >> IM_COL32_G_SHIFT) & 0xFF;
+        int cb = (c >> IM_COL32_B_SHIFT) & 0xFF;
+        p.glow_color = IM_COL32(cr, cg, cb, 30);
+        p.type_idx = i;
+    }
+
+    menu_bg_inited_ = true;
+}
+
+void PhysicsInterface::draw_menu_background() {
+    ImGuiIO& io = ImGui::GetIO();
+    float dt = io.DeltaTime;
+    float W = io.DisplaySize.x, H = io.DisplaySize.y;
+    menu_bg_time_ += dt;
+
+    if (!menu_bg_inited_) init_menu_background();
+
+    ImDrawList* bg = ImGui::GetBackgroundDrawList();
+
+    // ── 1. Dark base fill ──────────────────────────────────────────────────
+    bg->AddRectFilled(ImVec2(0, 0), ImVec2(W, H), IM_COL32(2, 6, 14, 255));
+
+    // ── 2. Slow-drifting nebula glows ──────────────────────────────────────
+    float t = menu_bg_time_;
+    draw_radial_glow(bg,
+        W * 0.25f + sinf(t * 0.08f) * W * 0.12f,
+        H * 0.35f + cosf(t * 0.06f) * H * 0.10f,
+        350.0f, IM_COL32(20, 40, 120, 22), IM_COL32(0, 0, 0, 0));
+    draw_radial_glow(bg,
+        W * 0.72f + cosf(t * 0.07f) * W * 0.08f,
+        H * 0.60f + sinf(t * 0.09f) * H * 0.08f,
+        280.0f, IM_COL32(50, 20, 100, 18), IM_COL32(0, 0, 0, 0));
+    draw_radial_glow(bg,
+        W * 0.50f + sinf(t * 0.05f + 2.0f) * W * 0.15f,
+        H * 0.20f + cosf(t * 0.04f + 1.0f) * H * 0.12f,
+        220.0f, IM_COL32(15, 60, 80, 15), IM_COL32(0, 0, 0, 0));
+
+    // ── 3. Update particles ────────────────────────────────────────────────
+    bool animate = !prefs.reduced_motion;
+    for (auto& p : menu_bg_particles_) {
+        if (animate) {
+            p.r = p.base_r * (1.0f + 0.18f * sinf(t * 1.5f + p.pulse_phase));
+            p.x += p.vx * dt * 60.0f;
+            p.y += p.vy * dt * 60.0f;
+            if (p.x < -20.0f) p.x += W + 40.0f;
+            if (p.x > W + 20.0f) p.x -= W + 40.0f;
+            if (p.y < -20.0f) p.y += H + 40.0f;
+            if (p.y > H + 20.0f) p.y -= H + 40.0f;
+        }
+    }
+
+    // ── 4. Update trails ───────────────────────────────────────────────────
+    if (animate) {
+        for (size_t i = 0; i < menu_bg_particles_.size(); ++i) {
+            menu_bg_trails_[i].push_back(
+                ImVec2(menu_bg_particles_[i].x, menu_bg_particles_[i].y));
+            if (menu_bg_trails_[i].size() > 12)
+                menu_bg_trails_[i].erase(menu_bg_trails_[i].begin());
+        }
+    }
+
+    // ── 5. Draw trails ─────────────────────────────────────────────────────
+    for (size_t i = 0; i < menu_bg_particles_.size(); ++i) {
+        auto& trail = menu_bg_trails_[i];
+        for (size_t j = 1; j < trail.size(); ++j) {
+            float frac = (float)j / (float)trail.size();
+            float alpha = frac * 0.25f;
+            float width = menu_bg_particles_[i].r * (0.1f + 0.4f * frac);
+            ImU32 col = (menu_bg_particles_[i].color & ~IM_COL32_A_MASK)
+                      | ((uint32_t)(alpha * 255) << IM_COL32_A_SHIFT);
+            bg->AddLine(trail[j - 1], trail[j], col, width);
+        }
+    }
+
+    // ── 6. Draw particles with glow ────────────────────────────────────────
+    for (auto& p : menu_bg_particles_) {
+        draw_radial_glow(bg, p.x, p.y, p.r * 4.0f, p.glow_color, IM_COL32(0, 0, 0, 0));
+        bg->AddCircleFilled(ImVec2(p.x, p.y), p.r, p.color);
+    }
+
+    // ── 7. Subtle force lines between close particles ──────────────────────
+    float link_dist = 100.0f;
+    for (size_t i = 0; i < menu_bg_particles_.size(); ++i) {
+        for (size_t j = i + 1; j < menu_bg_particles_.size(); ++j) {
+            float dx = menu_bg_particles_[j].x - menu_bg_particles_[i].x;
+            float dy = menu_bg_particles_[j].y - menu_bg_particles_[i].y;
+            float d2 = dx * dx + dy * dy;
+            if (d2 < link_dist * link_dist && d2 > 25.0f) {
+                float d = sqrtf(d2);
+                float alpha = (1.0f - d / link_dist) * 0.06f;
+                ImVec2 a(menu_bg_particles_[i].x, menu_bg_particles_[i].y);
+                ImVec2 b(menu_bg_particles_[j].x, menu_bg_particles_[j].y);
+                bg->AddLine(a, b, IM_COL32(40, 100, 200, (int)(alpha * 255)), 1.0f);
+            }
+        }
+    }
+
+    // ── 8. Vignette + scanlines ────────────────────────────────────────────
+    draw_vignette(bg, W, H);
+    float gap = 4.0f;
+    for (float y = 0; y < H; y += gap)
+        bg->AddRectFilled(ImVec2(0, y + gap * 0.5f), ImVec2(W, y + gap),
+                          IM_COL32(0, 0, 0, 5));
+}
+
 // ── Splash particle initialization ───────────────────────────────────────────
 
 void PhysicsInterface::init_splash_particles() {
@@ -211,7 +366,11 @@ void PhysicsInterface::draw_splash_screen() {
                 }
             }
         }
-        if (dismiss) { show_splash = false; return; }
+        if (dismiss) {
+            show_splash = false;
+            show_scenario_menu = true;  // take user to scenario selection
+            return;
+        }
     }
 
     // Dispatch to the selected variant
@@ -1386,7 +1545,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
         | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav;
 
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.03f, 0.06f, 0.85f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.03f, 0.06f, 0.75f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 
@@ -1564,7 +1723,7 @@ void PhysicsInterface::draw_settings_menu() {
         | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
         | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav;
 
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.03f, 0.06f, 0.88f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.03f, 0.06f, 0.78f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 
@@ -2281,7 +2440,7 @@ void PhysicsInterface::draw_achievements_panel() {
         | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
         | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav;
 
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.03f, 0.06f, 0.92f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.03f, 0.06f, 0.78f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 
@@ -2326,6 +2485,21 @@ void PhysicsInterface::draw_achievements_panel() {
         ImGui::SetCursorPos(ImVec2(cx - panel_w * 0.5f, content_top));
         ImGui::BeginChild("##AchContent", ImVec2(panel_w, content_bottom - content_top), ImGuiChildFlags_Border);
 
+        // ── Standard periodic table layout (10 rows × 18 cols) ────────
+        // -1 = empty cell, positive = atomic number Z
+        static const int PT_LAYOUT[10][18] = {
+            {  1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,  2},
+            {  3,  4, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,  5,  6,  7,  8,  9, 10},
+            { 11, 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 13, 14, 15, 16, 17, 18},
+            { 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36},
+            { 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54},
+            { 55, 56, -1, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86},
+            { 87, 88, -1,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118},
+            { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1},
+            { -1, -1, -1, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71},
+            { -1, -1, -1, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99,100,101,102,103},
+        };
+
         for (int cat = 0; cat < ACAT_COUNT; cat++) {
             ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.15f, 0.18f, 0.28f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.20f, 0.24f, 0.35f, 1.0f));
@@ -2348,55 +2522,215 @@ void PhysicsInterface::draw_achievements_panel() {
             ImGui::PopStyleColor(2);
 
             if (open) {
-                for (uint32_t i = 0; i < ACH_COUNT; i++) {
-                    const auto& def = ACHIEVEMENT_DEFS[i];
-                    if (def.category != cat) continue;
+                // Periodic table category: render as 18-column grid
+                if (cat == ACAT_PERIODIC_TABLE) {
+                    float cell_sz = std::min(34.0f, (panel_w - 20.0f) / 18.0f);
+                    float pad = 2.0f;
+                    ImVec2 origin = ImGui::GetCursorScreenPos();
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
 
-                    bool done = achievements_ptr->is_unlocked(def.id);
+                    for (int row = 0; row < 10; row++) {
+                        for (int col = 0; col < 18; col++) {
+                            int z = PT_LAYOUT[row][col];
+                            if (z < 1) continue;
 
-                    // Achievement row
-                    ImGui::PushID(i);
-                    float row_h = 44.0f;
-                    ImVec2 cursor = ImGui::GetCursorPos();
+                            AchievementID aid = static_cast<AchievementID>(ACH_ELEMENT_BASE + z - 1);
+                            bool discovered = achievements_ptr->is_unlocked(aid);
 
-                    // Background highlight for unlocked
-                    if (done) {
-                        ImVec2 p0 = ImGui::GetCursorScreenPos();
-                        ImVec2 p1 = ImVec2(p0.x + panel_w - 20.0f, p0.y + row_h);
-                        ImGui::GetWindowDrawList()->AddRectFilled(
-                            p0, p1, IM_COL32(40, 60, 30, 100), 4.0f);
+                            float x = origin.x + col * (cell_sz + pad);
+                            float y = origin.y + row * (cell_sz + pad);
+                            ImVec2 p0(x, y);
+                            ImVec2 p1(x + cell_sz, y + cell_sz);
+
+                            // Cell background
+                            if (discovered) {
+                                dl->AddRectFilled(p0, p1, IM_COL32(200, 170, 20, 180), 3.0f);
+                            } else {
+                                dl->AddRectFilled(p0, p1, IM_COL32(40, 40, 50, 180), 3.0f);
+                            }
+                            dl->AddRect(p0, p1, IM_COL32(60, 60, 70, 200), 3.0f);
+
+                            // Element symbol centered in cell
+                            const char* sym = ELEMENT_SYMBOLS[z];
+                            ImVec2 tsz = ImGui::CalcTextSize(sym);
+                            float tx = x + (cell_sz - tsz.x) * 0.5f;
+                            float ty = y + (cell_sz - tsz.y) * 0.5f;
+                            ImU32 text_col = discovered ? IM_COL32(20, 20, 10, 255) : IM_COL32(90, 90, 100, 200);
+                            dl->AddText(ImVec2(tx, ty), text_col, sym);
+
+                            // Tooltip on hover
+                            if (ImGui::IsMouseHoveringRect(p0, p1)) {
+                                ImGui::BeginTooltip();
+                                ImGui::Text("%d - %s (%s)", z, ELEMENT_NAMES[z], sym);
+                                if (discovered) ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f), "Discovered!");
+                                else ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Not yet discovered");
+                                ImGui::EndTooltip();
+                            }
+                        }
                     }
 
-                    // Icon
-                    ImGui::SetCursorPos(ImVec2(cursor.x + 8.0f, cursor.y + 4.0f));
-                    if (done) {
-                        ImGui::TextColored(ImVec4(1.0f, 0.843f, 0.0f, 1.0f), "%s", def.icon);
-                    } else {
-                        ImGui::TextColored(ImVec4(0.3f, 0.3f, 0.35f, 1.0f), "[?]");
-                    }
+                    // Reserve space for the grid
+                    float grid_h = 10 * (cell_sz + pad) + pad;
+                    ImGui::Dummy(ImVec2(18 * (cell_sz + pad), grid_h));
+                } else {
+                    // Standard list rendering for other categories
+                    for (uint32_t i = 0; i < ACH_COUNT; i++) {
+                        const auto& def = ACHIEVEMENT_DEFS[i];
+                        if (def.category != cat) continue;
 
-                    // Name
-                    ImGui::SameLine(60.0f);
-                    ImGui::SetCursorPosY(cursor.y + 4.0f);
-                    if (done) {
-                        ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1.0f), "%s", def.name);
-                    } else {
-                        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.55f, 1.0f), "%s", def.name);
-                    }
+                        bool done = achievements_ptr->is_unlocked(def.id);
 
-                    // Description
-                    ImGui::SetCursorPos(ImVec2(cursor.x + 60.0f, cursor.y + 22.0f));
-                    if (done) {
-                        ImGui::TextColored(ImVec4(0.6f, 0.7f, 0.6f, 1.0f), "%s", def.description);
-                    } else {
-                        ImGui::TextColored(ImVec4(0.35f, 0.35f, 0.4f, 1.0f), "%s", def.description);
-                    }
+                        // Achievement row
+                        ImGui::PushID(i);
+                        float row_h = 44.0f;
+                        ImVec2 cursor = ImGui::GetCursorPos();
 
-                    ImGui::SetCursorPosY(cursor.y + row_h);
-                    ImGui::Separator();
-                    ImGui::PopID();
+                        // Background highlight for unlocked
+                        if (done) {
+                            ImVec2 p0 = ImGui::GetCursorScreenPos();
+                            ImVec2 p1 = ImVec2(p0.x + panel_w - 20.0f, p0.y + row_h);
+                            ImGui::GetWindowDrawList()->AddRectFilled(
+                                p0, p1, IM_COL32(40, 60, 30, 100), 4.0f);
+                        }
+
+                        // Icon
+                        ImGui::SetCursorPos(ImVec2(cursor.x + 8.0f, cursor.y + 4.0f));
+                        if (done) {
+                            ImGui::TextColored(ImVec4(1.0f, 0.843f, 0.0f, 1.0f), "%s", def.icon);
+                        } else {
+                            ImGui::TextColored(ImVec4(0.3f, 0.3f, 0.35f, 1.0f), "[?]");
+                        }
+
+                        // Name
+                        ImGui::SameLine(60.0f);
+                        ImGui::SetCursorPosY(cursor.y + 4.0f);
+                        if (done) {
+                            ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1.0f), "%s", def.name);
+                        } else {
+                            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.55f, 1.0f), "%s", def.name);
+                        }
+
+                        // Description
+                        ImGui::SetCursorPos(ImVec2(cursor.x + 60.0f, cursor.y + 22.0f));
+                        if (done) {
+                            ImGui::TextColored(ImVec4(0.6f, 0.7f, 0.6f, 1.0f), "%s", def.description);
+                        } else {
+                            ImGui::TextColored(ImVec4(0.35f, 0.35f, 0.4f, 1.0f), "%s", def.description);
+                        }
+
+                        ImGui::SetCursorPosY(cursor.y + row_h);
+                        ImGui::Separator();
+                        ImGui::PopID();
+                    }
                 }
             }
+        }
+
+        // ── Lifetime Statistics Section ─────────────────────────────────
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.15f, 0.18f, 0.28f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.20f, 0.24f, 0.35f, 1.0f));
+        if (ImGui::CollapsingHeader("Lifetime Statistics")) {
+            ImGui::PopStyleColor(2);
+            const LifetimeStats& ls = lifetime_stats;
+
+            ImGui::TextColored(ImVec4(1.0f, 0.843f, 0.0f, 1.0f), "Career Totals");
+            ImGui::Separator();
+
+            // Play time formatting
+            int hours   = static_cast<int>(ls.total_play_time / 3600.0);
+            int minutes = static_cast<int>(fmod(ls.total_play_time, 3600.0) / 60.0);
+            int seconds = static_cast<int>(fmod(ls.total_play_time, 60.0));
+            ImGui::Text("Play Time:       %d:%02d:%02d", hours, minutes, seconds);
+            ImGui::Text("Simulations:     %u", ls.total_simulations);
+            ImGui::Text("Total Ticks:     %llu", (unsigned long long)ls.total_ticks);
+            ImGui::Spacing();
+
+            ImGui::TextColored(ImVec4(1.0f, 0.843f, 0.0f, 1.0f), "Reactions");
+            ImGui::Separator();
+            ImGui::Text("Fusions:         %llu", (unsigned long long)ls.total_fusions);
+            ImGui::Text("Fissions:        %llu", (unsigned long long)ls.total_fissions);
+            ImGui::Text("Annihilations:   %llu", (unsigned long long)ls.total_annihilations);
+            ImGui::Text("Nuclear Decays:  %llu", (unsigned long long)ls.total_decays);
+            ImGui::Text("Bonds Formed:    %llu", (unsigned long long)ls.total_bonds_formed);
+            ImGui::Spacing();
+
+            ImGui::TextColored(ImVec4(1.0f, 0.843f, 0.0f, 1.0f), "Records");
+            ImGui::Separator();
+            if (ls.peak_temperature >= 1e9f)
+                ImGui::Text("Peak Temperature:  %.2f GK", ls.peak_temperature / 1e9f);
+            else if (ls.peak_temperature >= 1e6f)
+                ImGui::Text("Peak Temperature:  %.2f MK", ls.peak_temperature / 1e6f);
+            else
+                ImGui::Text("Peak Temperature:  %.0f K", ls.peak_temperature);
+            ImGui::Text("Peak Particles:    %u", ls.peak_particles);
+            ImGui::Text("Peak Entangled:    %u", ls.peak_entangled);
+            ImGui::Text("Molecules Found:   %u", ls.total_molecules_discovered);
+            ImGui::Spacing();
+
+            // Top particles by total spawned
+            ImGui::TextColored(ImVec4(1.0f, 0.843f, 0.0f, 1.0f), "Top Particles (by total spawned)");
+            ImGui::Separator();
+            // Build sorted list of types by spawned count
+            struct TypeEntry { int type; uint64_t count; };
+            TypeEntry entries[LIFETIME_PARTICLE_TYPES];
+            int n_entries = 0;
+            for (int t = 0; t < LIFETIME_PARTICLE_TYPES; t++) {
+                if (ls.particles_spawned[t] > 0) {
+                    entries[n_entries++] = {t, ls.particles_spawned[t]};
+                }
+            }
+            // Simple insertion sort (small N)
+            for (int i = 1; i < n_entries; i++) {
+                TypeEntry key = entries[i];
+                int j = i - 1;
+                while (j >= 0 && entries[j].count < key.count) {
+                    entries[j + 1] = entries[j];
+                    j--;
+                }
+                entries[j + 1] = key;
+            }
+            int show = std::min(n_entries, 10);
+            for (int i = 0; i < show; i++) {
+                ImGui::Text("  %s: %llu (peak %u)",
+                    PHYS_TYPE_LABELS[entries[i].type],
+                    (unsigned long long)entries[i].count,
+                    ls.particles_peak[entries[i].type]);
+            }
+            if (n_entries == 0) ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.55f, 1.0f), "  No particles spawned yet");
+            ImGui::Spacing();
+
+            // Top elements by total created
+            ImGui::TextColored(ImVec4(1.0f, 0.843f, 0.0f, 1.0f), "Top Elements (by total created)");
+            ImGui::Separator();
+            struct ElemEntry { int z; uint64_t count; };
+            ElemEntry elem_entries[118];
+            int n_elem = 0;
+            for (int z = 1; z <= 118; z++) {
+                if (ls.elements_created[z] > 0) {
+                    elem_entries[n_elem++] = {z, ls.elements_created[z]};
+                }
+            }
+            for (int i = 1; i < n_elem; i++) {
+                ElemEntry key = elem_entries[i];
+                int j = i - 1;
+                while (j >= 0 && elem_entries[j].count < key.count) {
+                    elem_entries[j + 1] = elem_entries[j];
+                    j--;
+                }
+                elem_entries[j + 1] = key;
+            }
+            show = std::min(n_elem, 10);
+            for (int i = 0; i < show; i++) {
+                int z = elem_entries[i].z;
+                ImGui::Text("  %s (%s): %llu (peak %u)",
+                    ELEMENT_NAMES[z], ELEMENT_SYMBOLS[z],
+                    (unsigned long long)elem_entries[i].count,
+                    ls.elements_peak[z]);
+            }
+            if (n_elem == 0) ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.55f, 1.0f), "  No elements created yet");
+        } else {
+            ImGui::PopStyleColor(2);
         }
 
         ImGui::EndChild();
@@ -3123,6 +3457,23 @@ void PhysicsInterface::draw_save_load_dialog() {
 // ── Scenario Menu ──────────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
+// Progression order: scenario index → next scenario index (skipping sandbox 10,11)
+// A scenario is unlocked if (a) it's sandbox, (b) it's scenario 0, or (c) the
+// previous scenario in the progression chain has been completed.
+static bool is_scenario_unlocked(int idx, const AchievementManager* ach) {
+    if (idx == 10 || idx == 11) return true;   // sandbox always open
+    if (idx == 0) return true;                  // first scenario always open
+    if (!ach) return false;
+    // Progression chain: 0,1,2,3,4,5,6,7,8,9,12,13,14,15,16,17
+    static const int CHAIN[] = { 0,1,2,3,4,5,6,7,8,9,12,13,14,15,16,17 };
+    static const int CHAIN_LEN = sizeof(CHAIN)/sizeof(CHAIN[0]);
+    for (int p = 1; p < CHAIN_LEN; ++p) {
+        if (CHAIN[p] == idx)
+            return ach->scenarios_completed[CHAIN[p-1]];
+    }
+    return false;
+}
+
 void PhysicsInterface::draw_scenario_menu() {
     if (!scenarios_ptr) { show_scenario_menu = false; return; }
 
@@ -3135,7 +3486,7 @@ void PhysicsInterface::draw_scenario_menu() {
         | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
         | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav;
 
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.03f, 0.06f, 0.92f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.03f, 0.06f, 0.78f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 
@@ -3243,23 +3594,30 @@ void PhysicsInterface::draw_scenario_menu() {
             ImVec2 card_max(x + card_w, y + card_h);
             ImDrawList* dl = ImGui::GetWindowDrawList();
 
-            bool hovered = ImGui::IsMouseHoveringRect(card_min, card_max);
+            bool completed = achievements_ptr && i < 20
+                && achievements_ptr->scenarios_completed[i];
+            bool unlocked = is_scenario_unlocked(i, achievements_ptr);
+
+            // Dim factor for locked scenarios
+            float dim = unlocked ? 1.0f : 0.35f;
+
+            bool hovered = unlocked && ImGui::IsMouseHoveringRect(card_min, card_max);
             ImU32 bg_col = hovered
                 ? ImGui::ColorConvertFloat4ToU32(ImVec4(0.12f, 0.16f, 0.28f, 0.95f))
-                : ImGui::ColorConvertFloat4ToU32(ImVec4(0.08f, 0.10f, 0.18f, 0.90f));
+                : ImGui::ColorConvertFloat4ToU32(ImVec4(0.08f * dim, 0.10f * dim, 0.18f * dim, 0.90f));
             dl->AddRectFilled(card_min, card_max, bg_col, 8.0f);
 
             // Border
             ImVec4 cc = cat_color(s.category);
-            ImU32 border = hovered
-                ? ImGui::ColorConvertFloat4ToU32(ImVec4(cc.x, cc.y, cc.z, 0.8f))
-                : ImGui::ColorConvertFloat4ToU32(ImVec4(cc.x, cc.y, cc.z, 0.3f));
+            float border_a = unlocked ? (hovered ? 0.8f : 0.3f) : 0.12f;
+            ImU32 border = ImGui::ColorConvertFloat4ToU32(
+                ImVec4(cc.x, cc.y, cc.z, border_a));
             dl->AddRect(card_min, card_max, border, 8.0f, 0, 1.5f);
 
             // Category badge
             ImVec2 badge_pos(x + 10.0f, y + 8.0f);
             dl->AddText(badge_pos,
-                ImGui::ColorConvertFloat4ToU32(ImVec4(cc.x, cc.y, cc.z, 0.8f)),
+                ImGui::ColorConvertFloat4ToU32(ImVec4(cc.x * dim, cc.y * dim, cc.z * dim, 0.8f * dim)),
                 s.category);
 
             // Task count badge (right side)
@@ -3268,21 +3626,27 @@ void PhysicsInterface::draw_scenario_menu() {
                 std::snprintf(task_badge, sizeof(task_badge), "%d Tasks", s.task_count);
                 ImVec2 tb_size = ImGui::CalcTextSize(task_badge);
                 dl->AddText(ImVec2(x + card_w - tb_size.x - 10.0f, y + 8.0f),
-                    ImGui::ColorConvertFloat4ToU32(ImVec4(0.5f, 0.6f, 0.75f, 0.7f)),
+                    ImGui::ColorConvertFloat4ToU32(ImVec4(0.5f, 0.6f, 0.75f, 0.7f * dim)),
                     task_badge);
             }
 
             // Completion checkmark (top-right corner)
-            bool completed = achievements_ptr && i < 20
-                && achievements_ptr->scenarios_completed[i];
             if (completed) {
                 dl->AddText(ImVec2(x + card_w - 22.0f, y + 22.0f),
                     ImGui::ColorConvertFloat4ToU32(ImVec4(0.3f, 0.95f, 0.4f, 0.9f)), "OK");
             }
 
+            // Locked indicator
+            if (!unlocked) {
+                const char* lock_text = "LOCKED";
+                ImVec2 lock_sz = ImGui::CalcTextSize(lock_text);
+                dl->AddText(ImVec2(x + card_w - lock_sz.x - 10.0f, y + 22.0f),
+                    ImGui::ColorConvertFloat4ToU32(ImVec4(0.5f, 0.4f, 0.3f, 0.7f)), lock_text);
+            }
+
             // Scenario name
             ImGui::SetCursorPos(ImVec2(x + 10.0f, y + 26.0f));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.95f, 1.0f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f * dim, 0.95f * dim, 1.0f * dim, 1.0f));
             float s2 = ImGui::GetFont()->Scale;
             ImGui::GetFont()->Scale = 1.2f;
             ImGui::PushFont(ImGui::GetFont());
@@ -3294,49 +3658,55 @@ void PhysicsInterface::draw_scenario_menu() {
             // Storyline subtitle (if available)
             if (s.storyline) {
                 ImGui::SetCursorPos(ImVec2(x + 10.0f, y + 46.0f));
-                ImGui::TextColored(ImVec4(0.55f, 0.6f, 0.75f, 0.7f), "\"%s\"", s.storyline);
+                ImGui::TextColored(ImVec4(0.55f * dim, 0.6f * dim, 0.75f * dim, 0.7f), "\"%s\"", s.storyline);
             }
 
             // Description (wrapped)
             float desc_y = s.storyline ? y + 62.0f : y + 50.0f;
             ImGui::SetCursorPos(ImVec2(x + 10.0f, desc_y));
             ImGui::PushTextWrapPos(x + card_w - 10.0f);
-            ImGui::TextColored(ImVec4(0.65f, 0.68f, 0.78f, 1.0f), "%s", s.description);
+            if (unlocked) {
+                ImGui::TextColored(ImVec4(0.65f, 0.68f, 0.78f, 1.0f), "%s", s.description);
+            } else {
+                ImGui::TextColored(ImVec4(0.35f, 0.35f, 0.40f, 0.7f), "Complete the previous scenario to unlock.");
+            }
             ImGui::PopTextWrapPos();
 
-            // Reset button (visible only when completed)
             ImGui::PushID(i);
-            if (completed) {
-                ImGui::SetCursorPos(ImVec2(x + card_w - 145.0f, y + card_h - 36.0f));
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.12f, 0.12f, 0.90f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.50f, 0.18f, 0.18f, 0.95f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.35f, 0.10f, 0.10f, 1.0f));
-                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-                if (ImGui::Button("Reset", ImVec2(55.0f, 28.0f))) {
-                    if (achievements_ptr && i < 20)
-                        achievements_ptr->scenarios_completed[i] = false;
-                    request_scenario_start = i;
-                    show_scenario_menu = false;
+            if (unlocked) {
+                // Reset button (visible only when completed)
+                if (completed) {
+                    ImGui::SetCursorPos(ImVec2(x + card_w - 145.0f, y + card_h - 36.0f));
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.12f, 0.12f, 0.90f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.50f, 0.18f, 0.18f, 0.95f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.35f, 0.10f, 0.10f, 1.0f));
+                    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+                    if (ImGui::Button("Reset", ImVec2(55.0f, 28.0f))) {
+                        if (achievements_ptr && i < 20)
+                            achievements_ptr->scenarios_completed[i] = false;
+                        request_scenario_start = i;
+                        show_scenario_menu = false;
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Reset completion for this scenario");
+                    ImGui::PopStyleVar();
+                    ImGui::PopStyleColor(3);
                 }
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Reset completion for this scenario");
+
+                // Start button (or Replay if completed)
+                ImGui::SetCursorPos(ImVec2(x + card_w - 75.0f, y + card_h - 36.0f));
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.35f, 0.55f, 0.90f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.45f, 0.70f, 0.95f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.30f, 0.50f, 1.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+                const char* btn_label = completed ? "Replay" : "Start";
+                if (ImGui::Button(btn_label, ImVec2(60.0f, 28.0f))) {
+                    show_scenario_menu = false;
+                    request_scenario_start = i;
+                }
                 ImGui::PopStyleVar();
                 ImGui::PopStyleColor(3);
             }
-
-            // Start button (or Replay if completed)
-            ImGui::SetCursorPos(ImVec2(x + card_w - 75.0f, y + card_h - 36.0f));
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.35f, 0.55f, 0.90f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.45f, 0.70f, 0.95f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.30f, 0.50f, 1.0f));
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-            const char* btn_label = completed ? "Replay" : "Start";
-            if (ImGui::Button(btn_label, ImVec2(60.0f, 28.0f))) {
-                show_scenario_menu = false;
-                request_scenario_start = i;
-            }
-            ImGui::PopStyleVar();
-            ImGui::PopStyleColor(3);
             ImGui::PopID();
         }
 
@@ -3538,7 +3908,7 @@ void PhysicsInterface::draw_credits() {
 
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(io.DisplaySize);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.02f, 0.04f, 0.92f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.02f, 0.04f, 0.78f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::Begin("##Credits", nullptr,
@@ -3641,7 +4011,7 @@ void PhysicsInterface::draw_howto() {
 
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(io.DisplaySize);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.04f, 0.06f, 0.97f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.04f, 0.06f, 0.80f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::Begin("##howto", nullptr,
@@ -4439,7 +4809,7 @@ void PhysicsInterface::draw_cutscene_gallery() {
         | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
         | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav;
 
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.03f, 0.06f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.03f, 0.06f, 0.80f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 

@@ -326,6 +326,7 @@ void PhysicsSimulation::check_neutrino_oscillations() {
                          i, static_cast<float>(age) * C_SIM, E, age);
                 iface.push_decay_event(osc_msg, PhysicsInterface::DEVT_NEUTRINO, ImVec4(0.5f, 1.0f, 0.8f, 1.0f), std::string(detail));
             }
+            achievements.seen_neutrino_oscillation = true;
             cpu_particles_dirty_ = true;
         }
     }
