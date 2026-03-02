@@ -5,6 +5,7 @@
 #include "physics/audio.h"
 #include "physics/molecules.h"
 #include "physics/phys_particles.h"
+#include "physics/meson_data.h"
 #include "vulkan_context.h"
 #include "physics/ui_data.h"
 #include "stb_image.h"
@@ -484,6 +485,32 @@ static const SubAtomicSpec JPSI[] = {
     {  3, 0, ANTI_CHARM_TYPE },
 };
 
+// ── Direct meson spawns (single-particle meson types) ────────────────────────
+static const SubAtomicSpec MESON_PI_PLUS[]   = {{ 0, 0, PION_PLUS_MESON }};
+static const SubAtomicSpec MESON_PI_ZERO[]   = {{ 0, 0, PION_ZERO_MESON }};
+static const SubAtomicSpec MESON_PI_MINUS[]  = {{ 0, 0, PION_MINUS_MESON }};
+static const SubAtomicSpec MESON_ETA[]       = {{ 0, 0, ETA_MESON }};
+static const SubAtomicSpec MESON_RHO_PLUS[]  = {{ 0, 0, RHO_770_PLUS }};
+static const SubAtomicSpec MESON_RHO_ZERO[]  = {{ 0, 0, RHO_770_ZERO }};
+static const SubAtomicSpec MESON_RHO_MINUS[] = {{ 0, 0, RHO_770_MINUS }};
+static const SubAtomicSpec MESON_OMEGA[]     = {{ 0, 0, OMEGA_782_MESON }};
+static const SubAtomicSpec MESON_PHI[]       = {{ 0, 0, PHI_1020_MESON }};
+static const SubAtomicSpec MESON_K_PLUS[]    = {{ 0, 0, KAON_PLUS_MESON }};
+static const SubAtomicSpec MESON_K_ZERO[]    = {{ 0, 0, KAON_ZERO_MESON }};
+static const SubAtomicSpec MESON_K_MINUS[]   = {{ 0, 0, KAON_MINUS_MESON }};
+static const SubAtomicSpec MESON_KSTAR_P[]   = {{ 0, 0, KSTAR_892_PLUS }};
+static const SubAtomicSpec MESON_KSTAR_Z[]   = {{ 0, 0, KSTAR_892_ZERO }};
+static const SubAtomicSpec MESON_D_PLUS[]    = {{ 0, 0, D_PLUS_MESON }};
+static const SubAtomicSpec MESON_D_ZERO[]    = {{ 0, 0, D_ZERO_MESON }};
+static const SubAtomicSpec MESON_DS_PLUS[]   = {{ 0, 0, DS_PLUS_MESON }};
+static const SubAtomicSpec MESON_B_PLUS[]    = {{ 0, 0, B_PLUS_MESON }};
+static const SubAtomicSpec MESON_B_ZERO[]    = {{ 0, 0, B_ZERO_MESON }};
+static const SubAtomicSpec MESON_BS_ZERO[]   = {{ 0, 0, BS_ZERO_MESON }};
+static const SubAtomicSpec MESON_BC_PLUS[]   = {{ 0, 0, BC_PLUS_MESON }};
+static const SubAtomicSpec MESON_ETA_C[]     = {{ 0, 0, ETA_C_1S }};
+static const SubAtomicSpec MESON_JPSI_M[]    = {{ 0, 0, JPSI_MESON }};
+static const SubAtomicSpec MESON_UPSILON[]   = {{ 0, 0, UPSILON_1S }};
+
 const GroupTemplate GROUP_TEMPLATES[] = {
     { "H atom",       "H",    H_ATOM,        2 },
     { "Deuterium",    "D",    DEUTERIUM,      3 },
@@ -510,11 +537,36 @@ const GroupTemplate HADRON_TEMPLATES[] = {
     { "Delta++ (uuu)",      "D++",  DELTA_PP_QUARKS,    3 },
     { "Lambda0 (uds)",      "L0",   LAMBDA_QUARKS,      3 },
     { "Omega- (sss)",       "O-",   OMEGA_QUARKS,       3 },
-    // Mesons (quark-antiquark)
+    // Mesons as quark pairs (for quark-level spawning)
     { "Pion+ (ud~)",        "pi+",  PION_PLUS,          2 },
     { "Pion- (du~)",        "pi-",  PION_MINUS,         2 },
     { "Kaon+ (us~)",        "K+",   KAON_PLUS,          2 },
     { "J/psi (cc~)",        "J/p",  JPSI,               2 },
+    // Direct meson spawns (single-particle)
+    { "\xcf\x80\xe2\x81\xba",         "pi+",  MESON_PI_PLUS,   1 },
+    { "\xcf\x80\xe2\x81\xb0",         "pi0",  MESON_PI_ZERO,   1 },
+    { "\xcf\x80\xe2\x81\xbb",         "pi-",  MESON_PI_MINUS,  1 },
+    { "\xce\xb7",                      "eta",  MESON_ETA,       1 },
+    { "\xcf\x81\xe2\x81\xba",         "rho+", MESON_RHO_PLUS,  1 },
+    { "\xcf\x81\xe2\x81\xb0",         "rho0", MESON_RHO_ZERO,  1 },
+    { "\xcf\x81\xe2\x81\xbb",         "rho-", MESON_RHO_MINUS, 1 },
+    { "\xcf\x89(782)",                 "w",    MESON_OMEGA,     1 },
+    { "\xcf\x86(1020)",                "phi",  MESON_PHI,       1 },
+    { "K\xe2\x81\xba",                "K+",   MESON_K_PLUS,    1 },
+    { "K\xe2\x81\xb0",                "K0",   MESON_K_ZERO,    1 },
+    { "K\xe2\x81\xbb",                "K-",   MESON_K_MINUS,   1 },
+    { "K*(892)\xe2\x81\xba",          "K*+",  MESON_KSTAR_P,   1 },
+    { "K*(892)\xe2\x81\xb0",          "K*0",  MESON_KSTAR_Z,   1 },
+    { "D\xe2\x81\xba",                "D+",   MESON_D_PLUS,    1 },
+    { "D\xe2\x81\xb0",                "D0",   MESON_D_ZERO,    1 },
+    { "Ds\xe2\x81\xba",               "Ds+",  MESON_DS_PLUS,   1 },
+    { "B\xe2\x81\xba",                "B+",   MESON_B_PLUS,    1 },
+    { "B\xe2\x81\xb0",                "B0",   MESON_B_ZERO,    1 },
+    { "Bs\xe2\x81\xb0",               "Bs0",  MESON_BS_ZERO,   1 },
+    { "Bc\xe2\x81\xba",               "Bc+",  MESON_BC_PLUS,   1 },
+    { "\xce\xb7" "c(1S)",             "etac", MESON_ETA_C,     1 },
+    { "J/\xcf\x88",                    "J/p",  MESON_JPSI_M,    1 },
+    { "\xce\xa5(1S)",                  "Y1S",  MESON_UPSILON,   1 },
 };
 extern const int HADRON_TEMPLATE_COUNT_VAL = sizeof(HADRON_TEMPLATES) / sizeof(HADRON_TEMPLATES[0]);
 

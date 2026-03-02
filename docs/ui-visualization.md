@@ -85,9 +85,10 @@ velocity meter (tracks single particle), distance ruler (nanometer scale), densi
 
 ## Custom Particle Textures
 
-Each of the 67 particle types can be rendered with a custom PNG texture instead of (or blended
-with) the default procedural shader rendering. Textures are stored as a Vulkan `sampler2DArray`
-(128&times;128 per layer, RGBA8, ~4.5 MB total VRAM).
+Each particle type can be rendered with a custom PNG texture instead of (or blended with) the
+default procedural shader rendering. 67 base particle types (0&ndash;66) ship with custom textures;
+mesons (types 74&ndash;261) and quasiparticles (67&ndash;73) use procedural rendering by default.
+Textures are stored as a Vulkan `sampler2DArray` (128&times;128 per layer, RGBA8).
 
 **Render modes** (per-type, switchable at runtime via Settings &rarr; Particle Textures):
 

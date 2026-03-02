@@ -3,7 +3,7 @@
 #include <cstring>
 
 static constexpr uint32_t PPSG_MAGIC   = 0x47535050;  // "PPSG" little-endian
-static constexpr uint32_t PPSG_VERSION = 5;
+static constexpr uint32_t PPSG_VERSION = 6;
 static constexpr uint32_t PPSG_V1_MAX_TYPES = 36;  // MAX_PARTICLE_TYPES in version 1
 
 // Helper: write raw bytes

@@ -76,6 +76,7 @@ add_executable(particle_physics
     src/physics/nuclear.cpp
     src/physics/orbital.cpp
     src/physics/decay.cpp
+    src/physics/meson_decays.cpp
     src/physics/quantum.cpp
     src/physics/spawning.cpp
 

@@ -687,8 +687,9 @@ public:
         DEVT_CARRIER_HIGGS,         // Higgs boson exchange
         DEVT_CARRIER_NUCLEAR,       // Yukawa nuclear carrier (gluon between nucleons)
         DEVT_QUASIPARTICLE,         // Quasiparticle spawn / decay
+        DEVT_MESON_DECAY,           // Meson decay (π→μν, K→ππ, etc.)
     };
-    static constexpr int DEVT_COUNT = 24;
+    static constexpr int DEVT_COUNT = 25;
     struct DecayLogEntry {
         std::string description;
         std::string details;        // multi-line detail shown on click
@@ -709,7 +710,7 @@ public:
     struct ParticleTextureManager* texture_mgr = nullptr;  // set by simulation
 
     int32_t expanded_event_idx = -1;  // which event is expanded in log
-    bool event_filter[DEVT_COUNT] = {true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true};
+    bool event_filter[DEVT_COUNT] = {true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true};
 
     void push_decay_event(const char* desc, DecayEventType type, ImVec4 color = ImVec4(1,0.6f,0.2f,1));
     void push_decay_event(const char* desc, DecayEventType type, ImVec4 color, const std::string& details);

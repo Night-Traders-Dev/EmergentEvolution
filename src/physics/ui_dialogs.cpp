@@ -2436,7 +2436,7 @@ void PhysicsInterface::save_event_to_disk(const char* desc, DecayEventType type)
         "BREMSSTRAHLUNG", "NEUTRINO", "WEAK_SCATTER", "ELECTRON_HOLE",
         "CARRIER_EM", "CARRIER_QCD", "CARRIER_WEAK",
         "CARRIER_GRAVITY", "CARRIER_HIGGS", "CARRIER_NUCLEAR",
-        "QUASIPARTICLE"
+        "QUASIPARTICLE", "MESON_DECAY"
     };
     const std::string& data_dir = get_data_dir();
     std::ofstream f((data_dir + "event_log.txt").c_str(), std::ios::app);

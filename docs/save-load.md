@@ -10,7 +10,9 @@ Three binary formats for simulation state:
 
 Simulation saves capture a 320&times;180 PNG thumbnail. The load dialog displays saves as a
 card grid with preview images, names, dates, and file sizes. Element and molecule files store
-positions as offsets from centroid for portability.
+positions as offsets from centroid for portability. Current save format version is **6** (expanded
+from 74 to 282 particle types for meson support). Saves from earlier versions (v5 and below) are
+loaded with automatic zero-padding of the force/color matrices to 282 types.
 
 **Auto-save**: configurable interval (Off / 2 / 5 / 10 minutes) saves automatically during
 simulation. Interval is set in **Settings > Performance**.

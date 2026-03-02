@@ -18,6 +18,7 @@ EmergentEvolution/
 │   │                            #   pion decay, spallation, carrier exchange, quasiparticles
 │   ├── orbital.cpp              # Orbital assignment, nucleus repulsion, bonds, shell transitions
 │   ├── decay.cpp                # Particle decay, hadronization, bremsstrahlung, weak flavor change
+│   ├── meson_decays.cpp         # Meson decay with PDG branching ratios (~60 channels)
 │   ├── quantum.cpp              # Virtual pairs, neutrino scattering/oscillations, entanglement
 │   ├── spawning.cpp             # Accelerator fire, atom/particle spawning
 │   ├── sim_helpers.h            # Shared inline helpers (Lorentz gamma, energy conversion, etc.)
@@ -30,7 +31,8 @@ EmergentEvolution/
 │   ├── ui_tools.cpp             # Decay log, nuclear debug, accelerator, force objects, measurement
 │   ├── ui_overlays.cpp          # Visualization overlays (heatmap, fields, trajectories, etc.)
 │   ├── ui_data.h                # Shared UI data tables (elements, particle names/colors, formatting)
-│   ├── phys_particles.h/.cpp    # 74 particle types, masses, charges, environments
+│   ├── phys_particles.h/.cpp    # 282 particle types, masses, charges, environments
+│   ├── meson_data.h             # 188 PDG meson definitions (types 74–261), masses, spins, decays
 │   ├── molecules.h              # ~50 molecule templates with geometry
 │   ├── achievements.h/.cpp      # 126 achievements, persistence, Steam API names
 │   ├── audio.h/.cpp             # Background music + 10 SFX channels via miniaudio
@@ -46,7 +48,7 @@ EmergentEvolution/
 │   ├── physics.comp             # GPU: forces, collisions, bonds, fields, bloom, wave rendering
 │   ├── fullscreen.vert/.frag    # Render pipeline
 ├── assets/                      # Icons, music, Windows resources
-│   ├── particles/              # 74 custom particle texture PNGs (128x128 RGBA)
+│   ├── particles/              # 67 custom particle texture PNGs (128x128 RGBA)
 │   └── sfx/                    # 10 procedural WAV sound effects
 ├── tools/
 │   ├── ppmol/

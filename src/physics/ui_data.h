@@ -435,124 +435,127 @@ inline const char* element_name_from_ppel_filename(const char* filename) {
     return nullptr;
 }
 
-// ── Particle name/color tables for all 67 types ─────────────────────────────
+// ── Particle name/label/color access for all 282 types ──────────────────────
+// Function-based for meson range; falls back to base arrays for types 0-73.
 
-inline const char* const PHYS_TYPE_NAMES[PHYS_PARTICLE_TYPES] = {
-    "Proton", "Neutron", "Electron", "Photon", "Positron", "Antiproton",
-    "Neutrino_e",
-    "Muon", "Anti-muon", "Tau", "Anti-tau", "Neutrino_mu", "Neutrino_tau",
-    "Up", "Down", "Strange", "Charm", "Top", "Bottom",
-    "Anti-up", "Anti-down", "Anti-strange", "Anti-charm", "Anti-top", "Anti-bottom",
-    "Gluon", "W+", "W-", "Z0", "Higgs",
-    "Graviton", "Dark Matter", "Dark Energy",
-    "Axino", "WIMPzilla", "SIMP", "Sterile Neutrino", "Dark Photon", "Q-Ball",
-    "Selectron", "Smuon", "Stau", "Squark", "Gluino", "Photino",
-    "Wino", "Zino", "Higgsino", "Neutralino", "Sneutrino",
-    "Gravitino", "X Boson", "Y Boson", "Monopole", "Radion", "Dilaton",
-    "Tachyon", "Preon", "Inflaton", "Majoron", "Odderon",
-    "Glueball", "Skyrmion", "X17", "Chameleon",
-    "Paraparticle", "Dyn. Axion QP",
-    "Electron Hole",
-    "Plasmon",
-    "Phonon",
-    "Magnon",
-    "Polaron",
-    "Cooper Pair",
-    "Roton",
-};
+inline const char* phys_type_name(uint32_t t) {
+    static const char* const BASE[] = {
+        "Proton", "Neutron", "Electron", "Photon", "Positron", "Antiproton",
+        "Neutrino_e",
+        "Muon", "Anti-muon", "Tau", "Anti-tau", "Neutrino_mu", "Neutrino_tau",
+        "Up", "Down", "Strange", "Charm", "Top", "Bottom",
+        "Anti-up", "Anti-down", "Anti-strange", "Anti-charm", "Anti-top", "Anti-bottom",
+        "Gluon", "W+", "W-", "Z0", "Higgs",
+        "Graviton", "Dark Matter", "Dark Energy",
+        "Axino", "WIMPzilla", "SIMP", "Sterile Neutrino", "Dark Photon", "Q-Ball",
+        "Selectron", "Smuon", "Stau", "Squark", "Gluino", "Photino",
+        "Wino", "Zino", "Higgsino", "Neutralino", "Sneutrino",
+        "Gravitino", "X Boson", "Y Boson", "Monopole", "Radion", "Dilaton",
+        "Tachyon", "Preon", "Inflaton", "Majoron", "Odderon",
+        "Glueball", "Skyrmion", "X17", "Chameleon",
+        "Paraparticle", "Dyn. Axion QP",
+        "Electron Hole",
+        "Plasmon", "Phonon", "Magnon", "Polaron", "Cooper Pair", "Roton",
+    };
+    if (t < 74) return BASE[t];
+    if (t >= MESON_TYPE_FIRST && t <= MESON_TYPE_LAST) return MESON_NAMES[t - MESON_TYPE_FIRST];
+    return "Reserved";
+}
 
-inline const char* const PHYS_TYPE_LABELS[PHYS_PARTICLE_TYPES] = {
-    "p", "n", "e-", "y", "e+", "p-",
-    "ve",
-    "mu-", "mu+", "tau-", "tau+", "vmu", "vtau",
-    "u", "d", "s", "c", "t", "b",
-    "u~", "d~", "s~", "c~", "t~", "b~",
-    "g", "W+", "W-", "Z0", "H0",
-    "G", "DM", "DE",
-    "Ax", "WZ", "SI", "Ns", "A'", "QB",
-    "e~", "mu~", "ta~", "q~", "g~", "y~",
-    "W~", "Z~", "H~", "N1", "v~",
-    "G~", "X", "Y", "MM", "Ra", "Di",
-    "Ta", "Pr", "In", "Mj", "Od",
-    "Gb", "Sk", "X17", "Ch",
-    "Pp", "Dq",
-    "h+",
-    "Pl", "Ph", "Mn", "Po", "CP", "Ro",
-};
+inline const char* phys_type_label(uint32_t t) {
+    static const char* const BASE[] = {
+        "p", "n", "e-", "y", "e+", "p-", "ve",
+        "mu-", "mu+", "tau-", "tau+", "vmu", "vtau",
+        "u", "d", "s", "c", "t", "b",
+        "u~", "d~", "s~", "c~", "t~", "b~",
+        "g", "W+", "W-", "Z0", "H0",
+        "G", "DM", "DE",
+        "Ax", "WZ", "SI", "Ns", "A'", "QB",
+        "e~", "mu~", "ta~", "q~", "g~", "y~",
+        "W~", "Z~", "H~", "N1", "v~",
+        "G~", "X", "Y", "MM", "Ra", "Di",
+        "Ta", "Pr", "In", "Mj", "Od",
+        "Gb", "Sk", "X17", "Ch",
+        "Pp", "Dq", "h+",
+        "Pl", "Ph", "Mn", "Po", "CP", "Ro",
+    };
+    if (t < 74) return BASE[t];
+    if (t >= MESON_TYPE_FIRST && t <= MESON_TYPE_LAST) return MESON_LABELS[t - MESON_TYPE_FIRST];
+    return "??";
+}
 
-inline const ImVec4 PHYS_TYPE_UI_COLORS[PHYS_PARTICLE_TYPES] = {
-    ImVec4(0.9f, 0.2f, 0.2f, 1.0f),   // proton
-    ImVec4(0.7f, 0.7f, 0.7f, 1.0f),   // neutron
-    ImVec4(0.2f, 0.5f, 1.0f, 1.0f),   // electron
-    ImVec4(1.0f, 1.0f, 0.6f, 1.0f),   // photon
-    ImVec4(1.0f, 0.3f, 0.8f, 1.0f),   // positron
-    ImVec4(0.2f, 0.85f, 0.7f, 1.0f),  // antiproton
-    ImVec4(0.6f, 0.9f, 0.6f, 1.0f),   // neutrino_e
-    ImVec4(0.6f, 0.3f, 0.9f, 1.0f),   // muon
-    ImVec4(0.8f, 0.5f, 1.0f, 1.0f),   // anti-muon
-    ImVec4(0.4f, 0.2f, 0.7f, 1.0f),   // tau
-    ImVec4(0.6f, 0.4f, 0.9f, 1.0f),   // anti-tau
-    ImVec4(0.5f, 0.8f, 0.5f, 1.0f),   // neutrino_mu
-    ImVec4(0.4f, 0.7f, 0.4f, 1.0f),   // neutrino_tau
-    ImVec4(0.9f, 0.5f, 0.2f, 1.0f),   // up
-    ImVec4(0.4f, 0.7f, 0.2f, 1.0f),   // down
-    ImVec4(0.2f, 0.8f, 0.6f, 1.0f),   // strange
-    ImVec4(0.9f, 0.8f, 0.2f, 1.0f),   // charm
-    ImVec4(1.0f, 0.3f, 0.3f, 1.0f),   // top
-    ImVec4(0.5f, 0.3f, 0.8f, 1.0f),   // bottom
-    ImVec4(1.0f, 0.7f, 0.5f, 1.0f),   // anti-up
-    ImVec4(0.7f, 0.9f, 0.5f, 1.0f),   // anti-down
-    ImVec4(0.5f, 1.0f, 0.8f, 1.0f),   // anti-strange
-    ImVec4(1.0f, 0.9f, 0.5f, 1.0f),   // anti-charm
-    ImVec4(1.0f, 0.6f, 0.6f, 1.0f),   // anti-top
-    ImVec4(0.7f, 0.6f, 1.0f, 1.0f),   // anti-bottom
-    ImVec4(0.3f, 0.9f, 0.3f, 1.0f),   // gluon
-    ImVec4(0.9f, 0.9f, 1.0f, 1.0f),   // W+
-    ImVec4(0.7f, 0.7f, 1.0f, 1.0f),   // W-
-    ImVec4(0.8f, 0.8f, 0.9f, 1.0f),   // Z0
-    ImVec4(1.0f, 0.85f, 0.3f, 1.0f),  // Higgs
-    ImVec4(0.7f, 0.8f, 1.0f, 1.0f),   // graviton
-    ImVec4(0.3f, 0.1f, 0.5f, 1.0f),   // dark matter
-    ImVec4(0.6f, 0.1f, 0.2f, 1.0f),   // dark energy
-    ImVec4(0.4f, 0.2f, 0.6f, 1.0f),   // axino
-    ImVec4(0.2f, 0.05f, 0.35f, 1.0f), // WIMPzilla
-    ImVec4(0.35f, 0.25f, 0.55f, 1.0f),// SIMP
-    ImVec4(0.45f, 0.55f, 0.45f, 1.0f),// sterile neutrino
-    ImVec4(0.5f, 0.2f, 0.7f, 1.0f),   // dark photon
-    ImVec4(0.55f, 0.3f, 0.75f, 1.0f), // Q-Ball
-    ImVec4(0.5f, 0.8f, 1.0f, 1.0f),   // selectron
-    ImVec4(0.7f, 0.6f, 1.0f, 1.0f),   // smuon
-    ImVec4(0.6f, 0.5f, 0.9f, 1.0f),   // stau
-    ImVec4(1.0f, 0.7f, 0.4f, 1.0f),   // squark
-    ImVec4(0.4f, 1.0f, 0.5f, 1.0f),   // gluino
-    ImVec4(1.0f, 1.0f, 0.8f, 1.0f),   // photino
-    ImVec4(0.9f, 0.9f, 1.0f, 1.0f),   // wino
-    ImVec4(0.8f, 0.8f, 0.95f, 1.0f),  // zino
-    ImVec4(1.0f, 0.9f, 0.6f, 1.0f),   // higgsino
-    ImVec4(0.4f, 0.2f, 0.65f, 1.0f),  // neutralino
-    ImVec4(0.55f, 0.85f, 0.55f, 1.0f),// sneutrino
-    ImVec4(0.6f, 0.7f, 1.0f, 1.0f),   // gravitino
-    ImVec4(1.0f, 0.4f, 0.4f, 1.0f),   // X boson
-    ImVec4(1.0f, 0.5f, 0.3f, 1.0f),   // Y boson
-    ImVec4(0.95f, 0.95f, 0.95f, 1.0f),// monopole
-    ImVec4(0.7f, 0.6f, 0.4f, 1.0f),   // radion
-    ImVec4(0.6f, 0.55f, 0.45f, 1.0f), // dilaton
-    ImVec4(0.0f, 1.0f, 1.0f, 1.0f),   // tachyon
-    ImVec4(1.0f, 0.0f, 0.5f, 1.0f),   // preon
-    ImVec4(1.0f, 0.7f, 0.1f, 1.0f),   // inflaton
-    ImVec4(0.55f, 0.6f, 0.55f, 1.0f), // majoron
-    ImVec4(0.7f, 0.3f, 1.0f, 1.0f),   // odderon
-    ImVec4(0.5f, 1.0f, 0.3f, 1.0f),   // glueball
-    ImVec4(0.9f, 0.4f, 0.2f, 1.0f),   // skyrmion
-    ImVec4(0.2f, 0.9f, 0.8f, 1.0f),   // X17
-    ImVec4(0.7f, 0.5f, 0.3f, 1.0f),   // chameleon
-    ImVec4(0.9f, 0.2f, 1.0f, 1.0f),   // paraparticle
-    ImVec4(0.4f, 0.7f, 0.95f, 1.0f),  // dyn axion QP
-    ImVec4(1.0f, 0.75f, 0.25f, 1.0f), // electron hole
-    ImVec4(0.3f, 1.0f, 0.95f, 1.0f), // plasmon — cyan
-    ImVec4(0.95f, 0.95f, 0.4f, 1.0f),// phonon — pale yellow
-    ImVec4(1.0f, 0.45f, 0.15f, 1.0f),// magnon — orange-red
-    ImVec4(0.7f, 0.35f, 0.9f, 1.0f), // polaron — purple
-    ImVec4(0.6f, 0.85f, 1.0f, 1.0f), // cooper pair — ice blue
-    ImVec4(0.2f, 0.9f, 0.7f, 1.0f),  // roton — teal-green
-};
+inline ImVec4 phys_type_ui_color(uint32_t t) {
+    static const ImVec4 BASE[] = {
+        {0.9f,0.2f,0.2f,1}, {0.7f,0.7f,0.7f,1}, {0.2f,0.5f,1.0f,1}, {1.0f,1.0f,0.6f,1},
+        {1.0f,0.3f,0.8f,1}, {0.2f,0.85f,0.7f,1}, {0.6f,0.9f,0.6f,1},
+        {0.6f,0.3f,0.9f,1}, {0.8f,0.5f,1.0f,1}, {0.4f,0.2f,0.7f,1}, {0.6f,0.4f,0.9f,1},
+        {0.5f,0.8f,0.5f,1}, {0.4f,0.7f,0.4f,1},
+        {0.9f,0.5f,0.2f,1}, {0.4f,0.7f,0.2f,1}, {0.2f,0.8f,0.6f,1}, {0.9f,0.8f,0.2f,1},
+        {1.0f,0.3f,0.3f,1}, {0.5f,0.3f,0.8f,1},
+        {1.0f,0.7f,0.5f,1}, {0.7f,0.9f,0.5f,1}, {0.5f,1.0f,0.8f,1}, {1.0f,0.9f,0.5f,1},
+        {1.0f,0.6f,0.6f,1}, {0.7f,0.6f,1.0f,1},
+        {0.3f,0.9f,0.3f,1}, {0.9f,0.9f,1.0f,1}, {0.7f,0.7f,1.0f,1}, {0.8f,0.8f,0.9f,1},
+        {1.0f,0.85f,0.3f,1},
+        {0.7f,0.8f,1.0f,1}, {0.3f,0.1f,0.5f,1}, {0.6f,0.1f,0.2f,1},
+        {0.4f,0.2f,0.6f,1}, {0.2f,0.05f,0.35f,1}, {0.35f,0.25f,0.55f,1},
+        {0.45f,0.55f,0.45f,1}, {0.5f,0.2f,0.7f,1}, {0.55f,0.3f,0.75f,1},
+        {0.5f,0.8f,1.0f,1}, {0.7f,0.6f,1.0f,1}, {0.6f,0.5f,0.9f,1},
+        {1.0f,0.7f,0.4f,1}, {0.4f,1.0f,0.5f,1}, {1.0f,1.0f,0.8f,1},
+        {0.9f,0.9f,1.0f,1}, {0.8f,0.8f,0.95f,1}, {1.0f,0.9f,0.6f,1},
+        {0.4f,0.2f,0.65f,1}, {0.55f,0.85f,0.55f,1},
+        {0.6f,0.7f,1.0f,1}, {1.0f,0.4f,0.4f,1}, {1.0f,0.5f,0.3f,1},
+        {0.95f,0.95f,0.95f,1}, {0.7f,0.6f,0.4f,1}, {0.6f,0.55f,0.45f,1},
+        {0.0f,1.0f,1.0f,1}, {1.0f,0.0f,0.5f,1}, {1.0f,0.7f,0.1f,1},
+        {0.55f,0.6f,0.55f,1}, {0.7f,0.3f,1.0f,1}, {0.5f,1.0f,0.3f,1},
+        {0.9f,0.4f,0.2f,1}, {0.2f,0.9f,0.8f,1}, {0.7f,0.5f,0.3f,1},
+        {0.9f,0.2f,1.0f,1}, {0.4f,0.7f,0.95f,1},
+        {1.0f,0.75f,0.25f,1}, {0.3f,1.0f,0.95f,1}, {0.95f,0.95f,0.4f,1},
+        {1.0f,0.45f,0.15f,1}, {0.7f,0.35f,0.9f,1}, {0.6f,0.85f,1.0f,1}, {0.2f,0.9f,0.7f,1},
+    };
+    if (t < 74) return BASE[t];
+    if (t >= MESON_TYPE_FIRST && t <= MESON_TYPE_LAST) {
+        const auto& c = MESON_RENDER_COLORS[t - MESON_TYPE_FIRST];
+        return ImVec4(c.r, c.g, c.b, c.a);
+    }
+    return ImVec4(0.3f, 0.3f, 0.3f, 1.0f);
+}
+
+// ── Lazy-init arrays — PHYS_TYPE_NAMES[t] / LABELS / UI_COLORS syntax ───────
+// Delegates to phys_type_name/label/ui_color() for all 282 types incl. mesons.
+
+inline const char* const* get_phys_type_names_() {
+    static const char* arr[PHYS_PARTICLE_TYPES];
+    static bool init = false;
+    if (!init) {
+        for (uint32_t t = 0; t < PHYS_PARTICLE_TYPES; ++t)
+            arr[t] = phys_type_name(t);
+        init = true;
+    }
+    return arr;
+}
+
+inline const char* const* get_phys_type_labels_() {
+    static const char* arr[PHYS_PARTICLE_TYPES];
+    static bool init = false;
+    if (!init) {
+        for (uint32_t t = 0; t < PHYS_PARTICLE_TYPES; ++t)
+            arr[t] = phys_type_label(t);
+        init = true;
+    }
+    return arr;
+}
+
+inline const ImVec4* get_phys_type_ui_colors_() {
+    static ImVec4 arr[PHYS_PARTICLE_TYPES];
+    static bool init = false;
+    if (!init) {
+        for (uint32_t t = 0; t < PHYS_PARTICLE_TYPES; ++t)
+            arr[t] = phys_type_ui_color(t);
+        init = true;
+    }
+    return arr;
+}
+
+#define PHYS_TYPE_NAMES     (get_phys_type_names_())
+#define PHYS_TYPE_LABELS    (get_phys_type_labels_())
+#define PHYS_TYPE_UI_COLORS (get_phys_type_ui_colors_())

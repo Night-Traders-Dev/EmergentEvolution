@@ -10,7 +10,7 @@ static constexpr uint32_t REGION_W           = 2560;
 static constexpr uint32_t REGION_H           = 1440;
 static constexpr uint32_t WORLD_W            = REGION_W * 4;  // 10240 — simulation world bounds
 static constexpr uint32_t WORLD_H            = REGION_H * 4;  // 5760
-static constexpr uint32_t MAX_PARTICLE_TYPES = 74;
+static constexpr uint32_t MAX_PARTICLE_TYPES = 282;
 static constexpr uint32_t GROUP_DENSITY      = 256;
 static constexpr uint32_t GENOME_SIZE        = 4;   // floats per particle: charge, electronegativity, reactivity, bond_strength
 
@@ -34,7 +34,7 @@ static constexpr uint32_t Z_BOSON_TYPE       = 28u;  // Z⁰ gauge boson (weak f
 static constexpr uint32_t HIGGS_TYPE         = 29u;  // Higgs boson (H⁰)
 
 // Max covalent bonds per particle type (indexed 0–MAX_PARTICLE_TYPES-1)
-// Atoms 0–17, photon 18, SM particles 19–29, hypothetical 30–66, reserved 67
+// Atoms 0–17, photon 18, SM particles 19–29, hypothetical 30–66, quasi 67–73, mesons 74–281
 static constexpr uint32_t ATOM_VALENCE[MAX_PARTICLE_TYPES] = {
     1, 4, 3, 2, 5, 2, 1, 1,  // H C N O P S Na Cl (0-7)
     3, 2, 4, 2, 4, 2, 1, 4, 3, 6,  // Fe Ni Si Ca Ti Sr Au Pb Eu U (8-17)
@@ -49,6 +49,13 @@ static constexpr uint32_t ATOM_VALENCE[MAX_PARTICLE_TYPES] = {
     0, 0,                // 65-66: new class (paraparticle, dyn axion QP)
     0,                   // 67: electron hole
     0, 0, 0, 0, 0, 0,   // 68-73: quasiparticles (plasmon..roton)
+    // 74-281: mesons (208 slots, all valence 0)
+    0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0, // 74-113
+    0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0, // 114-153
+    0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0, // 154-193
+    0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0, // 194-233
+    0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0, // 234-273
+    0,0,0,0,0,0,0,0,     // 274-281
 };
 
 enum ParticleBehavior : uint32_t {

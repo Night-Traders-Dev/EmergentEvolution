@@ -1606,6 +1606,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                         check_carrier_exchange();
                     if (cfg.quasi_mode_enabled)
                         check_quasiparticles();
+                    check_meson_decays();
                 }
                 if (quality >= 1 && frame4) {
                     check_neutrino_scattering();

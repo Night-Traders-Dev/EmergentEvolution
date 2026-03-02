@@ -16,7 +16,7 @@ Fourteen presets spanning vacuum to the Big Bang, selectable from the **Environm
 | 6 | Heavy Nucleus | 100 K | Cold dense nuclear matter |
 | 7 | Quark-Gluon Plasma | 2&times;10&#185;&#178; K | Deconfined quarks, hadronization off |
 | 8 | Electroweak Era | 10&#185;&#8309; K | W/Z/Higgs above symmetry breaking |
-| 9 | Meson Factory | 5&times;10&#185;&#185; K | Quark-antiquark meson formation |
+| 9 | Meson Factory | 5&times;10&#185;&#185; K | Spawns diverse PDG meson types (&pi;, K, &rho;, &omega;, &eta;, &phi;, D, B, J/&psi;, &Upsilon;) with real decay channels |
 | 10 | Particle Accelerator | 10&#8312; K | High-energy protons + synchrotron |
 | 11 | Dark Sector | 10&#179; K | 40% DM, 30% p, 15% e, 10% DE, 5% graviton |
 | 12 | SUSY Sector | 10&#179; K | Neutralino/selectron/smuon/squark/gluino mix |

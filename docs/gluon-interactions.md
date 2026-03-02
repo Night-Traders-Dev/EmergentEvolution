@@ -15,4 +15,4 @@ Gluons carry SU(3) color-anticolor pairs (8 octet states).
 |---|---|
 | **Color-aware absorption** | Gluon within 12px of quark with matching color vertex &mdash; quark color rotates |
 | **Color-conserving merge** (g+g &rarr; g) | Two gluons within 12px with compatible colors (trilinear vertex) |
-| **Confinement splitting** (g &rarr; q+q&#773;) | Gluon with E &ge; 0.2, no colored particle within 40px &mdash; products **immediately entangled** as meson |
+| **Confinement splitting** (g &rarr; q+q&#773;) | Gluon with E &ge; 0.2, no colored particle within 40px &mdash; products converted to a specific PDG meson type via `quark_pair_to_meson()` |

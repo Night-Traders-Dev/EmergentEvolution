@@ -5,9 +5,81 @@
 
 #include "physics/simulation.h"
 #include "physics/sim_helpers.h"
+#include "physics/meson_data.h"
 #include <algorithm>
 #include <cmath>
 #include <random>
+
+// ── Quark pair → meson type mapping ──────────────────────────────────────────
+// Maps quark + antiquark flavors to the appropriate meson type.
+// High-energy pairs produce vector mesons; low-energy produce pseudoscalars.
+
+static uint32_t quark_pair_to_meson(uint32_t q_type, uint32_t qbar_type, float energy) {
+    // Map quark type to flavor index: u=0, d=1, s=2, c=3, t=4, b=5
+    auto flavor = [](uint32_t t) -> int {
+        if (t >= UP_QUARK_TYPE && t <= BOTTOM_QUARK_TYPE) return t - UP_QUARK_TYPE;
+        if (t >= ANTI_UP_TYPE && t <= ANTI_BOTTOM_TYPE) return t - ANTI_UP_TYPE;
+        return -1;
+    };
+
+    int fq  = flavor(q_type);
+    int fqb = flavor(qbar_type);
+    if (fq < 0 || fqb < 0) return PION_ZERO_MESON;
+
+    bool high_e = energy > 800.0f;
+
+    // u + d̄ → π⁺ / ρ⁺
+    if (fq == 0 && fqb == 1) return high_e ? RHO_770_PLUS : PION_PLUS_MESON;
+    // d + ū → π⁻ / ρ⁻
+    if (fq == 1 && fqb == 0) return high_e ? RHO_770_MINUS : PION_MINUS_MESON;
+    // u + ū or d + d̄ → π⁰ / ρ⁰
+    if ((fq == 0 && fqb == 0) || (fq == 1 && fqb == 1))
+        return high_e ? RHO_770_ZERO : PION_ZERO_MESON;
+    // s + s̄ → η / φ
+    if (fq == 2 && fqb == 2) return high_e ? PHI_1020_MESON : ETA_MESON;
+    // u + s̄ → K⁺ / K*⁺
+    if (fq == 0 && fqb == 2) return high_e ? KSTAR_892_PLUS : KAON_PLUS_MESON;
+    // d + s̄ → K⁰ / K*⁰
+    if (fq == 1 && fqb == 2) return high_e ? KSTAR_892_ZERO : KAON_ZERO_MESON;
+    // s + ū → K⁻ / K*⁻
+    if (fq == 2 && fqb == 0) return high_e ? KSTAR_892_MINUS : KAON_MINUS_MESON;
+    // s + d̄ → K̄⁰ / K̄*⁰
+    if (fq == 2 && fqb == 1) return high_e ? KSTAR_892_ZERO_BAR : KAON_ZERO_BAR_MESON;
+    // c + c̄ → ηc / J/ψ
+    if (fq == 3 && fqb == 3) return high_e ? JPSI_MESON : ETA_C_1S;
+    // b + b̄ → ηb / Υ
+    if (fq == 5 && fqb == 5) return high_e ? UPSILON_1S : ETA_B_1S;
+    // c + d̄ → D⁺
+    if (fq == 3 && fqb == 1) return D_PLUS_MESON;
+    // c + ū → D⁰
+    if (fq == 3 && fqb == 0) return D_ZERO_MESON;
+    // c + s̄ → Ds⁺
+    if (fq == 3 && fqb == 2) return DS_PLUS_MESON;
+    // d + c̄ → D⁻
+    if (fq == 1 && fqb == 3) return D_MINUS_MESON;
+    // u + c̄ → D̄⁰
+    if (fq == 0 && fqb == 3) return D_ZERO_BAR_MESON;
+    // s + c̄ → Ds⁻
+    if (fq == 2 && fqb == 3) return DS_MINUS_MESON;
+    // u + b̄ → B⁺
+    if (fq == 0 && fqb == 5) return B_PLUS_MESON;
+    // d + b̄ → B⁰
+    if (fq == 1 && fqb == 5) return B_ZERO_MESON;
+    // s + b̄ → Bs⁰
+    if (fq == 2 && fqb == 5) return BS_ZERO_MESON;
+    // b + ū → B⁻
+    if (fq == 5 && fqb == 0) return B_MINUS_MESON;
+    // b + d̄ → B̄⁰
+    if (fq == 5 && fqb == 1) return B_ZERO_BAR_MESON;
+    // b + s̄ → B̄s⁰
+    if (fq == 5 && fqb == 2) return BS_ZERO_BAR_MESON;
+    // c + b̄ → Bc⁺
+    if (fq == 3 && fqb == 5) return BC_PLUS_MESON;
+    // b + c̄ → Bc⁻
+    if (fq == 5 && fqb == 3) return BC_MINUS_MESON;
+
+    return PION_ZERO_MESON;
+}
 
 // ── Particle decay ───────────────────────────────────────────────────────────
 
@@ -1513,17 +1585,40 @@ void PhysicsSimulation::check_hadronization() {
             for (uint32_t j = 0; j < n; ++j) meson_search(j);
 
         if (best_j != UINT32_MAX) {
-            // Velocity impulse toward each other (binding)
-            glm::vec2 delta = (readback_positions_[best_j] - readback_positions_[i]);
-            float dist = std::sqrt(best_d2);
-            if (dist > 0.1f) {
-                glm::vec2 dir = delta / dist;
-                readback_velocities_[i]      += dir * 30.0f;
-                readback_velocities_[best_j] -= dir * 30.0f;
+            uint32_t tj = particles.types[best_j];
+
+            // Determine which is quark and which is antiquark
+            uint32_t q_type, qbar_type, q_idx, qbar_idx;
+            if (is_quark(ti)) {
+                q_type = ti; q_idx = i;
+                qbar_type = tj; qbar_idx = best_j;
+            } else {
+                qbar_type = ti; qbar_idx = i;
+                q_type = tj; q_idx = best_j;
             }
-            // Link quark pair as meson for decay tracking
-            particles.entangled_partner[i] = best_j;
-            particles.entangled_partner[best_j] = i;
+
+            float pair_energy = readback_energies_[i] + readback_energies_[best_j];
+            uint32_t meson_type = quark_pair_to_meson(q_type, qbar_type, pair_energy);
+
+            // Convert quark slot → meson particle at center of pair
+            glm::vec2 center = (readback_positions_[i] + readback_positions_[best_j]) * 0.5f;
+            particles.types[q_idx] = meson_type;
+            readback_positions_[q_idx] = center;
+            readback_velocities_[q_idx] = (readback_velocities_[i] + readback_velocities_[best_j]) * 0.5f;
+            readback_energies_[q_idx] = pair_energy;
+
+            // Set genome for new meson
+            if (q_idx * GENOME_SIZE + 3 < particles.genomes.size()) {
+                particles.genomes[q_idx * GENOME_SIZE + 0] = PHYS_CHARGE[meson_type];
+                particles.genomes[q_idx * GENOME_SIZE + 1] = PHYS_SPIN[meson_type];
+                particles.genomes[q_idx * GENOME_SIZE + 2] = 0.0f;
+                particles.genomes[q_idx * GENOME_SIZE + 3] = PHYS_DECAY_RATE[meson_type];
+            }
+            if (q_idx < particles.birth_frames.size())
+                particles.birth_frames[q_idx] = frame_counter_;
+
+            // Deactivate the other quark slot
+            readback_energies_[qbar_idx] = 0.0f;
 
             consumed[i] = true;
             consumed[best_j] = true;

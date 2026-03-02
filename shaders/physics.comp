@@ -179,6 +179,10 @@ const uint POLARON_TYPE         = 71u;
 const uint COOPER_PAIR_TYPE     = 72u;
 const uint ROTON_TYPE           = 73u;
 
+// ── Meson type range ─────────────────────────────────────────────────────────
+const uint MESON_FIRST          = 74u;
+const uint MESON_LAST           = 261u;
+
 // ── Behavior flags (must match types.h) ─────────────────────────────────────
 const uint BEHAVIOR_PHOTON      = 1024u;       // 1 << 10
 const uint BEHAVIOR_LEPTON      = 4096u;       // 1 << 12
@@ -773,6 +777,81 @@ void apply_physics(uint i) {
         return;
     }
 
+    // ── Meson fast-path (types 74-261) ───────────────────────────────────────
+    // Mesons are color-neutral QCD bound states. No Cornell potential, no Pauli,
+    // no nuclear Yukawa. Only Coulomb (if charged), residual strong with
+    // nucleons (~20px Yukawa, weaker coupling), and gravity.
+    if (type_a >= MESON_FIRST && type_a <= MESON_LAST) {
+        float meson_damp = 0.98;
+        vel_a *= meson_damp;
+
+        float charge_a_m = get_charge(i);
+        float mass_inv_m = get_mass_inv(type_a);
+        float mass_m     = 1.0 / max(mass_inv_m, 0.001);
+
+        vec2 meson_force = vec2(0.0);
+
+        int m_cx = clamp(int(pos_a.x / GRID_CELL_SIZE), 0, GRID_COLS - 1);
+        int m_cy = clamp(int(pos_a.y / GRID_CELL_SIZE), 0, GRID_ROWS - 1);
+        for (int gy = max(0, m_cy - 1); gy <= min(GRID_ROWS - 1, m_cy + 1); gy++) {
+        for (int gx = max(0, m_cx - 1); gx <= min(GRID_COLS - 1, m_cx + 1); gx++) {
+            uint gs, ge; grid_cell_range(gx, gy, gs, ge);
+            for (uint gk = gs; gk < ge; gk++) {
+                uint j = grid_indices.data[gk];
+                if (j == i) continue;
+                float e_j = in_energy_buffer.data[j];
+                if (e_j < 0.001) continue;
+                vec2 delta = in_pos_buffer.data[j] - pos_a;
+                float d2 = dot(delta, delta);
+                if (d2 > 10000.0 || d2 < 0.01) continue;
+                float dist = sqrt(d2);
+                vec2 n = delta / dist;
+                uint type_j = type_buffer.data[j];
+                float mass_j = 1.0 / max(get_mass_inv(type_j), 0.001);
+
+                // Coulomb (charged mesons only)
+                if (abs(charge_a_m) > 0.01) {
+                    float charge_j = get_charge(j);
+                    if (abs(charge_j) > 0.01) {
+                        float f_coul = params.coulomb_strength * charge_a_m * charge_j
+                                     * 80.0 / (d2 + 4.0);
+                        meson_force -= n * f_coul;
+                    }
+                }
+
+                // Residual strong with nucleons (pion-exchange-like, 20px Yukawa)
+                if (type_j <= 1u || type_j == 5u) {  // proton, neutron, antiproton
+                    float f_resid = params.yukawa_strength * 5.0
+                                  * fast_exp(-dist / 20.0) / max(dist, 1.0);
+                    meson_force += n * f_resid;
+                }
+
+                // Gravity
+                float f_grav = params.gravity_strength * mass_m * mass_j / (d2 + 25.0);
+                meson_force += n * f_grav;
+
+                // Hard-sphere repulsion at very close range
+                if (dist < params.repulsion_radius) {
+                    float overlap = params.repulsion_radius - dist;
+                    meson_force -= n * overlap * 50.0;
+                }
+            }
+        } }
+
+        // Energy decay from genome[3]
+        float m_decay = get_decay(i);
+        float m_energy = max(energy - m_decay * params.dt, 0.0);
+
+        vel_a += meson_force * params.dt * mass_inv_m;
+
+        out_energy_buffer.data[i] = m_energy;
+        out_pos_buffer.data[i]    = pos_a + vel_a * params.dt;
+        out_vel_buffer.data[i]    = vel_a;
+        angle_out_buffer.data[i]  = angle_in_buffer.data[i];
+        avel_out_buffer.data[i]   = avel_in_buffer.data[i];
+        return;
+    }
+
     // ── Full pairwise physics ────────────────────────────────────────────────
     float mass_inv_a = get_mass_inv(type_a);
     float charge_a   = get_charge(i);
@@ -842,6 +921,7 @@ void apply_physics(uint i) {
         // Skip non-interacting particles (neutrinos, W/Z bosons, Higgs, quasiparticles)
         if ((flags_b & (BEHAVIOR_NEUTRINO | BEHAVIOR_WEAK_BOSON | BEHAVIOR_HIGGS_FLAG)) != 0u) continue;
         if (type_b >= ELECTRON_HOLE_TYPE && type_b <= ROTON_TYPE) continue;
+        if (type_b >= MESON_FIRST && type_b <= MESON_LAST) continue;
 
         // ── Photon-matter interaction (Compton scattering + EM field) ───────
         if ((flags_b & BEHAVIOR_PHOTON) != 0u) {

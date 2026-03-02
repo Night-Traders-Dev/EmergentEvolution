@@ -91,6 +91,72 @@ static const glm::vec4 PHYS_COLORS[PHYS_PARTICLE_TYPES] = {
     { 0.7f, 0.35f, 0.9f, 1.0f },  // 71 Polaron          — purple
     { 0.6f, 0.85f, 1.0f, 1.0f },  // 72 Cooper Pair      — ice blue
     { 0.2f, 0.9f, 0.7f, 1.0f },   // 73 Roton            — teal-green
+    // ── Mesons (74-261) ─────────────────────────────────────────────────────
+    // Light pseudoscalar (74-86): warm yellow/orange
+    {1.0f,0.85f,0.2f,1}, {1.0f,0.9f,0.3f,1}, {1.0f,0.85f,0.2f,1}, {0.95f,0.8f,0.15f,1}, {0.9f,0.75f,0.1f,1},
+    {0.85f,0.7f,0.15f,1}, {0.85f,0.7f,0.15f,1}, {0.85f,0.7f,0.15f,1}, {0.9f,0.75f,0.1f,1}, {0.9f,0.75f,0.1f,1},
+    {0.8f,0.65f,0.1f,1}, {0.8f,0.65f,0.1f,1}, {0.8f,0.65f,0.1f,1},
+    // Light vector (87-100): red/crimson
+    {0.95f,0.2f,0.15f,1}, {0.95f,0.25f,0.2f,1}, {0.95f,0.2f,0.15f,1}, {0.85f,0.15f,0.1f,1}, {0.9f,0.1f,0.3f,1},
+    {0.8f,0.15f,0.12f,1}, {0.8f,0.15f,0.12f,1}, {0.8f,0.15f,0.12f,1}, {0.75f,0.12f,0.08f,1}, {0.85f,0.08f,0.25f,1},
+    {0.7f,0.12f,0.1f,1}, {0.7f,0.12f,0.1f,1}, {0.7f,0.12f,0.1f,1}, {0.65f,0.1f,0.07f,1},
+    // Light scalar (101-111): pink
+    {1.0f,0.5f,0.6f,1}, {1.0f,0.45f,0.55f,1}, {1.0f,0.5f,0.6f,1}, {1.0f,0.45f,0.55f,1}, {0.95f,0.5f,0.6f,1},
+    {0.9f,0.4f,0.5f,1}, {0.9f,0.4f,0.5f,1}, {0.9f,0.45f,0.55f,1}, {0.9f,0.4f,0.5f,1}, {0.85f,0.38f,0.48f,1}, {0.85f,0.35f,0.45f,1},
+    // Light axial-vector (112-124): purple
+    {0.7f,0.3f,0.9f,1}, {0.7f,0.35f,0.9f,1}, {0.7f,0.3f,0.9f,1}, {0.65f,0.25f,0.85f,1},
+    {0.75f,0.3f,0.95f,1}, {0.75f,0.35f,0.95f,1}, {0.75f,0.3f,0.95f,1}, {0.6f,0.25f,0.85f,1}, {0.6f,0.2f,0.8f,1}, {0.55f,0.2f,0.8f,1},
+    {0.65f,0.25f,0.85f,1}, {0.65f,0.3f,0.85f,1}, {0.65f,0.25f,0.85f,1},
+    // Light tensor (125-134): deeper purple
+    {0.55f,0.2f,0.8f,1}, {0.55f,0.25f,0.8f,1}, {0.55f,0.2f,0.8f,1}, {0.5f,0.18f,0.75f,1}, {0.5f,0.15f,0.7f,1},
+    {0.48f,0.16f,0.72f,1}, {0.48f,0.18f,0.72f,1}, {0.48f,0.16f,0.72f,1}, {0.45f,0.14f,0.68f,1}, {0.45f,0.14f,0.68f,1},
+    // Light pseudotensor (135-139)
+    {0.6f,0.15f,0.7f,1}, {0.6f,0.18f,0.7f,1}, {0.6f,0.15f,0.7f,1}, {0.55f,0.12f,0.65f,1}, {0.55f,0.12f,0.65f,1},
+    // Light higher spin (140-148)
+    {0.5f,0.1f,0.65f,1}, {0.5f,0.12f,0.65f,1}, {0.5f,0.1f,0.65f,1}, {0.45f,0.08f,0.6f,1}, {0.45f,0.08f,0.6f,1},
+    {0.4f,0.06f,0.55f,1}, {0.4f,0.08f,0.55f,1}, {0.4f,0.06f,0.55f,1}, {0.38f,0.06f,0.52f,1},
+    // Strange (149-174): green
+    {0.2f,0.9f,0.3f,1}, {0.25f,0.85f,0.3f,1}, {0.2f,0.9f,0.3f,1}, {0.25f,0.85f,0.3f,1},
+    {0.15f,0.8f,0.25f,1}, {0.18f,0.78f,0.25f,1}, {0.15f,0.8f,0.25f,1}, {0.18f,0.78f,0.25f,1},
+    {0.25f,0.75f,0.2f,1}, {0.25f,0.75f,0.2f,1},
+    {0.2f,0.7f,0.18f,1}, {0.2f,0.7f,0.18f,1}, {0.18f,0.65f,0.16f,1}, {0.18f,0.65f,0.16f,1},
+    {0.15f,0.7f,0.15f,1}, {0.15f,0.7f,0.15f,1}, {0.2f,0.68f,0.18f,1}, {0.2f,0.68f,0.18f,1},
+    {0.12f,0.65f,0.14f,1}, {0.12f,0.65f,0.14f,1}, {0.15f,0.62f,0.12f,1}, {0.15f,0.62f,0.12f,1},
+    {0.1f,0.6f,0.1f,1}, {0.1f,0.6f,0.1f,1}, {0.08f,0.55f,0.08f,1}, {0.08f,0.55f,0.08f,1},
+    // Charmed (175-196): cyan/teal
+    {0.1f,0.85f,0.85f,1}, {0.15f,0.8f,0.8f,1}, {0.1f,0.85f,0.85f,1}, {0.15f,0.8f,0.8f,1}, {0.1f,0.9f,0.8f,1}, {0.1f,0.9f,0.8f,1},
+    {0.12f,0.75f,0.75f,1}, {0.08f,0.78f,0.78f,1}, {0.08f,0.78f,0.78f,1}, {0.12f,0.75f,0.75f,1}, {0.08f,0.82f,0.72f,1}, {0.08f,0.82f,0.72f,1},
+    {0.15f,0.7f,0.7f,1}, {0.15f,0.7f,0.7f,1}, {0.12f,0.72f,0.65f,1},
+    {0.1f,0.68f,0.68f,1}, {0.1f,0.68f,0.68f,1}, {0.08f,0.7f,0.62f,1}, {0.08f,0.7f,0.62f,1},
+    {0.12f,0.65f,0.65f,1}, {0.12f,0.65f,0.65f,1}, {0.1f,0.67f,0.6f,1},
+    // Bottom (197-216): blue
+    {0.2f,0.3f,0.95f,1}, {0.25f,0.35f,0.9f,1}, {0.2f,0.3f,0.95f,1}, {0.25f,0.35f,0.9f,1}, {0.15f,0.25f,0.88f,1}, {0.15f,0.25f,0.88f,1},
+    {0.18f,0.28f,0.92f,1}, {0.18f,0.28f,0.92f,1},
+    {0.15f,0.25f,0.85f,1}, {0.18f,0.28f,0.82f,1}, {0.15f,0.25f,0.85f,1}, {0.18f,0.28f,0.82f,1}, {0.12f,0.2f,0.8f,1}, {0.12f,0.2f,0.8f,1},
+    {0.1f,0.2f,0.78f,1}, {0.1f,0.2f,0.78f,1}, {0.08f,0.18f,0.75f,1}, {0.08f,0.18f,0.75f,1},
+    {0.08f,0.15f,0.72f,1}, {0.08f,0.15f,0.72f,1},
+    // Charmonium (217-234): gold
+    {0.95f,0.8f,0.2f,1}, {1.0f,0.85f,0.0f,1},
+    {0.9f,0.75f,0.15f,1}, {0.92f,0.78f,0.1f,1}, {0.88f,0.72f,0.12f,1}, {0.9f,0.75f,0.1f,1},
+    {0.85f,0.7f,0.18f,1}, {0.95f,0.8f,0.0f,1}, {0.88f,0.72f,0.0f,1},
+    {1.0f,0.9f,0.3f,1}, {0.82f,0.68f,0.15f,1}, {0.85f,0.7f,0.1f,1},
+    {0.8f,0.65f,0.0f,1}, {0.78f,0.63f,0.0f,1}, {0.75f,0.6f,0.0f,1}, {0.72f,0.58f,0.0f,1}, {0.7f,0.55f,0.0f,1}, {0.68f,0.52f,0.0f,1},
+    // Bottomonium (235-252): silver/steel
+    {0.75f,0.75f,0.82f,1}, {0.8f,0.8f,0.9f,1},
+    {0.7f,0.7f,0.78f,1}, {0.72f,0.72f,0.8f,1}, {0.68f,0.68f,0.76f,1}, {0.7f,0.7f,0.78f,1},
+    {0.72f,0.72f,0.8f,1}, {0.78f,0.78f,0.88f,1},
+    {0.65f,0.65f,0.74f,1}, {0.67f,0.67f,0.76f,1}, {0.63f,0.63f,0.72f,1}, {0.65f,0.65f,0.74f,1},
+    {0.75f,0.75f,0.85f,1}, {0.62f,0.62f,0.72f,1}, {0.6f,0.6f,0.7f,1},
+    {0.72f,0.72f,0.82f,1}, {0.68f,0.68f,0.78f,1}, {0.65f,0.65f,0.75f,1},
+    // Exotic (253-261): magenta
+    {0.95f,0.15f,0.7f,1}, {0.95f,0.15f,0.7f,1}, {0.9f,0.1f,0.65f,1}, {0.9f,0.1f,0.65f,1},
+    {0.85f,0.08f,0.6f,1}, {0.85f,0.08f,0.6f,1}, {0.92f,0.12f,0.68f,1},
+    {0.8f,0.05f,0.55f,1}, {0.8f,0.05f,0.55f,1},
+    // Reserved (262-281): dark grey placeholder
+    {0.3f,0.3f,0.3f,1}, {0.3f,0.3f,0.3f,1}, {0.3f,0.3f,0.3f,1}, {0.3f,0.3f,0.3f,1}, {0.3f,0.3f,0.3f,1},
+    {0.3f,0.3f,0.3f,1}, {0.3f,0.3f,0.3f,1}, {0.3f,0.3f,0.3f,1}, {0.3f,0.3f,0.3f,1}, {0.3f,0.3f,0.3f,1},
+    {0.3f,0.3f,0.3f,1}, {0.3f,0.3f,0.3f,1}, {0.3f,0.3f,0.3f,1}, {0.3f,0.3f,0.3f,1}, {0.3f,0.3f,0.3f,1},
+    {0.3f,0.3f,0.3f,1}, {0.3f,0.3f,0.3f,1}, {0.3f,0.3f,0.3f,1}, {0.3f,0.3f,0.3f,1}, {0.3f,0.3f,0.3f,1},
 };
 
 // ── Environment abundance tables ─────────────────────────────────────────────
@@ -273,6 +339,26 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
     p.behavior_flags[COOPER_PAIR_TYPE_PHYS]    = BEHAVIOR_MASS_ULTRA | BEHAVIOR_EXOTIC;
     p.behavior_flags[ROTON_TYPE_PHYS]          = BEHAVIOR_EXOTIC;
 
+    // ── Mesons (types 74-261) ─────────────────────────────────────────────────
+    // Mesons are color-neutral QCD bound states. Behavior flags encode mass tier + charge.
+    for (uint32_t t = MESON_TYPE_FIRST; t <= MESON_TYPE_LAST; ++t) {
+        uint32_t idx = t - MESON_TYPE_FIRST;
+        float charge = MESON_CHARGE[idx];
+        float mass   = MESON_MASS_MEV[idx];
+        uint32_t flags = BEHAVIOR_NONE;
+
+        // Mass tier based on PDG mass
+        if (mass > 3000.0f)       flags |= BEHAVIOR_MASS_ULTRA;   // charmed, bottom, quarkonium
+        else if (mass > 800.0f)   flags |= BEHAVIOR_MASS_HEAVY;   // strange, excited light
+        else                      flags |= BEHAVIOR_MASS_MEDIUM;  // pions, light ground states
+
+        // Charge for EM interaction
+        if (charge > 0.5f)        flags |= BEHAVIOR_IONIC_POS;
+        else if (charge < -0.5f)  flags |= BEHAVIOR_IONIC_NEG;
+
+        p.behavior_flags[t] = flags;
+    }
+
     // Force matrix: zeroed (physics is computed in shader, not from matrix)
     p.forces.resize(MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES, 0.0f);
 
@@ -407,16 +493,31 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
             else if (r < 0.97f) type = DARK_MATTER_TYPE_PHYS;//  4% dark matter
             else                type = DARK_ENERGY_TYPE_PHYS; //  3% dark energy
         } else {
-            // Meson Factory: quark-antiquark pairs
+            // Meson Factory: diverse meson states + some quarks/gluons
             float r = unit(rng);
-            if (r < 0.20f) type = UP_QUARK_TYPE;
-            else if (r < 0.40f) type = ANTI_DOWN_TYPE;
-            else if (r < 0.50f) type = DOWN_QUARK_TYPE;
-            else if (r < 0.60f) type = ANTI_UP_TYPE;
-            else if (r < 0.70f) type = STRANGE_QUARK_TYPE;
-            else if (r < 0.80f) type = ANTI_STRANGE_TYPE;
-            else if (r < 0.90f) type = GLUON_TYPE_PHYS;
-            else type = ELECTRON_TYPE_PHYS;
+            if      (r < 0.10f) type = PION_PLUS_MESON;       // π⁺
+            else if (r < 0.17f) type = PION_ZERO_MESON;       // π⁰
+            else if (r < 0.24f) type = PION_MINUS_MESON;      // π⁻
+            else if (r < 0.30f) type = KAON_PLUS_MESON;       // K⁺
+            else if (r < 0.34f) type = KAON_MINUS_MESON;      // K⁻
+            else if (r < 0.38f) type = KAON_ZERO_MESON;       // K⁰
+            else if (r < 0.42f) type = ETA_MESON;             // η
+            else if (r < 0.48f) type = RHO_770_PLUS;          // ρ⁺
+            else if (r < 0.52f) type = RHO_770_ZERO;          // ρ⁰
+            else if (r < 0.55f) type = OMEGA_782_MESON;       // ω
+            else if (r < 0.58f) type = PHI_1020_MESON;        // φ
+            else if (r < 0.62f) type = D_PLUS_MESON;          // D⁺
+            else if (r < 0.65f) type = D_ZERO_MESON;          // D⁰
+            else if (r < 0.68f) type = DS_PLUS_MESON;         // Ds⁺
+            else if (r < 0.71f) type = JPSI_MESON;            // J/ψ
+            else if (r < 0.74f) type = B_PLUS_MESON;          // B⁺
+            else if (r < 0.76f) type = BS_ZERO_MESON;         // Bs⁰
+            else if (r < 0.78f) type = UPSILON_1S;            // Υ(1S)
+            else if (r < 0.80f) type = ETA_PRIME_MESON;       // η'
+            else if (r < 0.85f) type = GLUON_TYPE_PHYS;       // gluon
+            else if (r < 0.90f) type = UP_QUARK_TYPE;         // u
+            else if (r < 0.95f) type = ANTI_DOWN_TYPE;        // d̄
+            else                type = ELECTRON_TYPE_PHYS;     // e⁻
         }
 
         // Spatial distribution

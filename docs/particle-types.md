@@ -1,9 +1,10 @@
 # Particle Types
 
-74 types across 15 families. Types 0&ndash;32 cover the Standard Model and Beyond Standard Model;
+282 types across 22+ families. Types 0&ndash;32 cover the Standard Model and Beyond Standard Model;
 types 33&ndash;66 are hypothetical (dark matter candidates, SUSY sparticles, GUT bosons,
 theoretical extremes); types 67&ndash;73 are quasiparticles (collective excitations in condensed
-matter).
+matter); types 74&ndash;261 are **188 PDG meson states** covering all known quark-antiquark bound
+states; types 262&ndash;281 are reserved for future discoveries.
 
 <details>
 <summary><b>Full particle table</b> (click to expand)</summary>
@@ -100,5 +101,36 @@ matter).
 <tr><td>73</td><td><b>Roton</b></td><td>0.05</td><td>0</td><td>0</td><td>Vortex excitation in superfluid</td></tr>
 </tbody>
 </table>
+
+</details>
+
+<details>
+<summary><b>Meson families</b> (types 74&ndash;261, click to expand)</summary>
+
+All 188 meson entries carry PDG rest masses, electric charges, spins (J), decay rates scaled from
+PDG widths, and quark content. Data lives in `src/physics/meson_data.h`.
+
+| Range | Family | Count | Key Members |
+|-------|--------|-------|-------------|
+| 74&ndash;148 | **Light Unflavored** | 75 | &pi;&plusmn;&sup0;, &eta;, &eta;'(958), &rho;(770), &omega;(782), &phi;(1020), f&sub0;(500/980/1370/1500/1710), a&sub0;(980/1450), b&sub1;(1235), a&sub1;(1260), f&sub1;(1285/1420), f&sub2;(1270), a&sub2;(1320), &pi;&sub2;(1670), &rho;&sub3;(1690), &omega;&sub3;(1670), a&sub4;(2040), f&sub4;(2050), and excitations |
+| 149&ndash;174 | **Strange** | 26 | K&plusmn;, K&sup0;/K&#773;&sup0;, K*(892)&plusmn;&sup0;, K&sub1;(1270/1400), K*&sub0;(1430), K*&sub2;(1430), K*(1410/1680), K&sub3;*(1780), K&sub4;*(2045) |
+| 175&ndash;196 | **Charmed** | 22 | D&plusmn;, D&sup0;/D&#773;&sup0;, D&sup*;&plusmn;&sup0;, D*&sub0;(2300), D&sub1;(2420/2430), D*&sub2;(2460), D&sub;s;&plusmn;, D*&sub;s;&plusmn;, D*&sub;s0;(2317), D&sub;s1;(2460/2536), D*&sub;s2;(2573) |
+| 197&ndash;216 | **Bottom** | 20 | B&plusmn;, B&sup0;/B&#773;&sup0;, B*&plusmn;&sup0;, B&sub1;(5721), B*&sub2;(5747), B&sub;s;&sup0;, B*&sub;s;, B&sub;s1;(5830), B*&sub;s2;(5840), B&sub;c;&plusmn;, B*&sub;c;&plusmn; |
+| 217&ndash;234 | **Charmonium** (c&#x63;&#x304;) | 18 | &eta;&sub;c;(1S/2S), J/&psi;, &chi;&sub;c0;/&chi;&sub;c1;/&chi;&sub;c2;, h&sub;c;, &psi;(2S), &psi;(3770/4040/4160/4415/4660), X(3872) |
+| 235&ndash;252 | **Bottomonium** (b&#x62;&#x304;) | 18 | &eta;&sub;b;(1S/2S), &Upsilon;(1S&ndash;4S), &chi;&sub;b0;/&chi;&sub;b1;/&chi;&sub;b2;(1P/2P), h&sub;b;(1P/2P), &Upsilon;(10860/11020) |
+| 253&ndash;261 | **Exotic Candidates** | 9 | Z&sub;c;(3900)&plusmn;, Z&sub;c;(4020)&plusmn;, Z(4430)&plusmn;, X(4140), Z&sub;b;(10610)&plusmn;, Z&sub;b;(10650)&plusmn;, X(6900) |
+| 262&ndash;281 | **Reserved** | 20 | Future discoveries |
+
+**Decay**: mesons decay via `check_meson_decays()` with ~60 PDG-sourced branching ratio channels
+(e.g., &pi;&sup+; &rarr; &mu;&sup+; + &nu;&sub;&mu;, K&sup+; &rarr; &mu;&sup+; + &nu;&sub;&mu;,
+J/&psi; &rarr; e&sup+; + e&sup&minus;). See `src/physics/meson_decays.cpp`.
+
+**Hadronization**: quarks confine into specific meson types via `quark_pair_to_meson()` in
+`src/physics/decay.cpp`, mapping quark flavor pairs to pseudoscalar (low energy) or vector (high
+energy) mesons.
+
+**GPU physics**: mesons are color-neutral &mdash; they skip QCD Cornell, Pauli, and nuclear Yukawa
+forces. Charged mesons experience Coulomb; all mesons get residual strong interaction with nucleons
+(weaker Yukawa at ~20px range), gravity, and hard-sphere repulsion.
 
 </details>
