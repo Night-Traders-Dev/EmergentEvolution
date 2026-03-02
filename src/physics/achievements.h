@@ -260,6 +260,18 @@ public:
     uint32_t total_force_objects_placed = 0;
     uint32_t total_bonds_formed         = 0;
 
+    // Process counters (accumulated per session for lifetime stats)
+    uint32_t total_spallations       = 0;
+    uint32_t total_photoelectric     = 0;
+    uint32_t total_pair_productions  = 0;
+    uint32_t total_virtual_pairs     = 0;
+    uint32_t total_carrier_exchanges = 0;
+    uint32_t total_shell_transitions = 0;
+    uint32_t total_meson_decays      = 0;
+    uint32_t total_bremsstrahlung    = 0;
+    uint32_t total_neutrino_oscillations = 0;
+    uint32_t total_molecules_formed  = 0;  // every molecule detection (not just distinct)
+
     // Scenario completion tracking (indexed by scenario_idx)
     bool scenarios_completed[20] = {};
 
@@ -307,16 +319,37 @@ struct LifetimeStats {
     uint64_t total_decays          = 0;
     uint64_t total_bonds_formed    = 0;
 
+    // Extended reaction counters
+    uint64_t total_spallations       = 0;
+    uint64_t total_photoelectric     = 0;
+    uint64_t total_pair_productions  = 0;
+    uint64_t total_virtual_pairs     = 0;
+    uint64_t total_carrier_exchanges = 0;
+    uint64_t total_shell_transitions = 0;
+    uint64_t total_meson_decays      = 0;
+    uint64_t total_bremsstrahlung    = 0;
+    uint64_t total_neutrino_oscillations = 0;
+    uint64_t total_accelerator_fires = 0;
+
     // Per-particle-type (74 types)
     uint64_t particles_spawned[LIFETIME_PARTICLE_TYPES] = {};
     uint32_t particles_peak[LIFETIME_PARTICLE_TYPES]    = {};
+    uint64_t total_particles_spawned = 0;     // grand total across all types
+    uint32_t distinct_particle_types_seen = 0; // how many of 74 types ever observed
 
     // Per-element (Z=0..118)
     uint64_t elements_created[LIFETIME_ELEMENT_COUNT] = {};
     uint32_t elements_peak[LIFETIME_ELEMENT_COUNT]    = {};
+    uint32_t highest_z_created = 0;
 
     // Molecules
-    uint32_t total_molecules_discovered = 0;
+    uint32_t total_molecules_discovered = 0;  // distinct molecule formulas
+    uint64_t total_molecules_formed     = 0;  // every molecule detection
+    uint32_t largest_molecule_atoms     = 0;  // most atoms in a single molecule
+
+    // Gameplay
+    uint32_t total_scenarios_completed = 0;
+    uint32_t environments_explored     = 0;   // distinct environments tried
 
     // All-time peaks
     float    peak_temperature    = 0.0f;

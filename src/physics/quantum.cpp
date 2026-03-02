@@ -174,6 +174,7 @@ void PhysicsSimulation::check_virtual_pairs() {
         }
 
         pairs_created++;
+        achievements.total_virtual_pairs++;
         any_spawned = true;
     }
 
@@ -327,6 +328,7 @@ void PhysicsSimulation::check_neutrino_oscillations() {
                 iface.push_decay_event(osc_msg, PhysicsInterface::DEVT_NEUTRINO, ImVec4(0.5f, 1.0f, 0.8f, 1.0f), std::string(detail));
             }
             achievements.seen_neutrino_oscillation = true;
+            achievements.total_neutrino_oscillations++;
             cpu_particles_dirty_ = true;
         }
     }

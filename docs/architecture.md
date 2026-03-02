@@ -34,7 +34,7 @@ EmergentEvolution/
 │   ├── phys_particles.h/.cpp    # 282 particle types, masses, charges, environments
 │   ├── meson_data.h             # 188 PDG meson definitions (types 74–261), masses, spins, decays
 │   ├── molecules.h              # ~50 molecule templates with geometry
-│   ├── achievements.h/.cpp      # 126 achievements, persistence, Steam API names
+│   ├── achievements.h/.cpp      # 234 achievements (inc. 118 periodic table), lifetime stats, persistence
 │   ├── audio.h/.cpp             # Background music + 10 SFX channels via miniaudio
 │   ├── save_load.h/.cpp         # Binary .ppsg/.ppel/.ppmol serialization
 │   ├── paths.h                  # Platform-appropriate data directory (XDG / AppData)

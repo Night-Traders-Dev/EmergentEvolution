@@ -2641,18 +2641,41 @@ void PhysicsInterface::draw_achievements_panel() {
             int hours   = static_cast<int>(ls.total_play_time / 3600.0);
             int minutes = static_cast<int>(fmod(ls.total_play_time, 3600.0) / 60.0);
             int seconds = static_cast<int>(fmod(ls.total_play_time, 60.0));
-            ImGui::Text("Play Time:       %d:%02d:%02d", hours, minutes, seconds);
-            ImGui::Text("Simulations:     %u", ls.total_simulations);
-            ImGui::Text("Total Ticks:     %llu", (unsigned long long)ls.total_ticks);
+            ImGui::Text("Play Time:         %d:%02d:%02d", hours, minutes, seconds);
+            ImGui::Text("Simulations:       %u", ls.total_simulations);
+            ImGui::Text("Total Ticks:       %llu", (unsigned long long)ls.total_ticks);
+            ImGui::Text("Particles Spawned: %llu", (unsigned long long)ls.total_particles_spawned);
+            ImGui::Text("Types Observed:    %u / %d", ls.distinct_particle_types_seen, LIFETIME_PARTICLE_TYPES);
             ImGui::Spacing();
 
-            ImGui::TextColored(ImVec4(1.0f, 0.843f, 0.0f, 1.0f), "Reactions");
+            ImGui::TextColored(ImVec4(1.0f, 0.843f, 0.0f, 1.0f), "Nuclear Reactions");
             ImGui::Separator();
-            ImGui::Text("Fusions:         %llu", (unsigned long long)ls.total_fusions);
-            ImGui::Text("Fissions:        %llu", (unsigned long long)ls.total_fissions);
-            ImGui::Text("Annihilations:   %llu", (unsigned long long)ls.total_annihilations);
-            ImGui::Text("Nuclear Decays:  %llu", (unsigned long long)ls.total_decays);
-            ImGui::Text("Bonds Formed:    %llu", (unsigned long long)ls.total_bonds_formed);
+            ImGui::Text("Fusions:           %llu", (unsigned long long)ls.total_fusions);
+            ImGui::Text("Fissions:          %llu", (unsigned long long)ls.total_fissions);
+            ImGui::Text("Annihilations:     %llu", (unsigned long long)ls.total_annihilations);
+            ImGui::Text("Nuclear Decays:    %llu", (unsigned long long)ls.total_decays);
+            ImGui::Text("Spallations:       %llu", (unsigned long long)ls.total_spallations);
+            ImGui::Text("Pair Productions:  %llu", (unsigned long long)ls.total_pair_productions);
+            ImGui::Text("Photoelectric:     %llu", (unsigned long long)ls.total_photoelectric);
+            ImGui::Spacing();
+
+            ImGui::TextColored(ImVec4(1.0f, 0.843f, 0.0f, 1.0f), "Quantum & EM Processes");
+            ImGui::Separator();
+            ImGui::Text("Virtual Pairs:     %llu", (unsigned long long)ls.total_virtual_pairs);
+            ImGui::Text("Carrier Exchanges: %llu", (unsigned long long)ls.total_carrier_exchanges);
+            ImGui::Text("Shell Transitions: %llu", (unsigned long long)ls.total_shell_transitions);
+            ImGui::Text("Bremsstrahlung:    %llu", (unsigned long long)ls.total_bremsstrahlung);
+            ImGui::Text("Neutrino Osc.:     %llu", (unsigned long long)ls.total_neutrino_oscillations);
+            ImGui::Text("Meson Decays:      %llu", (unsigned long long)ls.total_meson_decays);
+            ImGui::Spacing();
+
+            ImGui::TextColored(ImVec4(1.0f, 0.843f, 0.0f, 1.0f), "Chemistry");
+            ImGui::Separator();
+            ImGui::Text("Bonds Formed:      %llu", (unsigned long long)ls.total_bonds_formed);
+            ImGui::Text("Molecules Found:   %u distinct", ls.total_molecules_discovered);
+            ImGui::Text("Molecules Formed:  %llu total", (unsigned long long)ls.total_molecules_formed);
+            if (ls.largest_molecule_atoms > 0)
+                ImGui::Text("Largest Molecule:  %u atoms", ls.largest_molecule_atoms);
             ImGui::Spacing();
 
             ImGui::TextColored(ImVec4(1.0f, 0.843f, 0.0f, 1.0f), "Records");
@@ -2665,7 +2688,15 @@ void PhysicsInterface::draw_achievements_panel() {
                 ImGui::Text("Peak Temperature:  %.0f K", ls.peak_temperature);
             ImGui::Text("Peak Particles:    %u", ls.peak_particles);
             ImGui::Text("Peak Entangled:    %u", ls.peak_entangled);
-            ImGui::Text("Molecules Found:   %u", ls.total_molecules_discovered);
+            if (ls.highest_z_created > 0)
+                ImGui::Text("Heaviest Element:  %s (Z=%u)", ELEMENT_NAMES[ls.highest_z_created], ls.highest_z_created);
+            ImGui::Spacing();
+
+            ImGui::TextColored(ImVec4(1.0f, 0.843f, 0.0f, 1.0f), "Gameplay");
+            ImGui::Separator();
+            ImGui::Text("Accelerator Fires: %llu", (unsigned long long)ls.total_accelerator_fires);
+            ImGui::Text("Scenarios Done:    %u", ls.total_scenarios_completed);
+            ImGui::Text("Environments:      %u / 12", ls.environments_explored);
             ImGui::Spacing();
 
             // Top particles by total spawned

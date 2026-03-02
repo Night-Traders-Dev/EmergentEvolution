@@ -1185,6 +1185,7 @@ void PhysicsSimulation::check_photoelectric() {
                 used[best_e] = true;
                 any_changed = true;
                 interaction_count++;
+                achievements.total_photoelectric++;
                 try_unlock(ACH_FIRST_PHOTOELECTRIC);
 
                 // Spawn electron hole at nucleus position (vacancy left behind)
@@ -1767,6 +1768,7 @@ void PhysicsSimulation::check_spallation() {
 
             any_spallated = true;
             spallation_count++;
+            achievements.total_spallations++;
             try_unlock(ACH_FIRST_SPALLATION);
 
             {
@@ -2116,6 +2118,7 @@ void PhysicsSimulation::check_spallation() {
                         e_slot, pp_energy, p_slot, pp_energy, pp_speed);
                     iface.push_decay_event("\xCE\xB3 \xE2\x86\x92 e\xE2\x81\xBA + e\xE2\x81\xBB", PhysicsInterface::DEVT_PAIR_PRODUCTION, ImVec4(0.3f, 0.7f, 1.0f, 1.0f), std::string(pp_detail));
                 }
+                achievements.total_pair_productions++;
                 try_unlock(ACH_FIRST_PAIR_PRODUCTION);
                 break;
 
@@ -2550,6 +2553,7 @@ void PhysicsSimulation::check_carrier_exchange() {
             iface.push_decay_event(msg, final_evt, col, std::string(detail));
         }
         achievements.seen_carrier_exchange = true;
+        achievements.total_carrier_exchanges++;
 
         ++spawned;
     }

@@ -512,6 +512,17 @@ public:
     uint32_t ls_snap_annihilations = 0;
     uint32_t ls_snap_decays        = 0;
     uint32_t ls_snap_bonds         = 0;
+    uint32_t ls_snap_spallations       = 0;
+    uint32_t ls_snap_photoelectric     = 0;
+    uint32_t ls_snap_pair_productions  = 0;
+    uint32_t ls_snap_virtual_pairs     = 0;
+    uint32_t ls_snap_carrier_exchanges = 0;
+    uint32_t ls_snap_shell_transitions = 0;
+    uint32_t ls_snap_meson_decays      = 0;
+    uint32_t ls_snap_bremsstrahlung    = 0;
+    uint32_t ls_snap_neutrino_osc      = 0;
+    uint32_t ls_snap_accel_fires       = 0;
+    uint32_t ls_snap_molecules_formed  = 0;
     uint32_t ls_snap_type_spawned[LIFETIME_PARTICLE_TYPES] = {};
     uint32_t ls_snap_elem_created[119] = {};
 

@@ -181,20 +181,44 @@ Linux, `%APPDATA%\ParticlePlayground\` on Windows).
 
 ## Achievements
 
-84 milestones across 7 categories:
+234 milestones across 8 categories:
 
 | Category | Count | Examples |
 |---|---|---|
-| **Nuclear Physics** | 13 | First Light, Chain Reaction, Reactor Core, Star Builder |
-| **Element Creation** | 13 | Simplest Atom, Iron Peak, Beyond Uranium, Island of Stability |
-| **Particle Zoo** | 12 | Ghost Particle, Dark Side, Cosmic Accelerator, Supersymmetry |
+| **Nuclear Physics** | 19 | First Light, Chain Reaction, Reactor Core, Braking Radiation, Quantum Leap |
+| **Element Creation** | 17 | Simplest Atom, Iron Peak, Beyond Uranium, Half the Table, Centurion |
+| **Particle Zoo** | 19 | Ghost Particle, Dark Side, Supersymmetry, Plasma Wave, Force Mediator |
 | **Thermodynamics** | 6 | Getting Warm, Quark Epoch, Absolute Zero, Planck Epoch |
-| **Milestones** | 22 | CERN at Home, Collider Veteran, Galaxy, Marathon Physicist |
-| **Chemistry** | 5 | Chemical Bond, Molecular Library, Macromolecule |
+| **Milestones** | 28 | CERN at Home, Collider Veteran, Galaxy, Marathon Physicist, Lore Master |
+| **Chemistry** | 9 | Chemical Bond, Molecular Library, Universal Solvent, Bond Builder |
 | **Scenarios** | 5 | First Steps, Nuclear Physicist, Chemist, Scenario Master |
+| **Periodic Table** | 118 | One achievement per element (Z=1 Hydrogen through Z=118 Oganesson) |
 
-Persist via `.ppach` file (v2 format, backward-compatible with v1). Steam achievement
+The **Periodic Table** category renders as an interactive 18-column grid matching the standard
+periodic table layout (10 rows including lanthanides/actinides). Discovered elements light up
+gold with tooltips showing the element name, symbol, and atomic number.
+
+Persist via `.ppach` file (v4 format, backward-compatible with v1&ndash;v3). Steam achievement
 integration ready (optional, builds without Steamworks SDK).
+
+## Lifetime Statistics
+
+Career statistics accumulate across all sessions and persist in a `.ppstats` file (auto-saved
+every 30 seconds). The statistics panel is accessible from the achievements screen and displays:
+
+| Section | Metrics |
+|---|---|
+| **Career Totals** | Play time, simulations, total ticks, particles spawned, types observed |
+| **Nuclear Reactions** | Fusions, fissions, annihilations, decays, spallations, pair productions, photoelectric |
+| **Quantum & EM** | Virtual pairs, carrier exchanges, shell transitions, bremsstrahlung, neutrino oscillations, meson decays |
+| **Chemistry** | Bonds formed, distinct molecules, total molecules formed, largest molecule (atoms) |
+| **Records** | Peak temperature, peak particles, peak entangled, heaviest element created |
+| **Gameplay** | Accelerator fires, scenarios completed, environments explored |
+| **Top Particles** | Top 10 particle types by total spawned (with peak counts) |
+| **Top Elements** | Top 10 elements by total created (with peak counts) |
+
+Per-particle-type tracking covers all 74 physics types; per-element tracking covers Z=1&ndash;118.
+Session counters persist in `.ppach` (v5); lifetime aggregates persist in `.ppstats` (v2).
 
 ## Sound Effects
 

@@ -2137,6 +2137,7 @@ void PhysicsSimulation::check_bremsstrahlung() {
             iface.push_decay_event(msg, PhysicsInterface::DEVT_BREMSSTRAHLUNG, ImVec4(0.8f, 0.8f, 1.0f, 1.0f), std::string(detail));
         }
         achievements.seen_bremsstrahlung = true;
+        achievements.total_bremsstrahlung++;
     }
 
     if (photons_spawned > 0)

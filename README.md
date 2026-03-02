@@ -53,6 +53,7 @@ uses a **spatial acceleration grid** with **OpenMP** parallelization for O(n) ne
   - [Display Settings](docs/ui-visualization.md#display-settings)
   - [Accessibility](docs/ui-visualization.md#accessibility)
   - [Achievements](docs/ui-visualization.md#achievements)
+  - [Lifetime Statistics](docs/ui-visualization.md#lifetime-statistics)
   - [Sound Effects](docs/ui-visualization.md#sound-effects)
   - [Gamepad Support](docs/ui-visualization.md#gamepad-support)
   - [Error Dialogs](docs/ui-visualization.md#error-dialogs)

@@ -256,7 +256,7 @@ int AchievementManager::unlocked_count() const {
 // ── Persistence (.ppach file) ───────────────────────────────────────────────
 
 static constexpr uint32_t PPACH_MAGIC   = 0x48434150;  // "PACH" little-endian
-static constexpr uint32_t PPACH_VERSION = 4;
+static constexpr uint32_t PPACH_VERSION = 5;
 
 bool AchievementManager::save(const std::string& filepath) const {
     std::ofstream f(filepath, std::ios::binary);
@@ -314,6 +314,18 @@ bool AchievementManager::save(const std::string& filepath) const {
     f.write(reinterpret_cast<const char*>(&seen_meson_decay), sizeof(bool));
     f.write(reinterpret_cast<const char*>(&seen_weak_decay), sizeof(bool));
 
+    // v5: process counters
+    f.write(reinterpret_cast<const char*>(&total_spallations), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&total_photoelectric), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&total_pair_productions), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&total_virtual_pairs), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&total_carrier_exchanges), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&total_shell_transitions), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&total_meson_decays), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&total_bremsstrahlung), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&total_neutrino_oscillations), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&total_molecules_formed), sizeof(uint32_t));
+
     return f.good();
 }
 
@@ -324,7 +336,7 @@ bool AchievementManager::load(const std::string& filepath) {
     uint32_t magic = 0, version = 0;
     f.read(reinterpret_cast<char*>(&magic), sizeof(uint32_t));
     f.read(reinterpret_cast<char*>(&version), sizeof(uint32_t));
-    if (magic != PPACH_MAGIC || version < 1 || version > 4)
+    if (magic != PPACH_MAGIC || version < 1 || version > 5)
         return false;
 
     // Clear all bitfield slots first
@@ -339,7 +351,7 @@ bool AchievementManager::load(const std::string& filepath) {
         f.read(reinterpret_cast<char*>(&unlocked_bits_[0]), sizeof(uint64_t));
         f.read(reinterpret_cast<char*>(&unlocked_bits_[1]), sizeof(uint64_t));
     } else {
-        // v4: four uint64_t bitfield slots
+        // v4+: four uint64_t bitfield slots
         for (uint32_t s = 0; s < ACH_ELEMENT_SLOTS; s++)
             f.read(reinterpret_cast<char*>(&unlocked_bits_[s]), sizeof(uint64_t));
     }
@@ -392,13 +404,27 @@ bool AchievementManager::load(const std::string& filepath) {
         f.read(reinterpret_cast<char*>(&seen_weak_decay), sizeof(bool));
     }
 
+    if (version >= 5) {
+        // v5: process counters
+        f.read(reinterpret_cast<char*>(&total_spallations), sizeof(uint32_t));
+        f.read(reinterpret_cast<char*>(&total_photoelectric), sizeof(uint32_t));
+        f.read(reinterpret_cast<char*>(&total_pair_productions), sizeof(uint32_t));
+        f.read(reinterpret_cast<char*>(&total_virtual_pairs), sizeof(uint32_t));
+        f.read(reinterpret_cast<char*>(&total_carrier_exchanges), sizeof(uint32_t));
+        f.read(reinterpret_cast<char*>(&total_shell_transitions), sizeof(uint32_t));
+        f.read(reinterpret_cast<char*>(&total_meson_decays), sizeof(uint32_t));
+        f.read(reinterpret_cast<char*>(&total_bremsstrahlung), sizeof(uint32_t));
+        f.read(reinterpret_cast<char*>(&total_neutrino_oscillations), sizeof(uint32_t));
+        f.read(reinterpret_cast<char*>(&total_molecules_formed), sizeof(uint32_t));
+    }
+
     return f.good();
 }
 
 // ── LifetimeStats persistence (.ppstats file) ──────────────────────────────
 
 static constexpr uint32_t PPST_MAGIC   = 0x54535050;  // "PPST" little-endian
-static constexpr uint32_t PPST_VERSION = 1;
+static constexpr uint32_t PPST_VERSION = 2;
 
 bool LifetimeStats::save(const std::string& filepath) const {
     std::ofstream f(filepath, std::ios::binary);
@@ -433,6 +459,33 @@ bool LifetimeStats::save(const std::string& filepath) const {
     f.write(reinterpret_cast<const char*>(&peak_particles), sizeof(uint32_t));
     f.write(reinterpret_cast<const char*>(&peak_entangled), sizeof(uint32_t));
 
+    // v2: extended reaction counters
+    f.write(reinterpret_cast<const char*>(&total_spallations), sizeof(uint64_t));
+    f.write(reinterpret_cast<const char*>(&total_photoelectric), sizeof(uint64_t));
+    f.write(reinterpret_cast<const char*>(&total_pair_productions), sizeof(uint64_t));
+    f.write(reinterpret_cast<const char*>(&total_virtual_pairs), sizeof(uint64_t));
+    f.write(reinterpret_cast<const char*>(&total_carrier_exchanges), sizeof(uint64_t));
+    f.write(reinterpret_cast<const char*>(&total_shell_transitions), sizeof(uint64_t));
+    f.write(reinterpret_cast<const char*>(&total_meson_decays), sizeof(uint64_t));
+    f.write(reinterpret_cast<const char*>(&total_bremsstrahlung), sizeof(uint64_t));
+    f.write(reinterpret_cast<const char*>(&total_neutrino_oscillations), sizeof(uint64_t));
+    f.write(reinterpret_cast<const char*>(&total_accelerator_fires), sizeof(uint64_t));
+
+    // v2: particle aggregate stats
+    f.write(reinterpret_cast<const char*>(&total_particles_spawned), sizeof(uint64_t));
+    f.write(reinterpret_cast<const char*>(&distinct_particle_types_seen), sizeof(uint32_t));
+
+    // v2: element stats
+    f.write(reinterpret_cast<const char*>(&highest_z_created), sizeof(uint32_t));
+
+    // v2: molecule stats
+    f.write(reinterpret_cast<const char*>(&total_molecules_formed), sizeof(uint64_t));
+    f.write(reinterpret_cast<const char*>(&largest_molecule_atoms), sizeof(uint32_t));
+
+    // v2: gameplay stats
+    f.write(reinterpret_cast<const char*>(&total_scenarios_completed), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&environments_explored), sizeof(uint32_t));
+
     return f.good();
 }
 
@@ -443,7 +496,7 @@ bool LifetimeStats::load(const std::string& filepath) {
     uint32_t magic = 0, version = 0;
     f.read(reinterpret_cast<char*>(&magic), sizeof(uint32_t));
     f.read(reinterpret_cast<char*>(&version), sizeof(uint32_t));
-    if (magic != PPST_MAGIC || version < 1 || version > 1)
+    if (magic != PPST_MAGIC || version < 1 || version > 2)
         return false;
 
     // Global totals
@@ -471,6 +524,35 @@ bool LifetimeStats::load(const std::string& filepath) {
     f.read(reinterpret_cast<char*>(&peak_temperature), sizeof(float));
     f.read(reinterpret_cast<char*>(&peak_particles), sizeof(uint32_t));
     f.read(reinterpret_cast<char*>(&peak_entangled), sizeof(uint32_t));
+
+    if (version >= 2) {
+        // v2: extended reaction counters
+        f.read(reinterpret_cast<char*>(&total_spallations), sizeof(uint64_t));
+        f.read(reinterpret_cast<char*>(&total_photoelectric), sizeof(uint64_t));
+        f.read(reinterpret_cast<char*>(&total_pair_productions), sizeof(uint64_t));
+        f.read(reinterpret_cast<char*>(&total_virtual_pairs), sizeof(uint64_t));
+        f.read(reinterpret_cast<char*>(&total_carrier_exchanges), sizeof(uint64_t));
+        f.read(reinterpret_cast<char*>(&total_shell_transitions), sizeof(uint64_t));
+        f.read(reinterpret_cast<char*>(&total_meson_decays), sizeof(uint64_t));
+        f.read(reinterpret_cast<char*>(&total_bremsstrahlung), sizeof(uint64_t));
+        f.read(reinterpret_cast<char*>(&total_neutrino_oscillations), sizeof(uint64_t));
+        f.read(reinterpret_cast<char*>(&total_accelerator_fires), sizeof(uint64_t));
+
+        // v2: particle aggregate stats
+        f.read(reinterpret_cast<char*>(&total_particles_spawned), sizeof(uint64_t));
+        f.read(reinterpret_cast<char*>(&distinct_particle_types_seen), sizeof(uint32_t));
+
+        // v2: element stats
+        f.read(reinterpret_cast<char*>(&highest_z_created), sizeof(uint32_t));
+
+        // v2: molecule stats
+        f.read(reinterpret_cast<char*>(&total_molecules_formed), sizeof(uint64_t));
+        f.read(reinterpret_cast<char*>(&largest_molecule_atoms), sizeof(uint32_t));
+
+        // v2: gameplay stats
+        f.read(reinterpret_cast<char*>(&total_scenarios_completed), sizeof(uint32_t));
+        f.read(reinterpret_cast<char*>(&environments_explored), sizeof(uint32_t));
+    }
 
     return f.good();
 }

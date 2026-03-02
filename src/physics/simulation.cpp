@@ -1485,19 +1485,36 @@ void PhysicsSimulation::check_achievements() {
         ls.total_ticks++;
         ls.total_play_time += ImGui::GetIO().DeltaTime;
 
-        // Merge event counters from session (delta since last snapshot)
-        ls.total_fusions       += (achievements.total_fusions       - iface.ls_snap_fusions);
-        ls.total_fissions      += (achievements.total_fissions      - iface.ls_snap_fissions);
-        ls.total_annihilations += (achievements.total_annihilations - iface.ls_snap_annihilations);
-        ls.total_decays        += (achievements.total_nuclear_decays - iface.ls_snap_decays);
-        ls.total_bonds_formed  += (achievements.total_bonds_formed  - iface.ls_snap_bonds);
-        iface.ls_snap_fusions       = achievements.total_fusions;
-        iface.ls_snap_fissions      = achievements.total_fissions;
-        iface.ls_snap_annihilations = achievements.total_annihilations;
-        iface.ls_snap_decays        = achievements.total_nuclear_decays;
-        iface.ls_snap_bonds         = achievements.total_bonds_formed;
+        // Merge core event counters (delta since last snapshot)
+        #define SNAP_DELTA(ls_field, ach_field, snap_field) do { \
+            ls.ls_field += (achievements.ach_field - iface.snap_field); \
+            iface.snap_field = achievements.ach_field; \
+        } while(0)
+
+        SNAP_DELTA(total_fusions,       total_fusions,       ls_snap_fusions);
+        SNAP_DELTA(total_fissions,      total_fissions,      ls_snap_fissions);
+        SNAP_DELTA(total_annihilations, total_annihilations, ls_snap_annihilations);
+        SNAP_DELTA(total_decays,        total_nuclear_decays, ls_snap_decays);
+        SNAP_DELTA(total_bonds_formed,  total_bonds_formed,  ls_snap_bonds);
+
+        // Extended process counters
+        SNAP_DELTA(total_spallations,       total_spallations,       ls_snap_spallations);
+        SNAP_DELTA(total_photoelectric,     total_photoelectric,     ls_snap_photoelectric);
+        SNAP_DELTA(total_pair_productions,  total_pair_productions,  ls_snap_pair_productions);
+        SNAP_DELTA(total_virtual_pairs,     total_virtual_pairs,     ls_snap_virtual_pairs);
+        SNAP_DELTA(total_carrier_exchanges, total_carrier_exchanges, ls_snap_carrier_exchanges);
+        SNAP_DELTA(total_shell_transitions, total_shell_transitions, ls_snap_shell_transitions);
+        SNAP_DELTA(total_meson_decays,      total_meson_decays,      ls_snap_meson_decays);
+        SNAP_DELTA(total_bremsstrahlung,    total_bremsstrahlung,    ls_snap_bremsstrahlung);
+        SNAP_DELTA(total_neutrino_oscillations, total_neutrino_oscillations, ls_snap_neutrino_osc);
+        SNAP_DELTA(total_accelerator_fires, total_accelerator_fires, ls_snap_accel_fires);
+        SNAP_DELTA(total_molecules_formed,  total_molecules_formed,  ls_snap_molecules_formed);
+
+        #undef SNAP_DELTA
 
         // Per-type spawned (delta) and per-type peak
+        uint64_t grand_total_spawned = 0;
+        uint32_t types_seen = 0;
         for (int t = 0; t < LIFETIME_PARTICLE_TYPES; t++) {
             uint32_t spawned_now = iface.type_stats[t].total_spawned;
             if (spawned_now > iface.ls_snap_type_spawned[t]) {
@@ -1506,7 +1523,11 @@ void PhysicsSimulation::check_achievements() {
             }
             uint32_t cur = iface.type_counts_display[t];
             if (cur > ls.particles_peak[t]) ls.particles_peak[t] = cur;
+            grand_total_spawned += ls.particles_spawned[t];
+            if (ls.particles_spawned[t] > 0) types_seen++;
         }
+        ls.total_particles_spawned = grand_total_spawned;
+        ls.distinct_particle_types_seen = types_seen;
 
         // Per-element created (delta) and peak
         for (int z = 1; z < 119; z++) {
@@ -1517,15 +1538,33 @@ void PhysicsSimulation::check_achievements() {
             }
             uint32_t cur = iface.element_stats[z].current_count;
             if (cur > ls.elements_peak[z]) ls.elements_peak[z] = cur;
+            if (ls.elements_created[z] > 0 && static_cast<uint32_t>(z) > ls.highest_z_created)
+                ls.highest_z_created = static_cast<uint32_t>(z);
         }
 
-        // Molecule count
+        // Molecule stats
         uint32_t mol_count = static_cast<uint32_t>(iface.molecule_bestiary.size());
         if (mol_count > ls.total_molecules_discovered) ls.total_molecules_discovered = mol_count;
+        for (const auto& be : iface.molecule_bestiary) {
+            if (be.atom_count > ls.largest_molecule_atoms)
+                ls.largest_molecule_atoms = be.atom_count;
+        }
+
+        // Gameplay stats
+        uint32_t scenarios_done = 0;
+        for (int s = 0; s < 20; s++)
+            if (achievements.scenarios_completed[s]) scenarios_done++;
+        if (scenarios_done > ls.total_scenarios_completed)
+            ls.total_scenarios_completed = scenarios_done;
+        uint32_t envs = 0;
+        for (int e = 0; e < 12; e++)
+            if (achievements.environments_tried[e]) envs++;
+        if (envs > ls.environments_explored)
+            ls.environments_explored = envs;
 
         // All-time peaks
-        if (temp > ls.peak_temperature)        ls.peak_temperature = temp;
-        if (active > ls.peak_particles)              ls.peak_particles = active;
+        if (temp > ls.peak_temperature)                ls.peak_temperature = temp;
+        if (active > ls.peak_particles)                ls.peak_particles = active;
         if (entangled_pair_count_ > ls.peak_entangled) ls.peak_entangled = entangled_pair_count_;
 
         // Periodic stats auto-save (every 30 seconds)
@@ -2965,6 +3004,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 if (e.count > 1) formula += std::to_string(e.count);
             }
             // Search existing bestiary
+            achievements.total_molecules_formed++;
             bool found = false;
             for (auto& be : iface.molecule_bestiary) {
                 if (be.formula == formula) {

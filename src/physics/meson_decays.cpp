@@ -494,5 +494,6 @@ void PhysicsSimulation::check_meson_decays() {
         ImVec4 col(mc.r, mc.g, mc.b, mc.a);
         iface.push_decay_event(msg, PhysicsInterface::DEVT_MESON_DECAY, col, std::string(detail));
         achievements.seen_meson_decay = true;
+        achievements.total_meson_decays++;
     }
 }
