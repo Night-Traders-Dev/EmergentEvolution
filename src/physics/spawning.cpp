@@ -113,6 +113,8 @@ void PhysicsSimulation::do_accelerator_fire(glm::vec2 aim_world_pos) {
         compute.upload_dynamic_data(vk, particles);
         audio.play(AudioPlayer::SFX_COLLISION, frame_counter_);
         try_unlock(ACH_FIRST_ACCELERATOR);
+        achievements.total_accelerator_fires++;
+        if (achievements.total_accelerator_fires >= 50) try_unlock(ACH_ACCELERATOR_50);
         // Cosmic ray: fire at near-lightspeed
         if (speed >= 295.0f) try_unlock(ACH_COSMIC_RAY);
     }

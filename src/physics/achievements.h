@@ -91,10 +91,42 @@ enum AchievementID : uint32_t {
     ACH_GRAVITON_OBSERVED,      // Observe a graviton
     ACH_LONG_PLAY,              // Run simulation for 10+ minutes
 
+    // ── Scenarios ─────────────────────────────────────────────────────────
+    ACH_FIRST_SCENARIO_COMPLETE,// Complete any scenario
+    ACH_ALL_NUCLEAR_SCENARIOS,  // Complete all Nuclear scenarios
+    ACH_ALL_CHEMISTRY_SCENARIOS,// Complete all Chemistry scenarios
+    ACH_ALL_COSMOLOGY_SCENARIOS,// Complete all Cosmology scenarios
+    ACH_SCENARIO_MASTER,        // Complete all non-sandbox scenarios
+
+    // ── Beyond Standard Model ─────────────────────────────────────────────
+    ACH_DARK_ENERGY,            // Observe a dark energy particle
+    ACH_SUSY_PARTICLE,          // Observe a SUSY particle
+    ACH_TACHYON,                // Observe a tachyon
+
+    // ── Advanced Nuclear ──────────────────────────────────────────────────
+    ACH_TRANSURANIC,            // Create transuranic element (Z > 92)
+    ACH_SUPERHEAVY,             // Create superheavy element (Z > 110)
+    ACH_FISSION_100,            // Trigger 100 fission events
+    ACH_FUSION_1000,            // Trigger 1000 fusion events
+
+    // ── Advanced Chemistry ────────────────────────────────────────────────
+    ACH_MOLECULES_10,           // Create 10 distinct molecules
+    ACH_MOLECULE_10_ATOMS,      // Create molecule with 10+ atoms
+
+    // ── Advanced Thermodynamics ───────────────────────────────────────────
+    ACH_TEMP_100GK,             // Reach 100,000,000,000 K (100 GK)
+
+    // ── Advanced Milestones ───────────────────────────────────────────────
+    ACH_PARTICLES_50000,        // Have 50,000+ active particles simultaneously
+    ACH_ENTANGLED_50,           // 50+ entangled pairs active simultaneously
+    ACH_FORCE_OBJECTS_5,        // Place 5 force objects
+    ACH_ACCELERATOR_50,         // Fire accelerator 50 times
+    ACH_PLAY_1_HOUR,            // Run simulation for 1+ hour
+
     ACH_COUNT                   // Total number of achievements
 };
 
-static_assert(ACH_COUNT <= 64, "Achievement count exceeds uint64_t bitfield capacity");
+static_assert(ACH_COUNT <= 128, "Achievement count exceeds dual uint64_t bitfield capacity");
 
 // ── Achievement metadata ────────────────────────────────────────────────────
 
@@ -105,6 +137,7 @@ enum AchievementCategory : uint8_t {
     ACAT_THERMO,
     ACAT_MILESTONES,
     ACAT_CHEMISTRY,
+    ACAT_SCENARIOS,
     ACAT_COUNT
 };
 
@@ -164,10 +197,17 @@ public:
     uint32_t peak_active_particles = 0;
     uint32_t peak_entangled_pairs = 0;
 
-    // Session time tracking (for ACH_LONG_PLAY)
+    // Session time tracking (for ACH_LONG_PLAY / ACH_PLAY_1_HOUR)
     float session_time_ = 0.0f;
 
+    // Advanced counters
+    uint32_t total_accelerator_fires    = 0;
+    uint32_t total_force_objects_placed = 0;
+
+    // Scenario completion tracking (indexed by scenario_idx)
+    bool scenarios_completed[20] = {};
+
 private:
-    // Bitfield for unlocked achievements (ACH_COUNT < 64, fits in 2 uint32s)
-    uint64_t unlocked_bits_ = 0;
+    // Bitfield for unlocked achievements (ACH_COUNT <= 128, two uint64_t slots)
+    uint64_t unlocked_bits_[2] = {};
 };

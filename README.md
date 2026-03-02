@@ -43,6 +43,8 @@ uses a **spatial acceleration grid** with **OpenMP** parallelization for O(n) ne
 - [Quantum Entanglement](docs/quantum-entanglement.md)
 - [Emergent Thermodynamics](docs/emergent-thermodynamics.md)
 - [UI & Visualization](docs/ui-visualization.md)
+  - [Top Stats Bar](docs/ui-visualization.md#top-stats-bar)
+  - [Bottom Taskbar](docs/ui-visualization.md#bottom-taskbar)
   - [Custom Particle Textures](docs/ui-visualization.md#custom-particle-textures)
   - [Display Settings](docs/ui-visualization.md#display-settings)
   - [Accessibility](docs/ui-visualization.md#accessibility)

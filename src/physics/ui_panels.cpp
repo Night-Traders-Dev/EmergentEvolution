@@ -233,45 +233,6 @@ void PhysicsInterface::draw_top_bar(SimConfig& cfg) {
             ImGui::TextColored(ImVec4(0.6f, 0.3f, 1.0f, 1.0f), "[DENSITY]");
         }
 
-        // ── Right-aligned particle census ──
-        float cursor_x = ImGui::GetCursorPosX();
-        // Build census string
-        char census[256] = {};
-        int cpos = 0;
-        auto add = [&](const char* fmt, ...) __attribute__((format(printf, 2, 3))) {
-            va_list ap; va_start(ap, fmt);
-            cpos += vsnprintf(census + cpos, sizeof(census) - cpos, fmt, ap);
-            va_end(ap);
-        };
-        if (type_counts_display[PROTON_TYPE]) add("p:%u ", type_counts_display[PROTON_TYPE]);
-        if (type_counts_display[NEUTRON_TYPE]) add("n:%u ", type_counts_display[NEUTRON_TYPE]);
-        if (type_counts_display[ELECTRON_TYPE_PHYS]) add("e:%u ", type_counts_display[ELECTRON_TYPE_PHYS]);
-        if (type_counts_display[PHOTON_TYPE_PHYS]) add("y:%u ", type_counts_display[PHOTON_TYPE_PHYS]);
-        uint32_t quark_total = 0;
-        for (uint32_t t = UP_QUARK_TYPE; t <= ANTI_BOTTOM_TYPE; ++t) quark_total += type_counts_display[t];
-        if (quark_total) add("q:%u ", quark_total);
-        uint32_t boson_total = type_counts_display[GLUON_TYPE_PHYS]
-            + type_counts_display[W_PLUS_TYPE_PHYS] + type_counts_display[W_MINUS_TYPE_PHYS]
-            + type_counts_display[Z_BOSON_TYPE_PHYS] + type_counts_display[HIGGS_TYPE_PHYS];
-        if (boson_total) add("B:%u ", boson_total);
-        if (type_counts_display[DARK_MATTER_TYPE_PHYS]) add("DM:%u ", type_counts_display[DARK_MATTER_TYPE_PHYS]);
-
-        char total_buf[32];
-        snprintf(total_buf, sizeof(total_buf), "Total: %u", active_particle_display);
-
-        // Only show full census if space allows, otherwise just Total
-        float census_w = ImGui::CalcTextSize(census).x;
-        float total_w = ImGui::CalcTextSize(total_buf).x;
-        float avail = display_w - 12.0f - cursor_x;
-        if (avail > census_w + total_w + 20.0f && cpos > 0) {
-            ImGui::SameLine(display_w - 12.0f - census_w - total_w - 10.0f);
-            ImGui::TextColored(ImVec4(0.5f, 0.55f, 0.65f, 0.7f), "%s", census);
-            ImGui::SameLine(0, 6);
-            ImGui::TextColored(ImVec4(0.6f, 0.65f, 0.75f, 1.0f), "%s", total_buf);
-        } else {
-            ImGui::SameLine(display_w - 12.0f - total_w);
-            ImGui::TextColored(ImVec4(0.6f, 0.65f, 0.75f, 1.0f), "%s", total_buf);
-        }
     }
     ImGui::End();
     ImGui::PopStyleVar(2);

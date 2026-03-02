@@ -10,7 +10,8 @@ const char* ACHIEVEMENT_CATEGORY_NAMES[ACAT_COUNT] = {
     "Particle Zoo",
     "Thermodynamics",
     "Milestones",
-    "Chemistry"
+    "Chemistry",
+    "Scenarios"
 };
 
 const AchievementDef ACHIEVEMENT_DEFS[ACH_COUNT] = {
@@ -93,6 +94,38 @@ const AchievementDef ACHIEVEMENT_DEFS[ACH_COUNT] = {
     { ACH_HUNDRED_ELEMENTS,    ACAT_ELEMENTS,  "Centurion",             "Discover 100 distinct elements",                      "[100]","ACH_HUNDRED_ELEMENTS"    },
     { ACH_GRAVITON_OBSERVED,   ACAT_PARTICLES, "Gravity's Messenger",   "Observe a graviton particle",                         "[Gr]", "ACH_GRAVITON_OBSERVED"   },
     { ACH_LONG_PLAY,           ACAT_MILESTONES,"Dedicated Physicist",   "Run a simulation for 10+ minutes",                    "[10m]","ACH_LONG_PLAY"           },
+
+    // ── Scenarios ────────────────────────────────────────────────────────
+    { ACH_FIRST_SCENARIO_COMPLETE, ACAT_SCENARIOS, "First Steps",       "Complete any scenario",                                "[S1]", "ACH_FIRST_SCENARIO_COMPLETE" },
+    { ACH_ALL_NUCLEAR_SCENARIOS,   ACAT_SCENARIOS, "Nuclear Physicist", "Complete all Nuclear scenarios",                        "[Nuc]","ACH_ALL_NUCLEAR_SCENARIOS"   },
+    { ACH_ALL_CHEMISTRY_SCENARIOS, ACAT_SCENARIOS, "Chemist",           "Complete all Chemistry scenarios",                      "[Chm]","ACH_ALL_CHEMISTRY_SCENARIOS" },
+    { ACH_ALL_COSMOLOGY_SCENARIOS, ACAT_SCENARIOS, "Cosmologist",       "Complete all Cosmology scenarios",                      "[Cos]","ACH_ALL_COSMOLOGY_SCENARIOS" },
+    { ACH_SCENARIO_MASTER,         ACAT_SCENARIOS, "Scenario Master",   "Complete all non-sandbox scenarios",                    "[**]", "ACH_SCENARIO_MASTER"        },
+
+    // ── Beyond Standard Model ────────────────────────────────────────────
+    { ACH_DARK_ENERGY,    ACAT_PARTICLES, "Cosmic Accelerator",  "Observe a dark energy particle",                              "[DE]", "ACH_DARK_ENERGY"            },
+    { ACH_SUSY_PARTICLE,  ACAT_PARTICLES, "Supersymmetry",       "Observe a supersymmetric particle",                           "[SY]", "ACH_SUSY_PARTICLE"          },
+    { ACH_TACHYON,        ACAT_PARTICLES, "Faster Than Light",   "Observe a tachyon",                                           "[FTL]","ACH_TACHYON"                },
+
+    // ── Advanced Nuclear ─────────────────────────────────────────────────
+    { ACH_TRANSURANIC,    ACAT_ELEMENTS,  "Beyond Uranium",      "Create a transuranic element (Z > 92)",                       "[Pu]", "ACH_TRANSURANIC"            },
+    { ACH_SUPERHEAVY,     ACAT_ELEMENTS,  "Island of Stability", "Create a superheavy element (Z > 110)",                       "[SH]", "ACH_SUPERHEAVY"             },
+    { ACH_FISSION_100,    ACAT_NUCLEAR,   "Reactor Core",        "Trigger 100 fission events",                                  "[R]",  "ACH_FISSION_100"            },
+    { ACH_FUSION_1000,    ACAT_NUCLEAR,   "Star Builder",        "Trigger 1000 fusion events",                                  "[FB]", "ACH_FUSION_1000"            },
+
+    // ── Advanced Chemistry ───────────────────────────────────────────────
+    { ACH_MOLECULES_10,      ACAT_CHEMISTRY, "Molecular Library",  "Create 10 distinct molecules",                              "[M10]","ACH_MOLECULES_10"           },
+    { ACH_MOLECULE_10_ATOMS, ACAT_CHEMISTRY, "Macromolecule",      "Create a molecule with 10+ atoms",                           "[MA]", "ACH_MOLECULE_10_ATOMS"      },
+
+    // ── Advanced Thermodynamics ──────────────────────────────────────────
+    { ACH_TEMP_100GK,     ACAT_THERMO,    "Planck Epoch",        "Reach 100,000,000,000 K",                                    "[100G]","ACH_TEMP_100GK"            },
+
+    // ── Advanced Milestones ──────────────────────────────────────────────
+    { ACH_PARTICLES_50000, ACAT_MILESTONES,"Galaxy",              "Have 50,000+ active particles simultaneously",               "[50k]","ACH_PARTICLES_50000"        },
+    { ACH_ENTANGLED_50,    ACAT_MILESTONES,"Quantum Fabric",      "Have 50+ entangled pairs active simultaneously",             "[Q50]","ACH_ENTANGLED_50"           },
+    { ACH_FORCE_OBJECTS_5, ACAT_MILESTONES,"Field Architect",     "Place 5 force objects",                                      "[F5]", "ACH_FORCE_OBJECTS_5"        },
+    { ACH_ACCELERATOR_50,  ACAT_MILESTONES,"Collider Veteran",    "Fire the particle accelerator 50 times",                     "[A50]","ACH_ACCELERATOR_50"         },
+    { ACH_PLAY_1_HOUR,     ACAT_MILESTONES,"Marathon Physicist",   "Run a simulation for 1+ hour",                              "[1h]", "ACH_PLAY_1_HOUR"            },
 };
 
 // ── AchievementManager implementation ───────────────────────────────────────
@@ -114,23 +147,26 @@ void AchievementManager::reset_session_counters() {
 
 bool AchievementManager::unlock(AchievementID id) {
     if (id >= ACH_COUNT) return false;
-    uint64_t bit = 1ULL << id;
-    if (unlocked_bits_ & bit) return false;  // already unlocked
-    unlocked_bits_ |= bit;
+    int slot = id / 64;
+    uint64_t bit = 1ULL << (id % 64);
+    if (unlocked_bits_[slot] & bit) return false;  // already unlocked
+    unlocked_bits_[slot] |= bit;
     return true;
 }
 
 bool AchievementManager::is_unlocked(AchievementID id) const {
     if (id >= ACH_COUNT) return false;
-    return (unlocked_bits_ & (1ULL << id)) != 0;
+    return (unlocked_bits_[id / 64] & (1ULL << (id % 64))) != 0;
 }
 
 int AchievementManager::unlocked_count() const {
     int count = 0;
-    uint64_t bits = unlocked_bits_;
-    while (bits) {
-        count += (bits & 1);
-        bits >>= 1;
+    for (int s = 0; s < 2; s++) {
+        uint64_t bits = unlocked_bits_[s];
+        while (bits) {
+            count += (bits & 1);
+            bits >>= 1;
+        }
     }
     return count;
 }
@@ -138,7 +174,7 @@ int AchievementManager::unlocked_count() const {
 // ── Persistence (.ppach file) ───────────────────────────────────────────────
 
 static constexpr uint32_t PPACH_MAGIC   = 0x48434150;  // "PACH" little-endian
-static constexpr uint32_t PPACH_VERSION = 1;
+static constexpr uint32_t PPACH_VERSION = 2;
 
 bool AchievementManager::save(const std::string& filepath) const {
     std::ofstream f(filepath, std::ios::binary);
@@ -146,7 +182,10 @@ bool AchievementManager::save(const std::string& filepath) const {
 
     f.write(reinterpret_cast<const char*>(&PPACH_MAGIC), sizeof(uint32_t));
     f.write(reinterpret_cast<const char*>(&PPACH_VERSION), sizeof(uint32_t));
-    f.write(reinterpret_cast<const char*>(&unlocked_bits_), sizeof(uint64_t));
+
+    // v2: two uint64_t bitfield slots
+    f.write(reinterpret_cast<const char*>(&unlocked_bits_[0]), sizeof(uint64_t));
+    f.write(reinterpret_cast<const char*>(&unlocked_bits_[1]), sizeof(uint64_t));
 
     // Counters
     f.write(reinterpret_cast<const char*>(&total_fusions), sizeof(uint32_t));
@@ -167,6 +206,13 @@ bool AchievementManager::save(const std::string& filepath) const {
     f.write(reinterpret_cast<const char*>(&peak_active_particles), sizeof(uint32_t));
     f.write(reinterpret_cast<const char*>(&peak_entangled_pairs), sizeof(uint32_t));
 
+    // v2: advanced counters
+    f.write(reinterpret_cast<const char*>(&total_accelerator_fires), sizeof(uint32_t));
+    f.write(reinterpret_cast<const char*>(&total_force_objects_placed), sizeof(uint32_t));
+
+    // v2: scenario completion
+    f.write(reinterpret_cast<const char*>(scenarios_completed), sizeof(scenarios_completed));
+
     return f.good();
 }
 
@@ -177,10 +223,18 @@ bool AchievementManager::load(const std::string& filepath) {
     uint32_t magic = 0, version = 0;
     f.read(reinterpret_cast<char*>(&magic), sizeof(uint32_t));
     f.read(reinterpret_cast<char*>(&version), sizeof(uint32_t));
-    if (magic != PPACH_MAGIC || version != PPACH_VERSION)
+    if (magic != PPACH_MAGIC || (version != 1 && version != 2))
         return false;
 
-    f.read(reinterpret_cast<char*>(&unlocked_bits_), sizeof(uint64_t));
+    if (version == 1) {
+        // v1: single uint64_t bitfield
+        f.read(reinterpret_cast<char*>(&unlocked_bits_[0]), sizeof(uint64_t));
+        unlocked_bits_[1] = 0;
+    } else {
+        // v2: two uint64_t bitfield slots
+        f.read(reinterpret_cast<char*>(&unlocked_bits_[0]), sizeof(uint64_t));
+        f.read(reinterpret_cast<char*>(&unlocked_bits_[1]), sizeof(uint64_t));
+    }
 
     // Counters
     f.read(reinterpret_cast<char*>(&total_fusions), sizeof(uint32_t));
@@ -200,6 +254,14 @@ bool AchievementManager::load(const std::string& filepath) {
     f.read(reinterpret_cast<char*>(&peak_temperature), sizeof(float));
     f.read(reinterpret_cast<char*>(&peak_active_particles), sizeof(uint32_t));
     f.read(reinterpret_cast<char*>(&peak_entangled_pairs), sizeof(uint32_t));
+
+    if (version >= 2) {
+        // v2: advanced counters
+        f.read(reinterpret_cast<char*>(&total_accelerator_fires), sizeof(uint32_t));
+        f.read(reinterpret_cast<char*>(&total_force_objects_placed), sizeof(uint32_t));
+        // v2: scenario completion
+        f.read(reinterpret_cast<char*>(scenarios_completed), sizeof(scenarios_completed));
+    }
 
     return f.good();
 }

@@ -992,6 +992,8 @@ void PhysicsSimulation::place_force_object(glm::vec2 world_pos, ForceObjectType 
             recount_force_objects();
             iface.selected_force_obj_idx = static_cast<int>(i);
             try_unlock(ACH_FIRST_FORCE_OBJ);
+            achievements.total_force_objects_placed++;
+            if (achievements.total_force_objects_placed >= 5) try_unlock(ACH_FORCE_OBJECTS_5);
             return;
         }
     }
@@ -1300,14 +1302,103 @@ void PhysicsSimulation::check_achievements() {
     // ── Speed demon: time_scale at max ───────────────────────────────────
     if (cfg.time_scale >= 4.9f) try_unlock(ACH_SPEED_DEMON);
 
-    // ── Long play: 10+ minutes ───────────────────────────────────────────
+    // ── Long play: 10+ minutes / 1 hour ───────────────────────────────────
     achievements.session_time_ += ImGui::GetIO().DeltaTime;
-    if (achievements.session_time_ >= 600.0f) try_unlock(ACH_LONG_PLAY);
+    if (achievements.session_time_ >= 600.0f)  try_unlock(ACH_LONG_PLAY);
+    if (achievements.session_time_ >= 3600.0f) try_unlock(ACH_PLAY_1_HOUR);
 
     // ── Fission chain reaction window (60 frame window) ─────────────────
     if (frame_counter_ - achievements.fission_window_start > 60) {
         achievements.fission_recent_count = 0;
         achievements.fission_window_start = frame_counter_;
+    }
+
+    // ── Advanced temperature ────────────────────────────────────────────
+    if (temp >= 100000000000.0f) try_unlock(ACH_TEMP_100GK);
+
+    // ── Advanced particle count ─────────────────────────────────────────
+    if (active >= 50000) try_unlock(ACH_PARTICLES_50000);
+
+    // ── Advanced entanglement ───────────────────────────────────────────
+    if (entangled_pair_count_ >= 50) try_unlock(ACH_ENTANGLED_50);
+
+    // ── Advanced fusion/fission ─────────────────────────────────────────
+    if (achievements.total_fissions >= 100)  try_unlock(ACH_FISSION_100);
+    if (achievements.total_fusions >= 1000)  try_unlock(ACH_FUSION_1000);
+
+    // ── Beyond Standard Model particles ─────────────────────────────────
+    if (tc[DARK_ENERGY_TYPE_PHYS] > 0) try_unlock(ACH_DARK_ENERGY);
+    if (tc[TACHYON_TYPE_PHYS] > 0)     try_unlock(ACH_TACHYON);
+    // SUSY particles: selectron, smuon, squark, gluino, neutralino
+    if (tc[SELECTRON_TYPE_PHYS] > 0 || tc[SMUON_TYPE_PHYS] > 0
+        || tc[SQUARK_TYPE_PHYS] > 0 || tc[GLUINO_TYPE_PHYS] > 0
+        || tc[NEUTRALINO_TYPE_PHYS] > 0)
+        try_unlock(ACH_SUSY_PARTICLE);
+
+    // ── Transuranic / Superheavy elements ───────────────────────────────
+    for (const auto& nuc : detected_nuclei_) {
+        if (nuc.Z > 92)  try_unlock(ACH_TRANSURANIC);
+        if (nuc.Z > 110) try_unlock(ACH_SUPERHEAVY);
+    }
+
+    // ── Advanced molecule checks ────────────────────────────────────────
+    {
+        int distinct_mol = 0;
+        for (const auto& m : iface.molecule_bestiary) {
+            if (!m.formula.empty()) distinct_mol++;
+        }
+        if (distinct_mol >= 10) try_unlock(ACH_MOLECULES_10);
+    }
+    // Molecule with 10+ atoms (extend existing BFS)
+    if (!bond_data_.empty() && !detected_nuclei_.empty()
+        && !achievements.is_unlocked(ACH_MOLECULE_10_ATOMS)) {
+        for (const auto& nuc : detected_nuclei_) {
+            if (nuc.Z == 0) continue;
+            uint32_t rep = nuc.rep;
+            if (rep >= cfg.particle_count) continue;
+            uint32_t base = rep * MAX_BONDS_PER_PARTICLE;
+            bool has_bond = false;
+            for (uint32_t s = 0; s < MAX_BONDS_PER_PARTICLE; ++s) {
+                if (base + s < bond_data_.size() && bond_data_[base + s] != 0xFFFFFFFFu)
+                    { has_bond = true; break; }
+            }
+            if (!has_bond) continue;
+            // BFS to count atoms
+            std::vector<uint32_t> visited;
+            std::vector<uint32_t> stack = {rep};
+            while (!stack.empty() && visited.size() < 12) {
+                uint32_t cur = stack.back(); stack.pop_back();
+                bool found = false;
+                for (auto v : visited) if (v == cur) { found = true; break; }
+                if (found) continue;
+                visited.push_back(cur);
+                uint32_t b = cur * MAX_BONDS_PER_PARTICLE;
+                for (uint32_t ss = 0; ss < MAX_BONDS_PER_PARTICLE; ++ss) {
+                    if (b + ss < bond_data_.size() && bond_data_[b + ss] != 0xFFFFFFFFu)
+                        stack.push_back(bond_data_[b + ss]);
+                }
+            }
+            if (visited.size() >= 10) { try_unlock(ACH_MOLECULE_10_ATOMS); break; }
+        }
+    }
+
+    // ── Scenario completion achievements ────────────────────────────────
+    {
+        bool all_nuclear = true, all_chem = true, all_cosmo = true;
+        // Nuclear: scenarios 0-4
+        for (int i = 0; i < 5; i++)
+            if (!achievements.scenarios_completed[i]) all_nuclear = false;
+        // Chemistry: scenarios 5-6
+        for (int i = 5; i < 7; i++)
+            if (!achievements.scenarios_completed[i]) all_chem = false;
+        // Cosmology: scenarios 7-9
+        for (int i = 7; i < 10; i++)
+            if (!achievements.scenarios_completed[i]) all_cosmo = false;
+
+        if (all_nuclear) try_unlock(ACH_ALL_NUCLEAR_SCENARIOS);
+        if (all_chem)    try_unlock(ACH_ALL_CHEMISTRY_SCENARIOS);
+        if (all_cosmo)   try_unlock(ACH_ALL_COSMOLOGY_SCENARIOS);
+        if (all_nuclear && all_chem && all_cosmo) try_unlock(ACH_SCENARIO_MASTER);
     }
 }
 
@@ -1550,7 +1641,13 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             if (scenarios.active && !scenarios.goal_complete) {
                 scenarios.check_goal(*this);
                 if (scenarios.goal_complete) {
-                    iface.push_notification("Goal Complete!", ImVec4(0.2f, 1.0f, 0.4f, 1.0f));
+                    iface.push_notification("Scenario Complete!", ImVec4(0.2f, 1.0f, 0.4f, 1.0f));
+                    if (scenarios.scenario_idx >= 0 && scenarios.scenario_idx < 20) {
+                        achievements.scenarios_completed[scenarios.scenario_idx] = true;
+                        try_unlock(ACH_FIRST_SCENARIO_COMPLETE);
+                    }
+                } else if (scenarios.task_just_completed) {
+                    iface.push_notification("Task Complete!", ImVec4(0.3f, 0.9f, 1.0f, 1.0f));
                 }
             }
 

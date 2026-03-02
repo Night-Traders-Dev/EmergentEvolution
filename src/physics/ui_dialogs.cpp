@@ -3148,7 +3148,7 @@ void PhysicsInterface::draw_scenario_menu() {
         // Scenario cards grid
         int count = ScenarioManager::scenario_count();
         float card_w = 340.0f;
-        float card_h = 140.0f;
+        float card_h = 155.0f;
         float card_spacing = 16.0f;
         int cols = std::max(1, static_cast<int>((io.DisplaySize.x - 80.0f) / (card_w + card_spacing)));
         float grid_w = cols * card_w + (cols - 1) * card_spacing;
@@ -3204,6 +3204,24 @@ void PhysicsInterface::draw_scenario_menu() {
                 ImGui::ColorConvertFloat4ToU32(ImVec4(cc.x, cc.y, cc.z, 0.8f)),
                 s.category);
 
+            // Task count badge (right side)
+            if (s.task_count > 0) {
+                char task_badge[24];
+                std::snprintf(task_badge, sizeof(task_badge), "%d Tasks", s.task_count);
+                ImVec2 tb_size = ImGui::CalcTextSize(task_badge);
+                dl->AddText(ImVec2(x + card_w - tb_size.x - 10.0f, y + 8.0f),
+                    ImGui::ColorConvertFloat4ToU32(ImVec4(0.5f, 0.6f, 0.75f, 0.7f)),
+                    task_badge);
+            }
+
+            // Completion checkmark (top-right corner)
+            bool completed = achievements_ptr && i < 20
+                && achievements_ptr->scenarios_completed[i];
+            if (completed) {
+                dl->AddText(ImVec2(x + card_w - 22.0f, y + 22.0f),
+                    ImGui::ColorConvertFloat4ToU32(ImVec4(0.3f, 0.95f, 0.4f, 0.9f)), "OK");
+            }
+
             // Scenario name
             ImGui::SetCursorPos(ImVec2(x + 10.0f, y + 26.0f));
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.95f, 1.0f, 1.0f));
@@ -3215,26 +3233,28 @@ void PhysicsInterface::draw_scenario_menu() {
             ImGui::PopFont();
             ImGui::PopStyleColor();
 
+            // Storyline subtitle (if available)
+            if (s.storyline) {
+                ImGui::SetCursorPos(ImVec2(x + 10.0f, y + 46.0f));
+                ImGui::TextColored(ImVec4(0.55f, 0.6f, 0.75f, 0.7f), "\"%s\"", s.storyline);
+            }
+
             // Description (wrapped)
-            ImGui::SetCursorPos(ImVec2(x + 10.0f, y + 50.0f));
+            float desc_y = s.storyline ? y + 62.0f : y + 50.0f;
+            ImGui::SetCursorPos(ImVec2(x + 10.0f, desc_y));
             ImGui::PushTextWrapPos(x + card_w - 10.0f);
             ImGui::TextColored(ImVec4(0.65f, 0.68f, 0.78f, 1.0f), "%s", s.description);
             ImGui::PopTextWrapPos();
 
-            // Goal text (if not sandbox)
-            if (s.goal_text) {
-                ImGui::SetCursorPos(ImVec2(x + 10.0f, y + card_h - 42.0f));
-                ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 0.8f), "Goal: %s", s.goal_text);
-            }
-
-            // Start button
+            // Start button (or Replay if completed)
             ImGui::SetCursorPos(ImVec2(x + card_w - 75.0f, y + card_h - 36.0f));
             ImGui::PushID(i);
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.35f, 0.55f, 0.90f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.45f, 0.70f, 0.95f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.30f, 0.50f, 1.0f));
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-            if (ImGui::Button("Start", ImVec2(60.0f, 28.0f))) {
+            const char* btn_label = completed ? "Replay" : "Start";
+            if (ImGui::Button(btn_label, ImVec2(60.0f, 28.0f))) {
                 show_scenario_menu = false;
                 request_scenario_start = i;
             }
@@ -3273,18 +3293,23 @@ void PhysicsInterface::draw_scenario_goal_hud() {
     if (!scenarios_ptr || !scenarios_ptr->active) return;
 
     const Scenario& s = scenarios_ptr->current();
+    const ScenarioTask* task = scenarios_ptr->current_task_ptr();
+    int total = scenarios_ptr->total_tasks();
+    int cur = scenarios_ptr->current_task;
     ImGuiIO& io = ImGui::GetIO();
     ImDrawList* fg = ImGui::GetForegroundDrawList();
 
     float cx = io.DisplaySize.x * 0.5f;
-    float hud_y = 8.0f;
+    float hud_y = 48.0f;  // below 42px top bar
 
     // Build HUD text
     char buf[256];
     if (scenarios_ptr->goal_complete) {
-        std::snprintf(buf, sizeof(buf), "%s  --  COMPLETE!", s.name);
-    } else if (s.goal_text) {
-        std::snprintf(buf, sizeof(buf), "%s  |  %s", s.name, s.goal_text);
+        std::snprintf(buf, sizeof(buf), "%s  --  SCENARIO COMPLETE!", s.name);
+    } else if (scenarios_ptr->task_just_completed && cur < total - 1) {
+        std::snprintf(buf, sizeof(buf), "%s  |  Task %d/%d  --  Task Complete!", s.name, cur + 1, total);
+    } else if (total > 0 && task && task->goal_text) {
+        std::snprintf(buf, sizeof(buf), "%s  |  Task %d/%d  |  %s", s.name, cur + 1, total, task->goal_text);
     } else {
         std::snprintf(buf, sizeof(buf), "%s  |  Sandbox", s.name);
     }
@@ -3298,37 +3323,113 @@ void PhysicsInterface::draw_scenario_goal_hud() {
     ImVec2 bg_max(cx + bg_w * 0.5f, hud_y + bg_h);
 
     // Background
-    ImU32 bg_col = scenarios_ptr->goal_complete
-        ? ImGui::ColorConvertFloat4ToU32(ImVec4(0.05f, 0.20f, 0.08f, 0.85f))
-        : ImGui::ColorConvertFloat4ToU32(ImVec4(0.04f, 0.06f, 0.12f, 0.85f));
+    ImU32 bg_col;
+    if (scenarios_ptr->goal_complete) {
+        bg_col = ImGui::ColorConvertFloat4ToU32(ImVec4(0.05f, 0.20f, 0.08f, 0.85f));
+    } else if (scenarios_ptr->task_just_completed) {
+        bg_col = ImGui::ColorConvertFloat4ToU32(ImVec4(0.04f, 0.12f, 0.18f, 0.85f));
+    } else {
+        bg_col = ImGui::ColorConvertFloat4ToU32(ImVec4(0.04f, 0.06f, 0.12f, 0.85f));
+    }
     fg->AddRectFilled(bg_min, bg_max, bg_col, 6.0f);
 
     // Border
-    ImU32 border_col = scenarios_ptr->goal_complete
-        ? ImGui::ColorConvertFloat4ToU32(ImVec4(0.2f, 0.9f, 0.3f, 0.7f))
-        : ImGui::ColorConvertFloat4ToU32(ImVec4(0.3f, 0.5f, 0.8f, 0.5f));
+    ImU32 border_col;
+    if (scenarios_ptr->goal_complete) {
+        border_col = ImGui::ColorConvertFloat4ToU32(ImVec4(0.2f, 0.9f, 0.3f, 0.7f));
+    } else if (scenarios_ptr->task_just_completed) {
+        border_col = ImGui::ColorConvertFloat4ToU32(ImVec4(0.3f, 0.8f, 1.0f, 0.7f));
+    } else {
+        border_col = ImGui::ColorConvertFloat4ToU32(ImVec4(0.3f, 0.5f, 0.8f, 0.5f));
+    }
     fg->AddRect(bg_min, bg_max, border_col, 6.0f, 0, 1.0f);
 
+    // Task progress dots (below border, inside HUD)
+    if (total > 1) {
+        float dot_y = bg_max.y - 4.0f;
+        float dot_spacing = 10.0f;
+        float dots_w = (total - 1) * dot_spacing;
+        float dot_x = cx - dots_w * 0.5f;
+        for (int i = 0; i < total; i++) {
+            ImU32 dot_col;
+            if (i < cur || (i == cur && scenarios_ptr->task_just_completed)) {
+                dot_col = ImGui::ColorConvertFloat4ToU32(ImVec4(0.3f, 0.9f, 0.4f, 0.9f));  // completed
+            } else if (i == cur) {
+                dot_col = ImGui::ColorConvertFloat4ToU32(ImVec4(0.4f, 0.7f, 1.0f, 0.9f));  // current
+            } else {
+                dot_col = ImGui::ColorConvertFloat4ToU32(ImVec4(0.3f, 0.35f, 0.45f, 0.6f)); // pending
+            }
+            fg->AddCircleFilled(ImVec2(dot_x + i * dot_spacing, dot_y), 2.5f, dot_col);
+        }
+    }
+
     // Text
-    ImU32 text_col = scenarios_ptr->goal_complete
-        ? ImGui::ColorConvertFloat4ToU32(ImVec4(0.3f, 1.0f, 0.4f, 1.0f))
-        : ImGui::ColorConvertFloat4ToU32(ImVec4(0.8f, 0.85f, 0.95f, 1.0f));
+    ImU32 text_col;
+    if (scenarios_ptr->goal_complete) {
+        text_col = ImGui::ColorConvertFloat4ToU32(ImVec4(0.3f, 1.0f, 0.4f, 1.0f));
+    } else if (scenarios_ptr->task_just_completed) {
+        text_col = ImGui::ColorConvertFloat4ToU32(ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
+    } else {
+        text_col = ImGui::ColorConvertFloat4ToU32(ImVec4(0.8f, 0.85f, 0.95f, 1.0f));
+    }
     fg->AddText(ImVec2(cx - text_size.x * 0.5f, hud_y + pad_y), text_col, buf);
 
-    // Hint (shown below goal when not yet complete, if available)
-    if (!scenarios_ptr->goal_complete && s.hint_text) {
-        ImVec2 hint_size = ImGui::CalcTextSize(s.hint_text);
-        float hint_y = hud_y + bg_h + 4.0f;
+    // Narrative text (fades over 5 seconds, shown below HUD)
+    float narrative_alpha = 0.0f;
+    const char* narrative_text = nullptr;
+    if (scenarios_ptr->narrative_timer < 5.0f) {
+        // Show current task narrative or intro storyline
+        if (task && task->narrative) {
+            narrative_text = task->narrative;
+        } else if (cur == 0 && s.storyline) {
+            narrative_text = s.storyline;
+        }
+        if (narrative_text) {
+            // Fade in over 0.5s, hold, fade out over last 1.5s
+            if (scenarios_ptr->narrative_timer < 0.5f) {
+                narrative_alpha = scenarios_ptr->narrative_timer / 0.5f;
+            } else if (scenarios_ptr->narrative_timer < 3.5f) {
+                narrative_alpha = 1.0f;
+            } else {
+                narrative_alpha = 1.0f - (scenarios_ptr->narrative_timer - 3.5f) / 1.5f;
+            }
+        }
+    }
+    float below_y = bg_max.y + 6.0f;
+
+    if (narrative_text && narrative_alpha > 0.01f) {
+        ImVec2 nar_size = ImGui::CalcTextSize(narrative_text);
+        // Wrap long narratives
+        float max_w = io.DisplaySize.x * 0.6f;
+        if (nar_size.x > max_w) {
+            nar_size = ImGui::CalcTextSize(narrative_text, nullptr, false, max_w);
+        }
+        float nar_y = below_y;
+        ImVec2 nar_bg_min(cx - nar_size.x * 0.5f - 12.0f, nar_y);
+        ImVec2 nar_bg_max(cx + nar_size.x * 0.5f + 12.0f, nar_y + nar_size.y + 10.0f);
+        fg->AddRectFilled(nar_bg_min, nar_bg_max,
+            ImGui::ColorConvertFloat4ToU32(ImVec4(0.02f, 0.03f, 0.06f, 0.7f * narrative_alpha)), 4.0f);
+        // Italic-style color for narrative
+        fg->AddText(nullptr, 0.0f, ImVec2(cx - nar_size.x * 0.5f, nar_y + 5.0f),
+            ImGui::ColorConvertFloat4ToU32(ImVec4(0.7f, 0.75f, 0.85f, 0.9f * narrative_alpha)),
+            narrative_text, nullptr, max_w);
+        below_y = nar_bg_max.y + 4.0f;
+    }
+
+    // Hint (shown below narrative/goal when not yet complete)
+    if (!scenarios_ptr->goal_complete && !scenarios_ptr->task_just_completed
+        && task && task->hint_text) {
+        ImVec2 hint_size = ImGui::CalcTextSize(task->hint_text);
+        float hint_y = below_y;
         ImVec2 hint_bg_min(cx - hint_size.x * 0.5f - 8.0f, hint_y);
         ImVec2 hint_bg_max(cx + hint_size.x * 0.5f + 8.0f, hint_y + hint_size.y + 6.0f);
         fg->AddRectFilled(hint_bg_min, hint_bg_max,
             ImGui::ColorConvertFloat4ToU32(ImVec4(0.03f, 0.04f, 0.08f, 0.75f)), 4.0f);
         fg->AddText(ImVec2(cx - hint_size.x * 0.5f, hint_y + 3.0f),
-            ImGui::ColorConvertFloat4ToU32(ImVec4(0.55f, 0.60f, 0.70f, 0.8f)), s.hint_text);
+            ImGui::ColorConvertFloat4ToU32(ImVec4(0.55f, 0.60f, 0.70f, 0.8f)), task->hint_text);
     }
 
     // End scenario button (small, right side of HUD)
-    // Use ImGui for clickable button instead of raw draw
     float end_btn_x = bg_max.x + 8.0f;
     float end_btn_y = hud_y;
     ImGui::SetNextWindowPos(ImVec2(end_btn_x, end_btn_y));

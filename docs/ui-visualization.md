@@ -9,12 +9,29 @@ opens the **Element Detail Card** with full composition, stability info, magneti
 and Move/Delete/Duplicate/Export actions. Molecules open a **Molecule Detail Card** with Hill
 formula, bond count, and clickable constituent atoms.
 
+## Top Stats Bar
+
+The top bar (42px) displays simulation state, timescale slider with preset buttons
+(0.25&times;&ndash;4&times;), temperature, B-field, FPS, energy, entropy trend, and clickable
+counters (Events, Particles, Atoms/Molecules) that open scrollable windows. Tool status
+indicators show the active mode ([SELECT], [THERMOMETER], etc.).
+
+## Bottom Taskbar
+
+The bottom bar functions as a window taskbar/dock:
+
+- **Menu button** (left) opens the popup organized into Simulation, File, View, Visualization,
+  Measurement, and Tools sections
+- **Open windows** appear as taskbar entries (e.g., Spawn, Settings, Elements, Particles)
+- **Click** an entry to minimize/restore the window
+- **Right-click** an entry to close the window entirely
+- Active windows have a bright background with blue underline; minimized windows are dimmed
+
+The taskbar auto-hides when the mouse is away from the bottom edge.
+
 ## Particle & Element Lists
 
-Bottom bar shows simulation state, timescale, temperature, B-field, FPS, energy, and entropy.
-Clickable counters (Events, Particles, Atoms/Molecules) open scrollable windows. The **Menu**
-popup organizes commands into Simulation, File, View, Visualization, Measurement, and Tools
-sections. Particle and element lists are accessible from **Menu > View**. The event log tracks
+Particle and element lists are accessible from **Menu > View**. The event log tracks
 up to 10,000 entries across 13 categories with timestamps (configurable limit and disk logging
 in Settings).
 
@@ -163,8 +180,19 @@ Linux, `%APPDATA%\ParticlePlayground\` on Windows).
 
 ## Achievements
 
-64 milestones across 6 categories (Nuclear Physics, Element Creation, Particle Zoo,
-Thermodynamics, Milestones, Chemistry). Persist via `.ppach` file. Steam achievement
+84 milestones across 7 categories:
+
+| Category | Count | Examples |
+|---|---|---|
+| **Nuclear Physics** | 13 | First Light, Chain Reaction, Reactor Core, Star Builder |
+| **Element Creation** | 13 | Simplest Atom, Iron Peak, Beyond Uranium, Island of Stability |
+| **Particle Zoo** | 12 | Ghost Particle, Dark Side, Cosmic Accelerator, Supersymmetry |
+| **Thermodynamics** | 6 | Getting Warm, Quark Epoch, Absolute Zero, Planck Epoch |
+| **Milestones** | 22 | CERN at Home, Collider Veteran, Galaxy, Marathon Physicist |
+| **Chemistry** | 5 | Chemical Bond, Molecular Library, Macromolecule |
+| **Scenarios** | 5 | First Steps, Nuclear Physicist, Chemist, Scenario Master |
+
+Persist via `.ppach` file (v2 format, backward-compatible with v1). Steam achievement
 integration ready (optional, builds without Steamworks SDK).
 
 ## Sound Effects
@@ -205,6 +233,10 @@ See [docs/online-repository.md](online-repository.md) for protocol and caching d
 All ImGui windows (info cards, settings panels, repository browser, event log, etc.) dynamically
 clamp their position to screen edges so they never open partially or fully off-screen. This
 applies on first open, after resolution changes, and when restoring saved window positions.
+
+Windows can be **minimized** via the bottom taskbar &mdash; clicking a window's taskbar entry
+toggles between visible and minimized states. Minimized windows remain in the taskbar (dimmed)
+and can be restored by clicking again. Right-clicking closes the window entirely.
 
 ## Error Dialogs
 
