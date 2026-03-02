@@ -1,4 +1,5 @@
 #include "physics/repository.h"
+#include "physics/save_load.h"
 #include "physics/paths.h"
 #include <filesystem>
 #include <fstream>
@@ -119,7 +120,15 @@ void ParticleRepository::update_cache_flags() {
     // Must be called with mutex_ held
     for (auto& e : listing_) {
         const std::string& dir = (current_category_ == 0) ? elements_cache_ : molecules_cache_;
-        e.is_cached = fs::exists(dir + e.name);
+        std::string path = dir + e.name;
+        e.is_cached = fs::exists(path);
+
+        // Peek chirality from cached .ppmol v3+ files
+        if (e.is_cached && current_category_ == 1) {
+            e.chirality = static_cast<int8_t>(peek_ppmol_chirality(path));
+        } else {
+            e.chirality = -1;
+        }
     }
 }
 

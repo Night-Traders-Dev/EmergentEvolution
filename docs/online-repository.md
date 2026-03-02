@@ -23,6 +23,8 @@ The browser has two tabs: **Elements** and **Molecules**.
   - **All** — show all files
   - **Cached** — only show locally downloaded files
   - **New** — only show files not yet downloaded
+  - **Chiral** — only show chiral molecules (Molecules tab only, requires cached v3+ files)
+  - **Achiral** — only show achiral molecules (Molecules tab only, requires cached v3+ files)
 
 ### Downloading Files
 

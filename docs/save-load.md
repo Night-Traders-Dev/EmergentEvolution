@@ -44,7 +44,10 @@ for import into the simulation.
 ```
 
 Supports chemical formulas with parentheses (`Ca(OH)2`), generates proper nuclear structure
-(protons, neutrons, electrons in shells), and creates valence-aware covalent bonds.
+(protons, neutrons, electrons in shells), creates valence-aware covalent bonds, and auto-detects
+chirality (atoms bonded to 3+ different element types as chiral centers). Output reports chirality
+status and center count. Current molecule file format version is **3** (v3 adds chirality fields;
+backward-compatible with v1&ndash;v2).
 
 **Python script** (`tools/ppmol/ppmol_gen.py`) &mdash; for real molecular geometry via RDKit:
 

@@ -332,14 +332,16 @@ ImportElementResult import_element(const std::string& filepath) {
 // ── Molecule export/import (.ppmol) ──────────────────────────────────────────
 
 static constexpr uint32_t PPMOL_MAGIC   = 0x4D4F4C50;  // "PLOM" little-endian
-static constexpr uint32_t PPMOL_VERSION = 2;  // v2 adds name field
+static constexpr uint32_t PPMOL_VERSION = 3;  // v3 adds chirality fields
 
 SaveResult export_molecule(
     const std::string& filepath,
     const std::string& formula,
     const std::vector<MoleculeAtomData>& atoms,
     const std::vector<MoleculeBondData>& bonds,
-    const std::string& name)
+    const std::string& name,
+    bool is_chiral,
+    uint32_t chiral_centers)
 {
     std::ofstream f(filepath, std::ios::binary);
     if (!f.is_open())
@@ -357,6 +359,11 @@ SaveResult export_molecule(
     uint32_t nlen = static_cast<uint32_t>(name.size());
     write_val(f, nlen);
     if (nlen > 0) f.write(name.data(), nlen);
+
+    // Chirality (v3+)
+    uint8_t chiral_flag = is_chiral ? 1 : 0;
+    write_val(f, chiral_flag);
+    write_val(f, chiral_centers);
 
     // Atom count + bond count
     uint32_t atom_count = static_cast<uint32_t>(atoms.size());
@@ -434,6 +441,14 @@ ImportMoleculeResult import_molecule(const std::string& filepath) {
         }
     }
 
+    // Chirality (v3+)
+    if (version >= 3) {
+        uint8_t chiral_flag = 0;
+        read_val(f, chiral_flag);
+        r.is_chiral = (chiral_flag != 0);
+        read_val(f, r.chiral_centers);
+    }
+
     // Counts
     uint32_t atom_count = 0, bond_count = 0;
     read_val(f, atom_count);
@@ -481,4 +496,32 @@ ImportMoleculeResult import_molecule(const std::string& filepath) {
     r.success = true;
     r.message = "Molecule imported!";
     return r;
+}
+
+int peek_ppmol_chirality(const std::string& filepath) {
+    std::ifstream f(filepath, std::ios::binary);
+    if (!f.is_open()) return -1;
+
+    uint32_t magic = 0, version = 0;
+    read_val(f, magic);
+    read_val(f, version);
+    if (magic != PPMOL_MAGIC || version < 3) return -1;
+
+    // Skip formula
+    uint32_t flen = 0;
+    read_val(f, flen);
+    if (flen > 256) return -1;
+    f.seekg(flen, std::ios::cur);
+
+    // Skip name (v2+)
+    uint32_t nlen = 0;
+    read_val(f, nlen);
+    if (nlen > 256) return -1;
+    if (nlen > 0) f.seekg(nlen, std::ios::cur);
+
+    // Read chirality flag
+    uint8_t chiral_flag = 0;
+    if (!read_val(f, chiral_flag)) return -1;
+
+    return chiral_flag ? 1 : 0;
 }

@@ -17,6 +17,7 @@ struct RepoEntry {
     std::string sha;            // git blob SHA (needed for upload/update)
     uint64_t    size = 0;       // file size in bytes
     bool        is_cached = false; // true if local copy exists
+    int8_t      chirality = -1; // -1=unknown, 0=achiral, 1=chiral (molecules only, from v3+ cache)
 };
 
 // Async operation status

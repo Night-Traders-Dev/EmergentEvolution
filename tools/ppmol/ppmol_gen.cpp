@@ -33,7 +33,7 @@
 // ── Format constants (must match save_load.cpp) ─────────────────────────────
 
 static constexpr uint32_t PPMOL_MAGIC   = 0x4D4F4C50;  // "PLOM" little-endian
-static constexpr uint32_t PPMOL_VERSION = 2;  // v2 adds name field
+static constexpr uint32_t PPMOL_VERSION = 3;  // v3 adds chirality fields
 static constexpr size_t   GENOME_SIZE   = 4;  // charge, spin, color_charge, decay_rate
 
 // ── Particle type indices (must match types.h / phys_particles.h) ───────────
@@ -182,6 +182,8 @@ struct ImportResult {
     std::string message;
     std::string formula;
     std::string name;       // common name (v2+), empty for v1 files
+    bool is_chiral = false;         // v3+: molecule has chiral centers
+    uint32_t chiral_centers = 0;    // v3+: number of chiral center atoms
     std::vector<AtomData> atoms;
     std::vector<BondData> bonds;
 };
@@ -234,7 +236,9 @@ static SaveResult export_molecule(
     const std::string& formula,
     const std::vector<AtomData>& atoms,
     const std::vector<BondData>& bonds,
-    const std::string& name = "")
+    const std::string& name = "",
+    bool is_chiral = false,
+    uint32_t chiral_centers = 0)
 {
     std::ofstream f(filepath, std::ios::binary);
     if (!f.is_open())
@@ -251,6 +255,11 @@ static SaveResult export_molecule(
     uint32_t nlen = static_cast<uint32_t>(name.size());
     write_val(f, nlen);
     if (nlen > 0) f.write(name.data(), nlen);
+
+    // Chirality (v3+)
+    uint8_t chiral_flag = is_chiral ? 1 : 0;
+    write_val(f, chiral_flag);
+    write_val(f, chiral_centers);
 
     uint32_t atom_count = static_cast<uint32_t>(atoms.size());
     uint32_t bond_count = static_cast<uint32_t>(bonds.size());
@@ -299,7 +308,7 @@ static ImportResult import_molecule(const std::string& filepath) {
         r.message = "Truncated file (header)"; return r;
     }
     if (magic != PPMOL_MAGIC) { r.message = "Not a valid .ppmol file"; return r; }
-    if (version < 1 || version > 2) { r.message = "Unsupported .ppmol version"; return r; }
+    if (version < 1 || version > 3) { r.message = "Unsupported .ppmol version"; return r; }
 
     uint32_t flen = 0;
     if (!read_val(f, flen)) { r.message = "Truncated file (formula len)"; return r; }
@@ -318,6 +327,14 @@ static ImportResult import_molecule(const std::string& filepath) {
             f.read(r.name.data(), nlen);
             if (!f.good()) { r.message = "Truncated file (name)"; return r; }
         }
+    }
+
+    // Chirality (v3+)
+    if (version >= 3) {
+        uint8_t chiral_flag = 0;
+        if (!read_val(f, chiral_flag)) { r.message = "Truncated file (chirality)"; return r; }
+        r.is_chiral = (chiral_flag != 0);
+        if (!read_val(f, r.chiral_centers)) { r.message = "Truncated file (chiral_centers)"; return r; }
     }
 
     uint32_t atom_count = 0, bond_count = 0;
@@ -1040,6 +1057,37 @@ static float nuclear_extent(int Z) {
 static constexpr float DEFAULT_ATOM_SPACING = 36.0f;  // matches SimConfig::bond_rest_length
 static constexpr float SAFE_MARGIN = 10.0f;            // keep nucleons outside Yukawa range
 
+// ── Chirality detection ─────────────────────────────────────────────────────
+// An atom is a chiral center if it can bond to 3+ different element types (Z).
+// This matches the simulation's chirality detection in simulation.cpp.
+
+static uint32_t compute_chirality(const std::vector<AtomData>& atoms,
+                                   const std::vector<BondData>& bonds)
+{
+    // Build adjacency: for each atom, collect Z values of bonded neighbors
+    uint32_t chiral_count = 0;
+    for (size_t i = 0; i < atoms.size(); ++i) {
+        int Z = atoms[i].Z;
+        // Only C, Si, N, P, S can be chiral centers
+        if (Z != 6 && Z != 14 && Z != 7 && Z != 15 && Z != 16) continue;
+
+        std::vector<int> bonded_z;
+        for (const auto& b : bonds) {
+            if (static_cast<size_t>(b.atom_a) == i)
+                bonded_z.push_back(atoms[static_cast<size_t>(b.atom_b)].Z);
+            else if (static_cast<size_t>(b.atom_b) == i)
+                bonded_z.push_back(atoms[static_cast<size_t>(b.atom_a)].Z);
+        }
+
+        if (bonded_z.size() >= 3) {
+            std::sort(bonded_z.begin(), bonded_z.end());
+            bonded_z.erase(std::unique(bonded_z.begin(), bonded_z.end()), bonded_z.end());
+            if (bonded_z.size() >= 3) chiral_count++;
+        }
+    }
+    return chiral_count;
+}
+
 static int cmd_gen(int argc, char** argv) {
     if (argc < 4) { print_help(); return 2; }
 
@@ -1239,7 +1287,11 @@ static int cmd_gen(int argc, char** argv) {
         }
     }
 
-    auto res = export_molecule(out_path, formula, atoms, bonds, mol_name);
+    // Compute chirality
+    uint32_t chiral_n = compute_chirality(atoms, bonds);
+    bool is_chiral = (chiral_n > 0);
+
+    auto res = export_molecule(out_path, formula, atoms, bonds, mol_name, is_chiral, chiral_n);
 
     if (res.success) {
         // Count particles
@@ -1253,6 +1305,9 @@ static int cmd_gen(int argc, char** argv) {
         std::cout << "  Atoms:     " << atoms.size() << "\n";
         std::cout << "  Bonds:     " << bonds.size() << "\n";
         std::cout << "  Particles: " << total_particles << "\n";
+        std::cout << "  Chirality: " << (is_chiral ? "chiral" : "achiral");
+        if (chiral_n > 0) std::cout << " (" << chiral_n << " center" << (chiral_n > 1 ? "s" : "") << ")";
+        std::cout << "\n";
     } else {
         std::cerr << "Error: " << res.message << "\n";
     }
@@ -1268,6 +1323,10 @@ static int cmd_dump(int argc, char** argv) {
     std::cout << "Formula:    " << r.formula << "\n";
     if (!r.name.empty())
         std::cout << "Name:       " << r.name << "\n";
+    std::cout << "Chirality:  " << (r.is_chiral ? "chiral" : "achiral");
+    if (r.chiral_centers > 0)
+        std::cout << " (" << r.chiral_centers << " center" << (r.chiral_centers > 1 ? "s" : "") << ")";
+    std::cout << "\n";
     std::cout << "Atoms:      " << r.atoms.size() << "\n";
     std::cout << "Bonds:      " << r.bonds.size() << "\n";
 
@@ -1332,12 +1391,13 @@ static int cmd_validate(int argc, char** argv) {
     int total_p = 0;
     for (auto& a : r.atoms) total_p += static_cast<int>(a.particles.size());
 
+    const char* chiral_str = r.is_chiral ? "chiral" : "achiral";
     if (!r.name.empty())
-        printf("VALID — %s (%s): %zu atoms, %zu bonds, %d particles (v2, GENOME_SIZE=%zu)\n",
-               r.formula.c_str(), r.name.c_str(), r.atoms.size(), r.bonds.size(), total_p, GENOME_SIZE);
+        printf("VALID — %s (%s): %zu atoms, %zu bonds, %d particles, %s (v3, GENOME_SIZE=%zu)\n",
+               r.formula.c_str(), r.name.c_str(), r.atoms.size(), r.bonds.size(), total_p, chiral_str, GENOME_SIZE);
     else
-        printf("VALID — %s: %zu atoms, %zu bonds, %d particles (GENOME_SIZE=%zu)\n",
-               r.formula.c_str(), r.atoms.size(), r.bonds.size(), total_p, GENOME_SIZE);
+        printf("VALID — %s: %zu atoms, %zu bonds, %d particles, %s (GENOME_SIZE=%zu)\n",
+               r.formula.c_str(), r.atoms.size(), r.bonds.size(), total_p, chiral_str, GENOME_SIZE);
     return 0;
 }
 

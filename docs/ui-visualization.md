@@ -250,7 +250,8 @@ collection of `.ppel` and `.ppmol` files. Features:
 
 - **Search** bar for filtering entries by name or formula
 - **Elements / Molecules** tabs
-- **Filter** buttons: All, Cached, New
+- **Filter** buttons: All, Cached, New, Chiral, Achiral (last two on Molecules tab only)
+- **Chirality column** (Molecules tab): shows "Chiral" badge for chiral molecules from cached v3+ files
 - **Download / Import** workflow: select an entry, preview its metadata, download to local cache,
   then import directly into the simulation
 

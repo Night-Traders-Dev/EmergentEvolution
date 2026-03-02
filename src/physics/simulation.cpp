@@ -3551,7 +3551,8 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             char fname[256];
             snprintf(fname, sizeof(fname), "%s%s.ppmol", mol_dir.c_str(), formula.c_str());
 
-            auto result = export_molecule(fname, formula, atom_data, bond_list);
+            auto result = export_molecule(fname, formula, atom_data, bond_list,
+                                         "", mol.is_chiral, mol.chiral_centers);
             if (result.success) try_unlock(ACH_FIRST_MOLECULE_EXPORT);
             iface.push_notification(
                 result.success ? "Molecule exported!" : "Export failed",

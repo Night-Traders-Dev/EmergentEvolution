@@ -93,7 +93,9 @@ SaveResult export_molecule(
     const std::string& formula,
     const std::vector<MoleculeAtomData>& atoms,
     const std::vector<MoleculeBondData>& bonds,
-    const std::string& name = ""
+    const std::string& name = "",
+    bool is_chiral = false,
+    uint32_t chiral_centers = 0
 );
 
 struct ImportMoleculeResult {
@@ -101,8 +103,14 @@ struct ImportMoleculeResult {
     std::string message;
     std::string formula;
     std::string name;           // common name (v2+), empty for v1 files
+    bool is_chiral = false;     // v3+: molecule has chiral centers
+    uint32_t chiral_centers = 0;// v3+: number of chiral center atoms
     std::vector<MoleculeAtomData> atoms;
     std::vector<MoleculeBondData> bonds;
 };
+
+// Lightweight header-only read of chirality from a cached .ppmol file
+// Returns: -1 = unknown/error, 0 = achiral, 1 = chiral
+int peek_ppmol_chirality(const std::string& filepath);
 
 ImportMoleculeResult import_molecule(const std::string& filepath);

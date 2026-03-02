@@ -49,6 +49,7 @@ void PhysicsInterface::draw_repository() {
                 if (repo_current_tab != 0) {
                     repo_current_tab = 0;
                     tab_changed = true;
+                    if (repo_filter_mode >= 3) repo_filter_mode = 0;
                 }
                 ImGui::EndTabItem();
             }
@@ -101,6 +102,12 @@ void PhysicsInterface::draw_repository() {
         filter_btn("Cached", 1, ImVec4(0.3f, 0.9f, 0.4f, 1.0f));
         ImGui::SameLine(0, 3);
         filter_btn("New", 2, ImVec4(0.4f, 0.65f, 1.0f, 1.0f));
+        if (repo_current_tab == 1) {
+            ImGui::SameLine(0, 3);
+            filter_btn("Chiral", 3, ImVec4(0.8f, 0.4f, 1.0f, 1.0f));
+            ImGui::SameLine(0, 3);
+            filter_btn("Achiral", 4, ImVec4(0.6f, 0.6f, 0.7f, 1.0f));
+        }
 
         ImGui::Separator();
 
@@ -134,12 +141,15 @@ void PhysicsInterface::draw_repository() {
                     // Count visible for stats
                     int visible_count = 0;
 
-                    // Table
-                    if (ImGui::BeginTable("##RepoFiles", 5,
+                    // Table — molecules get an extra Chirality column
+                    int col_count = (repo_current_tab == 1) ? 6 : 5;
+                    if (ImGui::BeginTable("##RepoFiles", col_count,
                             ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
                             ImGuiTableFlags_ScrollY)) {
                         ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_WidthFixed, 110.0f);
                         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+                        if (repo_current_tab == 1)
+                            ImGui::TableSetupColumn("Chirality", ImGuiTableColumnFlags_WidthFixed, 56.0f);
                         ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 70.0f);
                         ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 50.0f);
                         ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 100.0f);
@@ -151,6 +161,8 @@ void PhysicsInterface::draw_repository() {
                             // Apply status filter
                             if (repo_filter_mode == 1 && !entry.is_cached) continue;
                             if (repo_filter_mode == 2 && entry.is_cached) continue;
+                            if (repo_filter_mode == 3 && entry.chirality != 1) continue;
+                            if (repo_filter_mode == 4 && entry.chirality != 0) continue;
 
                             // Strip extension for display
                             std::string display_name = entry.name;
@@ -210,19 +222,29 @@ void PhysicsInterface::draw_repository() {
                                 ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.6f, 1.0f), "%s", common_name);
                             }
 
+                            // Chirality (molecules only)
+                            int col_off = 2;
+                            if (repo_current_tab == 1) {
+                                ImGui::TableSetColumnIndex(col_off++);
+                                if (entry.chirality == 1)
+                                    ImGui::TextColored(ImVec4(0.8f, 0.4f, 1.0f, 1.0f), "Chiral");
+                                else if (entry.chirality == 0)
+                                    ImGui::TextColored(tc.text_dim, "---");
+                            }
+
                             // Size
-                            ImGui::TableSetColumnIndex(2);
+                            ImGui::TableSetColumnIndex(col_off++);
                             ImGui::TextColored(tc.text_dim, "%s",
                                 format_size(entry.size).c_str());
 
                             // Status
-                            ImGui::TableSetColumnIndex(3);
+                            ImGui::TableSetColumnIndex(col_off++);
                             if (entry.is_cached) {
                                 ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.4f, 1.0f), "cached");
                             }
 
                             // Action
-                            ImGui::TableSetColumnIndex(4);
+                            ImGui::TableSetColumnIndex(col_off);
                             ImGui::PushID(i);
 
                             bool busy = (status == RepoStatus::Downloading ||
