@@ -51,10 +51,9 @@ static bool spawn_button(int type_idx, const char* label, ImVec4 color,
 
 // ── Top bar ──────────────────────────────────────────────────────────────────
 
-void PhysicsInterface::draw_top_bar(const SimConfig& cfg) {
-    (void)cfg;
+void PhysicsInterface::draw_top_bar(SimConfig& cfg) {
     ImGuiIO& io = ImGui::GetIO();
-    float bar_h = 24.0f;
+    float bar_h = 42.0f;
     float display_w = io.DisplaySize.x;
 
     ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -65,74 +64,214 @@ void PhysicsInterface::draw_top_bar(const SimConfig& cfg) {
         | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoCollapse
         | ImGuiWindowFlags_NoBringToFrontOnFocus;
 
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.03f, 0.04f, 0.07f, 0.65f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.039f, 0.051f, 0.090f, 0.80f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 4.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 8.0f));
 
     if (ImGui::Begin("##TopBar", nullptr, flags)) {
-        // Nucleons
-        if (type_counts_display[PROTON_TYPE])
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[PROTON_TYPE], "p:%u", type_counts_display[PROTON_TYPE]); ImGui::SameLine(0, 8); }
-        if (type_counts_display[NEUTRON_TYPE])
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[NEUTRON_TYPE], "n:%u", type_counts_display[NEUTRON_TYPE]); ImGui::SameLine(0, 8); }
-        // Leptons
-        if (type_counts_display[ELECTRON_TYPE_PHYS])
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[ELECTRON_TYPE_PHYS], "e-:%u", type_counts_display[ELECTRON_TYPE_PHYS]); ImGui::SameLine(0, 8); }
-        if (type_counts_display[PHOTON_TYPE_PHYS])
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[PHOTON_TYPE_PHYS], "y:%u", type_counts_display[PHOTON_TYPE_PHYS]); ImGui::SameLine(0, 8); }
-        if (type_counts_display[POSITRON_TYPE_PHYS])
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[POSITRON_TYPE_PHYS], "e+:%u", type_counts_display[POSITRON_TYPE_PHYS]); ImGui::SameLine(0, 8); }
-        if (type_counts_display[ANTIPROTON_TYPE_PHYS])
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[ANTIPROTON_TYPE_PHYS], "p-:%u", type_counts_display[ANTIPROTON_TYPE_PHYS]); ImGui::SameLine(0, 8); }
-        if (type_counts_display[NEUTRINO_TYPE_PHYS])
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[NEUTRINO_TYPE_PHYS], "ve:%u", type_counts_display[NEUTRINO_TYPE_PHYS]); ImGui::SameLine(0, 8); }
-        // Muons/Taus
-        uint32_t muon_total = type_counts_display[MUON_TYPE_PHYS] + type_counts_display[ANTIMUON_TYPE_PHYS];
-        if (muon_total)
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[MUON_TYPE_PHYS], "u:%u", muon_total); ImGui::SameLine(0, 8); }
-        uint32_t tau_total = type_counts_display[TAU_TYPE_PHYS] + type_counts_display[ANTITAU_TYPE_PHYS];
-        if (tau_total)
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[TAU_TYPE_PHYS], "t:%u", tau_total); ImGui::SameLine(0, 8); }
+        // ── Sim state ──
+        if (sim_running)
+            ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.4f, 1.0f), ">> RUNNING");
+        else
+            ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.2f, 1.0f), "|| PAUSED");
 
-        // Separator
-        ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.60f), "|");
-        ImGui::SameLine(0, 8);
+        // ── Timestep ──
+        ImGui::SameLine(0, 20);
+        ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
+        ImGui::SameLine(0, 10);
+        ImGui::SetNextItemWidth(80);
+        ImGui::SliderFloat("##TimeScale", &cfg.time_scale, 0.0f, 16.0f, "%.2fx");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Simulation speed  [ = slower, ] = faster\nSpace = pause/resume");
+        {
+            static const float presets[] = { 0.25f, 0.5f, 1.0f, 2.0f, 4.0f };
+            static const char* labels[]  = { ".25", ".5", "1x", "2x", "4x" };
+            ImGui::SameLine(0, 6);
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(3, 2));
+            for (int i = 0; i < 5; i++) {
+                if (i > 0) ImGui::SameLine(0, 2);
+                bool active = (std::abs(cfg.time_scale - presets[i]) < 0.01f);
+                if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.25f, 0.5f, 0.9f));
+                else        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.08f, 0.10f, 0.18f, 0.7f));
+                char btn_id[16]; snprintf(btn_id, sizeof(btn_id), "%s###TS%d", labels[i], i);
+                if (ImGui::SmallButton(btn_id)) cfg.time_scale = presets[i];
+                ImGui::PopStyleColor();
+            }
+            ImGui::PopStyleVar();
+        }
 
-        // Quarks (total)
+        // ── Temperature ──
+        ImGui::SameLine(0, 20);
+        ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
+        ImGui::SameLine(0, 10);
+        if (cfg.thermo_feedback_enabled && emergent_temp_display > 0.0f) {
+            char etemp_buf[64];
+            format_temperature(emergent_temp_display, etemp_buf, sizeof(etemp_buf), prefs.temp_unit);
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "T: %s", etemp_buf);
+        } else {
+            char temp_buf[64];
+            format_temperature(cfg.temperature_kelvin, temp_buf, sizeof(temp_buf), prefs.temp_unit);
+            ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "T: %s", temp_buf);
+        }
+
+        // ── B-field ──
+        if (cfg.magnetic_feedback_enabled && emergent_bfield_display > 0.001f) {
+            ImGui::SameLine(0, 12);
+            ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "B: %.3f T", emergent_bfield_display);
+        }
+
+        // ── FPS ──
+        if (prefs.show_fps) {
+            ImGui::SameLine(0, 20);
+            ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
+            ImGui::SameLine(0, 10);
+            ImGui::Text("%.0f fps", fps_display);
+        }
+
+        // ── Energy + Entropy ──
+        ImGui::SameLine(0, 20);
+        ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
+        ImGui::SameLine(0, 10);
+        {
+            char ebuf[32];
+            float total_MeV = total_energy_display * E_SCALE_MEV;
+            fmt_energy_ev(ebuf, sizeof(ebuf), total_MeV);
+            ImGui::Text("E: %s", ebuf);
+        }
+        {
+            ImGui::SameLine(0, 8);
+            const char* s_arrow = (entropy_trend_display > 0) ? "S^" :
+                                   (entropy_trend_display < 0) ? "Sv" : "S=";
+            ImVec4 s_color = (entropy_trend_display >= 0)
+                ? ImVec4(0.5f, 0.8f, 0.5f, 1.0f)
+                : ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
+            ImGui::TextColored(s_color, "%s", s_arrow);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Entropy trend\nS^ = increasing (2nd law)\nS= = equilibrium\nSv = decreasing (external work)");
+        }
+
+        // ── Events button ──
+        if (nuclear_decay_count_display > 0 || !decay_log.empty()) {
+            ImGui::SameLine(0, 20);
+            ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
+            ImGui::SameLine(0, 10);
+            char decay_btn[64];
+            snprintf(decay_btn, sizeof(decay_btn), "Events: %u###DecayBtn",
+                     static_cast<unsigned>(decay_log.size()));
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.2f, 0.1f, 0.5f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.2f, 0.15f, 0.05f, 0.7f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.6f, 0.2f, 1.0f));
+            if (ImGui::SmallButton(decay_btn))
+                show_decay_log = !show_decay_log;
+            ImGui::PopStyleColor(4);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Click to open decay/interaction event log");
+        }
+
+        // ── Particle count button ──
+        {
+            ImGui::SameLine(0, 20);
+            ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
+            ImGui::SameLine(0, 10);
+            char part_btn[48];
+            snprintf(part_btn, sizeof(part_btn), "Particles: %u###PartBtn", active_particle_display);
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.1f, 0.2f, 0.4f, 0.5f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.05f, 0.15f, 0.3f, 0.7f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.75f, 1.0f, 1.0f));
+            if (ImGui::SmallButton(part_btn))
+                show_particle_list = !show_particle_list;
+            ImGui::PopStyleColor(4);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Click to show particle list");
+        }
+
+        // ── Element/Molecule count button ──
+        if (!element_list.empty()) {
+            ImGui::SameLine(0, 20);
+            ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
+            ImGui::SameLine(0, 10);
+            char elem_btn[64];
+            int nmol = 0;
+            for (auto& m : molecule_list) if (m.atom_indices.size() > 1) nmol++;
+            if (nmol > 0)
+                snprintf(elem_btn, sizeof(elem_btn), "Atoms: %d  Mol: %d",
+                         static_cast<int>(element_list.size()), nmol);
+            else
+                snprintf(elem_btn, sizeof(elem_btn), "Elements: %d", static_cast<int>(element_list.size()));
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.3f, 0.5f, 0.5f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.2f, 0.4f, 0.7f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.85f, 0.6f, 1.0f));
+            if (ImGui::SmallButton(elem_btn))
+                show_element_list = !show_element_list;
+            ImGui::PopStyleColor(4);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Click to show element list");
+        }
+
+        // ── Tool status indicators ──
+        if (select_mode) {
+            ImGui::SameLine(0, 12);
+            ImGui::TextColored(ImVec4(0.0f, 0.9f, 0.9f, 1.0f), "[SELECT]");
+        }
+        if (thermo_probe_placement_mode) {
+            ImGui::SameLine(0, 12);
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "[THERMO]");
+        }
+        if (velocity_meter_mode) {
+            ImGui::SameLine(0, 12);
+            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "[VEL]");
+        }
+        if (ruler_placement_mode) {
+            ImGui::SameLine(0, 12);
+            ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.3f, 1.0f), "[RULER]");
+        }
+        if (density_counter_placement_mode) {
+            ImGui::SameLine(0, 12);
+            ImGui::TextColored(ImVec4(0.6f, 0.3f, 1.0f, 1.0f), "[DENSITY]");
+        }
+
+        // ── Right-aligned particle census ──
+        float cursor_x = ImGui::GetCursorPosX();
+        // Build census string
+        char census[256] = {};
+        int cpos = 0;
+        auto add = [&](const char* fmt, ...) __attribute__((format(printf, 2, 3))) {
+            va_list ap; va_start(ap, fmt);
+            cpos += vsnprintf(census + cpos, sizeof(census) - cpos, fmt, ap);
+            va_end(ap);
+        };
+        if (type_counts_display[PROTON_TYPE]) add("p:%u ", type_counts_display[PROTON_TYPE]);
+        if (type_counts_display[NEUTRON_TYPE]) add("n:%u ", type_counts_display[NEUTRON_TYPE]);
+        if (type_counts_display[ELECTRON_TYPE_PHYS]) add("e:%u ", type_counts_display[ELECTRON_TYPE_PHYS]);
+        if (type_counts_display[PHOTON_TYPE_PHYS]) add("y:%u ", type_counts_display[PHOTON_TYPE_PHYS]);
         uint32_t quark_total = 0;
-        for (uint32_t t = UP_QUARK_TYPE; t <= ANTI_BOTTOM_TYPE; ++t)
-            quark_total += type_counts_display[t];
-        if (quark_total)
-            { ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.2f, 1.0f), "q:%u", quark_total); ImGui::SameLine(0, 8); }
-        // Bosons (excl photon)
+        for (uint32_t t = UP_QUARK_TYPE; t <= ANTI_BOTTOM_TYPE; ++t) quark_total += type_counts_display[t];
+        if (quark_total) add("q:%u ", quark_total);
         uint32_t boson_total = type_counts_display[GLUON_TYPE_PHYS]
             + type_counts_display[W_PLUS_TYPE_PHYS] + type_counts_display[W_MINUS_TYPE_PHYS]
             + type_counts_display[Z_BOSON_TYPE_PHYS] + type_counts_display[HIGGS_TYPE_PHYS];
-        if (boson_total)
-            { ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "B:%u", boson_total); ImGui::SameLine(0, 8); }
+        if (boson_total) add("B:%u ", boson_total);
+        if (type_counts_display[DARK_MATTER_TYPE_PHYS]) add("DM:%u ", type_counts_display[DARK_MATTER_TYPE_PHYS]);
 
-        // Separator
-        ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.60f), "|");
-        ImGui::SameLine(0, 8);
-
-        // BSM
-        if (type_counts_display[GRAVITON_TYPE_PHYS])
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[GRAVITON_TYPE_PHYS], "G:%u", type_counts_display[GRAVITON_TYPE_PHYS]); ImGui::SameLine(0, 8); }
-        if (type_counts_display[DARK_MATTER_TYPE_PHYS])
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[DARK_MATTER_TYPE_PHYS], "DM:%u", type_counts_display[DARK_MATTER_TYPE_PHYS]); ImGui::SameLine(0, 8); }
-        if (type_counts_display[DARK_ENERGY_TYPE_PHYS])
-            { ImGui::TextColored(PHYS_TYPE_UI_COLORS[DARK_ENERGY_TYPE_PHYS], "DE:%u", type_counts_display[DARK_ENERGY_TYPE_PHYS]); ImGui::SameLine(0, 8); }
-        // Hypothetical total
-        { uint32_t hyp_count = 0;
-          for (uint32_t t = AXINO_TYPE_PHYS; t <= DYN_AXION_QP_TYPE_PHYS; t++) hyp_count += type_counts_display[t];
-          if (hyp_count) { ImGui::TextColored(ImVec4(0.7f, 0.5f, 1.0f, 1.0f), "Hyp:%u", hyp_count); ImGui::SameLine(0, 8); } }
-
-        // Right-aligned total
         char total_buf[32];
         snprintf(total_buf, sizeof(total_buf), "Total: %u", active_particle_display);
-        float tw = ImGui::CalcTextSize(total_buf).x;
-        ImGui::SameLine(display_w - 10.0f - tw);
-        ImGui::TextColored(ImVec4(0.6f, 0.65f, 0.75f, 1.0f), "%s", total_buf);
+
+        // Only show full census if space allows, otherwise just Total
+        float census_w = ImGui::CalcTextSize(census).x;
+        float total_w = ImGui::CalcTextSize(total_buf).x;
+        float avail = display_w - 12.0f - cursor_x;
+        if (avail > census_w + total_w + 20.0f && cpos > 0) {
+            ImGui::SameLine(display_w - 12.0f - census_w - total_w - 10.0f);
+            ImGui::TextColored(ImVec4(0.5f, 0.55f, 0.65f, 0.7f), "%s", census);
+            ImGui::SameLine(0, 6);
+            ImGui::TextColored(ImVec4(0.6f, 0.65f, 0.75f, 1.0f), "%s", total_buf);
+        } else {
+            ImGui::SameLine(display_w - 12.0f - total_w);
+            ImGui::TextColored(ImVec4(0.6f, 0.65f, 0.75f, 1.0f), "%s", total_buf);
+        }
     }
     ImGui::End();
     ImGui::PopStyleVar(2);
@@ -148,7 +287,7 @@ void PhysicsInterface::draw_top_bar(const SimConfig& cfg) {
 
 void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
     ImGuiIO& io = ImGui::GetIO();
-    float bar_h = 42.0f;
+    float bar_h = 36.0f;
     float display_w = io.DisplaySize.x;
     float display_h = io.DisplaySize.y;
     float dt = io.DeltaTime;
@@ -174,196 +313,107 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
         | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoCollapse
         | ImGuiWindowFlags_NoBringToFrontOnFocus;
 
-    // Darker background for bottom bar
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.039f, 0.051f, 0.090f, 0.80f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 8.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 6.0f));
 
     if (ImGui::Begin("##BottomBar", nullptr, bar_flags)) {
-        // Sim state indicator
-        if (sim_running) {
-            ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.4f, 1.0f), ">> RUNNING");
-        } else {
-            ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.2f, 1.0f), "|| PAUSED");
-        }
-
-        // Timestep
-        ImGui::SameLine(0, 20);
-        ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
-        ImGui::SameLine(0, 10);
-        ImGui::SetNextItemWidth(80);
-        ImGui::SliderFloat("##TimeScale", &cfg.time_scale, 0.0f, 16.0f, "%.2fx");
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Simulation speed  [ = slower, ] = faster\nSpace = pause/resume");
-
-        // Time preset buttons
-        {
-            static const float presets[] = { 0.25f, 0.5f, 1.0f, 2.0f, 4.0f };
-            static const char* labels[]  = { ".25", ".5", "1x", "2x", "4x" };
-            ImGui::SameLine(0, 6);
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(3, 2));
-            for (int i = 0; i < 5; i++) {
-                if (i > 0) ImGui::SameLine(0, 2);
-                bool active = (std::abs(cfg.time_scale - presets[i]) < 0.01f);
-                if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.25f, 0.5f, 0.9f));
-                else        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.08f, 0.10f, 0.18f, 0.7f));
-                char btn_id[16]; snprintf(btn_id, sizeof(btn_id), "%s###TS%d", labels[i], i);
-                if (ImGui::SmallButton(btn_id)) cfg.time_scale = presets[i];
-                ImGui::PopStyleColor();
-            }
-            ImGui::PopStyleVar();
-        }
-
-        // Emergent temperature
-        ImGui::SameLine(0, 20);
-        ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
-        ImGui::SameLine(0, 10);
-        if (cfg.thermo_feedback_enabled && emergent_temp_display > 0.0f) {
-            char etemp_buf[64];
-            format_temperature(emergent_temp_display, etemp_buf, sizeof(etemp_buf), prefs.temp_unit);
-            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "T: %s", etemp_buf);
-        } else {
-            char temp_buf[64];
-            format_temperature(cfg.temperature_kelvin, temp_buf, sizeof(temp_buf), prefs.temp_unit);
-            ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "T: %s", temp_buf);
-        }
-
-        // Emergent B-field
-        if (cfg.magnetic_feedback_enabled && emergent_bfield_display > 0.001f) {
-            ImGui::SameLine(0, 12);
-            ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "B: %.3f T", emergent_bfield_display);
-        }
-
-        // FPS
-        if (prefs.show_fps) {
-            ImGui::SameLine(0, 20);
-            ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
-            ImGui::SameLine(0, 10);
-            ImGui::Text("%.0f fps", fps_display);
-        }
-
-        // Energy
-        ImGui::SameLine(0, 20);
-        ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
-        ImGui::SameLine(0, 10);
-        {
-            char ebuf[32];
-            float total_MeV = total_energy_display * E_SCALE_MEV;
-            fmt_energy_ev(ebuf, sizeof(ebuf), total_MeV);
-            ImGui::Text("E: %s", ebuf);
-        }
-
-        // Entropy trend indicator
-        {
-            ImGui::SameLine(0, 8);
-            const char* s_arrow = (entropy_trend_display > 0) ? "S^" :
-                                   (entropy_trend_display < 0) ? "Sv" : "S=";
-            ImVec4 s_color = (entropy_trend_display >= 0)
-                ? ImVec4(0.5f, 0.8f, 0.5f, 1.0f)
-                : ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
-            ImGui::TextColored(s_color, "%s", s_arrow);
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Entropy trend\nS^ = increasing (2nd law)\nS= = equilibrium\nSv = decreasing (external work)");
-        }
-
-        // Nuclear decays (clickable — opens decay log)
-        if (nuclear_decay_count_display > 0 || !decay_log.empty()) {
-            ImGui::SameLine(0, 20);
-            ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
-            ImGui::SameLine(0, 10);
-            char decay_btn[64];
-            snprintf(decay_btn, sizeof(decay_btn), "Events: %u###DecayBtn",
-                     static_cast<unsigned>(decay_log.size()));
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.2f, 0.1f, 0.5f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.2f, 0.15f, 0.05f, 0.7f));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.6f, 0.2f, 1.0f));
-            if (ImGui::SmallButton(decay_btn))
-                show_decay_log = !show_decay_log;
-            ImGui::PopStyleColor(4);
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Click to open decay/interaction event log");
-        }
-
-        // Particle count (clickable)
-        {
-            ImGui::SameLine(0, 20);
-            ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
-            ImGui::SameLine(0, 10);
-            char part_btn[48];
-            snprintf(part_btn, sizeof(part_btn), "Particles: %u###PartBtn", active_particle_display);
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.1f, 0.2f, 0.4f, 0.5f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.05f, 0.15f, 0.3f, 0.7f));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.75f, 1.0f, 1.0f));
-            if (ImGui::SmallButton(part_btn))
-                show_particle_list = !show_particle_list;
-            ImGui::PopStyleColor(4);
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Click to show particle list");
-        }
-
-        // Element count (clickable)
-        if (!element_list.empty()) {
-            ImGui::SameLine(0, 20);
-            ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
-            ImGui::SameLine(0, 10);
-            char elem_btn[64];
-            int nmol = 0;
-            for (auto& m : molecule_list) if (m.atom_indices.size() > 1) nmol++;
-            if (nmol > 0)
-                snprintf(elem_btn, sizeof(elem_btn), "Atoms: %d  Mol: %d",
-                         static_cast<int>(element_list.size()), nmol);
-            else
-                snprintf(elem_btn, sizeof(elem_btn), "Elements: %d", static_cast<int>(element_list.size()));
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.3f, 0.5f, 0.5f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.2f, 0.4f, 0.7f));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.85f, 0.6f, 1.0f));
-            if (ImGui::SmallButton(elem_btn))
-                show_element_list = !show_element_list;
-            ImGui::PopStyleColor(4);
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Click to show element list");
-        }
-
-        // Status indicators
-        if (select_mode) {
-            ImGui::SameLine(0, 12);
-            ImGui::TextColored(ImVec4(0.0f, 0.9f, 0.9f, 1.0f), "[SELECT]");
-        }
-        if (thermo_probe_placement_mode) {
-            ImGui::SameLine(0, 12);
-            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "[THERMOMETER]");
-        }
-        if (velocity_meter_mode) {
-            ImGui::SameLine(0, 12);
-            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "[VEL METER]");
-        }
-        if (ruler_placement_mode) {
-            ImGui::SameLine(0, 12);
-            ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.3f, 1.0f), "[RULER]");
-        }
-        if (density_counter_placement_mode) {
-            ImGui::SameLine(0, 12);
-            ImGui::TextColored(ImVec4(0.6f, 0.3f, 1.0f, 1.0f), "[DENSITY]");
-        }
-
-        // Right-aligned Menu button
+        // ── Left: Menu button ──
         float menu_btn_w = 70.0f;
-        float x_right = display_w - 12.0f - menu_btn_w;
-        ImGui::SameLine(x_right);
-
-        if (ImGui::Button("Menu", ImVec2(menu_btn_w, 26))) {
+        if (ImGui::Button("Menu", ImVec2(menu_btn_w, 24))) {
             show_tools_popup = !show_tools_popup;
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tools & settings menu");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tools & settings menu (Escape for pause)");
 
-        // Menu popup (rendered above the button)
+        // ── Separator ──
+        ImGui::SameLine(0, 8);
+        ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.50f), "|");
+        ImGui::SameLine(0, 8);
+
+        // ── Taskbar: open windows as dock entries ──
+        struct TBEntry { const char* label; TaskbarWindow tw; bool* close_flag; };
+        TBEntry entries[TW_COUNT];
+        int entry_count = 0;
+        auto add_entry = [&](bool condition, const char* label, TaskbarWindow tw, bool* close_flag) {
+            if (condition && entry_count < (int)TW_COUNT)
+                entries[entry_count++] = { label, tw, close_flag };
+        };
+        add_entry(spawn_menu_visible, "Spawn", TW_SPAWN_MENU, &spawn_menu_visible);
+        add_entry(settings_visible, "Settings", TW_SETTINGS, &settings_visible);
+        add_entry(show_element_list, "Elements", TW_ELEMENT_LIST, &show_element_list);
+        add_entry(show_particle_list, "Particles", TW_PARTICLE_LIST, &show_particle_list);
+        add_entry(show_particle_bestiary, "Bestiary", TW_PARTICLE_BESTIARY, &show_particle_bestiary);
+        add_entry(show_element_bestiary, "Elem Disc", TW_ELEMENT_BESTIARY, &show_element_bestiary);
+        add_entry(show_molecule_bestiary, "Mol Disc", TW_MOLECULE_BESTIARY, &show_molecule_bestiary);
+        add_entry(show_decay_log, "Events", TW_DECAY_LOG, &show_decay_log);
+        add_entry(show_nuclear_debug, "Nuclear", TW_NUCLEAR_DEBUG, &show_nuclear_debug);
+        add_entry(show_texture_panel, "Textures", TW_TEXTURE_PANEL, &show_texture_panel);
+        add_entry(show_save_dialog, "Save", TW_SAVE_DIALOG, &show_save_dialog);
+        add_entry(show_load_dialog, "Load", TW_LOAD_DIALOG, &show_load_dialog);
+        add_entry(show_repository, "Repository", TW_REPOSITORY, &show_repository);
+        add_entry(accel_mode, "Accelerator", TW_ACCELERATOR, nullptr);  // accel_mode needs special close
+
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 3));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+        for (int i = 0; i < entry_count; i++) {
+            auto& e = entries[i];
+            bool visible = !is_minimized(e.tw);
+
+            if (visible) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.16f, 0.28f, 0.9f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.18f, 0.22f, 0.38f, 0.95f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.14f, 0.18f, 0.32f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.88f, 0.95f, 1.0f));
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.06f, 0.08f, 0.14f, 0.7f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.10f, 0.14f, 0.24f, 0.85f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.08f, 0.12f, 0.20f, 0.9f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.55f, 0.65f, 0.8f));
+            }
+
+            char btn_id[64];
+            snprintf(btn_id, sizeof(btn_id), "%s###TB_%d", e.label, static_cast<int>(e.tw));
+            if (ImGui::Button(btn_id, ImVec2(0, 22))) {
+                toggle_minimized(e.tw);
+            }
+
+            // Blue underline for visible (non-minimized) windows
+            if (visible) {
+                ImVec2 rmin = ImGui::GetItemRectMin();
+                ImVec2 rmax = ImGui::GetItemRectMax();
+                ImGui::GetWindowDrawList()->AddRectFilled(
+                    ImVec2(rmin.x + 2, rmax.y - 2), ImVec2(rmax.x - 2, rmax.y),
+                    ImGui::ColorConvertFloat4ToU32(ImVec4(0.302f, 0.749f, 0.953f, 0.8f)));
+            }
+
+            // Right-click context menu: close window
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+                if (e.close_flag) {
+                    *e.close_flag = false;
+                } else if (e.tw == TW_ACCELERATOR) {
+                    accel_mode = false;
+                    accel_phase = 0;
+                    accel_source_idx = -1;
+                    accel_stream_timer = 0;
+                    accel_free_origin_set = false;
+                }
+                set_minimized(e.tw, false);
+            }
+            if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+                ; // consumed above
+            else if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s\nClick: minimize/restore\nRight-click: close", e.label);
+
+            ImGui::PopStyleColor(4);
+            ImGui::SameLine(0, 4);
+        }
+        ImGui::PopStyleVar(2);
+
+        // ── Menu popup (anchored above left-side Menu button) ──
         if (show_tools_popup) {
             float popup_w = 230.0f;
             float popup_h = std::min(540.0f, display_h - 40.0f);
-            float popup_x = std::max(10.0f, display_w - 12.0f - popup_w);
+            float popup_x = 12.0f;
             float popup_y = std::max(10.0f, bar_y - popup_h - 4.0f);
             ImGui::SetNextWindowPos(ImVec2(popup_x, popup_y));
             ImGui::SetNextWindowSize(ImVec2(popup_w, popup_h));
@@ -616,7 +666,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
     ImGuiIO& io = ImGui::GetIO();
     float max_h = io.DisplaySize.y - 64.0f;
 
-    ImGui::SetNextWindowPos(ImVec2(10, 40), ImGuiCond_FirstUseEver);  // below 24px top bar
+    ImGui::SetNextWindowPos(ImVec2(10, 48), ImGuiCond_FirstUseEver);  // below 42px top bar
     ImGui::SetNextWindowSize(ImVec2(300, std::min(700.0f, max_h)), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(280, 200), ImVec2(350, max_h));
 
@@ -1173,7 +1223,7 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
     ImGuiIO& io = ImGui::GetIO();
     float max_h = io.DisplaySize.y - 64.0f;
 
-    ImGui::SetNextWindowPos(ImVec2(10, 29), ImGuiCond_FirstUseEver);  // below 24px top bar
+    ImGui::SetNextWindowPos(ImVec2(10, 48), ImGuiCond_FirstUseEver);  // below 42px top bar
     ImGui::SetNextWindowSize(ImVec2(380, std::min(720.0f, max_h)), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(340, 200), ImVec2(420, max_h));
 

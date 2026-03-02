@@ -860,53 +860,79 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         return;
     }
 
-    // Draw bottom bar (auto-hides) and top stats bar
+    // Draw bottom bar (taskbar dock) and top stats bar
     draw_bottom_bar(cfg, request_reset);
     draw_top_bar(cfg);
 
+    // Clear minimized bits for windows that are no longer open
+    if (!spawn_menu_visible)     set_minimized(TW_SPAWN_MENU, false);
+    if (!settings_visible)       set_minimized(TW_SETTINGS, false);
+    if (!show_element_list)      set_minimized(TW_ELEMENT_LIST, false);
+    if (!show_particle_list)     set_minimized(TW_PARTICLE_LIST, false);
+    if (!show_particle_bestiary) set_minimized(TW_PARTICLE_BESTIARY, false);
+    if (!show_element_bestiary)  set_minimized(TW_ELEMENT_BESTIARY, false);
+    if (!show_molecule_bestiary) set_minimized(TW_MOLECULE_BESTIARY, false);
+    if (!show_decay_log)         set_minimized(TW_DECAY_LOG, false);
+    if (!show_nuclear_debug)     set_minimized(TW_NUCLEAR_DEBUG, false);
+    if (!show_texture_panel)     set_minimized(TW_TEXTURE_PANEL, false);
+    if (!show_save_dialog)       set_minimized(TW_SAVE_DIALOG, false);
+    if (!show_load_dialog)       set_minimized(TW_LOAD_DIALOG, false);
+    if (!show_repository)        set_minimized(TW_REPOSITORY, false);
+    if (!accel_mode)             set_minimized(TW_ACCELERATOR, false);
+
     // Draw settings panel
-    if (settings_visible)
+    if (settings_visible && !is_minimized(TW_SETTINGS))
         draw_settings_panel(cfg);
 
     // Draw spawn menu
-    if (spawn_menu_visible)
+    if (spawn_menu_visible && !is_minimized(TW_SPAWN_MENU))
         draw_spawn_menu(cfg);
 
-    // Draw force object panel (if selected)
+    // Draw force object panel (if selected — not taskbar-managed)
     if (selected_force_obj_idx >= 0)
         draw_force_object_panel(force_objects);
 
     // Draw accelerator panel
-    if (accel_mode)
+    if (accel_mode && !is_minimized(TW_ACCELERATOR))
         draw_accelerator_panel();
 
-    // Save/Load/Import dialog (drawn before cards so cards render on top)
-    if (show_save_dialog || show_load_dialog || show_import_dialog || show_molecule_import_dialog)
+    // Save/Load/Import dialog (import dialogs not taskbar-managed)
+    if ((show_save_dialog && !is_minimized(TW_SAVE_DIALOG)) ||
+        (show_load_dialog && !is_minimized(TW_LOAD_DIALOG)) ||
+        show_import_dialog || show_molecule_import_dialog)
         draw_save_load_dialog();
 
     // Repository dialog
-    if (show_repository)
+    if (show_repository && !is_minimized(TW_REPOSITORY))
         draw_repository();
 
     // Draw element list window (center, drawn before cards so cards overlay)
-    draw_element_list();
+    if (!is_minimized(TW_ELEMENT_LIST))
+        draw_element_list();
 
     // Draw particle list window
-    draw_particle_list(particles);
+    if (!is_minimized(TW_PARTICLE_LIST))
+        draw_particle_list(particles);
 
     // Draw bestiary windows
-    draw_particle_bestiary();
-    draw_element_bestiary();
-    draw_molecule_bestiary();
+    if (!is_minimized(TW_PARTICLE_BESTIARY))
+        draw_particle_bestiary();
+    if (!is_minimized(TW_ELEMENT_BESTIARY))
+        draw_element_bestiary();
+    if (!is_minimized(TW_MOLECULE_BESTIARY))
+        draw_molecule_bestiary();
 
     // Draw decay log window
-    draw_decay_log();
+    if (!is_minimized(TW_DECAY_LOG))
+        draw_decay_log();
 
     // Draw nuclear reactions debug window
-    draw_nuclear_debug(cfg);
+    if (!is_minimized(TW_NUCLEAR_DEBUG))
+        draw_nuclear_debug(cfg);
 
     // Draw custom particle texture panel
-    draw_texture_panel();
+    if (!is_minimized(TW_TEXTURE_PANEL))
+        draw_texture_panel();
 
     // Draw particle info card (bottom-right, always on top)
     draw_info_card(particles);

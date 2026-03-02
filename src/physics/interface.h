@@ -487,6 +487,21 @@ public:
     // Bottom bar auto-hide
     float bottom_bar_offset = 0.0f;  // 0.0 = fully visible, 1.0 = fully hidden
 
+    // Taskbar / window minimize system
+    enum TaskbarWindow : uint32_t {
+        TW_SPAWN_MENU = 0, TW_SETTINGS, TW_ELEMENT_LIST, TW_PARTICLE_LIST,
+        TW_PARTICLE_BESTIARY, TW_ELEMENT_BESTIARY, TW_MOLECULE_BESTIARY,
+        TW_DECAY_LOG, TW_NUCLEAR_DEBUG, TW_TEXTURE_PANEL,
+        TW_SAVE_DIALOG, TW_LOAD_DIALOG, TW_REPOSITORY, TW_ACCELERATOR,
+        TW_COUNT
+    };
+    uint32_t minimized_windows = 0;
+    bool is_minimized(TaskbarWindow tw) const { return (minimized_windows >> tw) & 1; }
+    void set_minimized(TaskbarWindow tw, bool v) {
+        if (v) minimized_windows |= (1u << tw); else minimized_windows &= ~(1u << tw);
+    }
+    void toggle_minimized(TaskbarWindow tw) { minimized_windows ^= (1u << tw); }
+
     // Emergent feedback display
     float emergent_temp_display   = 0.0f;
     float emergent_bfield_display = 0.0f;
@@ -659,7 +674,7 @@ private:
     void push_theme();
     void pop_theme();
     void draw_bottom_bar(SimConfig& cfg, bool& request_reset);
-    void draw_top_bar(const SimConfig& cfg);
+    void draw_top_bar(SimConfig& cfg);
     void draw_settings_panel(SimConfig& cfg);
     void draw_spawn_menu(const SimConfig& cfg);
     void draw_info_card(const Particles& particles);

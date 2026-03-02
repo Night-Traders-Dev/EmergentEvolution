@@ -2473,7 +2473,7 @@ void PhysicsInterface::draw_notifications() {
     float card_w = 260.0f;
     float card_pad = 4.0f;
     float start_x = std::max(10.0f, io.DisplaySize.x - card_w - 10.0f);
-    float start_y = 40.0f;
+    float start_y = 44.0f;
 
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
         | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize
