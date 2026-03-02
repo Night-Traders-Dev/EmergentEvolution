@@ -51,7 +51,7 @@ void PhysicsInterface::draw_decay_log() {
         "Photo-e", "Spall.", "Pair", "Pion", "VMD", "Photodis.",
         "Bond+", "Bond-", "Brems.", "Neutrino", "Weak", "e-Hole",
         "EM Xchg", "QCD Xchg", "Weak Xchg", "Grav Xchg", "Higgs Xchg", "Nuc Xchg",
-        "Quasi", "Meson"
+        "Quasi", "Meson", "CP Viol"
     };
     static const ImVec4 TYPE_COLORS[] = {
         ImVec4(1.0f, 0.8f, 0.5f, 1.0f),   // PARTICLE_DECAY — warm yellow
@@ -79,6 +79,7 @@ void PhysicsInterface::draw_decay_log() {
         ImVec4(1.0f, 0.7f, 0.3f, 1.0f),  // CARRIER_NUCLEAR — orange (Yukawa)
         ImVec4(0.3f, 1.0f, 0.95f, 1.0f), // QUASIPARTICLE — cyan
         ImVec4(1.0f, 0.85f, 0.3f, 1.0f), // MESON_DECAY — gold
+        ImVec4(0.85f, 0.6f, 1.0f, 1.0f), // CP_VIOLATION — violet
     };
 
     // Summary counts by type

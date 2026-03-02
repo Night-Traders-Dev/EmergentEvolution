@@ -279,6 +279,9 @@ struct SimConfig {
     // Quasi Mode — quasiparticle spawning and physics effects
     bool     quasi_mode_enabled         = true;
 
+    // CP violation — neutral meson oscillation + asymmetric decays
+    bool     cp_violation_enabled       = true;
+
     // Thermodynamic feedback
     bool  thermo_feedback_enabled   = true;
     float thermo_coupling           = 1.0f;   // 0=slider only, 1=fully emergent

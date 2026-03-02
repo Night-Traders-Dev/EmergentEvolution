@@ -527,6 +527,8 @@ public:
     uint32_t ls_snap_molecules_formed  = 0;
     uint32_t ls_snap_chiral_mol     = 0;
     uint32_t ls_snap_lh_weak_decays = 0;
+    uint32_t ls_snap_meson_osc      = 0;
+    uint32_t ls_snap_cp_violations  = 0;
     uint32_t ls_snap_type_spawned[LIFETIME_PARTICLE_TYPES] = {};
     uint32_t ls_snap_elem_created[119] = {};
 
@@ -725,8 +727,9 @@ public:
         DEVT_CARRIER_NUCLEAR,       // Yukawa nuclear carrier (gluon between nucleons)
         DEVT_QUASIPARTICLE,         // Quasiparticle spawn / decay
         DEVT_MESON_DECAY,           // Meson decay (π→μν, K→ππ, etc.)
+        DEVT_CP_VIOLATION,          // CP violation (meson oscillation + asymmetric decay)
     };
-    static constexpr int DEVT_COUNT = 25;
+    static constexpr int DEVT_COUNT = 26;
     struct DecayLogEntry {
         std::string description;
         std::string details;        // multi-line detail shown on click
@@ -747,7 +750,7 @@ public:
     struct ParticleTextureManager* texture_mgr = nullptr;  // set by simulation
 
     int32_t expanded_event_idx = -1;  // which event is expanded in log
-    bool event_filter[DEVT_COUNT] = {true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true};
+    bool event_filter[DEVT_COUNT] = {true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true};
 
     void push_decay_event(const char* desc, DecayEventType type, ImVec4 color = ImVec4(1,0.6f,0.2f,1));
     void push_decay_event(const char* desc, DecayEventType type, ImVec4 color, const std::string& details);

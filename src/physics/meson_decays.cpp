@@ -218,6 +218,17 @@ static const MesonDecayEntry MESON_DECAY_TABLE[] = {
         { 0.6f, { DS_MINUS_MESON, PION_PLUS_MESON, 0, 0 }, 2 },
         { 0.4f, { JPSI_MESON, PHI_1020_MESON, 0, 0 }, 2 },
     }, 2 },
+    // B̄⁰ → D⁺π⁻, J/ψ K̄⁰, D⁺π⁻π⁻π⁺ (charge conjugate of B⁰)
+    { B_ZERO_BAR_MESON, {
+        { 0.5f, { D_PLUS_MESON, PION_MINUS_MESON, 0, 0 }, 2 },
+        { 0.3f, { JPSI_MESON, KAON_ZERO_BAR_MESON, 0, 0 }, 2 },
+        { 0.2f, { D_PLUS_MESON, PION_MINUS_MESON, PION_MINUS_MESON, PION_PLUS_MESON }, 4 },
+    }, 3 },
+    // B̄s⁰ → Ds⁺π⁻, J/ψ φ (charge conjugate of Bs⁰)
+    { BS_ZERO_BAR_MESON, {
+        { 0.6f, { DS_PLUS_MESON, PION_MINUS_MESON, 0, 0 }, 2 },
+        { 0.4f, { JPSI_MESON, PHI_1020_MESON, 0, 0 }, 2 },
+    }, 2 },
     // Bc⁺ → J/ψ π⁺, J/ψ μ⁺νμ
     { BC_PLUS_MESON, {
         { 0.5f, { JPSI_MESON, PION_PLUS_MESON, 0, 0 }, 2 },
@@ -410,13 +421,27 @@ void PhysicsSimulation::check_meson_decays() {
             continue;
         }
 
-        // Select decay mode by branching ratio
+        // CP asymmetry: shift branching ratio threshold for neutral mesons
+        // Particle and antiparticle have slightly different decay rates,
+        // producing a matter-antimatter asymmetry (direct CP violation).
+        float cp_shift = 0.0f;
+        if (cfg.cp_violation_enabled) {
+            if (t == KAON_ZERO_MESON)     cp_shift = +CP_EPSILON_PRIME;
+            if (t == KAON_ZERO_BAR_MESON) cp_shift = -CP_EPSILON_PRIME;
+            if (t == B_ZERO_MESON)        cp_shift = +CP_SIN2BETA * 0.01f;
+            if (t == B_ZERO_BAR_MESON)    cp_shift = -CP_SIN2BETA * 0.01f;
+            if (t == BS_ZERO_MESON)       cp_shift = +CP_SIN2BETAS * 0.01f;
+            if (t == BS_ZERO_BAR_MESON)   cp_shift = -CP_SIN2BETAS * 0.01f;
+        }
+
+        // Select decay mode by branching ratio (shifted by CP asymmetry)
         float roll = dist01(rng);
+        float adjusted_roll = std::clamp(roll - cp_shift, 0.0f, 1.0f);
         float cumulative = 0.0f;
         const MesonDecayMode* selected = nullptr;
         for (uint8_t m = 0; m < entry->mode_count; ++m) {
             cumulative += entry->modes[m].branching_ratio;
-            if (roll < cumulative) {
+            if (adjusted_roll < cumulative) {
                 selected = &entry->modes[m];
                 break;
             }
@@ -495,5 +520,21 @@ void PhysicsSimulation::check_meson_decays() {
         iface.push_decay_event(msg, PhysicsInterface::DEVT_MESON_DECAY, col, std::string(detail));
         achievements.seen_meson_decay = true;
         achievements.total_meson_decays++;
+
+        // CP violation tracking: count matter vs antimatter products
+        if (cp_shift != 0.0f) {
+            achievements.seen_cp_violation = true;
+            achievements.total_cp_violations++;
+            for (uint8_t p = 0; p < selected->product_count; ++p) {
+                float q = PHYS_CHARGE[selected->products[p]];
+                if (q > 0.01f)  achievements.matter_excess++;
+                if (q < -0.01f) achievements.antimatter_excess++;
+            }
+            // Log CP violation event
+            char cp_msg[128];
+            snprintf(cp_msg, sizeof(cp_msg), "CP violation: %s (shift %+.4f)", phys_type_name(t), cp_shift);
+            iface.push_decay_event(cp_msg, PhysicsInterface::DEVT_CP_VIOLATION,
+                                   ImVec4(0.85f, 0.6f, 1.0f, 1.0f), std::string(detail));
+        }
     }
 }

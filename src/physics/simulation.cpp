@@ -1465,6 +1465,10 @@ void PhysicsSimulation::check_achievements() {
     if (achievements.seen_recombination)        try_unlock(ACH_FIRST_RECOMBINATION);
     if (achievements.seen_meson_decay)          try_unlock(ACH_FIRST_MESON_DECAY);
     if (achievements.seen_weak_decay)           try_unlock(ACH_FIRST_WEAK_DECAY);
+    if (achievements.seen_meson_oscillation)   try_unlock(ACH_FIRST_MESON_OSCILLATION);
+    if (achievements.seen_cp_violation)        try_unlock(ACH_FIRST_CP_VIOLATION);
+    if (std::abs(achievements.matter_excess - achievements.antimatter_excess) >= 10)
+        try_unlock(ACH_MATTER_ANTIMATTER_ASYMMETRY);
 
     // ── Chirality achievements ─────────────────────────────────────
     {
@@ -1536,6 +1540,13 @@ void PhysicsSimulation::check_achievements() {
         SNAP_DELTA(total_molecules_formed,  total_molecules_formed,  ls_snap_molecules_formed);
         SNAP_DELTA(total_chiral_molecules_found, total_chiral_molecules_found, ls_snap_chiral_mol);
         SNAP_DELTA(total_left_handed_weak_decays, total_left_handed_weak_decays, ls_snap_lh_weak_decays);
+        SNAP_DELTA(total_meson_oscillations, total_meson_oscillations, ls_snap_meson_osc);
+        SNAP_DELTA(total_cp_violations,      total_cp_violations,      ls_snap_cp_violations);
+
+        // Matter-antimatter asymmetry (accumulate and reset)
+        ls.lifetime_matter_asymmetry += static_cast<int64_t>(achievements.matter_excess - achievements.antimatter_excess);
+        achievements.matter_excess = 0;
+        achievements.antimatter_excess = 0;
 
         #undef SNAP_DELTA
 
@@ -1815,6 +1826,8 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                         check_carrier_exchange();
                     if (cfg.quasi_mode_enabled)
                         check_quasiparticles();
+                    if (cfg.cp_violation_enabled)
+                        check_meson_oscillations();
                     check_meson_decays();
                 }
                 if (quality >= 1 && frame4) {

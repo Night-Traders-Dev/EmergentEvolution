@@ -246,6 +246,7 @@ private:
     void check_neutrino_scattering();
     void check_neutrino_oscillations();
     void check_weak_flavor_change();
+    void check_meson_oscillations();
     void apply_gw_tidal_forces(double dt);
 
     void place_force_object(glm::vec2 world_pos, ForceObjectType type);

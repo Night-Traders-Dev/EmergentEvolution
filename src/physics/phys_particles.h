@@ -508,6 +508,23 @@ static constexpr float PMNS_DM2_21    = 7.53e-5f;   // solar Δm² (eV²)
 static constexpr float PMNS_DM2_32    = 2.453e-3f;  // atmospheric Δm²
 static constexpr float SIM_OSC_SCALE  = 0.01f;      // tunable oscillation scale
 
+// ── Neutral meson mixing parameters (PDG 2024, simulation-scaled) ───────────
+// Real Δm values span orders of magnitude; pre-scaled for visible oscillation
+// periods (~100-500 frames), analogous to PMNS_DM2 * SIM_OSC_SCALE.
+static constexpr float KAON_DM_SIM    = 0.03f;    // K⁰ oscillation rate (Δm_K scaled)
+static constexpr float KAON_DG_RATIO  = 2.0f;     // KS vs KL lifetime ratio (ΔΓ/Γ_avg)
+static constexpr float BD_DM_SIM      = 0.05f;    // B⁰ oscillation rate (Δm_d scaled)
+static constexpr float BD_DG_RATIO    = 0.001f;   // negligible width difference
+static constexpr float BS_DM_SIM      = 0.10f;    // Bs⁰ oscillation rate (Δm_s scaled, fastest)
+static constexpr float BS_DG_RATIO    = 0.13f;    // modest width difference
+
+// ── CP violation parameters ─────────────────────────────────────────────────
+// Exaggerated for simulation visibility (real values in comments)
+static constexpr float CP_EPSILON       = 2.228e-3f; // |ε| indirect CP violation (K system)
+static constexpr float CP_EPSILON_PRIME = 0.05f;     // direct CP asymmetry (real: 1.66e-3)
+static constexpr float CP_SIN2BETA      = 0.699f;    // sin(2β) — B⁰ → J/ψ K (PDG)
+static constexpr float CP_SIN2BETAS     = 0.036f;    // sin(2βs) — Bs⁰ → J/ψ φ (PDG)
+
 // ── Nuclear isotope decay ────────────────────────────────────────────────────
 
 enum NuclearDecayMode : uint8_t {

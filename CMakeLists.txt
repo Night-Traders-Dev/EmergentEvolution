@@ -78,6 +78,7 @@ add_executable(particle_physics
     src/physics/decay.cpp
     src/physics/meson_decays.cpp
     src/physics/quantum.cpp
+    src/physics/cp_violation.cpp
     src/physics/spawning.cpp
 
     # Onboarding & gameplay

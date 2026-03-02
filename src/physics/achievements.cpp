@@ -182,6 +182,11 @@ AchievementDef ACHIEVEMENT_DEFS[ACH_COUNT] = {
     { ACH_PARITY_VIOLATION,      ACAT_NUCLEAR,   "Broken Mirror",    "Observe parity violation in a weak decay",                 "[PV]", "ACH_PARITY_VIOLATION"           },
     { ACH_HOMOCHIRAL,            ACAT_CHEMISTRY, "Homochiral World", "Have 10+ chiral molecules simultaneously",                 "[HC]", "ACH_HOMOCHIRAL"                 },
     { ACH_MIRROR_IMAGE,          ACAT_CHEMISTRY, "Enantiomer",       "Create both enantiomers of a chiral molecule",             "[LR]", "ACH_MIRROR_IMAGE"               },
+
+    // ── CP Violation ───────────────────────────────────────────────────
+    { ACH_FIRST_MESON_OSCILLATION,     ACAT_PARTICLES, "Quantum Mixing",   "Observe neutral meson oscillation",                        "[QM]", "ACH_FIRST_MESON_OSCILLATION"    },
+    { ACH_FIRST_CP_VIOLATION,          ACAT_NUCLEAR,   "Broken Symmetry",  "Observe CP violation in meson decay",                      "[CP]", "ACH_FIRST_CP_VIOLATION"         },
+    { ACH_MATTER_ANTIMATTER_ASYMMETRY, ACAT_MILESTONES,"Why We Exist",     "Accumulate matter-antimatter asymmetry from CP violation",  "[WE]", "ACH_MATTER_ANTIMATTER_ASYMMETRY"},
 };
 
 // ── Runtime initialization for element achievements ─────────────────────────

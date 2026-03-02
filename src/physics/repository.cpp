@@ -368,7 +368,13 @@ void ParticleRepository::worker_fetch_listing(int category) {
 
         // Check if cached locally
         const std::string& dir = (category == 0) ? elements_cache_ : molecules_cache_;
-        e.is_cached = fs::exists(dir + name);
+        std::string local_path = dir + name;
+        e.is_cached = fs::exists(local_path);
+
+        // Peek chirality from cached .ppmol v3+ files
+        if (e.is_cached && category == 1) {
+            e.chirality = static_cast<int8_t>(peek_ppmol_chirality(local_path));
+        }
 
         entries.push_back(std::move(e));
     }
@@ -377,6 +383,50 @@ void ParticleRepository::worker_fetch_listing(int category) {
     // Sort alphabetically
     std::sort(entries.begin(), entries.end(),
         [](const RepoEntry& a, const RepoEntry& b) { return a.name < b.name; });
+
+    // Fetch chirality manifest for molecules (fills in chirality for uncached files)
+    if (category == 1) {
+        char manifest_url[512];
+        snprintf(manifest_url, sizeof(manifest_url),
+            "https://raw.githubusercontent.com/%s/%s/main/%s/manifest.json",
+            REPO_OWNER, REPO_NAME, subdir);
+
+        CURL* mcurl = curl_easy_init();
+        if (mcurl) {
+            std::string manifest_response;
+            struct curl_slist* mheaders = nullptr;
+            mheaders = curl_slist_append(mheaders, "User-Agent: ParticlePlayground");
+            if (!token.empty()) {
+                mheaders = curl_slist_append(mheaders, auth_header.c_str());
+            }
+
+            curl_easy_setopt(mcurl, CURLOPT_URL, manifest_url);
+            curl_easy_setopt(mcurl, CURLOPT_HTTPHEADER, mheaders);
+            curl_easy_setopt(mcurl, CURLOPT_WRITEFUNCTION, curl_write_string_cb);
+            curl_easy_setopt(mcurl, CURLOPT_WRITEDATA, &manifest_response);
+            curl_easy_setopt(mcurl, CURLOPT_TIMEOUT, 10L);
+            curl_easy_setopt(mcurl, CURLOPT_FOLLOWLOCATION, 1L);
+
+            CURLcode mres = curl_easy_perform(mcurl);
+            long mhttp = 0;
+            curl_easy_getinfo(mcurl, CURLINFO_RESPONSE_CODE, &mhttp);
+            curl_slist_free_all(mheaders);
+            curl_easy_cleanup(mcurl);
+
+            if (mres == CURLE_OK && mhttp == 200 && !manifest_response.empty()) {
+                cJSON* manifest = cJSON_Parse(manifest_response.c_str());
+                if (manifest && cJSON_IsObject(manifest)) {
+                    for (auto& e : entries) {
+                        if (e.chirality >= 0) continue; // already known from cache
+                        cJSON* val = cJSON_GetObjectItem(manifest, e.name.c_str());
+                        if (val && cJSON_IsNumber(val))
+                            e.chirality = static_cast<int8_t>(val->valueint);
+                    }
+                    cJSON_Delete(manifest);
+                }
+            }
+        }
+    }
 
     {
         std::lock_guard<std::mutex> lk(mutex_);

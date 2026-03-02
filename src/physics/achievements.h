@@ -176,6 +176,11 @@ enum AchievementID : uint32_t {
     ACH_HOMOCHIRAL,             // Have 10+ chiral molecules simultaneously
     ACH_MIRROR_IMAGE,           // Create both L and R forms of a chiral molecule
 
+    // ── CP Violation ───────────────────────────────────────────────────
+    ACH_FIRST_MESON_OSCILLATION,     // Observe neutral meson oscillation (K⁰↔K̄⁰ or B⁰↔B̄⁰)
+    ACH_FIRST_CP_VIOLATION,          // Observe CP violation in meson decay
+    ACH_MATTER_ANTIMATTER_ASYMMETRY, // Accumulate matter-antimatter asymmetry from CP violation
+
     // ── Periodic Table Collection (Z=1..118) ────────────────────────────
     // One achievement per element — contiguous range for easy indexing
     ACH_ELEMENT_BASE,                           // = first element achievement slot
@@ -310,6 +315,14 @@ public:
     bool seen_meson_decay          = false;
     bool seen_weak_decay           = false;
 
+    // CP violation tracking
+    bool     seen_meson_oscillation   = false;
+    bool     seen_cp_violation        = false;
+    uint32_t total_meson_oscillations = 0;
+    uint32_t total_cp_violations      = 0;
+    int32_t  matter_excess            = 0;  // positive = more matter from CP-violating decays
+    int32_t  antimatter_excess        = 0;
+
 private:
     // Bitfield for unlocked achievements (ACH_COUNT <= 256, four uint64_t slots)
     uint64_t unlocked_bits_[ACH_ELEMENT_SLOTS] = {};
@@ -342,6 +355,9 @@ struct LifetimeStats {
     uint64_t total_meson_decays      = 0;
     uint64_t total_bremsstrahlung    = 0;
     uint64_t total_neutrino_oscillations = 0;
+    uint64_t total_meson_oscillations    = 0;
+    uint64_t total_cp_violations         = 0;
+    int64_t  lifetime_matter_asymmetry   = 0;
     uint64_t total_accelerator_fires = 0;
 
     // Per-particle-type (74 types)

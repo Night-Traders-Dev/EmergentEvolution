@@ -2677,6 +2677,13 @@ void PhysicsInterface::draw_achievements_panel() {
             ImGui::Text("Parity Violations: %llu", (unsigned long long)ls.total_left_handed_weak_decays);
             ImGui::Spacing();
 
+            ImGui::TextColored(ImVec4(0.85f, 0.6f, 1.0f, 1.0f), "CP Violation");
+            ImGui::Separator();
+            ImGui::Text("Meson Oscillations: %llu", (unsigned long long)ls.total_meson_oscillations);
+            ImGui::Text("CP Violations:      %llu", (unsigned long long)ls.total_cp_violations);
+            ImGui::Text("Matter Asymmetry:   %+lld", (long long)ls.lifetime_matter_asymmetry);
+            ImGui::Spacing();
+
             ImGui::TextColored(ImVec4(1.0f, 0.843f, 0.0f, 1.0f), "Chemistry");
             ImGui::Separator();
             ImGui::Text("Bonds Formed:      %llu", (unsigned long long)ls.total_bonds_formed);
