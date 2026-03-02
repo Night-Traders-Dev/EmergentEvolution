@@ -49,6 +49,8 @@ struct UserPrefs {
     int   quality_preset   = 2;      // 0=Low, 1=Medium, 2=High, 3=Ultra, 4=Custom
     float sfx_volume       = 0.7f;   // 0.0-1.0 sound effect volume
     bool  sfx_muted        = false;  // mute SFX toggle
+    float voice_volume     = 0.8f;   // 0.0-1.0 voice-over volume
+    bool  voice_muted      = false;  // mute voice toggle
 
     // v5 fields — visual overlays + particle count
     bool  hide_bond_visuals       = false;  // hide bond lines (spring physics still active)

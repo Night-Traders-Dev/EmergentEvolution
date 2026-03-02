@@ -14,6 +14,7 @@ struct AudioPlayer {
     bool       engine_ok = false;
     bool       music_ok  = false;
     float      volume    = 0.5f;   // 0–1 music volume
+    std::string asset_prefix;      // "" or "../" depending on CWD
 
     // ── Sound effects ─────────────────────────────────────────────────────
     static constexpr int SFX_COUNT = 10;
@@ -38,12 +39,14 @@ struct AudioPlayer {
     // base_dir: asset directory prefix ("" for project root, "../" for build/)
     bool init(const char* base_dir = "") {
         // Clean up any prior partial init (safe to call multiple times)
+        stop_voice();
         for (int i = 0; i < SFX_COUNT; i++) {
             if (sfx_ok[i]) { ma_sound_uninit(&sfx[i]); sfx_ok[i] = false; }
         }
         if (music_ok)  { ma_sound_uninit(&music);  music_ok  = false; }
         if (engine_ok) { ma_engine_uninit(&engine); engine_ok = false; }
 
+        asset_prefix = base_dir;
         std::string prefix = base_dir;
 
         ma_engine_config cfg = ma_engine_config_init();
@@ -125,11 +128,66 @@ struct AudioPlayer {
     void play_collision()     { play(SFX_COLLISION); }
     void play_photon()        { play(SFX_PHOTON); }
 
+    // ── Voice-over (cutscene narration) ─────────────────────────────────────
+    ma_sound   voice{};
+    bool       voice_ok     = false;
+    bool       voice_loaded = false;  // a file is currently loaded
+    float      voice_volume = 0.8f;   // 0–1 voice volume
+    bool       voice_muted  = false;
+    float      voice_duration = 0.0f; // duration of current clip in seconds
+
+    // Load and play a voice WAV file. Stops any currently playing voice first.
+    void play_voice(const std::string& path) {
+        stop_voice();
+        if (!engine_ok) return;
+        if (ma_sound_init_from_file(&engine, path.c_str(), 0, nullptr, nullptr, &voice) != MA_SUCCESS)
+            return;
+        voice_ok = true;
+        voice_loaded = true;
+        // Query clip duration
+        float len = 0.0f;
+        if (ma_sound_get_length_in_seconds(&voice, &len) == MA_SUCCESS)
+            voice_duration = len;
+        else
+            voice_duration = 0.0f;
+        ma_sound_set_volume(&voice, voice_muted ? 0.0f : voice_volume);
+        ma_sound_start(&voice);
+    }
+
+    void stop_voice() {
+        if (voice_ok) {
+            ma_sound_stop(&voice);
+            ma_sound_uninit(&voice);
+            voice_ok = false;
+            voice_loaded = false;
+            voice_duration = 0.0f;
+        }
+    }
+
+    bool is_voice_playing() const {
+        return voice_ok && ma_sound_is_playing(const_cast<ma_sound*>(&voice));
+    }
+
+    void set_voice_volume(float v) {
+        voice_volume = v;
+        if (voice_ok) ma_sound_set_volume(&voice, voice_muted ? 0.0f : v);
+    }
+
+    // Play voice-over for a cutscene line.
+    // kind: "intro" or "comp", scenario: scenario index, line: line index within cutscene
+    void play_cutscene_voice(const char* kind, int scenario, int line) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "%sassets/voice/%s_%d_%d.wav",
+                 asset_prefix.c_str(), kind, scenario, line);
+        play_voice(std::string(buf));
+    }
+
     void pause()  { if (music_ok) ma_sound_stop(&music); }
     void resume() { if (music_ok) ma_sound_start(&music); }
     bool is_playing() const { return music_ok && ma_sound_is_playing(const_cast<ma_sound*>(&music)); }
 
     void destroy() {
+        stop_voice();
         for (int i = 0; i < SFX_COUNT; i++) {
             if (sfx_ok[i]) { ma_sound_uninit(&sfx[i]); sfx_ok[i] = false; }
         }

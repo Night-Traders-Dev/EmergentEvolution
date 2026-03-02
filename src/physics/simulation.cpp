@@ -279,6 +279,8 @@ void PhysicsSimulation::init(GLFWwindow* window) {
     audio.set_volume(iface.prefs.music_volume);
     audio.set_sfx_volume(iface.prefs.sfx_volume);
     audio.sfx_muted = iface.prefs.sfx_muted;
+    audio.set_voice_volume(iface.prefs.voice_volume);
+    audio.voice_muted = iface.prefs.voice_muted;
     if (iface.prefs.music_muted) audio.pause();
 
     repository.init();
@@ -1660,7 +1662,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                     int sidx = scenarios.scenario_idx;
                     if (sidx != 10 && sidx != 11 && sidx >= 0 && sidx < CUTSCENE_SCENARIO_COUNT)
                         iface.play_cutscene(sidx, true);
-                } else if (scenarios.task_just_completed) {
+                } else if (scenarios.task_just_completed && scenarios.task_complete_timer < ImGui::GetIO().DeltaTime * 1.5f) {
                     iface.push_notification("Task Complete!", ImVec4(0.3f, 0.9f, 1.0f, 1.0f));
                 }
             }

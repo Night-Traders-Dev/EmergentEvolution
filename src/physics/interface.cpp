@@ -41,12 +41,13 @@ void PhysicsInterface::init() {
 // ── Settings persistence ────────────────────────────────────────────────────
 
 static constexpr uint32_t PPCFG_MAGIC   = 0x47464350;  // "PCFG" little-endian
-static constexpr uint32_t PPCFG_VERSION = 5;
+static constexpr uint32_t PPCFG_VERSION = 6;
 
 // Historical struct sizes (for backward-compat migration)
 static constexpr size_t PPCFG_V2_SIZE = 52;   // temp_unit .. event_log_save
 static constexpr size_t PPCFG_V3_SIZE = 72;   // + autosave_interval .. tutorial_done
 static constexpr size_t PPCFG_V4_SIZE = 104;  // + vsync .. sfx_muted
+static constexpr size_t PPCFG_V5_SIZE = 108;  // + hide_bond_visuals .. particle_count_slider
 
 void PhysicsInterface::save_prefs() {
     const std::string& data_dir = get_data_dir();
@@ -93,6 +94,7 @@ void PhysicsInterface::load_prefs() {
     if (version == 2)      read_size = PPCFG_V2_SIZE;
     else if (version == 3) read_size = PPCFG_V3_SIZE;
     else if (version == 4) read_size = PPCFG_V4_SIZE;
+    else if (version == 5) read_size = PPCFG_V5_SIZE;
 
     f.read(reinterpret_cast<char*>(&loaded), static_cast<std::streamsize>(read_size));
     if (!f.good()) return;
@@ -125,6 +127,10 @@ void PhysicsInterface::load_prefs() {
         prefs.hide_virtual_trails = defaults.hide_virtual_trails;
         prefs.hide_entanglement_lines = defaults.hide_entanglement_lines;
         prefs.particle_count_slider = defaults.particle_count_slider;
+    }
+    if (version <= 5) {
+        prefs.voice_volume = defaults.voice_volume;
+        prefs.voice_muted = defaults.voice_muted;
     }
 }
 

@@ -2018,6 +2018,19 @@ void PhysicsInterface::draw_settings_menu() {
                 }
             }
 
+            ImGui::Dummy(ImVec2(0, 10));
+            if (ImGui::Checkbox("Mute Voice", &prefs.voice_muted)) {
+                if (audio_ptr) audio_ptr->voice_muted = prefs.voice_muted;
+            }
+
+            if (!prefs.voice_muted) {
+                float voice_pct = prefs.voice_volume * 100.0f;
+                if (ImGui::SliderFloat("Voice Volume", &voice_pct, 0.0f, 100.0f, "%.0f%%")) {
+                    prefs.voice_volume = voice_pct / 100.0f;
+                    if (audio_ptr) audio_ptr->set_voice_volume(prefs.voice_volume);
+                }
+            }
+
             ImGui::Dummy(ImVec2(0, 14));
 
             ImGui::TextColored(tc.accent, "Event Log");
@@ -3302,6 +3315,8 @@ void PhysicsInterface::draw_scenario_menu() {
                 if (ImGui::Button("Reset", ImVec2(55.0f, 28.0f))) {
                     if (achievements_ptr && i < 20)
                         achievements_ptr->scenarios_completed[i] = false;
+                    request_scenario_start = i;
+                    show_scenario_menu = false;
                 }
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Reset completion for this scenario");
@@ -3824,6 +3839,9 @@ void PhysicsInterface::play_cutscene(int scenario_idx, bool is_completion) {
                                            : CUTSCENE_INTROS[scenario_idx];
     if (def.line_count <= 0 || def.title[0] == '\0') return;  // stub / sandbox
 
+    // Stop any prior voice-over
+    if (audio_ptr) audio_ptr->stop_voice();
+
     cutscene_scenario_idx_ = scenario_idx;
     cutscene_is_completion_ = is_completion;
     cutscene_state_ = CS_FADE_IN;
@@ -4092,6 +4110,11 @@ void PhysicsInterface::draw_cutscene() {
         if (cutscene_fade_time_ >= FADE_DURATION) {
             cutscene_state_ = CS_PLAYING;
             cutscene_line_time_ = 0.0f;
+            // Start voice for first line
+            if (audio_ptr && def.line_count > 0) {
+                const char* kind = cutscene_is_completion_ ? "comp" : "intro";
+                audio_ptr->play_cutscene_voice(kind, cutscene_scenario_idx_, 0);
+            }
         }
     } else if (cutscene_state_ == CS_FADE_OUT) {
         cutscene_fade_time_ += dt;
@@ -4322,13 +4345,20 @@ void PhysicsInterface::draw_cutscene() {
         if (cutscene_state_ == CS_PLAYING && cutscene_line_idx_ < def.line_count) {
             cutscene_line_time_ += dt;
             const CutsceneTextLine& line = def.lines[cutscene_line_idx_];
-            float total_line_dur = LINE_FADE_IN + line.hold + LINE_FADE_OUT;
+
+            // Extend hold time to fit voice clip duration (+ 0.5s breathing room)
+            float effective_hold = line.hold;
+            if (audio_ptr && audio_ptr->voice_duration > 0.0f) {
+                float voice_hold = audio_ptr->voice_duration - LINE_FADE_IN + 0.5f;
+                if (voice_hold > effective_hold) effective_hold = voice_hold;
+            }
+            float total_line_dur = LINE_FADE_IN + effective_hold + LINE_FADE_OUT;
 
             float line_alpha = 1.0f;
             if (cutscene_line_time_ < LINE_FADE_IN) {
                 line_alpha = cutscene_line_time_ / LINE_FADE_IN;
-            } else if (cutscene_line_time_ > LINE_FADE_IN + line.hold) {
-                float fade_t = cutscene_line_time_ - LINE_FADE_IN - line.hold;
+            } else if (cutscene_line_time_ > LINE_FADE_IN + effective_hold) {
+                float fade_t = cutscene_line_time_ - LINE_FADE_IN - effective_hold;
                 line_alpha = 1.0f - std::min(fade_t / LINE_FADE_OUT, 1.0f);
             }
             line_alpha *= master_alpha;
@@ -4338,9 +4368,14 @@ void PhysicsInterface::draw_cutscene() {
                 cutscene_line_idx_++;
                 cutscene_line_time_ = 0.0f;
                 if (cutscene_line_idx_ >= def.line_count) {
-                    // Start fade out
+                    // Start fade out — stop voice
                     cutscene_state_ = CS_FADE_OUT;
                     cutscene_fade_time_ = 0.0f;
+                    if (audio_ptr) audio_ptr->stop_voice();
+                } else if (audio_ptr) {
+                    // Play voice for new line
+                    const char* kind = cutscene_is_completion_ ? "comp" : "intro";
+                    audio_ptr->play_cutscene_voice(kind, cutscene_scenario_idx_, cutscene_line_idx_);
                 }
             } else {
                 ImVec2 text_sz = ImGui::CalcTextSize(line.text);
@@ -4370,12 +4405,18 @@ void PhysicsInterface::draw_cutscene() {
         bool skip = ImGui::IsMouseClicked(0) || ImGui::IsKeyPressed(ImGuiKey_Space)
                  || ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_Escape);
         if (skip && cutscene_state_ == CS_PLAYING) {
+            // Stop current voice
+            if (audio_ptr) audio_ptr->stop_voice();
             // Advance to next line or end
             cutscene_line_idx_++;
             cutscene_line_time_ = 0.0f;
             if (cutscene_line_idx_ >= def.line_count) {
                 cutscene_state_ = CS_FADE_OUT;
                 cutscene_fade_time_ = 0.0f;
+            } else if (audio_ptr) {
+                // Play voice for new line
+                const char* kind = cutscene_is_completion_ ? "comp" : "intro";
+                audio_ptr->play_cutscene_voice(kind, cutscene_scenario_idx_, cutscene_line_idx_);
             }
         } else if (skip && cutscene_state_ == CS_FADE_IN) {
             // Skip fade-in
