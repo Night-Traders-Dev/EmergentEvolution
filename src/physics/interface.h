@@ -724,6 +724,7 @@ public:
     void load_molecule_bestiary();
     void set_vk_ctx(VulkanContext* ctx) { vk_ctx_ = ctx; }
     void play_cutscene(int scenario_idx, bool is_completion);
+    bool  skip_next_intro_cutscene_ = false;  // don't re-play intro on deferred start
 
 private:
     void push_theme();
@@ -801,7 +802,7 @@ private:
     void draw_splash_collider();
 
     // Cutscene state
-    enum CutsceneState { CS_INACTIVE, CS_FADE_IN, CS_PLAYING, CS_FADE_OUT };
+    enum CutsceneState { CS_INACTIVE, CS_FADE_IN, CS_PLAYING, CS_FADE_OUT, CS_BLANK };
     CutsceneState cutscene_state_ = CS_INACTIVE;
     int   cutscene_scenario_idx_ = -1;   // which scenario
     bool  cutscene_is_completion_ = false; // intro or completion
@@ -814,6 +815,10 @@ private:
     std::vector<std::vector<ImVec2>> cutscene_trails_;
     bool  show_cutscene_gallery = false;
     bool  cutscene_was_running_ = false;  // restore sim_running on exit
+    int   cutscene_blank_next_ = -1;     // next scenario to start after blank
+    int   cutscene_precached_scenario_ = -1;  // scenario whose particles are precached
+    bool  cutscene_precached_completion_ = false;
+    int   cutscene_deferred_scenario_ = -1;   // scenario to start after intro cutscene ends
 
     void draw_cutscene();
     void draw_cutscene_gallery();

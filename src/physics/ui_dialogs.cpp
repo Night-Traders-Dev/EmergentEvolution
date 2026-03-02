@@ -3831,7 +3831,16 @@ void PhysicsInterface::play_cutscene(int scenario_idx, bool is_completion) {
     cutscene_line_time_ = 0.0f;
     cutscene_line_idx_ = 0;
     cutscene_fade_time_ = 0.0f;
-    cutscene_particles_inited_ = false;
+
+    // Check if particles were precached during blank transition
+    if (cutscene_precached_scenario_ == scenario_idx &&
+        cutscene_precached_completion_ == is_completion) {
+        cutscene_particles_inited_ = true;   // use precached particles + trails
+        cutscene_precached_scenario_ = -1;   // consume
+    } else {
+        cutscene_particles_inited_ = false;
+    }
+
     cutscene_was_running_ = sim_running;
     sim_running = false;
 }
@@ -4088,19 +4097,84 @@ void PhysicsInterface::draw_cutscene() {
         cutscene_fade_time_ += dt;
         master_alpha = 1.0f - std::min(cutscene_fade_time_ / FADE_DURATION, 1.0f);
         if (cutscene_fade_time_ >= FADE_DURATION) {
-            cutscene_state_ = CS_INACTIVE;
-            // Auto-advance: completion cutscene → start next scenario
+            // Auto-advance: completion cutscene → blank transition → next scenario
             if (cutscene_is_completion_) {
                 int next = cutscene_scenario_idx_ + 1;
                 while (next < CUTSCENE_SCENARIO_COUNT && (next == 10 || next == 11)) next++;
                 if (next < CUTSCENE_SCENARIO_COUNT) {
-                    request_scenario_start = next;
+                    cutscene_state_ = CS_BLANK;
+                    cutscene_fade_time_ = 0.0f;
+                    cutscene_blank_next_ = next;
+                    // Pre-cache: init particles for the next intro cutscene
+                    const CutsceneDef& next_def = CUTSCENE_INTROS[next];
+                    if (next_def.line_count > 0 && next_def.title[0] != '\0') {
+                        init_cutscene_particles((int)next_def.scene, next_def.color1, next_def.color2);
+                        cutscene_precached_scenario_ = next;
+                        cutscene_precached_completion_ = false;
+                    }
                     return;
                 }
             }
+            // Deferred start: intro cutscene finished → now start the scenario
+            if (!cutscene_is_completion_ && cutscene_deferred_scenario_ >= 0) {
+                cutscene_state_ = CS_INACTIVE;
+                request_scenario_start = cutscene_deferred_scenario_;
+                skip_next_intro_cutscene_ = true;
+                cutscene_deferred_scenario_ = -1;
+                return;
+            }
+            cutscene_state_ = CS_INACTIVE;
             sim_running = cutscene_was_running_;
             return;
         }
+    } else if (cutscene_state_ == CS_BLANK) {
+        cutscene_fade_time_ += dt;
+        constexpr float BLANK_DURATION = 1.8f;
+
+        // Black screen
+        bg->AddRectFilled(ImVec2(0, 0), ImVec2(W, H), IM_COL32(2, 8, 16, 255));
+
+        // Pre-simulate particles during blank to build up trails and motion
+        if (cutscene_particles_inited_) {
+            constexpr int SUBSTEPS = 8;  // multiple substeps per frame
+            float sub_dt = dt / (float)SUBSTEPS;
+            for (int step = 0; step < SUBSTEPS; ++step) {
+                for (auto& p : cutscene_particles_) {
+                    p.r = p.base_r;
+                    if (p.orbit) {
+                        p.phase += p.orbit_speed * sub_dt * 60.0f;
+                        p.x = p.cx + cosf(p.phase) * p.orbit_r * p.tilt_x;
+                        p.y = p.cy + sinf(p.phase) * p.orbit_r * p.tilt_y;
+                    } else {
+                        p.x += p.vx * sub_dt * 60.0f;
+                        p.y += p.vy * sub_dt * 60.0f;
+                        if (p.x < -10) p.x = W + 10;
+                        if (p.x > W + 10) p.x = -10;
+                        if (p.y < -10) p.y = H + 10;
+                        if (p.y > H + 10) p.y = -10;
+                    }
+                }
+                // Build trails (one point per substep)
+                for (size_t i = 0; i < cutscene_particles_.size(); ++i) {
+                    cutscene_trails_[i].push_back(
+                        ImVec2(cutscene_particles_[i].x, cutscene_particles_[i].y));
+                    if (cutscene_trails_[i].size() > 10)
+                        cutscene_trails_[i].erase(cutscene_trails_[i].begin());
+                }
+            }
+        }
+
+        if (cutscene_fade_time_ >= BLANK_DURATION) {
+            // Play the intro cutscene now — defer actual scenario start until it finishes
+            cutscene_deferred_scenario_ = cutscene_blank_next_;
+            cutscene_blank_next_ = -1;
+            // Mark intro as seen for gallery
+            if (cutscene_deferred_scenario_ < 18)
+                if (achievements_ptr)
+                    achievements_ptr->cutscene_intros_seen |= (1u << cutscene_deferred_scenario_);
+            play_cutscene(cutscene_deferred_scenario_, false);
+        }
+        return;  // skip all rendering — just black
     }
 
     // ── 1. Background ──────────────────────────────────────────────────────

@@ -3053,9 +3053,12 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         iface.active_spawn_rules = &ScenarioManager::get(idx).spawn_rules;
         is_active = true;
         iface.sim_running = true;
-        // Play intro cutscene (skip sandbox scenarios 10,11)
-        if (idx != 10 && idx != 11 && idx < CUTSCENE_SCENARIO_COUNT)
-            iface.play_cutscene(idx, false);
+        // Play intro cutscene (skip if already played via deferred auto-advance)
+        if (!iface.skip_next_intro_cutscene_) {
+            if (idx != 10 && idx != 11 && idx < CUTSCENE_SCENARIO_COUNT)
+                iface.play_cutscene(idx, false);
+        }
+        iface.skip_next_intro_cutscene_ = false;
         // Mark intro as seen for gallery unlock
         if (idx < 18)
             achievements.cutscene_intros_seen |= (1u << idx);
