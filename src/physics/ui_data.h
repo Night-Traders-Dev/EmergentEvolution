@@ -10,6 +10,17 @@
 #include <cmath>
 #include <algorithm>
 
+// ── Screen-edge clamping for window placement ───────────────────────────────
+// Ensures a window of the given size stays within the display area.
+inline ImVec2 clamp_window_pos(ImVec2 pos, ImVec2 size, float margin = 10.0f) {
+    auto& io = ImGui::GetIO();
+    float max_x = io.DisplaySize.x - size.x - margin;
+    float max_y = io.DisplaySize.y - size.y - margin;
+    pos.x = std::max(margin, std::min(pos.x, max_x));
+    pos.y = std::max(margin, std::min(pos.y, max_y));
+    return pos;
+}
+
 // ── World-unit ↔ real-unit scale ────────────────────────────────────────────
 inline constexpr float R_BOHR_WORLD    = 15.0f;
 inline constexpr float BOHR_RADIUS_NM  = 0.0529f;
@@ -181,6 +192,248 @@ inline const char* const ELEMENT_SYMBOLS[] = {
     "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og",
 };
 inline constexpr int FULL_ELEMENT_COUNT = 118;
+
+// ── Molecule common name lookup ──────────────────────────────────────────────
+
+struct MoleculeNameEntry { const char* formula; const char* name; };
+
+inline const MoleculeNameEntry MOLECULE_COMMON_NAMES[] = {
+    // Diatomic
+    {"H2",      "Hydrogen"},
+    {"O2",      "Oxygen"},
+    {"N2",      "Nitrogen"},
+    {"F2",      "Fluorine"},
+    {"Cl2",     "Chlorine"},
+    {"HF",      "Hydrogen Fluoride"},
+    {"HCl",     "Hydrogen Chloride"},
+    {"CO",      "Carbon Monoxide"},
+    {"NO",      "Nitric Oxide"},
+    {"NaCl",    "Sodium Chloride"},
+    {"MgO",     "Magnesium Oxide"},
+    {"CaO",     "Calcium Oxide"},
+    {"Br2",     "Bromine"},
+    {"I2",      "Iodine"},
+    // Triatomic
+    {"H2O",     "Water"},
+    {"CO2",     "Carbon Dioxide"},
+    {"NO2",     "Nitrogen Dioxide"},
+    {"H2S",     "Hydrogen Sulfide"},
+    {"O3",      "Ozone"},
+    {"SO2",     "Sulfur Dioxide"},
+    {"CS2",     "Carbon Disulfide"},
+    {"N2O",     "Nitrous Oxide"},
+    {"HCN",     "Hydrogen Cyanide"},
+    {"SiO2",    "Silicon Dioxide"},
+    {"H2CO3",   "Carbonic Acid"},
+    // 4-atom
+    {"NH3",     "Ammonia"},
+    {"PH3",     "Phosphine"},
+    {"NaOH",    "Sodium Hydroxide"},
+    {"KOH",     "Potassium Hydroxide"},
+    {"LiOH",    "Lithium Hydroxide"},
+    {"H2O2",    "Hydrogen Peroxide"},
+    {"H3BO3",   "Boric Acid"},
+    // 5-atom
+    {"CH4",     "Methane"},
+    {"SiH4",    "Silane"},
+    {"CF4",     "Carbon Tetrafluoride"},
+    {"CCl4",    "Carbon Tetrachloride"},
+    {"HNO3",    "Nitric Acid"},
+    {"HCOOH",   "Formic Acid"},
+    // 6+ atom
+    {"CH2O",    "Formaldehyde"},
+    {"CH3OH",   "Methanol"},
+    {"C2H2",    "Acetylene"},
+    {"C2H4",    "Ethylene"},
+    {"C2H6",    "Ethane"},
+    {"C2H5OH",  "Ethanol"},
+    {"CH3COOH", "Acetic Acid"},
+    {"CH3NH2",  "Methylamine"},
+    {"NaHCO3",  "Sodium Bicarbonate"},
+    {"H2SO4",   "Sulfuric Acid"},
+    {"H3PO4",   "Phosphoric Acid"},
+    // Larger organic
+    {"C3H8",    "Propane"},
+    {"C3H6O",   "Acetone"},
+    {"C4H10",   "Butane"},
+    {"C5H12",   "Pentane"},
+    {"C6H14",   "Hexane"},
+    {"C6H6",    "Benzene"},
+    {"C6H12O6", "Glucose"},
+    {"C12H22O11","Sucrose"},
+    {"C8H10N4O2","Caffeine"},
+    {"SF6",     "Sulfur Hexafluoride"},
+    // Pharmaceuticals
+    {"C9H8O4",      "Aspirin"},
+    {"C13H18O2",    "Ibuprofen"},
+    {"C8H9NO2",     "Acetaminophen"},
+    {"C10H14N2",    "Nicotine"},
+    {"C8H11NO2",    "Dopamine"},
+    {"C10H12N2O",   "Serotonin"},
+    {"C9H13NO3",    "Epinephrine"},
+    {"C13H16N2O2",  "Melatonin"},
+    {"C4H11N5",     "Metformin"},
+    {"C17H19NO3",   "Morphine"},
+    {"C18H21NO3",   "Codeine"},
+    {"C6H8O6",      "Ascorbic Acid"},
+    {"C16H18N2O4S", "Penicillin G"},
+    {"C16H19N3O5S", "Amoxicillin"},
+    {"C21H30O2",    "THC"},
+    {"C7H8N4O2",    "Theobromine"},
+    // Amino acids
+    {"C2H5NO2",     "Glycine"},
+    {"C3H7NO2",     "Alanine"},
+    {"C5H11NO2",    "Valine"},
+    {"C6H13NO2",    "Leucine"},
+    {"C9H11NO2",    "Phenylalanine"},
+    {"C11H12N2O2",  "Tryptophan"},
+    {"C5H9NO4",     "Glutamic Acid"},
+    {"C9H11NO3",    "Tyrosine"},
+    // Acids
+    {"C6H8O7",  "Citric Acid"},
+    {"C3H6O3",  "Lactic Acid"},
+    {"C2H2O4",  "Oxalic Acid"},
+    {"C4H6O6",  "Tartaric Acid"},
+    {"C4H6O5",  "Malic Acid"},
+    {"C7H6O2",  "Benzoic Acid"},
+    {"C7H6O3",  "Salicylic Acid"},
+    {"C3H4O3",  "Pyruvic Acid"},
+    {"C4H6O4",  "Succinic Acid"},
+    // Bases
+    {"C5H5N",       "Pyridine"},
+    {"C6H7N",       "Aniline"},
+    {"C5H11N",      "Piperidine"},
+    // DNA/RNA nucleobases
+    {"C5H5N5",      "Adenine"},
+    {"C5H5N5O",     "Guanine"},
+    {"C4H5N3O",     "Cytosine"},
+    {"C5H6N2O2",    "Thymine"},
+    {"C4H4N2O2",    "Uracil"},
+    // DNA/RNA sugars
+    {"C5H10O4",     "Deoxyribose"},
+    {"C5H10O5",     "Ribose"},
+    // DNA/RNA nucleosides
+    {"C10H13N5O3",  "Deoxyadenosine"},
+    {"C10H13N5O4",  "Adenosine"},
+    {"C10H13N5O5",  "Guanosine"},
+    // Energy molecules
+    {"C10H16N5O13P3","ATP"},
+    {"C10H15N5O10P2","ADP"},
+    {"C10H14N5O7P",  "AMP"},
+    // Metal oxides
+    {"Fe2O3",   "Iron(III) Oxide"},
+    {"CaCO3",   "Calcium Carbonate"},
+    // Psychoactive / controlled substances
+    {"C9H13N",       "Amphetamine"},
+    {"C10H15N",      "Methamphetamine"},
+    {"C17H21NO4",    "Cocaine"},
+    {"C21H23NO5",    "Heroin"},
+    {"C22H28N2O",    "Fentanyl"},
+    {"C20H25N3O",    "LSD"},
+    {"C11H15NO2",    "MDMA"},
+    {"C12H17N2O4P",  "Psilocybin"},
+    {"C12H16N2",     "DMT"},
+    {"C13H16ClNO",   "Ketamine"},
+    {"C11H17NO3",    "Mescaline"},
+    {"C4H8O3",       "GHB"},
+    {"C17H25N",      "PCP"},
+    {"C15H21NO2",    "Psilocin"},
+    // More pharmaceuticals
+    {"C17H18F3NO",   "Fluoxetine"},
+    {"C17H17Cl2N",   "Sertraline"},
+    {"C16H13ClN2O",  "Diazepam"},
+    {"C17H19N3O3S",  "Omeprazole"},
+    {"C15H25NO3",    "Metoprolol"},
+    {"C21H26O5",     "Prednisone"},
+    {"C22H29FO5",    "Dexamethasone"},
+    {"C19H16O4",     "Warfarin"},
+    {"C5H9NO3S",     "Acetylcysteine"},
+    {"C22H23ClN2O2", "Loratadine"},
+    {"C22H30N6O4S",  "Sildenafil"},
+    {"C14H14O3",     "Naproxen"},
+    {"C9H17NO2",     "Gabapentin"},
+    {"C18H26ClN3O",  "Hydroxychloroquine"},
+    {"C17H18FN3O3",  "Ciprofloxacin"},
+    {"C10H13N5O4",   "Acyclovir"},
+    {"C14H10O4",     "Dantrolene"},
+    {"C21H28O2",     "Testosterone"},
+    {"C19H24O2",     "Estradiol"},
+    {"C26H29NO",     "Tamoxifen"},
+    {"C15H12N2O",    "Carbamazepine"},
+    {"C8H11NO3",     "Norepinephrine"},
+    // Semiconductors and advanced materials
+    {"GaAs",     "Gallium Arsenide"},
+    {"SiC",      "Silicon Carbide"},
+    {"BN",       "Boron Nitride"},
+    {"AlN",      "Aluminium Nitride"},
+    {"GaN",      "Gallium Nitride"},
+    {"ZnO",      "Zinc Oxide"},
+    {"CdSe",     "Cadmium Selenide"},
+    {"InP",      "Indium Phosphide"},
+    {"ZnS",      "Zinc Sulfide"},
+    {"TiO2",     "Titanium Dioxide"},
+    {"WC",       "Tungsten Carbide"},
+    {"ZrO2",     "Zirconium Dioxide"},
+    {"SnO2",     "Tin Dioxide"},
+    {"BaTiO3",   "Barium Titanate"},
+    // Superconducting materials
+    {"MgB2",     "Magnesium Diboride"},
+    {"NbN",      "Niobium Nitride"},
+    {"Nb3Sn",    "Niobium-Tin"},
+    {"NbTi",     "Niobium-Titanium"},
+    {"V3Si",     "Vanadium-Silicon"},
+    // Fullerenes
+    {"C60",      "Buckminsterfullerene"},
+    {"C24",      "Coronene Carbon"},
+    {"C20",      "Dodecahedrane Carbon"},
+    // Industrial / common chemicals
+    {"CaF2",     "Calcium Fluoride"},
+    {"Na2CO3",   "Sodium Carbonate"},
+    {"KNO3",     "Potassium Nitrate"},
+    {"AgNO3",    "Silver Nitrate"},
+    {"CuSO4",    "Copper Sulfate"},
+    {"FeCl3",    "Iron(III) Chloride"},
+    {"AlCl3",    "Aluminium Chloride"},
+    {"ZnCl2",    "Zinc Chloride"},
+    {"PbO2",     "Lead Dioxide"},
+    {"MnO2",     "Manganese Dioxide"},
+    {"Cr2O3",    "Chromium(III) Oxide"},
+    {"V2O5",     "Vanadium Pentoxide"},
+    {"WO3",      "Tungsten Trioxide"},
+    {"MoS2",     "Molybdenum Disulfide"},
+    {"CaCl2",    "Calcium Chloride"},
+    {"NaNO3",    "Sodium Nitrate"},
+    {"NH4NO3",   "Ammonium Nitrate"},
+    {"NH4Cl",    "Ammonium Chloride"},
+    {"Ca3(PO4)2","Tricalcium Phosphate"},
+};
+inline constexpr int MOLECULE_COMMON_NAMES_COUNT =
+    sizeof(MOLECULE_COMMON_NAMES) / sizeof(MOLECULE_COMMON_NAMES[0]);
+
+inline const char* lookup_molecule_common_name(const char* formula) {
+    for (int i = 0; i < MOLECULE_COMMON_NAMES_COUNT; ++i)
+        if (strcmp(formula, MOLECULE_COMMON_NAMES[i].formula) == 0)
+            return MOLECULE_COMMON_NAMES[i].name;
+    return nullptr;
+}
+
+// Helper: extract element name from a .ppel filename like "H-1.ppel" or "Fe-56.ppel"
+inline const char* element_name_from_ppel_filename(const char* filename) {
+    // Parse the symbol before the first '-'
+    char sym[4] = {};
+    int i = 0;
+    while (filename[i] && filename[i] != '-' && i < 3) {
+        sym[i] = filename[i];
+        i++;
+    }
+    sym[i] = '\0';
+    // Look up Z from symbol
+    for (int z = 1; z <= FULL_ELEMENT_COUNT; ++z) {
+        if (strcmp(ELEMENT_SYMBOLS[z], sym) == 0)
+            return ELEMENT_NAMES[z];
+    }
+    return nullptr;
+}
 
 // ── Particle name/color tables for all 67 types ─────────────────────────────
 

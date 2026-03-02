@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <chrono>
+#include <random>
 #ifdef HAS_OPENMP
 #include <omp.h>
 #endif
@@ -190,6 +191,13 @@ void PhysicsInterface::init_splash_particles() {
 void PhysicsInterface::draw_splash_screen() {
     ImGuiIO& io = ImGui::GetIO();
 
+    // Pick a random variant on first call
+    if (splash_variant_ < 0) {
+        std::mt19937 rng(static_cast<unsigned>(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+        splash_variant_ = std::uniform_int_distribution<int>(0, 3)(rng);
+    }
+
     // Check for dismiss: any mouse button or key (skip first 0.3s to avoid accidental dismiss)
     if (splash_time_ > 0.3f) {
         bool dismiss = ImGui::IsMouseClicked(ImGuiMouseButton_Left)
@@ -205,6 +213,24 @@ void PhysicsInterface::draw_splash_screen() {
         if (dismiss) { show_splash = false; return; }
     }
 
+    // Dispatch to the selected variant
+    if (splash_variant_ == 1) {
+        if (!splash_inited_ && !prefs.reduced_motion) { init_splash_blue_orb(); splash_inited_ = true; }
+        draw_splash_blue_orb();
+        return;
+    }
+    if (splash_variant_ == 2) {
+        if (!splash_inited_ && !prefs.reduced_motion) { init_splash_nebula(); splash_inited_ = true; }
+        draw_splash_nebula();
+        return;
+    }
+    if (splash_variant_ == 3) {
+        if (!splash_inited_ && !prefs.reduced_motion) { init_splash_collider(); splash_inited_ = true; }
+        draw_splash_collider();
+        return;
+    }
+
+    // Variant 0: Original atom splash
     // Init particles on first call (or re-init on About)
     // Skip splash animation in reduced-motion mode
     if (!splash_inited_ && !prefs.reduced_motion) { init_splash_particles(); splash_inited_ = true; }
@@ -398,6 +424,948 @@ void PhysicsInterface::draw_splash_screen() {
         ImVec2 hint_size = ImGui::CalcTextSize(hint);
         ImGui::SetCursorPos(ImVec2(W * 0.5f - hint_size.x * 0.5f, H - 30.0f * scale));
         ImGui::TextColored(ImVec4(0.45f, 0.48f, 0.58f, pulse), "%s", hint);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Blue Orb Splash (variant 1) ─────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::init_splash_blue_orb() {
+    ImGuiIO& io = ImGui::GetIO();
+    float W = io.DisplaySize.x, H = io.DisplaySize.y;
+    float scale = std::min(W / 616.0f, H / 353.0f);
+
+    splash_particles_.clear();
+    splash_trails_.clear();
+    splash_time_ = 0.0f;
+
+    std::mt19937 rng(77);
+    auto randf = [&]() { return std::uniform_real_distribution<float>(0.0f, 1.0f)(rng); };
+    auto randf_range = [&](float lo, float hi) { return std::uniform_real_distribution<float>(lo, hi)(rng); };
+
+    float cx = W * 0.50f, cy = H * 0.42f;
+
+    // Ring particles orbiting the central orb — 24 fast, tight orbit
+    for (int i = 0; i < 24; ++i) {
+        SplashParticle p{};
+        p.orbit = true;
+        p.orbit_r = (55.0f + randf() * 20.0f) * scale;
+        p.orbit_speed = 0.010f + randf() * 0.008f;
+        if (i % 2 == 0) p.orbit_speed = -p.orbit_speed; // counter-rotating
+        p.phase = (6.2831853f * i / 24.0f) + randf() * 0.3f;
+        p.cx = cx;
+        p.cy = cy;
+        p.tilt_x = 0.85f + randf() * 0.15f;
+        p.tilt_y = 0.35f + randf() * 0.30f;
+        p.r = (1.5f + randf() * 1.5f) * scale;
+        p.base_r = p.r;
+        p.pulse_phase = randf() * 6.2831853f;
+        p.type_idx = 0;
+        // Cyan/white shades
+        int bright = 180 + (int)(randf() * 75);
+        p.color = IM_COL32(bright / 2, bright, 255, 220);
+        p.glow_color = IM_COL32(0, 150, 255, 80);
+        p.x = p.cx + cosf(p.phase) * p.orbit_r * p.tilt_x;
+        p.y = p.cy + sinf(p.phase) * p.orbit_r * p.tilt_y;
+        splash_particles_.push_back(p);
+    }
+
+    // Second ring — wider, slower, more tilted
+    for (int i = 0; i < 18; ++i) {
+        SplashParticle p{};
+        p.orbit = true;
+        p.orbit_r = (90.0f + randf() * 30.0f) * scale;
+        p.orbit_speed = 0.005f + randf() * 0.005f;
+        if (i % 3 == 0) p.orbit_speed = -p.orbit_speed;
+        p.phase = (6.2831853f * i / 18.0f) + randf() * 0.5f;
+        p.cx = cx;
+        p.cy = cy;
+        p.tilt_x = 0.55f + randf() * 0.20f;
+        p.tilt_y = 0.80f + randf() * 0.20f;
+        p.r = (1.0f + randf() * 2.0f) * scale;
+        p.base_r = p.r;
+        p.pulse_phase = randf() * 6.2831853f;
+        p.type_idx = 1;
+        p.color = IM_COL32(100, 200, 255, 180);
+        p.glow_color = IM_COL32(50, 120, 255, 60);
+        p.x = p.cx + cosf(p.phase) * p.orbit_r * p.tilt_x;
+        p.y = p.cy + sinf(p.phase) * p.orbit_r * p.tilt_y;
+        splash_particles_.push_back(p);
+    }
+
+    // Distant ambient particles — slow drift, various blues and purples
+    ImU32 ambient_colors[] = {
+        IM_COL32(80, 160, 255, 200),   // blue
+        IM_COL32(120, 100, 255, 180),  // indigo
+        IM_COL32(60, 200, 255, 190),   // cyan
+        IM_COL32(150, 80, 255, 170),   // purple
+        IM_COL32(40, 220, 200, 160),   // teal
+        IM_COL32(200, 200, 255, 140),  // pale white-blue
+    };
+    ImU32 ambient_glows[] = {
+        IM_COL32(40, 80, 255, 50),
+        IM_COL32(80, 50, 200, 40),
+        IM_COL32(30, 120, 200, 50),
+        IM_COL32(100, 40, 200, 40),
+        IM_COL32(20, 150, 150, 40),
+        IM_COL32(120, 120, 200, 30),
+    };
+    for (int i = 0; i < 120; ++i) {
+        SplashParticle p{};
+        p.orbit = false;
+        p.x = randf() * W;
+        p.y = randf() * H;
+        p.vx = randf_range(-0.3f, 0.3f) * 0.5f;
+        p.vy = randf_range(-0.3f, 0.3f) * 0.5f;
+        p.r = (1.0f + randf() * 2.5f) * scale;
+        p.base_r = p.r;
+        p.pulse_phase = randf() * 6.2831853f;
+        int ci = i % 6;
+        p.type_idx = ci + 2;
+        p.color = ambient_colors[ci];
+        p.glow_color = ambient_glows[ci];
+        p.phase = randf() * 6.2831853f;
+        splash_particles_.push_back(p);
+    }
+
+    splash_trails_.resize(splash_particles_.size());
+}
+
+void PhysicsInterface::draw_splash_blue_orb() {
+    ImGuiIO& io = ImGui::GetIO();
+    float dt = io.DeltaTime;
+    splash_time_ += dt;
+
+    ImDrawList* bg = ImGui::GetBackgroundDrawList();
+    float W = io.DisplaySize.x, H = io.DisplaySize.y;
+    float scale = std::min(W / 616.0f, H / 353.0f);
+    float cx = W * 0.50f, cy = H * 0.42f;
+
+    // 1. Deep dark background
+    bg->AddRectFilled(ImVec2(0, 0), ImVec2(W, H), IM_COL32(1, 4, 12, 255));
+
+    // 2. Distant nebula hints — subtle blue/purple patches
+    draw_radial_glow(bg, W * 0.2f, H * 0.7f, 280.0f * scale,
+                     IM_COL32(15, 10, 40, 40), IM_COL32(15, 10, 40, 0));
+    draw_radial_glow(bg, W * 0.75f, H * 0.25f, 200.0f * scale,
+                     IM_COL32(8, 15, 50, 35), IM_COL32(8, 15, 50, 0));
+
+    // 3. The giant blue orb — layered radial glows
+    float pulse = sinf(splash_time_ * 1.2f);
+    float breathe = sinf(splash_time_ * 0.6f);
+    float orb_r = (60.0f + breathe * 4.0f) * scale;
+
+    // Outermost corona — huge, faint
+    draw_radial_glow(bg, cx, cy, orb_r * 6.0f,
+                     IM_COL32(0, 60, 180, (int)(12 + pulse * 4)), IM_COL32(0, 20, 80, 0));
+
+    // Outer halo — medium, blue
+    draw_radial_glow(bg, cx, cy, orb_r * 3.5f,
+                     IM_COL32(0, 100, 255, (int)(30 + pulse * 8)), IM_COL32(0, 40, 140, 0));
+
+    // Mid glow — brighter blue-cyan
+    draw_radial_glow(bg, cx, cy, orb_r * 2.2f,
+                     IM_COL32(20, 140, 255, (int)(50 + pulse * 10)), IM_COL32(10, 60, 180, 0));
+
+    // Inner glow — bright cyan
+    draw_radial_glow(bg, cx, cy, orb_r * 1.4f,
+                     IM_COL32(60, 180, 255, (int)(80 + pulse * 15)), IM_COL32(20, 100, 220, 0));
+
+    // Core orb — solid, bright
+    bg->AddCircleFilled(ImVec2(cx, cy), orb_r,
+                        IM_COL32(30, 120, 220, 200), 96);
+    // Core inner bright spot
+    bg->AddCircleFilled(ImVec2(cx, cy), orb_r * 0.7f,
+                        IM_COL32(80, 170, 255, (int)(180 + pulse * 30)), 96);
+    // Hot center
+    bg->AddCircleFilled(ImVec2(cx, cy), orb_r * 0.35f,
+                        IM_COL32(160, 220, 255, (int)(200 + pulse * 40)), 64);
+    // Specular highlight (slightly off-center top-left)
+    bg->AddCircleFilled(ImVec2(cx - orb_r * 0.25f, cy - orb_r * 0.25f),
+                        orb_r * 0.18f, IM_COL32(220, 240, 255, 120), 32);
+
+    // 4. Update particles
+    for (auto& p : splash_particles_) {
+        p.r = p.base_r * (1.0f + 0.2f * sinf(splash_time_ * 2.0f + p.pulse_phase));
+        if (p.orbit) {
+            p.phase += p.orbit_speed * dt * 60.0f;
+            p.x = p.cx + cosf(p.phase) * p.orbit_r * p.tilt_x;
+            p.y = p.cy + sinf(p.phase) * p.orbit_r * p.tilt_y;
+        } else {
+            p.x += p.vx * dt * 60.0f;
+            p.y += p.vy * dt * 60.0f;
+            if (p.x < -10) p.x = W + 10;
+            if (p.x > W + 10) p.x = -10;
+            if (p.y < -10) p.y = H + 10;
+            if (p.y > H + 10) p.y = -10;
+        }
+    }
+
+    // 5. Update trails
+    for (size_t i = 0; i < splash_particles_.size(); ++i) {
+        splash_trails_[i].push_back(ImVec2(splash_particles_[i].x, splash_particles_[i].y));
+        if (splash_trails_[i].size() > 12) splash_trails_[i].erase(splash_trails_[i].begin());
+    }
+
+    // 6. Draw trails
+    for (size_t i = 0; i < splash_particles_.size(); ++i) {
+        auto& trail = splash_trails_[i];
+        for (size_t j = 1; j < trail.size(); ++j) {
+            float t = (float)j / (float)trail.size();
+            float alpha = t * 0.35f;
+            float width = splash_particles_[i].r * (0.2f + 0.5f * t);
+            ImU32 col = (splash_particles_[i].color & ~IM_COL32_A_MASK) |
+                        ((uint32_t)(alpha * 255) << IM_COL32_A_SHIFT);
+            bg->AddLine(trail[j-1], trail[j], col, width);
+        }
+    }
+
+    // 7. Force lines between nearby orbital particles
+    float force_dist = 70.0f * scale;
+    for (size_t i = 0; i < splash_particles_.size(); ++i) {
+        if (!splash_particles_[i].orbit) continue;
+        for (size_t j = i + 1; j < splash_particles_.size(); ++j) {
+            if (!splash_particles_[j].orbit) continue;
+            float dx = splash_particles_[j].x - splash_particles_[i].x;
+            float dy = splash_particles_[j].y - splash_particles_[i].y;
+            float dist2 = dx * dx + dy * dy;
+            if (dist2 < force_dist * force_dist && dist2 > 25.0f) {
+                float dist = sqrtf(dist2);
+                float alpha = (1.0f - dist / force_dist) * 0.12f;
+                ImVec2 a(splash_particles_[i].x, splash_particles_[i].y);
+                ImVec2 b(splash_particles_[j].x, splash_particles_[j].y);
+                bg->AddLine(a, b, IM_COL32(0, 140, 255, (int)(alpha * 200)), 3.0f);
+                bg->AddLine(a, b, IM_COL32(100, 200, 255, (int)(alpha * 255)), 1.0f);
+            }
+        }
+    }
+
+    // 8. Draw particles (glow + core)
+    for (auto& p : splash_particles_) {
+        draw_radial_glow(bg, p.x, p.y, p.r * 3.5f, p.glow_color, IM_COL32(0, 0, 0, 0));
+        bg->AddCircleFilled(ImVec2(p.x, p.y), p.r, p.color);
+        bg->AddCircleFilled(ImVec2(p.x - p.r * 0.15f, p.y - p.r * 0.15f),
+                            p.r * 0.45f, IM_COL32(220, 240, 255, 70));
+    }
+
+    // 9. Vignette
+    draw_vignette(bg, W, H);
+
+    // 10. Scanlines
+    float scanline_gap = 4.0f * scale;
+    if (scanline_gap < 2.0f) scanline_gap = 2.0f;
+    for (float y = 0; y < H; y += scanline_gap)
+        bg->AddRectFilled(ImVec2(0, y + scanline_gap * 0.5f), ImVec2(W, y + scanline_gap),
+                          IM_COL32(0, 0, 0, 6));
+
+    // 11. Text overlay
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
+        | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav
+        | ImGuiWindowFlags_NoBackground;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+
+    if (ImGui::Begin("##SplashOrb", nullptr, flags)) {
+        float title_y = H - 80.0f * scale;
+        float left_margin = 30.0f * scale;
+
+        // Accent line
+        bg->AddLine(ImVec2(left_margin, title_y - 8.0f * scale),
+                    ImVec2(left_margin + 180.0f * scale, title_y - 8.0f * scale),
+                    IM_COL32(0, 160, 255, 130), 1.0f);
+
+        // Title — use pre-rasterized font if available
+        bool has_title_font = (title_font != nullptr);
+        if (has_title_font) {
+            ImGui::PushFont(title_font);
+        } else {
+            float title_font_scale = 2.2f * scale;
+            if (title_font_scale < 1.5f) title_font_scale = 1.5f;
+            ImGui::GetFont()->Scale = title_font_scale;
+            ImGui::PushFont(ImGui::GetFont());
+        }
+
+        // Glow shadow layers
+        for (int g = 3; g >= 1; --g) {
+            float ga = 0.10f / (float)g;
+            float off = (float)g * 1.5f;
+            ImGui::SetCursorPos(ImVec2(left_margin + off, title_y + off));
+            ImGui::TextColored(ImVec4(0.0f, 0.3f, 0.9f, ga), "Particle ");
+            ImGui::SameLine(0, 0);
+            ImGui::TextColored(ImVec4(0.0f, 0.3f, 0.9f, ga), "Playground");
+        }
+
+        // "Particle " in white
+        ImGui::SetCursorPos(ImVec2(left_margin, title_y));
+        ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1.0f), "Particle ");
+        ImGui::SameLine(0, 0);
+        // "Playground" in bright blue
+        ImGui::TextColored(ImVec4(0.2f, 0.7f, 1.0f, 1.0f), "Playground");
+
+        if (!has_title_font) {
+            ImGui::GetFont()->Scale = 1.0f;
+        }
+        ImGui::PopFont();
+
+#ifndef APP_VERSION
+#define APP_VERSION "0.1.0"
+#endif
+        // Subtitle
+        ImGui::SetCursorPos(ImVec2(left_margin, title_y + 40.0f * scale));
+        ImGui::TextColored(ImVec4(0.3f, 0.65f, 1.0f, 0.7f),
+            "Standard Model  |  Fusion  |  Fission  |  67 Particle Types  |  v" APP_VERSION);
+
+        // Top-right badge
+        {
+            const char* badge = "QUANTUM PHYSICS SANDBOX";
+            ImVec2 badge_sz = ImGui::CalcTextSize(badge);
+            float badge_x = W - badge_sz.x - 18.0f * scale;
+            float badge_y = 14.0f * scale;
+            bg->AddRectFilled(ImVec2(badge_x - 10.0f * scale, badge_y - 3.0f * scale),
+                              ImVec2(badge_x + badge_sz.x + 10.0f * scale, badge_y + badge_sz.y + 3.0f * scale),
+                              IM_COL32(20, 60, 180, 20));
+            bg->AddRect(ImVec2(badge_x - 10.0f * scale, badge_y - 3.0f * scale),
+                        ImVec2(badge_x + badge_sz.x + 10.0f * scale, badge_y + badge_sz.y + 3.0f * scale),
+                        IM_COL32(60, 140, 255, 60), 2.0f);
+            ImGui::SetCursorPos(ImVec2(badge_x, badge_y));
+            ImGui::TextColored(ImVec4(0.3f, 0.55f, 1.0f, 0.9f), "%s", badge);
+        }
+
+        // Bottom-center dismiss hint
+        float hint_pulse = 0.3f + 0.2f * sinf(splash_time_ * 3.0f);
+        const char* hint = "Click or press any key to continue";
+        ImVec2 hint_size = ImGui::CalcTextSize(hint);
+        ImGui::SetCursorPos(ImVec2(W * 0.5f - hint_size.x * 0.5f, H - 30.0f * scale));
+        ImGui::TextColored(ImVec4(0.35f, 0.50f, 0.70f, hint_pulse), "%s", hint);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Nebula Splash (variant 2) ───────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::init_splash_nebula() {
+    ImGuiIO& io = ImGui::GetIO();
+    float W = io.DisplaySize.x, H = io.DisplaySize.y;
+    float scale = std::min(W / 616.0f, H / 353.0f);
+
+    splash_particles_.clear();
+    splash_trails_.clear();
+    splash_time_ = 0.0f;
+
+    std::mt19937 rng(314);
+    auto randf = [&]() { return std::uniform_real_distribution<float>(0.0f, 1.0f)(rng); };
+    auto randf_range = [&](float lo, float hi) { return std::uniform_real_distribution<float>(lo, hi)(rng); };
+
+    float cx = W * 0.45f, cy = H * 0.45f;
+
+    // Star field — many tiny white/blue dots slowly drifting
+    ImU32 star_colors[] = {
+        IM_COL32(255, 255, 255, 200),
+        IM_COL32(200, 220, 255, 180),
+        IM_COL32(180, 200, 255, 160),
+        IM_COL32(255, 240, 200, 170),
+        IM_COL32(255, 200, 180, 150),
+    };
+    for (int i = 0; i < 80; ++i) {
+        SplashParticle p{};
+        p.orbit = false;
+        p.x = randf() * W;
+        p.y = randf() * H;
+        p.vx = randf_range(-0.05f, 0.05f);
+        p.vy = randf_range(-0.05f, 0.05f);
+        p.r = (0.5f + randf() * 1.5f) * scale;
+        p.base_r = p.r;
+        p.pulse_phase = randf() * 6.2831853f;
+        p.type_idx = 0;
+        p.color = star_colors[i % 5];
+        p.glow_color = IM_COL32(100, 150, 255, 30);
+        p.phase = randf() * 6.2831853f;
+        splash_particles_.push_back(p);
+    }
+
+    // Nebula cloud particles — larger, colorful, slow spiral outward
+    ImU32 nebula_colors[] = {
+        IM_COL32(180, 60, 120, 120),   // magenta
+        IM_COL32(80, 40, 160, 100),    // deep purple
+        IM_COL32(40, 100, 180, 110),   // blue
+        IM_COL32(60, 160, 140, 90),    // teal
+        IM_COL32(200, 80, 60, 100),    // red-orange
+        IM_COL32(140, 60, 180, 95),    // violet
+        IM_COL32(60, 80, 200, 105),    // royal blue
+        IM_COL32(180, 120, 60, 85),    // gold dust
+    };
+    ImU32 nebula_glows[] = {
+        IM_COL32(180, 60, 120, 40),
+        IM_COL32(80, 40, 160, 35),
+        IM_COL32(40, 100, 180, 40),
+        IM_COL32(60, 160, 140, 30),
+        IM_COL32(200, 80, 60, 35),
+        IM_COL32(140, 60, 180, 30),
+        IM_COL32(60, 80, 200, 35),
+        IM_COL32(180, 120, 60, 25),
+    };
+    for (int i = 0; i < 60; ++i) {
+        SplashParticle p{};
+        p.orbit = true;
+        float angle = randf() * 6.2831853f;
+        float arm_offset = static_cast<float>(i % 3) * 2.0944f; // 3 spiral arms
+        p.orbit_r = (30.0f + randf() * 150.0f) * scale;
+        p.orbit_speed = 0.002f + (200.0f * scale / (p.orbit_r + 50.0f)) * 0.003f; // faster near center
+        if (i % 2 == 0) p.orbit_speed = -p.orbit_speed;
+        p.phase = angle + arm_offset;
+        p.cx = cx;
+        p.cy = cy;
+        p.tilt_x = 0.90f + randf() * 0.10f;
+        p.tilt_y = 0.50f + randf() * 0.25f;
+        p.r = (3.0f + randf() * 6.0f) * scale;
+        p.base_r = p.r;
+        p.pulse_phase = randf() * 6.2831853f;
+        int ci = i % 8;
+        p.type_idx = ci + 1;
+        p.color = nebula_colors[ci];
+        p.glow_color = nebula_glows[ci];
+        p.x = p.cx + cosf(p.phase) * p.orbit_r * p.tilt_x;
+        p.y = p.cy + sinf(p.phase) * p.orbit_r * p.tilt_y;
+        splash_particles_.push_back(p);
+    }
+
+    // Bright core cluster — a few hot bright particles near center
+    for (int i = 0; i < 12; ++i) {
+        SplashParticle p{};
+        p.orbit = true;
+        p.orbit_r = (8.0f + randf() * 25.0f) * scale;
+        p.orbit_speed = 0.008f + randf() * 0.008f;
+        p.phase = randf() * 6.2831853f;
+        p.cx = cx;
+        p.cy = cy;
+        p.tilt_x = 0.7f + randf() * 0.3f;
+        p.tilt_y = 0.7f + randf() * 0.3f;
+        p.r = (2.0f + randf() * 2.5f) * scale;
+        p.base_r = p.r;
+        p.pulse_phase = randf() * 6.2831853f;
+        p.type_idx = 9;
+        p.color = IM_COL32(255, 230, 200, 230);
+        p.glow_color = IM_COL32(255, 180, 100, 80);
+        p.x = p.cx + cosf(p.phase) * p.orbit_r * p.tilt_x;
+        p.y = p.cy + sinf(p.phase) * p.orbit_r * p.tilt_y;
+        splash_particles_.push_back(p);
+    }
+
+    splash_trails_.resize(splash_particles_.size());
+}
+
+void PhysicsInterface::draw_splash_nebula() {
+    ImGuiIO& io = ImGui::GetIO();
+    float dt = io.DeltaTime;
+    splash_time_ += dt;
+
+    ImDrawList* bg = ImGui::GetBackgroundDrawList();
+    float W = io.DisplaySize.x, H = io.DisplaySize.y;
+    float scale = std::min(W / 616.0f, H / 353.0f);
+    float cx = W * 0.45f, cy = H * 0.45f;
+
+    // 1. Very dark background
+    bg->AddRectFilled(ImVec2(0, 0), ImVec2(W, H), IM_COL32(2, 3, 8, 255));
+
+    // 2. Multi-layer nebula glow clouds — rotating hue patches
+    float t = splash_time_;
+    // Warm magenta cloud
+    draw_radial_glow(bg, cx + sinf(t * 0.3f) * 40.0f * scale, cy + cosf(t * 0.2f) * 30.0f * scale,
+                     280.0f * scale,
+                     IM_COL32(60, 15, 40, 45), IM_COL32(60, 15, 40, 0));
+    // Cool blue cloud
+    draw_radial_glow(bg, cx - cosf(t * 0.25f) * 50.0f * scale, cy - sinf(t * 0.35f) * 35.0f * scale,
+                     240.0f * scale,
+                     IM_COL32(15, 25, 70, 40), IM_COL32(15, 25, 70, 0));
+    // Teal accent
+    draw_radial_glow(bg, cx + 100.0f * scale, cy + 60.0f * scale, 180.0f * scale,
+                     IM_COL32(10, 50, 50, 30), IM_COL32(10, 50, 50, 0));
+    // Purple haze
+    draw_radial_glow(bg, cx - 80.0f * scale, cy - 40.0f * scale, 200.0f * scale,
+                     IM_COL32(40, 10, 60, 35), IM_COL32(40, 10, 60, 0));
+
+    // 3. Central galactic core glow
+    float pulse = sinf(t * 0.8f);
+    draw_radial_glow(bg, cx, cy, (100.0f + pulse * 8.0f) * scale,
+                     IM_COL32(255, 200, 130, (int)(35 + pulse * 10)), IM_COL32(200, 120, 60, 0));
+    draw_radial_glow(bg, cx, cy, (50.0f + pulse * 4.0f) * scale,
+                     IM_COL32(255, 240, 200, (int)(50 + pulse * 15)), IM_COL32(255, 180, 100, 0));
+
+    // 4. Update particles
+    for (auto& p : splash_particles_) {
+        p.r = p.base_r * (1.0f + 0.25f * sinf(t * 1.5f + p.pulse_phase));
+        if (p.orbit) {
+            p.phase += p.orbit_speed * dt * 60.0f;
+            p.x = p.cx + cosf(p.phase) * p.orbit_r * p.tilt_x;
+            p.y = p.cy + sinf(p.phase) * p.orbit_r * p.tilt_y;
+        } else {
+            // Stars: very subtle twinkle drift
+            p.x += p.vx * dt * 60.0f;
+            p.y += p.vy * dt * 60.0f;
+            if (p.x < -10) p.x = W + 10;
+            if (p.x > W + 10) p.x = -10;
+            if (p.y < -10) p.y = H + 10;
+            if (p.y > H + 10) p.y = -10;
+        }
+    }
+
+    // 5. Update trails (short for nebula — ghostly wisps)
+    for (size_t i = 0; i < splash_particles_.size(); ++i) {
+        splash_trails_[i].push_back(ImVec2(splash_particles_[i].x, splash_particles_[i].y));
+        if (splash_trails_[i].size() > 10) splash_trails_[i].erase(splash_trails_[i].begin());
+    }
+
+    // 6. Draw trails (nebula particles only — not stars)
+    for (size_t i = 80; i < splash_particles_.size(); ++i) {
+        auto& trail = splash_trails_[i];
+        for (size_t j = 1; j < trail.size(); ++j) {
+            float tf = (float)j / (float)trail.size();
+            float alpha = tf * 0.3f;
+            float width = splash_particles_[i].r * (0.3f + 0.4f * tf);
+            ImU32 col = (splash_particles_[i].color & ~IM_COL32_A_MASK) |
+                        ((uint32_t)(alpha * 255) << IM_COL32_A_SHIFT);
+            bg->AddLine(trail[j-1], trail[j], col, width);
+        }
+    }
+
+    // 7. Draw particles — stars first (small, sharp), then nebula (big, glowy)
+    for (size_t i = 0; i < splash_particles_.size(); ++i) {
+        auto& p = splash_particles_[i];
+        if (i < 80) {
+            // Stars — tiny, sharp, twinkle
+            float twinkle = 0.6f + 0.4f * sinf(t * 4.0f + p.pulse_phase);
+            ImU32 col = (p.color & ~IM_COL32_A_MASK) |
+                        ((uint32_t)(twinkle * ((p.color >> IM_COL32_A_SHIFT) & 0xFF)) << IM_COL32_A_SHIFT);
+            bg->AddCircleFilled(ImVec2(p.x, p.y), p.r, col);
+        } else {
+            // Nebula — big soft glow
+            draw_radial_glow(bg, p.x, p.y, p.r * 5.0f, p.glow_color, IM_COL32(0, 0, 0, 0));
+            bg->AddCircleFilled(ImVec2(p.x, p.y), p.r, p.color);
+        }
+    }
+
+    // 8. Vignette
+    draw_vignette(bg, W, H);
+
+    // 9. Scanlines (very subtle)
+    float scanline_gap = 4.0f * scale;
+    if (scanline_gap < 2.0f) scanline_gap = 2.0f;
+    for (float y = 0; y < H; y += scanline_gap)
+        bg->AddRectFilled(ImVec2(0, y + scanline_gap * 0.5f), ImVec2(W, y + scanline_gap),
+                          IM_COL32(0, 0, 0, 5));
+
+    // 10. Text overlay
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
+        | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav
+        | ImGuiWindowFlags_NoBackground;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+
+    if (ImGui::Begin("##SplashNebula", nullptr, flags)) {
+        float title_y = H - 80.0f * scale;
+        float left_margin = 30.0f * scale;
+
+        // Accent line — warm gradient
+        bg->AddLine(ImVec2(left_margin, title_y - 8.0f * scale),
+                    ImVec2(left_margin + 200.0f * scale, title_y - 8.0f * scale),
+                    IM_COL32(200, 100, 180, 120), 1.0f);
+
+        bool has_title_font = (title_font != nullptr);
+        if (has_title_font) {
+            ImGui::PushFont(title_font);
+        } else {
+            float title_font_scale = 2.2f * scale;
+            if (title_font_scale < 1.5f) title_font_scale = 1.5f;
+            ImGui::GetFont()->Scale = title_font_scale;
+            ImGui::PushFont(ImGui::GetFont());
+        }
+
+        // Glow shadow layers
+        for (int g = 3; g >= 1; --g) {
+            float ga = 0.10f / (float)g;
+            float off = (float)g * 1.5f;
+            ImGui::SetCursorPos(ImVec2(left_margin + off, title_y + off));
+            ImGui::TextColored(ImVec4(0.5f, 0.15f, 0.4f, ga), "Particle ");
+            ImGui::SameLine(0, 0);
+            ImGui::TextColored(ImVec4(0.5f, 0.15f, 0.4f, ga), "Playground");
+        }
+
+        // "Particle " in white
+        ImGui::SetCursorPos(ImVec2(left_margin, title_y));
+        ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1.0f), "Particle ");
+        ImGui::SameLine(0, 0);
+        // "Playground" in warm rose/magenta
+        ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.7f, 1.0f), "Playground");
+
+        if (!has_title_font) {
+            ImGui::GetFont()->Scale = 1.0f;
+        }
+        ImGui::PopFont();
+
+#ifndef APP_VERSION
+#define APP_VERSION "0.1.0"
+#endif
+        ImGui::SetCursorPos(ImVec2(left_margin, title_y + 40.0f * scale));
+        ImGui::TextColored(ImVec4(0.7f, 0.4f, 0.6f, 0.7f),
+            "Standard Model  |  Fusion  |  Fission  |  67 Particle Types  |  v" APP_VERSION);
+
+        // Top-right badge
+        {
+            const char* badge = "QUANTUM PHYSICS SANDBOX";
+            ImVec2 badge_sz = ImGui::CalcTextSize(badge);
+            float badge_x = W - badge_sz.x - 18.0f * scale;
+            float badge_y = 14.0f * scale;
+            bg->AddRectFilled(ImVec2(badge_x - 10.0f * scale, badge_y - 3.0f * scale),
+                              ImVec2(badge_x + badge_sz.x + 10.0f * scale, badge_y + badge_sz.y + 3.0f * scale),
+                              IM_COL32(120, 40, 80, 20));
+            bg->AddRect(ImVec2(badge_x - 10.0f * scale, badge_y - 3.0f * scale),
+                        ImVec2(badge_x + badge_sz.x + 10.0f * scale, badge_y + badge_sz.y + 3.0f * scale),
+                        IM_COL32(180, 80, 140, 60), 2.0f);
+            ImGui::SetCursorPos(ImVec2(badge_x, badge_y));
+            ImGui::TextColored(ImVec4(0.8f, 0.4f, 0.6f, 0.9f), "%s", badge);
+        }
+
+        float hint_pulse = 0.3f + 0.2f * sinf(splash_time_ * 3.0f);
+        const char* hint = "Click or press any key to continue";
+        ImVec2 hint_size = ImGui::CalcTextSize(hint);
+        ImGui::SetCursorPos(ImVec2(W * 0.5f - hint_size.x * 0.5f, H - 30.0f * scale));
+        ImGui::TextColored(ImVec4(0.50f, 0.40f, 0.50f, hint_pulse), "%s", hint);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Collider Splash (variant 3) ─────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::init_splash_collider() {
+    ImGuiIO& io = ImGui::GetIO();
+    float W = io.DisplaySize.x, H = io.DisplaySize.y;
+    float scale = std::min(W / 616.0f, H / 353.0f);
+
+    splash_particles_.clear();
+    splash_trails_.clear();
+    splash_time_ = 0.0f;
+
+    std::mt19937 rng(256);
+    auto randf = [&]() { return std::uniform_real_distribution<float>(0.0f, 1.0f)(rng); };
+    auto randf_range = [&](float lo, float hi) { return std::uniform_real_distribution<float>(lo, hi)(rng); };
+
+    float cx = W * 0.50f, cy = H * 0.42f;
+
+    // Two beam streams converging on center — left beam and right beam
+    // Left beam particles (moving right)
+    for (int i = 0; i < 20; ++i) {
+        SplashParticle p{};
+        p.orbit = false;
+        p.x = randf_range(-50.0f, W * 0.35f);
+        p.y = cy + randf_range(-8.0f, 8.0f) * scale;
+        p.vx = 1.5f + randf() * 1.5f;
+        p.vy = randf_range(-0.1f, 0.1f);
+        p.r = (2.0f + randf() * 2.0f) * scale;
+        p.base_r = p.r;
+        p.pulse_phase = randf() * 6.2831853f;
+        p.type_idx = 0; // beam left
+        p.color = IM_COL32(255, 100, 50, 220);
+        p.glow_color = IM_COL32(255, 60, 20, 60);
+        p.phase = randf() * 6.2831853f;
+        splash_particles_.push_back(p);
+    }
+
+    // Right beam particles (moving left)
+    for (int i = 0; i < 20; ++i) {
+        SplashParticle p{};
+        p.orbit = false;
+        p.x = randf_range(W * 0.65f, W + 50.0f);
+        p.y = cy + randf_range(-8.0f, 8.0f) * scale;
+        p.vx = -(1.5f + randf() * 1.5f);
+        p.vy = randf_range(-0.1f, 0.1f);
+        p.r = (2.0f + randf() * 2.0f) * scale;
+        p.base_r = p.r;
+        p.pulse_phase = randf() * 6.2831853f;
+        p.type_idx = 1; // beam right
+        p.color = IM_COL32(50, 150, 255, 220);
+        p.glow_color = IM_COL32(20, 100, 255, 60);
+        p.phase = randf() * 6.2831853f;
+        splash_particles_.push_back(p);
+    }
+
+    // Collision debris — particles exploding outward from center
+    ImU32 debris_colors[] = {
+        IM_COL32(255, 220, 80, 200),   // yellow
+        IM_COL32(80, 255, 160, 190),   // green
+        IM_COL32(255, 80, 200, 180),   // pink
+        IM_COL32(100, 200, 255, 190),  // light blue
+        IM_COL32(255, 160, 60, 185),   // orange
+        IM_COL32(200, 100, 255, 175),  // purple
+        IM_COL32(255, 255, 255, 200),  // white
+        IM_COL32(80, 255, 255, 185),   // cyan
+    };
+    ImU32 debris_glows[] = {
+        IM_COL32(255, 180, 40, 50),
+        IM_COL32(40, 200, 120, 45),
+        IM_COL32(200, 40, 150, 40),
+        IM_COL32(60, 150, 220, 45),
+        IM_COL32(220, 120, 30, 40),
+        IM_COL32(150, 60, 220, 38),
+        IM_COL32(200, 200, 200, 50),
+        IM_COL32(40, 220, 220, 42),
+    };
+    for (int i = 0; i < 80; ++i) {
+        SplashParticle p{};
+        p.orbit = false;
+        float angle = randf() * 6.2831853f;
+        float speed = 0.5f + randf() * 2.5f;
+        // Spawn from center with initial radial offset
+        float off = randf() * 30.0f * scale;
+        p.x = cx + cosf(angle) * off;
+        p.y = cy + sinf(angle) * off;
+        p.vx = cosf(angle) * speed;
+        p.vy = sinf(angle) * speed;
+        p.r = (1.0f + randf() * 3.0f) * scale;
+        p.base_r = p.r;
+        p.pulse_phase = randf() * 6.2831853f;
+        int ci = i % 8;
+        p.type_idx = ci + 2;
+        p.color = debris_colors[ci];
+        p.glow_color = debris_glows[ci];
+        p.phase = randf() * 6.2831853f;
+        splash_particles_.push_back(p);
+    }
+
+    // Detector ring particles — orbiting at fixed radius like a detector barrel
+    for (int i = 0; i < 32; ++i) {
+        SplashParticle p{};
+        p.orbit = true;
+        p.orbit_r = (140.0f + randf() * 15.0f) * scale;
+        p.orbit_speed = 0.003f + randf() * 0.002f;
+        if (i % 2 == 0) p.orbit_speed = -p.orbit_speed;
+        p.phase = (6.2831853f * i / 32.0f);
+        p.cx = cx;
+        p.cy = cy;
+        p.tilt_x = 1.0f;
+        p.tilt_y = 0.35f + randf() * 0.10f;
+        p.r = (1.5f + randf() * 1.0f) * scale;
+        p.base_r = p.r;
+        p.pulse_phase = randf() * 6.2831853f;
+        p.type_idx = 10;
+        p.color = IM_COL32(60, 80, 100, 140);
+        p.glow_color = IM_COL32(30, 50, 80, 30);
+        p.x = p.cx + cosf(p.phase) * p.orbit_r * p.tilt_x;
+        p.y = p.cy + sinf(p.phase) * p.orbit_r * p.tilt_y;
+        splash_particles_.push_back(p);
+    }
+
+    splash_trails_.resize(splash_particles_.size());
+}
+
+void PhysicsInterface::draw_splash_collider() {
+    ImGuiIO& io = ImGui::GetIO();
+    float dt = io.DeltaTime;
+    splash_time_ += dt;
+
+    ImDrawList* bg = ImGui::GetBackgroundDrawList();
+    float W = io.DisplaySize.x, H = io.DisplaySize.y;
+    float scale = std::min(W / 616.0f, H / 353.0f);
+    float cx = W * 0.50f, cy = H * 0.42f;
+    float t = splash_time_;
+
+    // 1. Dark background
+    bg->AddRectFilled(ImVec2(0, 0), ImVec2(W, H), IM_COL32(3, 5, 10, 255));
+
+    // 2. Detector ring — faint structural circle
+    float det_r = 145.0f * scale;
+    bg->AddCircle(ImVec2(cx, cy), det_r, IM_COL32(30, 45, 60, 60), 96, 1.5f);
+    bg->AddCircle(ImVec2(cx, cy), det_r + 5.0f * scale, IM_COL32(20, 30, 45, 30), 96, 1.0f);
+
+    // 3. Beam line — horizontal glow
+    float beam_alpha = 0.4f + 0.15f * sinf(t * 3.0f);
+    bg->AddRectFilled(ImVec2(0, cy - 3.0f * scale), ImVec2(W, cy + 3.0f * scale),
+                      IM_COL32(80, 100, 140, (int)(beam_alpha * 25)));
+    bg->AddLine(ImVec2(0, cy), ImVec2(cx - 20.0f * scale, cy),
+                IM_COL32(255, 120, 60, (int)(beam_alpha * 100)), 2.0f);
+    bg->AddLine(ImVec2(cx + 20.0f * scale, cy), ImVec2(W, cy),
+                IM_COL32(60, 160, 255, (int)(beam_alpha * 100)), 2.0f);
+
+    // 4. Collision flash at center — pulsing
+    float flash = 0.5f + 0.5f * sinf(t * 2.0f);
+    draw_radial_glow(bg, cx, cy, (40.0f + flash * 15.0f) * scale,
+                     IM_COL32(255, 230, 180, (int)(40 + flash * 25)),
+                     IM_COL32(255, 150, 80, 0));
+    draw_radial_glow(bg, cx, cy, (20.0f + flash * 5.0f) * scale,
+                     IM_COL32(255, 255, 240, (int)(60 + flash * 40)),
+                     IM_COL32(255, 200, 120, 0));
+
+    // 5. Update particles
+    for (size_t i = 0; i < splash_particles_.size(); ++i) {
+        auto& p = splash_particles_[i];
+        p.r = p.base_r * (1.0f + 0.15f * sinf(t * 2.5f + p.pulse_phase));
+
+        if (p.orbit) {
+            p.phase += p.orbit_speed * dt * 60.0f;
+            p.x = p.cx + cosf(p.phase) * p.orbit_r * p.tilt_x;
+            p.y = p.cy + sinf(p.phase) * p.orbit_r * p.tilt_y;
+        } else {
+            p.x += p.vx * dt * 60.0f;
+            p.y += p.vy * dt * 60.0f;
+
+            // Beam particles: wrap horizontally
+            if (p.type_idx == 0) { // left beam
+                if (p.x > cx - 15.0f * scale) {
+                    p.x = -20.0f;
+                    p.y = cy + (p.y - cy) * 0.3f; // re-center
+                }
+            } else if (p.type_idx == 1) { // right beam
+                if (p.x < cx + 15.0f * scale) {
+                    p.x = W + 20.0f;
+                    p.y = cy + (p.y - cy) * 0.3f;
+                }
+            } else {
+                // Debris: wrap at edges
+                if (p.x < -20) p.x = W + 20;
+                if (p.x > W + 20) p.x = -20;
+                if (p.y < -20) p.y = H + 20;
+                if (p.y > H + 20) p.y = -20;
+            }
+        }
+    }
+
+    // 6. Trails
+    for (size_t i = 0; i < splash_particles_.size(); ++i) {
+        splash_trails_[i].push_back(ImVec2(splash_particles_[i].x, splash_particles_[i].y));
+        if (splash_trails_[i].size() > 14) splash_trails_[i].erase(splash_trails_[i].begin());
+    }
+
+    // 7. Draw trails
+    for (size_t i = 0; i < splash_particles_.size(); ++i) {
+        auto& trail = splash_trails_[i];
+        auto& p = splash_particles_[i];
+        if (p.type_idx >= 10) continue; // skip detector ring trails
+        for (size_t j = 1; j < trail.size(); ++j) {
+            float tf = (float)j / (float)trail.size();
+            float alpha = tf * 0.4f;
+            float width = p.r * (0.2f + 0.5f * tf);
+            ImU32 col = (p.color & ~IM_COL32_A_MASK) |
+                        ((uint32_t)(alpha * 255) << IM_COL32_A_SHIFT);
+            bg->AddLine(trail[j-1], trail[j], col, width);
+        }
+    }
+
+    // 8. Draw particles
+    for (auto& p : splash_particles_) {
+        draw_radial_glow(bg, p.x, p.y, p.r * 3.5f, p.glow_color, IM_COL32(0, 0, 0, 0));
+        bg->AddCircleFilled(ImVec2(p.x, p.y), p.r, p.color);
+        bg->AddCircleFilled(ImVec2(p.x - p.r * 0.15f, p.y - p.r * 0.15f),
+                            p.r * 0.4f, IM_COL32(255, 255, 255, 60));
+    }
+
+    // 9. Vignette
+    draw_vignette(bg, W, H);
+
+    // 10. Scanlines
+    float scanline_gap = 4.0f * scale;
+    if (scanline_gap < 2.0f) scanline_gap = 2.0f;
+    for (float y = 0; y < H; y += scanline_gap)
+        bg->AddRectFilled(ImVec2(0, y + scanline_gap * 0.5f), ImVec2(W, y + scanline_gap),
+                          IM_COL32(0, 0, 0, 6));
+
+    // 11. Text overlay
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
+        | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav
+        | ImGuiWindowFlags_NoBackground;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+
+    if (ImGui::Begin("##SplashCollider", nullptr, flags)) {
+        float title_y = H - 80.0f * scale;
+        float left_margin = 30.0f * scale;
+
+        // Accent line — warm orange
+        bg->AddLine(ImVec2(left_margin, title_y - 8.0f * scale),
+                    ImVec2(left_margin + 180.0f * scale, title_y - 8.0f * scale),
+                    IM_COL32(255, 160, 60, 130), 1.0f);
+
+        bool has_title_font = (title_font != nullptr);
+        if (has_title_font) {
+            ImGui::PushFont(title_font);
+        } else {
+            float title_font_scale = 2.2f * scale;
+            if (title_font_scale < 1.5f) title_font_scale = 1.5f;
+            ImGui::GetFont()->Scale = title_font_scale;
+            ImGui::PushFont(ImGui::GetFont());
+        }
+
+        // Glow shadow
+        for (int g = 3; g >= 1; --g) {
+            float ga = 0.10f / (float)g;
+            float off = (float)g * 1.5f;
+            ImGui::SetCursorPos(ImVec2(left_margin + off, title_y + off));
+            ImGui::TextColored(ImVec4(0.8f, 0.4f, 0.1f, ga), "Particle ");
+            ImGui::SameLine(0, 0);
+            ImGui::TextColored(ImVec4(0.8f, 0.4f, 0.1f, ga), "Playground");
+        }
+
+        // Title
+        ImGui::SetCursorPos(ImVec2(left_margin, title_y));
+        ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1.0f), "Particle ");
+        ImGui::SameLine(0, 0);
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "Playground");
+
+        if (!has_title_font) {
+            ImGui::GetFont()->Scale = 1.0f;
+        }
+        ImGui::PopFont();
+
+#ifndef APP_VERSION
+#define APP_VERSION "0.1.0"
+#endif
+        ImGui::SetCursorPos(ImVec2(left_margin, title_y + 40.0f * scale));
+        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 0.7f),
+            "Standard Model  |  Fusion  |  Fission  |  67 Particle Types  |  v" APP_VERSION);
+
+        // Top-right badge
+        {
+            const char* badge = "QUANTUM PHYSICS SANDBOX";
+            ImVec2 badge_sz = ImGui::CalcTextSize(badge);
+            float badge_x = W - badge_sz.x - 18.0f * scale;
+            float badge_y = 14.0f * scale;
+            bg->AddRectFilled(ImVec2(badge_x - 10.0f * scale, badge_y - 3.0f * scale),
+                              ImVec2(badge_x + badge_sz.x + 10.0f * scale, badge_y + badge_sz.y + 3.0f * scale),
+                              IM_COL32(200, 100, 30, 15));
+            bg->AddRect(ImVec2(badge_x - 10.0f * scale, badge_y - 3.0f * scale),
+                        ImVec2(badge_x + badge_sz.x + 10.0f * scale, badge_y + badge_sz.y + 3.0f * scale),
+                        IM_COL32(255, 160, 60, 50), 2.0f);
+            ImGui::SetCursorPos(ImVec2(badge_x, badge_y));
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 0.9f), "%s", badge);
+        }
+
+        float hint_pulse = 0.3f + 0.2f * sinf(splash_time_ * 3.0f);
+        const char* hint = "Click or press any key to continue";
+        ImVec2 hint_size = ImGui::CalcTextSize(hint);
+        ImGui::SetCursorPos(ImVec2(W * 0.5f - hint_size.x * 0.5f, H - 30.0f * scale));
+        ImGui::TextColored(ImVec4(0.55f, 0.45f, 0.35f, hint_pulse), "%s", hint);
     }
     ImGui::End();
     ImGui::PopStyleVar(3);
@@ -1197,10 +2165,10 @@ void PhysicsInterface::draw_tutorial_overlay() {
     const auto& step = tutorial_ptr->current();
     const auto& tc = get_theme(std::clamp(prefs.theme, 0, total_theme_count() - 1));
 
-    float panel_w = 500.0f;
+    float panel_w = std::min(500.0f, io.DisplaySize.x - 20.0f);
     float panel_h = 160.0f;
-    float panel_x = (io.DisplaySize.x - panel_w) * 0.5f;
-    float panel_y = io.DisplaySize.y - panel_h - 80.0f;
+    float panel_x = std::max(10.0f, (io.DisplaySize.x - panel_w) * 0.5f);
+    float panel_y = std::max(10.0f, io.DisplaySize.y - panel_h - 80.0f);
 
     ImGui::SetNextWindowPos(ImVec2(panel_x, panel_y));
     ImGui::SetNextWindowSize(ImVec2(panel_w, panel_h));
@@ -1481,7 +2449,7 @@ void PhysicsInterface::draw_notifications() {
     // Draw stacked cards from top-right, growing downward
     float card_w = 260.0f;
     float card_pad = 4.0f;
-    float start_x = io.DisplaySize.x - card_w - 10.0f;
+    float start_x = std::max(10.0f, io.DisplaySize.x - card_w - 10.0f);
     float start_y = 40.0f;
 
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
@@ -1755,7 +2723,8 @@ void PhysicsInterface::draw_save_load_dialog() {
     ImVec2 center(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
     ImVec2 size = use_thumbnails ? ImVec2(720, 520) : ImVec2(520, 480);
 
-    ImGui::SetNextWindowPos(ImVec2(center.x - size.x * 0.5f, center.y - size.y * 0.5f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(clamp_window_pos(
+        ImVec2(center.x - size.x * 0.5f, center.y - size.y * 0.5f), size), ImGuiCond_Appearing);
     ImGui::SetNextWindowSize(size, ImGuiCond_Appearing);
 
     const char* title = show_molecule_import_dialog ? "Import Molecule###SaveLoad"
@@ -2411,6 +3380,12 @@ void PhysicsInterface::draw_credits() {
             "",
             "stb_image / stb_image_write  -  Image I/O",
             "  MIT License / Public Domain",
+            "",
+            "cJSON  -  JSON Parser (Repository API)",
+            "  MIT License",
+            "",
+            "libcurl  -  HTTP Client (Repository)",
+            "  curl License (MIT-style)",
             "",
             "BUILD TOOLS",
             "",

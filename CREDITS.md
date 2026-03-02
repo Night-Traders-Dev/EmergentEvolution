@@ -26,6 +26,14 @@ MIT-0 / Public Domain (Unlicense)
 https://github.com/nothings/stb
 MIT License / Public Domain
 
+**cJSON** — Lightweight JSON Parser (for Repository API)
+https://github.com/DaveGamble/cJSON
+MIT License
+
+**libcurl** — HTTP Client (for Repository Downloads/Uploads)
+https://curl.se/libcurl/
+curl License (MIT-style)
+
 ## Build Tools
 
 **CMake** — Build System Generator

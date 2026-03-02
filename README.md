@@ -55,6 +55,7 @@ uses a **spatial acceleration grid** with **OpenMP** parallelization for O(n) ne
 - [Environment Presets](docs/environment-presets.md)
 - [Save / Load](docs/save-load.md)
   - [Molecule Tools](docs/save-load.md#molecule-tools)
+- [Online Repository](docs/online-repository.md)
 - [Controls](docs/controls.md)
 - [Build](docs/build.md)
   - [CMake Options](docs/build.md#cmake-options)

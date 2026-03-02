@@ -114,6 +114,23 @@ static const ElementEntry ELEMENT_TABLE[] = {
     { 2, TYPE_H,   "He", 2 },  // Helium → H slot
     {10, TYPE_H,   "Ne", 10},  // Neon → H slot (noble gas)
     {18, TYPE_CL,  "Ar", 22},  // Argon → Cl slot
+    // Extended elements for materials/superconductors
+    {13, TYPE_SI,  "Al", 14},  // Aluminium → Si slot
+    {31, TYPE_SI,  "Ga", 38},  // Gallium → Si slot
+    {32, TYPE_SI,  "Ge", 41},  // Germanium → Si slot
+    {41, TYPE_FE,  "Nb", 52},  // Niobium → Fe slot (transition metal)
+    {42, TYPE_FE,  "Mo", 54},  // Molybdenum → Fe slot
+    {23, TYPE_TI,  "V",  28},  // Vanadium → Ti slot
+    {24, TYPE_FE,  "Cr", 28},  // Chromium → Fe slot
+    {25, TYPE_FE,  "Mn", 30},  // Manganese → Fe slot
+    {74, TYPE_FE,  "W",  110}, // Tungsten → Fe slot
+    {40, TYPE_TI,  "Zr", 51},  // Zirconium → Ti slot
+    {50, TYPE_PB,  "Sn", 69},  // Tin → Pb slot
+    {56, TYPE_CA,  "Ba", 81},  // Barium → Ca slot (alkaline earth)
+    {47, TYPE_AU,  "Ag", 61},  // Silver → Au slot
+    {48, TYPE_NI,  "Cd", 64},  // Cadmium → Ni slot
+    {49, TYPE_SI,  "In", 66},  // Indium → Si slot
+    {39, TYPE_TI,  "Y",  50},  // Yttrium → Ti slot
 };
 static constexpr int ELEMENT_TABLE_SIZE = sizeof(ELEMENT_TABLE) / sizeof(ELEMENT_TABLE[0]);
 
@@ -895,6 +912,90 @@ static const MoleculeNameEntry MOLECULE_NAMES[] = {
     {"C10H16N5O13P3","ATP"},
     {"C10H15N5O10P2","ADP"},
     {"C10H14N5O7P",  "AMP"},
+    // Psychoactive / controlled substances
+    {"C9H13N",       "Amphetamine"},
+    {"C10H15N",      "Methamphetamine"},
+    {"C17H21NO4",    "Cocaine"},
+    {"C21H23NO5",    "Heroin"},
+    {"C22H28N2O",    "Fentanyl"},
+    {"C20H25N3O",    "LSD"},
+    {"C11H15NO2",    "MDMA"},
+    {"C12H17N2O4P",  "Psilocybin"},
+    {"C12H16N2",     "DMT"},
+    {"C13H16ClNO",   "Ketamine"},
+    {"C11H17NO3",    "Mescaline"},
+    {"C4H8O3",       "GHB"},
+    {"C17H25N",      "PCP"},
+    {"C15H21NO2",    "Psilocin"},
+    // More pharmaceuticals
+    {"C17H18F3NO",   "Fluoxetine"},
+    {"C17H17Cl2N",   "Sertraline"},
+    {"C16H13ClN2O",  "Diazepam"},
+    {"C17H19N3O3S",  "Omeprazole"},
+    {"C15H25NO3",    "Metoprolol"},
+    {"C21H26O5",     "Prednisone"},
+    {"C22H29FO5",    "Dexamethasone"},
+    {"C19H16O4",     "Warfarin"},
+    {"C5H9NO3S",     "Acetylcysteine"},
+    {"C22H23ClN2O2", "Loratadine"},
+    {"C22H30N6O4S",  "Sildenafil"},
+    {"C14H14O3",     "Naproxen"},
+    {"C9H17NO2",     "Gabapentin"},
+    {"C18H26ClN3O",  "Hydroxychloroquine"},
+    {"C17H18FN3O3",  "Ciprofloxacin"},
+    {"C10H13N5O4",   "Acyclovir"},
+    {"C8H9NO2",      "Acetaminophen"},
+    {"C14H10O4",     "Dantrolene"},
+    {"C21H28O2",     "Testosterone"},
+    {"C19H24O2",     "Estradiol"},
+    {"C26H29NO",     "Tamoxifen"},
+    {"C15H12N2O",    "Carbamazepine"},
+    {"C8H11NO3",     "Norepinephrine"},
+    // Semiconductors and advanced materials
+    {"GaAs",     "Gallium Arsenide"},
+    {"SiC",      "Silicon Carbide"},
+    {"BN",       "Boron Nitride"},
+    {"AlN",      "Aluminium Nitride"},
+    {"GaN",      "Gallium Nitride"},
+    {"ZnO",      "Zinc Oxide"},
+    {"CdSe",     "Cadmium Selenide"},
+    {"InP",      "Indium Phosphide"},
+    {"ZnS",      "Zinc Sulfide"},
+    {"TiO2",     "Titanium Dioxide"},
+    {"WC",       "Tungsten Carbide"},
+    {"ZrO2",     "Zirconium Dioxide"},
+    {"SnO2",     "Tin Dioxide"},
+    {"BaTiO3",   "Barium Titanate"},
+    // Superconducting materials
+    {"MgB2",     "Magnesium Diboride"},
+    {"NbN",      "Niobium Nitride"},
+    {"Nb3Sn",    "Niobium-Tin"},
+    {"NbTi",     "Niobium-Titanium"},
+    {"V3Si",     "Vanadium-Silicon"},
+    // Fullerenes and carbon allotropes
+    {"C60",      "Buckminsterfullerene"},
+    {"C24",      "Coronene Carbon"},
+    {"C20",      "Dodecahedrane Carbon"},
+    // Industrial / common chemicals
+    {"CaF2",     "Calcium Fluoride"},
+    {"Na2CO3",   "Sodium Carbonate"},
+    {"KNO3",     "Potassium Nitrate"},
+    {"AgNO3",    "Silver Nitrate"},
+    {"CuSO4",    "Copper Sulfate"},
+    {"FeCl3",    "Iron(III) Chloride"},
+    {"AlCl3",    "Aluminium Chloride"},
+    {"ZnCl2",    "Zinc Chloride"},
+    {"PbO2",     "Lead Dioxide"},
+    {"MnO2",     "Manganese Dioxide"},
+    {"Cr2O3",    "Chromium(III) Oxide"},
+    {"V2O5",     "Vanadium Pentoxide"},
+    {"WO3",      "Tungsten Trioxide"},
+    {"MoS2",     "Molybdenum Disulfide"},
+    {"CaCl2",    "Calcium Chloride"},
+    {"NaNO3",    "Sodium Nitrate"},
+    {"NH4NO3",   "Ammonium Nitrate"},
+    {"NH4Cl",    "Ammonium Chloride"},
+    {"Ca3(PO4)2","Tricalcium Phosphate"},
 };
 static constexpr int MOLECULE_NAMES_SIZE = sizeof(MOLECULE_NAMES) / sizeof(MOLECULE_NAMES[0]);
 

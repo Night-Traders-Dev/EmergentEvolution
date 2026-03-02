@@ -70,14 +70,16 @@ void PhysicsInterface::draw_element_list() {
     if (!show_element_list || element_list.empty()) return;
 
     ImGuiIO& io = ImGui::GetIO();
-    float win_w = 420.0f;
+    float win_w = 520.0f;
     float max_h = io.DisplaySize.y - 120.0f;
+    ImVec2 win_size(win_w, max_h * 0.7f);
 
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
-                                    io.DisplaySize.y * 0.5f - max_h * 0.35f),
-                            ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(win_w, max_h * 0.7f), ImGuiCond_Appearing);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(380, 150), ImVec2(560, max_h));
+    ImGui::SetNextWindowPos(clamp_window_pos(
+        ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
+               io.DisplaySize.y * 0.5f - max_h * 0.35f), win_size),
+        ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(450, 150), ImVec2(660, max_h));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.05f, 0.09f, 0.95f));
     ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.08f, 0.06f, 0.03f, 0.95f));
@@ -179,7 +181,7 @@ void PhysicsInterface::draw_element_list() {
 
     // Use molecule_list if available
     if (!molecule_list.empty()) {
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "  %-14s %4s %10s %6s",
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "  %-24s %4s %10s %6s",
                            "Formula", "Q", "Energy", "Age");
         ImGui::Separator();
 
@@ -204,6 +206,16 @@ void PhysicsInterface::draw_element_list() {
             }
 
             std::string formula = build_molecular_formula(element_list, mol.atom_indices);
+
+            // Look up common name for molecules, element name for single atoms
+            const char* common_name = nullptr;
+            if (is_molecule) {
+                common_name = lookup_molecule_common_name(formula.c_str());
+            } else {
+                auto& elem0 = element_list[mol.atom_indices[0]];
+                if (elem0.Z >= 1 && elem0.Z <= FULL_ELEMENT_COUNT)
+                    common_name = ELEMENT_NAMES[elem0.Z];
+            }
 
             char charge_str[16];
             if (mol.total_charge == 0) snprintf(charge_str, sizeof(charge_str), "0");
@@ -241,9 +253,17 @@ void PhysicsInterface::draw_element_list() {
             uint32_t first_rep = element_list[mol.atom_indices[0]].rep;
             bool is_selected_mol = (molecule_card_atom_rep == static_cast<int32_t>(first_rep));
             bool is_selected_elem = !is_molecule && (element_card_nucleus_rep == static_cast<int32_t>(first_rep));
+            // Build display string: formula (name) charge energy age
             char row_text[192];
-            snprintf(row_text, sizeof(row_text), "  %-14s %4s %10s %6s",
-                     formula.c_str(), charge_str, energy_str, age_str);
+            if (common_name) {
+                char label[64];
+                snprintf(label, sizeof(label), "%s (%s)", formula.c_str(), common_name);
+                snprintf(row_text, sizeof(row_text), "  %-24s %4s %10s %6s",
+                         label, charge_str, energy_str, age_str);
+            } else {
+                snprintf(row_text, sizeof(row_text), "  %-24s %4s %10s %6s",
+                         formula.c_str(), charge_str, energy_str, age_str);
+            }
 
             if (ImGui::Selectable(row_text, is_selected_mol || is_selected_elem,
                                   ImGuiSelectableFlags_None, ImVec2(0, 22))) {
@@ -261,7 +281,12 @@ void PhysicsInterface::draw_element_list() {
             if (ImGui::IsItemHovered()) {
                 ImGui::BeginTooltip();
                 if (is_molecule) {
-                    ImGui::TextColored(ImVec4(0.4f, 0.65f, 1.0f, 1.0f), "Molecule: %s", formula.c_str());
+                    if (common_name) {
+                        ImGui::TextColored(ImVec4(0.4f, 0.65f, 1.0f, 1.0f), "%s", formula.c_str());
+                        ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.6f, 1.0f), "%s", common_name);
+                    } else {
+                        ImGui::TextColored(ImVec4(0.4f, 0.65f, 1.0f, 1.0f), "Molecule: %s", formula.c_str());
+                    }
                     ImGui::Text("Atoms: %d  Charge: %s", static_cast<int>(mol.atom_indices.size()), charge_str);
                     ImGui::Separator();
                     float total_mass = 0.0f, total_mu = 0.0f;
@@ -421,11 +446,13 @@ void PhysicsInterface::draw_particle_list(const Particles& particles) {
     ImGuiIO& io = ImGui::GetIO();
     float win_w = 500.0f;
     float max_h = io.DisplaySize.y - 120.0f;
+    ImVec2 win_size(win_w, max_h * 0.7f);
 
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
-                                    io.DisplaySize.y * 0.5f - max_h * 0.35f),
-                            ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(win_w, max_h * 0.7f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(clamp_window_pos(
+        ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
+               io.DisplaySize.y * 0.5f - max_h * 0.35f), win_size),
+        ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
     ImGui::SetNextWindowSizeConstraints(ImVec2(460, 150), ImVec2(620, max_h));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.05f, 0.09f, 0.95f));
@@ -616,13 +643,15 @@ void PhysicsInterface::draw_particle_bestiary() {
     if (!show_particle_bestiary) return;
 
     ImGuiIO& io = ImGui::GetIO();
-    float win_w = 920.0f;
+    float win_w = std::min(920.0f, io.DisplaySize.x - 20.0f);
     float max_h = io.DisplaySize.y - 80.0f;
+    ImVec2 win_size(win_w, max_h * 0.75f);
 
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
-                                    io.DisplaySize.y * 0.5f - max_h * 0.4f),
-                            ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(win_w, max_h * 0.75f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(clamp_window_pos(
+        ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
+               io.DisplaySize.y * 0.5f - max_h * 0.4f), win_size),
+        ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
     ImGui::SetNextWindowSizeConstraints(ImVec2(600, 300), ImVec2(1200, max_h));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.04f, 0.08f, 0.96f));
@@ -849,13 +878,15 @@ void PhysicsInterface::draw_element_bestiary() {
     if (!show_element_bestiary) return;
 
     ImGuiIO& io = ImGui::GetIO();
-    float win_w = 960.0f;
+    float win_w = std::min(960.0f, io.DisplaySize.x - 20.0f);
     float max_h = io.DisplaySize.y - 80.0f;
+    ImVec2 win_size(win_w, max_h * 0.75f);
 
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
-                                    io.DisplaySize.y * 0.5f - max_h * 0.4f),
-                            ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(win_w, max_h * 0.75f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(clamp_window_pos(
+        ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
+               io.DisplaySize.y * 0.5f - max_h * 0.4f), win_size),
+        ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
     ImGui::SetNextWindowSizeConstraints(ImVec2(600, 300), ImVec2(1200, max_h));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.03f, 0.04f, 0.07f, 0.96f));
@@ -1011,13 +1042,15 @@ void PhysicsInterface::draw_molecule_bestiary() {
     if (!show_molecule_bestiary) return;
 
     ImGuiIO& io = ImGui::GetIO();
-    float win_w = 740.0f;
+    float win_w = std::min(740.0f, io.DisplaySize.x - 20.0f);
     float max_h = io.DisplaySize.y - 80.0f;
+    ImVec2 win_size(win_w, max_h * 0.65f);
 
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
-                                    io.DisplaySize.y * 0.5f - max_h * 0.4f),
+    ImGui::SetNextWindowPos(clamp_window_pos(
+        ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
+               io.DisplaySize.y * 0.5f - max_h * 0.4f), win_size),
                             ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(win_w, max_h * 0.65f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
     ImGui::SetNextWindowSizeConstraints(ImVec2(500, 200), ImVec2(1000, max_h));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.03f, 0.05f, 0.06f, 0.96f));

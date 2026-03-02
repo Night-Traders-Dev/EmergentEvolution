@@ -34,7 +34,9 @@ void PhysicsInterface::draw_info_card(const Particles& particles) {
 
     ImGuiIO& io = ImGui::GetIO();
     // Bottom-right default position — user can drag elsewhere
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 260, io.DisplaySize.y - 60),
+    float card_x = std::max(10.0f, io.DisplaySize.x - 260);
+    float card_y = std::min(io.DisplaySize.y - 10.0f, io.DisplaySize.y - 60);
+    ImGui::SetNextWindowPos(ImVec2(card_x, card_y),
                             ImGuiCond_Appearing, ImVec2(0.0f, 1.0f));
 
     ImGuiWindowFlags card_flags = ImGuiWindowFlags_NoTitleBar
@@ -464,9 +466,11 @@ void PhysicsInterface::draw_encyclopedia_popup() {
     ImGuiIO& io = ImGui::GetIO();
     float popup_w = 400.0f;
     float popup_h = 340.0f;
-    ImGui::SetNextWindowPos(ImVec2((io.DisplaySize.x - popup_w) * 0.5f,
-                                   (io.DisplaySize.y - popup_h) * 0.5f), ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(popup_w, popup_h), ImGuiCond_Appearing);
+    ImVec2 popup_size(popup_w, popup_h);
+    ImGui::SetNextWindowPos(clamp_window_pos(
+        ImVec2((io.DisplaySize.x - popup_w) * 0.5f,
+               (io.DisplaySize.y - popup_h) * 0.5f), popup_size), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(popup_size, ImGuiCond_Appearing);
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.06f, 0.12f, 0.97f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
@@ -630,7 +634,8 @@ void PhysicsInterface::draw_element_card(const Particles& particles) {
 
     // Window — bottom-right, to the left of info card
     ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 590, io.DisplaySize.y - 60),
+    float ec_x = std::max(10.0f, io.DisplaySize.x - 590);
+    ImGui::SetNextWindowPos(ImVec2(ec_x, io.DisplaySize.y - 60),
                             ImGuiCond_Appearing, ImVec2(0.0f, 1.0f));
     ImGui::SetNextWindowSize(ImVec2(320, 0), ImGuiCond_Appearing);
 
@@ -1015,7 +1020,8 @@ void PhysicsInterface::draw_molecule_card(const Particles& particles) {
 
     // Window position — next to element card position
     ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 590, io.DisplaySize.y - 60),
+    float rc_x = std::max(10.0f, io.DisplaySize.x - 590);
+    ImGui::SetNextWindowPos(ImVec2(rc_x, io.DisplaySize.y - 60),
                             ImGuiCond_Appearing, ImVec2(0.0f, 1.0f));
     ImGui::SetNextWindowSize(ImVec2(340, 0), ImGuiCond_Appearing);
 
@@ -1024,7 +1030,11 @@ void PhysicsInterface::draw_molecule_card(const Particles& particles) {
 
     bool open = true;
     char title[128];
-    snprintf(title, sizeof(title), "Molecule: %s###MoleculeCard", formula.c_str());
+    const char* mol_common_name = lookup_molecule_common_name(formula.c_str());
+    if (mol_common_name)
+        snprintf(title, sizeof(title), "%s (%s)###MoleculeCard", mol_common_name, formula.c_str());
+    else
+        snprintf(title, sizeof(title), "Molecule: %s###MoleculeCard", formula.c_str());
 
     ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.04f, 0.07f, 0.14f, 0.95f));
     ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.06f, 0.12f, 0.24f, 0.95f));
@@ -1035,6 +1045,10 @@ void PhysicsInterface::draw_molecule_card(const Particles& particles) {
         // Big formula display
         ImGui::TextColored(ImVec4(0.4f, 0.65f, 1.0f, 1.0f), "%s", formula.c_str());
         ImGui::SameLine();
+        if (mol_common_name) {
+            ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.6f, 1.0f), "%s", mol_common_name);
+            ImGui::SameLine();
+        }
         ImGui::TextColored(ImVec4(0.35f, 0.55f, 0.85f, 0.8f), "(%d atoms)", static_cast<int>(atoms.size()));
         ImGui::Separator();
 

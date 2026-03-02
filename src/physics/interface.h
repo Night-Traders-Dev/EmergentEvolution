@@ -264,6 +264,7 @@ public:
     int   spawn_molecule_idx = -1;        // index into MOLECULE_TEMPLATES (-1 = not spawning molecule)
     char  molecule_formula_buf[64] = {};   // text input buffer
     int   molecule_match_idx = -1;         // current exact match (-1 = no match)
+    std::string spawn_molecule_file;      // cached .ppmol file path (empty = use template)
 
     // Hover / selected particle inspection
     int32_t hover_particle_idx    = -1;
@@ -299,6 +300,8 @@ public:
     int  repo_current_tab = 0;       // 0=elements, 1=molecules
     char repo_upload_path[512] = {};
     char repo_token_buf[256] = {};   // token input buffer
+    char repo_search_buf[64] = {};   // search filter text
+    int  repo_filter_mode = 0;       // 0=All, 1=Cached, 2=Not Downloaded
 
     // Force object interaction
     bool force_obj_placement_mode = false;
@@ -699,6 +702,7 @@ private:
     void load_keybindings();
 
     // Splash animation state
+    int   splash_variant_ = -1;   // -1=not chosen, 0=atom, 1=blue orb, 2=nebula, 3=collider
     struct SplashParticle {
         float x, y, vx, vy, r;
         ImU32 color, glow_color;
@@ -712,6 +716,12 @@ private:
     std::vector<std::vector<ImVec2>> splash_trails_;
     float splash_time_ = 0.0f;
     bool  splash_inited_ = false;
+    void init_splash_blue_orb();
+    void draw_splash_blue_orb();
+    void init_splash_nebula();
+    void draw_splash_nebula();
+    void init_splash_collider();
+    void draw_splash_collider();
 
     // Thumbnail cache for save/load dialog
     struct ThumbnailEntry {

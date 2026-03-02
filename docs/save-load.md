@@ -63,3 +63,24 @@ python3 tools/ppmol/ppmol_gen.py --formula-only "H2O" --out water.ppmol
 
 Requires RDKit (`python3-rdkit`) for SDF/MOL/SMILES modes. PubChem download and formula-only
 mode work without RDKit.
+
+## Online Repository
+
+The simulation connects to an online repository
+([Night-Traders-Dev/ParticleRepository](https://github.com/Night-Traders-Dev/ParticleRepository))
+for downloading and uploading `.ppel` and `.ppmol` files. HTTP requests use libcurl and JSON
+responses are parsed with cJSON.
+
+Downloaded files are cached locally so subsequent loads are instant. The repository browser
+(accessible from **Menu > Tools > Repository**) provides:
+
+- **Search** bar for filtering by name or formula
+- **Elements / Molecules** tabs
+- **Filter** toggle: All, Cached, New
+- **Download / Import** workflow: preview metadata, download to cache, then import into the
+  active simulation
+
+Downloaded molecules also appear in the **Spawn Picker (F3)** molecule list with a `[repo]` tag.
+
+For full details on the repository protocol, caching strategy, and upload workflow, see
+[docs/online-repository.md](online-repository.md).

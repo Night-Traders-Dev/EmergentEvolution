@@ -1,6 +1,7 @@
 #include "physics/interface.h"
 #include "physics/paths.h"
 #include "physics/repository.h"
+#include "physics/ui_data.h"
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -24,9 +25,11 @@ void PhysicsInterface::draw_repository() {
     const auto& tc = get_theme(prefs.theme);
     auto& io = ImGui::GetIO();
 
+    ImVec2 win_size(640, 560);
     ImVec2 center(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
-    ImGui::SetNextWindowPos(ImVec2(center.x - 320, center.y - 280), ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(640, 560), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(clamp_window_pos(
+        ImVec2(center.x - win_size.x * 0.5f, center.y - win_size.y * 0.5f), win_size), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
     ImGui::SetNextWindowSizeConstraints(ImVec2(500, 400), ImVec2(800, 700));
 
     bool open = true;
@@ -72,6 +75,28 @@ void PhysicsInterface::draw_repository() {
         }
         if (!can_refresh) ImGui::EndDisabled();
 
+        // ── Search bar ────────────────────────────────────────────────────
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 200);
+        ImGui::InputTextWithHint("##repo_search", "Search by formula or name...",
+                                 repo_search_buf, sizeof(repo_search_buf));
+        ImGui::SameLine(0, 8);
+
+        // Filter buttons
+        auto filter_btn = [&](const char* label, int mode, ImVec4 col) {
+            bool active = (repo_filter_mode == mode);
+            if (!active) col = ImVec4(col.x * 0.4f, col.y * 0.4f, col.z * 0.4f, 0.5f);
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(col.x * 0.2f, col.y * 0.2f, col.z * 0.2f, 0.6f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(col.x * 0.4f, col.y * 0.4f, col.z * 0.4f, 0.8f));
+            ImGui::PushStyleColor(ImGuiCol_Text, col);
+            if (ImGui::SmallButton(label)) repo_filter_mode = mode;
+            ImGui::PopStyleColor(3);
+        };
+        filter_btn("All", 0, ImVec4(0.7f, 0.7f, 0.8f, 1.0f));
+        ImGui::SameLine(0, 3);
+        filter_btn("Cached", 1, ImVec4(0.3f, 0.9f, 0.4f, 1.0f));
+        ImGui::SameLine(0, 3);
+        filter_btn("New", 2, ImVec4(0.4f, 0.65f, 1.0f, 1.0f));
+
         ImGui::Separator();
 
         // ── File listing ─────────────────────────────────────────────────
@@ -93,10 +118,22 @@ void PhysicsInterface::draw_repository() {
                         "Upload %s files to populate the repository.",
                         repo_current_tab == 0 ? ".ppel" : ".ppmol");
                 } else {
+                    // Pre-compute search filter
+                    size_t search_len = strlen(repo_search_buf);
+                    char search_lower[64] = {};
+                    for (size_t si = 0; si < search_len && si < 63; ++si) {
+                        char c = repo_search_buf[si];
+                        search_lower[si] = (c >= 'A' && c <= 'Z') ? (c + 32) : c;
+                    }
+
+                    // Count visible for stats
+                    int visible_count = 0;
+
                     // Table
-                    if (ImGui::BeginTable("##RepoFiles", 4,
+                    if (ImGui::BeginTable("##RepoFiles", 5,
                             ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
                             ImGuiTableFlags_ScrollY)) {
+                        ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_WidthFixed, 110.0f);
                         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
                         ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 70.0f);
                         ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 50.0f);
@@ -105,30 +142,82 @@ void PhysicsInterface::draw_repository() {
 
                         for (int i = 0; i < static_cast<int>(listing.size()); i++) {
                             const auto& entry = listing[i];
-                            ImGui::TableNextRow();
 
-                            // Name
-                            ImGui::TableSetColumnIndex(0);
+                            // Apply status filter
+                            if (repo_filter_mode == 1 && !entry.is_cached) continue;
+                            if (repo_filter_mode == 2 && entry.is_cached) continue;
+
                             // Strip extension for display
                             std::string display_name = entry.name;
                             auto dot_pos = display_name.rfind('.');
                             if (dot_pos != std::string::npos)
                                 display_name = display_name.substr(0, dot_pos);
+
+                            // Look up common name
+                            const char* common_name = nullptr;
+                            if (repo_current_tab == 0) {
+                                common_name = element_name_from_ppel_filename(display_name.c_str());
+                            } else {
+                                common_name = lookup_molecule_common_name(display_name.c_str());
+                            }
+
+                            // Apply search filter
+                            if (search_len > 0) {
+                                bool match = false;
+                                // Check formula/filename (case-insensitive substring)
+                                for (size_t fi = 0; fi < display_name.size() && !match; ++fi) {
+                                    bool ok = true;
+                                    for (size_t si = 0; si < search_len && ok; ++si) {
+                                        if (fi + si >= display_name.size()) { ok = false; break; }
+                                        char fc = display_name[fi + si];
+                                        if (fc >= 'A' && fc <= 'Z') fc += 32;
+                                        if (fc != search_lower[si]) ok = false;
+                                    }
+                                    if (ok) match = true;
+                                }
+                                // Check common name (case-insensitive substring)
+                                if (!match && common_name) {
+                                    size_t nlen = strlen(common_name);
+                                    for (size_t ni = 0; ni < nlen && !match; ++ni) {
+                                        bool ok = true;
+                                        for (size_t si = 0; si < search_len && ok; ++si) {
+                                            if (ni + si >= nlen) { ok = false; break; }
+                                            char nc = common_name[ni + si];
+                                            if (nc >= 'A' && nc <= 'Z') nc += 32;
+                                            if (nc != search_lower[si]) ok = false;
+                                        }
+                                        if (ok) match = true;
+                                    }
+                                }
+                                if (!match) continue;
+                            }
+
+                            visible_count++;
+                            ImGui::TableNextRow();
+
+                            // File (formula / isotope notation)
+                            ImGui::TableSetColumnIndex(0);
                             ImGui::TextUnformatted(display_name.c_str());
 
-                            // Size
+                            // Common name
                             ImGui::TableSetColumnIndex(1);
+                            if (common_name) {
+                                ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.6f, 1.0f), "%s", common_name);
+                            }
+
+                            // Size
+                            ImGui::TableSetColumnIndex(2);
                             ImGui::TextColored(tc.text_dim, "%s",
                                 format_size(entry.size).c_str());
 
                             // Status
-                            ImGui::TableSetColumnIndex(2);
+                            ImGui::TableSetColumnIndex(3);
                             if (entry.is_cached) {
                                 ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.4f, 1.0f), "cached");
                             }
 
                             // Action
-                            ImGui::TableSetColumnIndex(3);
+                            ImGui::TableSetColumnIndex(4);
                             ImGui::PushID(i);
 
                             bool busy = (status == RepoStatus::Downloading ||
@@ -138,9 +227,6 @@ void PhysicsInterface::draw_repository() {
                                 if (busy) ImGui::BeginDisabled();
                                 if (ImGui::Button("Import", ImVec2(90, 0))) {
                                     // Import the cached file
-                                    const std::string& dir = (repo_current_tab == 0)
-                                        ? repository_ptr->last_downloaded_path()
-                                        : repository_ptr->last_downloaded_path();
                                     std::string cache_dir = get_data_dir() + "repository/"
                                         + (repo_current_tab == 0 ? "elements/" : "molecules/");
                                     std::string path = cache_dir + entry.name;
@@ -164,6 +250,12 @@ void PhysicsInterface::draw_repository() {
                             ImGui::PopID();
                         }
                         ImGui::EndTable();
+                    }
+
+                    // Show result count when filtering
+                    if (search_len > 0 || repo_filter_mode != 0) {
+                        ImGui::TextColored(tc.text_dim, "%d of %d shown",
+                            visible_count, static_cast<int>(listing.size()));
                     }
                 }
             }

@@ -112,12 +112,19 @@ g++ -O2 -std=c++17 -o build/gen_textures tools/gen_particle_textures.cpp -lm
 ./build/gen_textures   # outputs to assets/particles/
 ```
 
+## Splash Screen
+
+Four random splash screen variants are selected at startup: **atom**, **blue orb**, **nebula**,
+and **collider**. Each plays a short animated sequence before fading into the simulation. Any
+key or mouse click dismisses the splash immediately.
+
 ## Spawn Picker (F3)
 
 Categorized spawning: leptons, quarks, bosons, hypothetical particles, composite atoms
 (H through Fe as complete atoms with force-relaxed nuclei and Bohr-model electron shells), and
-molecules by formula. Nucleon positions are computed via iterative force relaxation matching
-GPU shader constants. Configurable count, energy, and scatter radius.
+molecules by formula. Downloaded repository molecules appear with a `[repo]` tag. Nucleon
+positions are computed via iterative force relaxation matching GPU shader constants. Configurable
+count, energy, and scatter radius.
 
 ## Experiment Presets
 
@@ -179,6 +186,25 @@ GLFW gamepad polling with standard mapping:
 | A | Play / pause |
 | B | Back / escape |
 | Bumpers | Cycle settings tabs |
+
+## Repository Browser
+
+The online repository browser (**Menu > Tools > Repository**) connects to a remote GitHub-hosted
+collection of `.ppel` and `.ppmol` files. Features:
+
+- **Search** bar for filtering entries by name or formula
+- **Elements / Molecules** tabs
+- **Filter** buttons: All, Cached, New
+- **Download / Import** workflow: select an entry, preview its metadata, download to local cache,
+  then import directly into the simulation
+
+See [docs/online-repository.md](online-repository.md) for protocol and caching details.
+
+## Window Management
+
+All ImGui windows (info cards, settings panels, repository browser, event log, etc.) dynamically
+clamp their position to screen edges so they never open partially or fully off-screen. This
+applies on first open, after resolution changes, and when restoring saved window positions.
 
 ## Error Dialogs
 

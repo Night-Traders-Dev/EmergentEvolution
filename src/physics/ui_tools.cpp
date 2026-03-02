@@ -17,11 +17,13 @@ void PhysicsInterface::draw_decay_log() {
     float win_w = 420.0f;
     float max_h = io.DisplaySize.y - 120.0f;
     float win_h = std::min(500.0f, max_h);
+    ImVec2 win_size(win_w, win_h);
 
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
-                                    io.DisplaySize.y * 0.5f - win_h * 0.5f),
-                            ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(win_w, win_h), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(clamp_window_pos(
+        ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
+               io.DisplaySize.y * 0.5f - win_h * 0.5f), win_size),
+        ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
     ImGui::SetNextWindowSizeConstraints(ImVec2(340, 200), ImVec2(560, max_h));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.04f, 0.07f, 0.95f));
@@ -198,8 +200,10 @@ void PhysicsInterface::draw_nuclear_debug(SimConfig& cfg) {
     if (!show_nuclear_debug) return;
 
     ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 680, 60), ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(320, 540), ImGuiCond_Appearing);
+    ImVec2 nuc_size(320, 540);
+    ImGui::SetNextWindowPos(clamp_window_pos(
+        ImVec2(io.DisplaySize.x - 680, 60), nuc_size), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(nuc_size, ImGuiCond_Appearing);
     ImGui::SetNextWindowSizeConstraints(ImVec2(280, 300), ImVec2(500, 800));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.04f, 0.07f, 0.95f));
@@ -547,8 +551,10 @@ void PhysicsInterface::draw_accelerator_panel() {
     ImGuiIO& io = ImGui::GetIO();
     float max_h = io.DisplaySize.y - 64.0f;
 
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 650, 10), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(300, std::min(420.0f, max_h)), ImGuiCond_FirstUseEver);
+    ImVec2 accel_size(300, std::min(420.0f, max_h));
+    ImGui::SetNextWindowPos(clamp_window_pos(
+        ImVec2(io.DisplaySize.x - 650, 10), accel_size), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(accel_size, ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(260, 200), ImVec2(340, max_h));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.05f, 0.09f, 0.95f));
@@ -717,7 +723,8 @@ void PhysicsInterface::draw_force_object_panel(ForceObject* objects) {
     ImVec4 type_color = (obj.force_type < FORCE_OBJ_COUNT) ? fo_type_colors[obj.force_type] : ImVec4(1,1,1,1);
 
     ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 260, 10), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(clamp_window_pos(
+        ImVec2(io.DisplaySize.x - 260, 10), ImVec2(250, 300)), ImGuiCond_Appearing);
     ImGui::SetNextWindowSize(ImVec2(250, 0), ImGuiCond_Appearing);
 
     ImGuiWindowFlags panel_flags = ImGuiWindowFlags_NoTitleBar
@@ -806,7 +813,8 @@ void PhysicsInterface::draw_measurement_panel() {
     float panel_w = 280.0f;
     float max_h = io.DisplaySize.y - 64.0f;
 
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - panel_w - 10, 10), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(clamp_window_pos(
+        ImVec2(io.DisplaySize.x - panel_w - 10, 10), ImVec2(panel_w, 200)), ImGuiCond_Appearing);
     ImGui::SetNextWindowSizeConstraints(ImVec2(200, 80), ImVec2(400, max_h));
     ImGui::SetNextWindowSize(ImVec2(panel_w, 0), ImGuiCond_Appearing);
 

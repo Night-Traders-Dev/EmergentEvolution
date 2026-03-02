@@ -4,6 +4,8 @@
 #include "physics/molecules.h"
 #include "physics/audio.h"
 #include "physics/repository.h"
+#include "physics/paths.h"
+#include <filesystem>
 #include "particle_textures.h"
 #include <imgui.h>
 #include <cstdio>
@@ -360,9 +362,9 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
         // Menu popup (rendered above the button)
         if (show_tools_popup) {
             float popup_w = 230.0f;
-            float popup_h = 540.0f;
-            float popup_x = display_w - 12.0f - popup_w;
-            float popup_y = bar_y - popup_h - 4.0f;
+            float popup_h = std::min(540.0f, display_h - 40.0f);
+            float popup_x = std::max(10.0f, display_w - 12.0f - popup_w);
+            float popup_y = std::max(10.0f, bar_y - popup_h - 4.0f);
             ImGui::SetNextWindowPos(ImVec2(popup_x, popup_y));
             ImGui::SetNextWindowSize(ImVec2(popup_w, popup_h));
             ImGuiWindowFlags popup_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
@@ -1283,6 +1285,42 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
 
     // ── Molecules ────────────────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Molecules")) {
+        // ── Scan cached .ppmol files from repository ────────────────────────
+        struct CachedMol {
+            std::string formula;       // parsed from filename (e.g. "H2O")
+            std::string name;          // looked up from MOLECULE_COMMON_NAMES
+            std::string path;          // full filesystem path
+        };
+        static std::vector<CachedMol> cached_molecules;
+        static float last_cache_scan = -10.0f;
+
+        // Rescan every 5 seconds (lightweight directory read)
+        float now = static_cast<float>(ImGui::GetTime());
+        if (now - last_cache_scan > 5.0f) {
+            last_cache_scan = now;
+            cached_molecules.clear();
+            std::string mol_cache = get_data_dir() + "repository/molecules/";
+            std::error_code ec;
+            if (std::filesystem::is_directory(mol_cache, ec)) {
+                for (auto& entry : std::filesystem::directory_iterator(mol_cache, ec)) {
+                    if (!entry.is_regular_file()) continue;
+                    std::string fname = entry.path().filename().string();
+                    if (fname.size() < 6 || fname.substr(fname.size() - 6) != ".ppmol") continue;
+                    std::string formula = fname.substr(0, fname.size() - 6);
+
+                    // Skip if this formula already exists in MOLECULE_TEMPLATES
+                    if (find_molecule_template(formula.c_str()) >= 0) continue;
+
+                    CachedMol cm;
+                    cm.formula = formula;
+                    const char* cname = lookup_molecule_common_name(formula.c_str());
+                    cm.name = cname ? cname : "";
+                    cm.path = entry.path().string();
+                    cached_molecules.push_back(std::move(cm));
+                }
+            }
+        }
+
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Type a formula:");
 
         bool enter_pressed = ImGui::InputText("##mol_formula", molecule_formula_buf, 64,
@@ -1290,30 +1328,45 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
 
         // Live search: find exact and prefix matches
         molecule_match_idx = -1;
+        int cached_match_idx = -1;   // index into cached_molecules for exact match
+        spawn_molecule_file.clear();
         int match_count = 0;
-        int match_indices[8] = {-1,-1,-1,-1,-1,-1,-1,-1};
+        int match_indices[16] = {};
+        bool match_is_cached[16] = {};
 
         if (molecule_formula_buf[0] != '\0') {
-            // Exact match first
+            size_t buf_len = strlen(molecule_formula_buf);
+
+            // Exact match first (templates)
             molecule_match_idx = find_molecule_template(molecule_formula_buf);
 
-            // Prefix/substring matches for autocomplete
-            size_t buf_len = strlen(molecule_formula_buf);
-            for (int mi = 0; mi < MOLECULE_TEMPLATE_COUNT && match_count < 8; ++mi) {
-                // Check formula prefix
+            // If no template exact match, check cached files
+            if (molecule_match_idx < 0) {
+                for (int ci = 0; ci < static_cast<int>(cached_molecules.size()); ++ci) {
+                    if (cached_molecules[ci].formula == molecule_formula_buf) {
+                        cached_match_idx = ci;
+                        spawn_molecule_file = cached_molecules[ci].path;
+                        break;
+                    }
+                }
+            }
+
+            // Prefix/substring matches from templates
+            for (int mi = 0; mi < MOLECULE_TEMPLATE_COUNT && match_count < 12; ++mi) {
                 if (strncmp(MOLECULE_TEMPLATES[mi].formula, molecule_formula_buf, buf_len) == 0) {
-                    match_indices[match_count++] = mi;
+                    match_indices[match_count] = mi;
+                    match_is_cached[match_count] = false;
+                    match_count++;
                     continue;
                 }
-                // Check name substring (case-insensitive)
+                // Name substring (case-insensitive)
                 const char* name = MOLECULE_TEMPLATES[mi].name;
-                const char* buf = molecule_formula_buf;
                 bool name_match = false;
                 for (size_t ni = 0; name[ni] && !name_match; ++ni) {
                     bool ok = true;
                     for (size_t bi = 0; bi < buf_len && ok; ++bi) {
                         char nc = name[ni + bi];
-                        char bc = buf[bi];
+                        char bc = molecule_formula_buf[bi];
                         if (nc >= 'A' && nc <= 'Z') nc += 32;
                         if (bc >= 'A' && bc <= 'Z') bc += 32;
                         if (nc != bc) ok = false;
@@ -1321,7 +1374,42 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
                     if (ok) name_match = true;
                 }
                 if (name_match) {
-                    match_indices[match_count++] = mi;
+                    match_indices[match_count] = mi;
+                    match_is_cached[match_count] = false;
+                    match_count++;
+                }
+            }
+
+            // Prefix/substring matches from cached files
+            for (int ci = 0; ci < static_cast<int>(cached_molecules.size()) && match_count < 16; ++ci) {
+                const auto& cm = cached_molecules[ci];
+                // Formula prefix
+                if (strncmp(cm.formula.c_str(), molecule_formula_buf, buf_len) == 0) {
+                    match_indices[match_count] = ci;
+                    match_is_cached[match_count] = true;
+                    match_count++;
+                    continue;
+                }
+                // Name substring (case-insensitive)
+                if (!cm.name.empty()) {
+                    bool name_match = false;
+                    for (size_t ni = 0; ni < cm.name.size() && !name_match; ++ni) {
+                        bool ok = true;
+                        for (size_t bi = 0; bi < buf_len && ok; ++bi) {
+                            if (ni + bi >= cm.name.size()) { ok = false; break; }
+                            char nc = cm.name[ni + bi];
+                            char bc = molecule_formula_buf[bi];
+                            if (nc >= 'A' && nc <= 'Z') nc += 32;
+                            if (bc >= 'A' && bc <= 'Z') bc += 32;
+                            if (nc != bc) ok = false;
+                        }
+                        if (ok) name_match = true;
+                    }
+                    if (name_match) {
+                        match_indices[match_count] = ci;
+                        match_is_cached[match_count] = true;
+                        match_count++;
+                    }
                 }
             }
         }
@@ -1331,17 +1419,32 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
         if (molecule_match_idx >= 0) {
             ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.3f, 1.0f), "%s",
                 MOLECULE_TEMPLATES[molecule_match_idx].name);
+        } else if (cached_match_idx >= 0) {
+            // Cached file exact match
+            const char* display = cached_molecules[cached_match_idx].name.empty()
+                ? cached_molecules[cached_match_idx].formula.c_str()
+                : cached_molecules[cached_match_idx].name.c_str();
+            ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "%s", display);
         } else if (molecule_formula_buf[0] != '\0') {
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "?");
         }
 
-        // Spawn button (or Enter)
+        // Spawn button (or Enter) — template molecule
         if (molecule_match_idx >= 0) {
             if (enter_pressed || ImGui::Button("Spawn##mol_spawn")) {
                 spawn_molecule_idx = molecule_match_idx;
+                spawn_molecule_file.clear();
                 spawn_atom_Z = -1;
                 spawn_group = -1;
                 pending_spawn = true;
+            }
+        }
+        // Spawn button — cached .ppmol file (import at camera center)
+        else if (cached_match_idx >= 0) {
+            if (enter_pressed || ImGui::Button("Spawn##mol_spawn")) {
+                snprintf(save_filename, sizeof(save_filename), "%s",
+                         cached_molecules[cached_match_idx].path.c_str());
+                request_molecule_import = true;
             }
         }
 
@@ -1349,16 +1452,36 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
         if (match_count > 0 && molecule_formula_buf[0] != '\0') {
             for (int mi = 0; mi < match_count; ++mi) {
                 int idx = match_indices[mi];
-                char label[128];
-                snprintf(label, sizeof(label), "%s  (%s)##mol_%d",
-                    MOLECULE_TEMPLATES[idx].formula,
-                    MOLECULE_TEMPLATES[idx].name, idx);
-                if (ImGui::Selectable(label)) {
-                    snprintf(molecule_formula_buf, 64, "%s", MOLECULE_TEMPLATES[idx].formula);
-                    spawn_molecule_idx = idx;
-                    spawn_atom_Z = -1;
-                    spawn_group = -1;
-                    pending_spawn = true;
+                char label[192];
+
+                if (!match_is_cached[mi]) {
+                    // Template molecule
+                    snprintf(label, sizeof(label), "%s  (%s)##mol_%d",
+                        MOLECULE_TEMPLATES[idx].formula,
+                        MOLECULE_TEMPLATES[idx].name, idx);
+                    if (ImGui::Selectable(label)) {
+                        snprintf(molecule_formula_buf, 64, "%s", MOLECULE_TEMPLATES[idx].formula);
+                        spawn_molecule_idx = idx;
+                        spawn_molecule_file.clear();
+                        spawn_atom_Z = -1;
+                        spawn_group = -1;
+                        pending_spawn = true;
+                    }
+                } else {
+                    // Cached .ppmol file
+                    const auto& cm = cached_molecules[idx];
+                    if (!cm.name.empty()) {
+                        snprintf(label, sizeof(label), "%s  (%s) [repo]##cmol_%d",
+                            cm.formula.c_str(), cm.name.c_str(), idx);
+                    } else {
+                        snprintf(label, sizeof(label), "%s  [repo]##cmol_%d",
+                            cm.formula.c_str(), idx);
+                    }
+                    if (ImGui::Selectable(label)) {
+                        snprintf(molecule_formula_buf, 64, "%s", cm.formula.c_str());
+                        snprintf(save_filename, sizeof(save_filename), "%s", cm.path.c_str());
+                        request_molecule_import = true;
+                    }
                 }
             }
         }
@@ -1954,9 +2077,11 @@ void PhysicsInterface::draw_texture_panel() {
     float panel_w = 380.0f;
     float panel_h = io.DisplaySize.y * 0.7f;
 
-    ImGui::SetNextWindowSize(ImVec2(panel_w, panel_h), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - panel_w * 0.5f,
-                                    io.DisplaySize.y * 0.15f), ImGuiCond_FirstUseEver);
+    ImVec2 tex_size(panel_w, panel_h);
+    ImGui::SetNextWindowSize(tex_size, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(clamp_window_pos(
+        ImVec2(io.DisplaySize.x * 0.5f - panel_w * 0.5f,
+               io.DisplaySize.y * 0.15f), tex_size), ImGuiCond_FirstUseEver);
 
     if (!ImGui::Begin("Particle Textures", &show_texture_panel)) {
         ImGui::End();

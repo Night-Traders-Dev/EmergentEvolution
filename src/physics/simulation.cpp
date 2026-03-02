@@ -5,6 +5,7 @@
 #include "physics/molecules.h"
 #include "physics/save_load.h"
 #include "physics/sim_helpers.h"
+#include "physics/ui_data.h"
 #include "stb_image_write.h"
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -2614,15 +2615,20 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             if (!found) {
                 PhysicsInterface::MoleculeBestiaryEntry entry;
                 entry.formula = formula;
-                // Try template lookup first, then dynamic naming
+                // Try template lookup first, then common name table, then dynamic naming
                 int tmpl = find_molecule_template(formula.c_str());
                 if (tmpl >= 0) {
                     entry.name = MOLECULE_TEMPLATES[tmpl].name;
                 } else {
-                    std::vector<std::pair<int,int>> components;
-                    for (auto& e : entries)
-                        components.push_back({e.Z, e.count});
-                    entry.name = name_molecule_dynamic(components);
+                    const char* cname = lookup_molecule_common_name(formula.c_str());
+                    if (cname) {
+                        entry.name = cname;
+                    } else {
+                        std::vector<std::pair<int,int>> components;
+                        for (auto& e : entries)
+                            components.push_back({e.Z, e.count});
+                        entry.name = name_molecule_dynamic(components);
+                    }
                 }
                 entry.times_seen = 1;
                 entry.atom_count = static_cast<uint32_t>(mol.atom_indices.size());
