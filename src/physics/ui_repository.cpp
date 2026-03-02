@@ -23,19 +23,24 @@ void PhysicsInterface::draw_repository() {
     if (!show_repository || !repository_ptr) return;
 
     const auto& tc = get_theme(prefs.theme);
-    auto& io = ImGui::GetIO();
 
     ImVec2 win_size(640, 560);
-    ImVec2 center(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
-    ImGui::SetNextWindowPos(clamp_window_pos(
-        ImVec2(center.x - win_size.x * 0.5f, center.y - win_size.y * 0.5f), win_size), ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
+    if (retile_windows_) {
+        ImGui::SetNextWindowPos(tile_pos_[TW_REPOSITORY]);
+        ImGui::SetNextWindowSize(tile_size_[TW_REPOSITORY]);
+    } else {
+        ImGui::SetNextWindowPos(find_free_window_pos(win_size), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
+    }
     ImGui::SetNextWindowSizeConstraints(ImVec2(500, 400), ImVec2(800, 700));
 
     bool open = true;
     ImGui::PushStyleColor(ImGuiCol_WindowBg, tc.bg);
-    if (ImGui::Begin("Particle Repository###RepoDialog", &open,
-            ImGuiWindowFlags_NoCollapse)) {
+    bool repo_vis = ImGui::Begin("Particle Repository###RepoDialog", &open,
+            ImGuiWindowFlags_NoCollapse);
+    record_window_rect(TW_REPOSITORY);
+    if (repo_vis) {
+        draw_minimize_button(TW_REPOSITORY);
 
         // ── Tab bar ──────────────────────────────────────────────────────
         bool tab_changed = false;

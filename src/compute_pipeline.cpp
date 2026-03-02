@@ -512,6 +512,14 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
         // Hypothetical: New Class
         set(65, 0.00001f,        zpe_from_mass(0.00001f));         // Paraparticle
         set(66, 100.0f,          0.0f);                             // Dyn. Axion QP
+        // Quasiparticles
+        set(67, 0.511f,          0.0f);                             // Electron Hole
+        set(68, 100.0f,          0.0f);                             // Plasmon (very light)
+        set(69, 1000.0f,         0.0f);                             // Phonon (extremely light)
+        set(70, 100.0f,          0.0f);                             // Magnon (very light)
+        set(71, 1.0f,            0.0f);                             // Polaron (~electron mass)
+        set(72, 0.000533f,       0.0f);                             // Cooper Pair (2× neutron)
+        set(73, 10.0f,           0.0f);                             // Roton
 
         VkDeviceSize mzpe_size = mass_zpe.size() * sizeof(float);
         mass_zpe_buffer_ = ctx.create_buffer(mzpe_size, CPU_BUF_USAGE, HOST_PROPS);

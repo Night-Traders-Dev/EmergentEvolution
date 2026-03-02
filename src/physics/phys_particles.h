@@ -105,7 +105,16 @@ static constexpr uint32_t CHAMELEON_TYPE_PHYS          = 64;  // environment-dep
 static constexpr uint32_t PARAPARTICLE_TYPE_PHYS       = 65;  // neither boson nor fermion
 static constexpr uint32_t DYN_AXION_QP_TYPE_PHYS       = 66;  // dynamical axion quasiparticle
 
-static constexpr uint32_t PHYS_PARTICLE_TYPES  = 67;
+// ── Quasiparticles ────────────────────────────────────────────────────────
+static constexpr uint32_t ELECTRON_HOLE_TYPE_PHYS      = 67;  // electron hole quasiparticle
+static constexpr uint32_t PLASMON_TYPE_PHYS            = 68;  // collective electron density oscillation
+static constexpr uint32_t PHONON_TYPE_PHYS             = 69;  // quantized lattice vibration
+static constexpr uint32_t MAGNON_TYPE_PHYS             = 70;  // quantized spin wave
+static constexpr uint32_t POLARON_TYPE_PHYS            = 71;  // electron + lattice polarization cloud
+static constexpr uint32_t COOPER_PAIR_TYPE_PHYS        = 72;  // paired neutrons (superfluid)
+static constexpr uint32_t ROTON_TYPE_PHYS              = 73;  // quantized vortex excitation
+
+static constexpr uint32_t PHYS_PARTICLE_TYPES  = 74;
 
 // ── Environment presets ──────────────────────────────────────────────────────
 
@@ -157,6 +166,10 @@ static constexpr float PHYS_CHARGE[PHYS_PARTICLE_TYPES] = {
      1.0f,  0.0f,  0.0f,
     // 65:paraparticle 66:dyn_axion_qp
      0.0f,  0.0f,
+    // 67:electron_hole
+     1.0f,
+    // 68-73: quasiparticles
+     0.0f,  0.0f,  0.0f, -1.0f,  0.0f,  0.0f,
 };
 
 // Spin quantum number
@@ -187,6 +200,10 @@ static constexpr float PHYS_SPIN[PHYS_PARTICLE_TYPES] = {
      0.5f,  1.0f,  0.0f,
     // 65:paraparticle(1/3) 66:dyn_axion_qp(0)
      0.33f,  0.0f,
+    // 67:electron_hole(1/2)
+     0.5f,
+    // 68:plasmon(1) 69:phonon(0) 70:magnon(1) 71:polaron(1/2) 72:cooper_pair(0) 73:roton(0)
+     1.0f,  0.0f,  1.0f,  0.5f,  0.0f,  0.0f,
 };
 
 // Decay rate (energy drain per dt, 0 = stable)
@@ -217,6 +234,10 @@ static constexpr float PHYS_DECAY_RATE[PHYS_PARTICLE_TYPES] = {
     0.0f, 0.20f, 0.0f,
     // 65:paraparticle 66:dyn_axion_qp
     0.10f, 0.0f,
+    // 67:electron_hole
+    0.05f,
+    // 68:plasmon 69:phonon 70:magnon 71:polaron 72:cooper_pair 73:roton
+    0.08f, 0.04f, 0.03f, 0.02f, 0.005f, 0.01f,
 };
 
 // ── Simulation constants ─────────────────────────────────────────────────────
@@ -257,6 +278,10 @@ static constexpr float PHYS_REST_MASS_MEV[PHYS_PARTICLE_TYPES] = {
     2500.0f, 1700.0f, 939.0f, 17.0f, 0.00001f,
     // 65:paraparticle(500GeV) 66:dyn_axion_qp(~1meV)
     500000.0f, 0.001f,
+    // 67:electron_hole(effective mass ~ electron)
+    0.511f,
+    // 68:plasmon 69:phonon 70:magnon 71:polaron 72:cooper_pair(2×neutron) 73:roton
+    0.01f, 0.001f, 0.01f, 1.0f, 1879.13f, 0.1f,
 };
 
 // ── CKM matrix |V_ij|² row-normalized for branching (PDG 2024) ──────────────

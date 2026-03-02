@@ -19,11 +19,13 @@ void PhysicsInterface::draw_decay_log() {
     float win_h = std::min(500.0f, max_h);
     ImVec2 win_size(win_w, win_h);
 
-    ImGui::SetNextWindowPos(clamp_window_pos(
-        ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
-               io.DisplaySize.y * 0.5f - win_h * 0.5f), win_size),
-        ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
+    if (retile_windows_) {
+        ImGui::SetNextWindowPos(tile_pos_[TW_DECAY_LOG]);
+        ImGui::SetNextWindowSize(tile_size_[TW_DECAY_LOG]);
+    } else {
+        ImGui::SetNextWindowPos(find_free_window_pos(win_size), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
+    }
     ImGui::SetNextWindowSizeConstraints(ImVec2(340, 200), ImVec2(560, max_h));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.04f, 0.07f, 0.95f));
@@ -34,17 +36,22 @@ void PhysicsInterface::draw_decay_log() {
     snprintf(title, sizeof(title), "Event Log (%d)###DecayLog",
              static_cast<int>(decay_log.size()));
 
-    if (!ImGui::Begin(title, &show_decay_log)) {
+    bool dl_open = ImGui::Begin(title, &show_decay_log);
+    record_window_rect(TW_DECAY_LOG);
+    if (!dl_open) {
         ImGui::End();
         ImGui::PopStyleColor(3);
         return;
     }
+    draw_minimize_button(TW_DECAY_LOG);
 
     // Event type labels and colors
     static const char* TYPE_LABELS[] = {
         "Decay", "Nuclear", "Fusion", "Fission", "Annihil.",
         "Photo-e", "Spall.", "Pair", "Pion", "VMD", "Photodis.",
-        "Bond+", "Bond-", "Brems.", "Neutrino", "Weak"
+        "Bond+", "Bond-", "Brems.", "Neutrino", "Weak", "e-Hole",
+        "EM Xchg", "QCD Xchg", "Weak Xchg", "Grav Xchg", "Higgs Xchg", "Nuc Xchg",
+        "Quasi"
     };
     static const ImVec4 TYPE_COLORS[] = {
         ImVec4(1.0f, 0.8f, 0.5f, 1.0f),   // PARTICLE_DECAY — warm yellow
@@ -63,6 +70,14 @@ void PhysicsInterface::draw_decay_log() {
         ImVec4(0.8f, 0.8f, 1.0f, 1.0f),   // BREMSSTRAHLUNG — pale blue
         ImVec4(0.5f, 1.0f, 0.8f, 1.0f),   // NEUTRINO — mint green
         ImVec4(0.7f, 0.8f, 1.0f, 1.0f),   // WEAK_SCATTER — light blue
+        ImVec4(1.0f, 0.75f, 0.25f, 1.0f), // ELECTRON_HOLE — amber
+        ImVec4(1.0f, 1.0f, 0.3f, 1.0f),  // CARRIER_EM — bright yellow (photon)
+        ImVec4(0.3f, 1.0f, 0.3f, 1.0f),  // CARRIER_QCD — bright green (gluon)
+        ImVec4(0.6f, 0.4f, 1.0f, 1.0f),  // CARRIER_WEAK — violet (Z/W)
+        ImVec4(0.4f, 0.6f, 1.0f, 1.0f),  // CARRIER_GRAVITY — blue (graviton)
+        ImVec4(1.0f, 0.5f, 0.8f, 1.0f),  // CARRIER_HIGGS — pink (Higgs)
+        ImVec4(1.0f, 0.7f, 0.3f, 1.0f),  // CARRIER_NUCLEAR — orange (Yukawa)
+        ImVec4(0.3f, 1.0f, 0.95f, 1.0f), // QUASIPARTICLE — cyan
     };
 
     // Summary counts by type
@@ -199,23 +214,29 @@ void PhysicsInterface::draw_decay_log() {
 void PhysicsInterface::draw_nuclear_debug(SimConfig& cfg) {
     if (!show_nuclear_debug) return;
 
-    ImGuiIO& io = ImGui::GetIO();
     ImVec2 nuc_size(320, 540);
-    ImGui::SetNextWindowPos(clamp_window_pos(
-        ImVec2(io.DisplaySize.x - 680, 60), nuc_size), ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(nuc_size, ImGuiCond_Appearing);
+    if (retile_windows_) {
+        ImGui::SetNextWindowPos(tile_pos_[TW_NUCLEAR_DEBUG]);
+        ImGui::SetNextWindowSize(tile_size_[TW_NUCLEAR_DEBUG]);
+    } else {
+        ImGui::SetNextWindowPos(find_free_window_pos(nuc_size), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(nuc_size, ImGuiCond_Appearing);
+    }
     ImGui::SetNextWindowSizeConstraints(ImVec2(280, 300), ImVec2(500, 800));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.04f, 0.07f, 0.95f));
     ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.14f, 0.08f, 0.02f, 0.95f));
     ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.22f, 0.12f, 0.03f, 0.95f));
 
-    if (!ImGui::Begin("Nuclear Reactions###NuclearDebug", &show_nuclear_debug)) {
+    bool nd_open = ImGui::Begin("Nuclear Reactions###NuclearDebug", &show_nuclear_debug);
+    record_window_rect(TW_NUCLEAR_DEBUG);
+    if (!nd_open) {
         wobble_window(4.0f);
         ImGui::End();
         ImGui::PopStyleColor(3);
         return;
     }
+    draw_minimize_button(TW_NUCLEAR_DEBUG);
 
     float w = ImGui::GetContentRegionAvail().x;
 
@@ -552,9 +573,13 @@ void PhysicsInterface::draw_accelerator_panel() {
     float max_h = io.DisplaySize.y - 64.0f;
 
     ImVec2 accel_size(300, std::min(420.0f, max_h));
-    ImGui::SetNextWindowPos(clamp_window_pos(
-        ImVec2(io.DisplaySize.x - 650, 10), accel_size), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(accel_size, ImGuiCond_FirstUseEver);
+    if (retile_windows_) {
+        ImGui::SetNextWindowPos(tile_pos_[TW_ACCELERATOR]);
+        ImGui::SetNextWindowSize(tile_size_[TW_ACCELERATOR]);
+    } else {
+        ImGui::SetNextWindowPos(find_free_window_pos(accel_size), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(accel_size, ImGuiCond_Appearing);
+    }
     ImGui::SetNextWindowSizeConstraints(ImVec2(260, 200), ImVec2(340, max_h));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.05f, 0.09f, 0.95f));
@@ -562,7 +587,9 @@ void PhysicsInterface::draw_accelerator_panel() {
     ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.18f, 0.06f, 0.03f, 0.95f));
 
     bool panel_open = accel_mode;
-    if (!ImGui::Begin("Particle Accelerator", &panel_open)) {
+    bool acc_vis = ImGui::Begin("Particle Accelerator", &panel_open);
+    record_window_rect(TW_ACCELERATOR);
+    if (!acc_vis) {
         ImGui::End();
         ImGui::PopStyleColor(3);
         if (!panel_open) {
@@ -581,6 +608,7 @@ void PhysicsInterface::draw_accelerator_panel() {
         accel_stream_timer = 0;
         accel_free_origin_set = false;
     }
+    draw_minimize_button(TW_ACCELERATOR);
 
     // ── Status ──
     if (accel_phase == 0) {

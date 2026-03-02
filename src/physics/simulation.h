@@ -239,6 +239,9 @@ private:
     void check_spallation();
     void check_hadronization();
     void check_bremsstrahlung();
+    void check_recombination();
+    void check_carrier_exchange();
+    void check_quasiparticles();
     void check_neutrino_scattering();
     void check_neutrino_oscillations();
     void check_weak_flavor_change();

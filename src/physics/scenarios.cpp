@@ -141,6 +141,64 @@ static void setup_free_space(PhysicsSimulation& sim) {
     sim.reset();
 }
 
+// ── Cosmic Evolution scenario setups ─────────────────────────────────────────
+
+static void setup_quark_soup(PhysicsSimulation& sim) {
+    sim.cfg.environment_mode = 7;  // Quark-Gluon Plasma
+    sim.cfg.start_empty = false;
+    sim.cfg.particle_count = 40000;
+    sim.cfg.temperature_kelvin = 1.0e10f;
+    sim.cfg.carrier_mode_enabled = true;
+    sim.cfg.quasi_mode_enabled = true;
+    sim.reset();
+}
+
+static void setup_cosmic_dawn(PhysicsSimulation& sim) {
+    sim.cfg.environment_mode = 13;  // Big Bang
+    sim.cfg.start_empty = false;
+    sim.cfg.particle_count = 50000;
+    sim.cfg.temperature_kelvin = 1.0e9f;
+    sim.reset();
+}
+
+static void setup_neutron_star_scenario(PhysicsSimulation& sim) {
+    sim.cfg.environment_mode = 2;  // Neutron Star Surface
+    sim.cfg.start_empty = false;
+    sim.cfg.particle_count = 30000;
+    sim.cfg.temperature_kelvin = 100.0f;
+    sim.cfg.quasi_mode_enabled = true;
+    sim.reset();
+}
+
+static void setup_magnetar(PhysicsSimulation& sim) {
+    sim.cfg.environment_mode = 2;  // Neutron Star Surface
+    sim.cfg.start_empty = false;
+    sim.cfg.particle_count = 25000;
+    sim.cfg.temperature_kelvin = 500.0f;
+    sim.cfg.lorentz_strength = 8.0f;
+    sim.cfg.magnetic_coupling = 1.0f;
+    sim.cfg.magnetic_feedback_enabled = true;
+    sim.cfg.quasi_mode_enabled = true;
+    sim.reset();
+}
+
+static void setup_susy_world(PhysicsSimulation& sim) {
+    sim.cfg.environment_mode = 12;  // SUSY Sector
+    sim.cfg.start_empty = false;
+    sim.cfg.particle_count = 20000;
+    sim.cfg.temperature_kelvin = 1.0e11f;
+    sim.reset();
+}
+
+static void setup_the_collider(PhysicsSimulation& sim) {
+    sim.cfg.environment_mode = 10;  // Particle Accelerator
+    sim.cfg.start_empty = false;
+    sim.cfg.particle_count = 15000;
+    sim.cfg.temperature_kelvin = 5000.0f;
+    sim.cfg.carrier_mode_enabled = true;
+    sim.reset();
+}
+
 // ── Task check functions ─────────────────────────────────────────────────────
 
 // First Light tasks
@@ -312,6 +370,92 @@ static bool check_iron_or_heavier(const PhysicsSimulation& sim) {
     for (const auto& e : sim.iface.element_list)
         if (e.Z >= 26) return true;
     return false;
+}
+
+// ── Cosmic Evolution check functions ─────────────────────────────────────────
+
+// Quark Soup checks
+static bool check_5_quarks(const PhysicsSimulation& sim) {
+    int quarks = 0;
+    for (uint32_t q = UP_QUARK_TYPE; q <= ANTI_BOTTOM_TYPE; ++q)
+        quarks += sim.iface.type_counts_display[q];
+    return quarks >= 5;
+}
+static bool check_gluon_visible(const PhysicsSimulation& sim) {
+    return sim.iface.type_counts_display[GLUON_TYPE_PHYS] > 0;
+}
+static bool check_plasmon_exists(const PhysicsSimulation& sim) {
+    return sim.iface.type_counts_display[PLASMON_TYPE_PHYS] > 0;
+}
+
+// Cosmic Dawn checks
+static bool check_temp_1G(const PhysicsSimulation& sim) {
+    return sim.iface.emergent_temp_display >= 1.0e9f;
+}
+static bool check_pair_produced(const PhysicsSimulation& sim) {
+    return sim.iface.type_counts_display[POSITRON_TYPE_PHYS] > 0
+        || sim.iface.type_counts_display[NEUTRINO_TYPE_PHYS] > 0;
+}
+static bool check_5_photons(const PhysicsSimulation& sim) {
+    return sim.iface.type_counts_display[PHOTON_TYPE_PHYS] >= 5;
+}
+
+// Neutron Star checks
+static bool check_50_neutrons(const PhysicsSimulation& sim) {
+    return sim.iface.type_counts_display[NEUTRON_TYPE] >= 50;
+}
+static bool check_phonon_exists(const PhysicsSimulation& sim) {
+    return sim.iface.type_counts_display[PHONON_TYPE_PHYS] > 0;
+}
+static bool check_cooper_pair_exists(const PhysicsSimulation& sim) {
+    return sim.iface.type_counts_display[COOPER_PAIR_TYPE_PHYS] > 0;
+}
+static bool check_roton_exists(const PhysicsSimulation& sim) {
+    return sim.iface.type_counts_display[ROTON_TYPE_PHYS] > 0;
+}
+
+// Magnetar checks
+static bool check_strong_bfield(const PhysicsSimulation& sim) {
+    return sim.iface.emergent_bfield_display > 0.3f;
+}
+static bool check_magnon_exists(const PhysicsSimulation& sim) {
+    return sim.iface.type_counts_display[MAGNON_TYPE_PHYS] > 0;
+}
+static bool check_3_qp_types(const PhysicsSimulation& sim) {
+    int qp_types = 0;
+    for (uint32_t t = ELECTRON_HOLE_TYPE_PHYS; t <= ROTON_TYPE_PHYS; ++t)
+        if (sim.iface.type_counts_display[t] > 0) qp_types++;
+    return qp_types >= 3;
+}
+
+// SUSY World checks
+static bool check_3_susy_types(const PhysicsSimulation& sim) {
+    int susy_count = 0;
+    uint32_t susy_types[] = { SELECTRON_TYPE_PHYS, SMUON_TYPE_PHYS,
+        SQUARK_TYPE_PHYS, GLUINO_TYPE_PHYS, NEUTRALINO_TYPE_PHYS, GRAVITINO_TYPE_PHYS };
+    for (auto t : susy_types)
+        if (sim.iface.type_counts_display[t] > 0) susy_count++;
+    return susy_count >= 3;
+}
+static bool check_neutralino_exists(const PhysicsSimulation& sim) {
+    return sim.iface.type_counts_display[NEUTRALINO_TYPE_PHYS] > 0;
+}
+static bool check_polaron_exists(const PhysicsSimulation& sim) {
+    return sim.iface.type_counts_display[POLARON_TYPE_PHYS] > 0;
+}
+
+// Collider checks
+static bool check_accelerator_fired(const PhysicsSimulation& sim) {
+    return sim.achievements.total_accelerator_fires > 0;
+}
+static bool check_muon_exists(const PhysicsSimulation& sim) {
+    return sim.iface.type_counts_display[MUON_TYPE_PHYS] > 0;
+}
+static bool check_15_types(const PhysicsSimulation& sim) {
+    int types = 0;
+    for (uint32_t i = 0; i < PHYS_PARTICLE_TYPES; i++)
+        if (sim.iface.type_counts_display[i] > 0) types++;
+    return types >= 15;
 }
 
 // ── Task arrays ──────────────────────────────────────────────────────────────
@@ -486,6 +630,131 @@ static const ScenarioTask TASKS_NUCLEOSYNTHESIS[] = {
       check_iron_or_heavier },
 };
 
+// ── Cosmic Evolution task arrays ─────────────────────────────────────────────
+
+static const ScenarioTask TASKS_QUARK_SOUP[] = {
+    { "In the first microsecond, the universe was a seething plasma of quarks and gluons — "
+      "matter in its most primal form, before protons or neutrons could exist.",
+      "Observe 5+ free quarks",
+      "The QGP environment naturally deconfines quarks from hadrons",
+      check_5_quarks },
+    { "Between quarks, gluons fly ceaselessly — the strong force carriers that bind the "
+      "universe together. Here they are free, unconfined.",
+      "Observe gluon exchange",
+      "With Carrier Mode on, you can see gluons flying between quarks",
+      check_gluon_visible },
+    { "The dense electron sea begins to oscillate collectively — "
+      "a plasmon, the first quasiparticle, emerges from the chaos.",
+      "Create a plasmon",
+      "Plasmons emerge when electrons cluster densely in hot plasma",
+      check_plasmon_exists },
+};
+
+static const ScenarioTask TASKS_COSMIC_DAWN[] = {
+    { "Moments after the Big Bang, the universe is an inferno of pure energy. "
+      "Temperature defines everything — what can exist, what must annihilate.",
+      "Reach 1 billion K",
+      "The Big Bang environment starts extremely hot",
+      check_temp_1G },
+    { "From the seething vacuum, particle-antiparticle pairs burst into existence. "
+      "Most annihilate instantly, but some survive.",
+      "Observe pair production",
+      "High-energy collisions create positrons and neutrinos",
+      check_pair_produced },
+    { "As the universe cools, protons capture electrons for the first time. "
+      "Hydrogen — the simplest atom, and the seed of all structure.",
+      "Create hydrogen",
+      "Cooling allows protons to capture electrons — recombination",
+      check_any_hydrogen },
+    { "With neutral atoms formed, photons finally stream free. "
+      "The universe becomes transparent — this is the cosmic dawn.",
+      "Create 5 photons",
+      "Photons are released as electrons settle into orbitals",
+      check_5_photons },
+};
+
+static const ScenarioTask TASKS_NEUTRON_STAR[] = {
+    { "A massive star has died. Its core, compressed beyond imagination, "
+      "is now an ocean of neutrons packed tighter than atomic nuclei.",
+      "Observe 50+ neutrons",
+      "The neutron star environment is dominated by dense neutron matter",
+      check_50_neutrons },
+    { "In this crystalline sea, vibrations propagate as phonons — "
+      "lattice vibrations that carry energy through the nuclear solid.",
+      "Create a phonon",
+      "Phonons emerge when nucleons cluster densely enough to form a lattice",
+      check_phonon_exists },
+    { "At low temperature, neutrons pair up through quantum attraction. "
+      "Cooper pairs — the basis of neutron star superfluidity.",
+      "Form a Cooper pair",
+      "Cold, slow neutrons near each other can pair into a superfluid condensate",
+      check_cooper_pair_exists },
+    { "The superfluid stirs. A vortex excitation — a roton — "
+      "ripples through the condensate like a quantum whirlpool.",
+      "Observe a roton",
+      "Energetic Cooper pairs can shed roton vortex excitations",
+      check_roton_exists },
+};
+
+static const ScenarioTask TASKS_MAGNETAR[] = {
+    { "Some neutron stars are born with magnetic fields a quadrillion times stronger "
+      "than Earth's. This is a magnetar — the most magnetic object in the universe.",
+      "Build strong magnetic field",
+      "Fast-moving charges generate emergent B-field — watch it grow",
+      check_strong_bfield },
+    { "In the intense field, spin waves propagate through the magnetized matter. "
+      "Each magnon carries a quantum of magnetic excitation.",
+      "Create a magnon",
+      "Magnons form when fast charged particles move through strong B-fields",
+      check_magnon_exists },
+    { "The extreme environment breeds diversity — multiple quasiparticle species "
+      "coexist in this magnetic crucible.",
+      "Observe 3 different quasiparticle types",
+      "Phonons, magnons, Cooper pairs, rotons — they all arise in neutron stars",
+      check_3_qp_types },
+};
+
+static const ScenarioTask TASKS_SUSY_WORLD[] = {
+    { "Beyond the Standard Model lies a mirror world — supersymmetry. "
+      "Every fermion has a boson partner, every boson a fermion twin.",
+      "Discover 3 SUSY particles",
+      "The SUSY Sector environment produces selectrons, squarks, gluinos, and more",
+      check_3_susy_types },
+    { "The lightest supersymmetric particle — the neutralino — is stable. "
+      "It may be dark matter itself, invisible yet gravitating.",
+      "Observe a neutralino",
+      "Heavier SUSY particles decay to the stable neutralino (LSP)",
+      check_neutralino_exists },
+    { "In this dense plasma, electrons become dressed in phonon clouds — "
+      "polarons, where quantum many-body physics meets particle physics.",
+      "Create a polaron",
+      "Polarons form when electrons are surrounded by ions in dense environments",
+      check_polaron_exists },
+};
+
+static const ScenarioTask TASKS_THE_COLLIDER[] = {
+    { "The particle accelerator is humanity's most powerful microscope — "
+      "smashing particles together to reveal nature's deepest secrets.",
+      "Fire the accelerator",
+      "Click the accelerator tool or use the keyboard shortcut to fire",
+      check_accelerator_fired },
+    { "From the collision debris, a muon emerges — the electron's heavier cousin, "
+      "unstable and fleeting, a messenger from the second generation.",
+      "Create a muon",
+      "High-energy collisions produce muons — heavier leptons from the second family",
+      check_muon_exists },
+    { "Energy converts to mass and back again. Positron-electron pairs "
+      "materialize from pure collision energy — E = mc².",
+      "Observe pair production",
+      "Energetic collisions near nuclei can produce electron-positron pairs",
+      check_positron_exists },
+    { "The particle zoo grows. Each collision reveals new species — "
+      "quarks, bosons, leptons, all catalogued in the Standard Model.",
+      "Discover 15 particle types",
+      "Keep firing the accelerator — higher energies unlock rarer particles",
+      check_15_types },
+};
+
 // ── Scenario definitions ────────────────────────────────────────────────────
 
 static const Scenario SCENARIOS[] = {
@@ -572,6 +841,50 @@ static const Scenario SCENARIOS[] = {
       nullptr,
       setup_free_space,
       nullptr, 0 },
+
+    // ── Cosmic Evolution arc (indices 12-17) ─────────────────────────────
+
+    { "Quark Soup",
+      "Witness the universe's first microsecond — quarks and gluons in primal chaos.",
+      "Cosmology",
+      "The First Microsecond",
+      setup_quark_soup,
+      TASKS_QUARK_SOUP, 3 },
+
+    { "Cosmic Dawn",
+      "From the Big Bang inferno to the first atoms and light.",
+      "Cosmology",
+      "From Fire to First Light",
+      setup_cosmic_dawn,
+      TASKS_COSMIC_DAWN, 4 },
+
+    { "Neutron Star",
+      "Explore the superfluid heart of a dead star.",
+      "Cosmology",
+      "Heart of a Dead Star",
+      setup_neutron_star_scenario,
+      TASKS_NEUTRON_STAR, 4 },
+
+    { "Magnetar",
+      "The most magnetic object in the universe breeds spin waves.",
+      "Cosmology",
+      "The Most Magnetic Object in the Universe",
+      setup_magnetar,
+      TASKS_MAGNETAR, 3 },
+
+    { "SUSY World",
+      "Step beyond the Standard Model into supersymmetry.",
+      "Cosmology",
+      "Beyond the Standard Model",
+      setup_susy_world,
+      TASKS_SUSY_WORLD, 3 },
+
+    { "The Collider",
+      "Smash particles together at humanity's frontier of discovery.",
+      "Cosmology",
+      "Smashing the Frontier",
+      setup_the_collider,
+      TASKS_THE_COLLIDER, 4 },
 };
 
 static constexpr int SCENARIO_COUNT = sizeof(SCENARIOS) / sizeof(SCENARIOS[0]);

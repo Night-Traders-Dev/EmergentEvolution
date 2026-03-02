@@ -232,4 +232,56 @@ inline const EncyclopediaEntry ENCYCLOPEDIA[PHYS_PARTICLE_TYPES] = {
     // 65-66: New class
     { "Paraparticle", "Pp", "Exotic", "Particle obeying parastatistics — neither purely bosonic nor fermionic. Theoretical framework for exotic quantum statistics.", 0.0f, 0.0f, 0.0f, "Predicted" },
     { "Dynamical Axion QP", "aQP", "Condensed Matter", "Dynamical axion quasiparticle arising in topological insulators. A condensed-matter analog of the axion.", 0.0f, 0.0f, 0.0f, "2019" },
+    // 67: Electron Hole
+    { "Electron Hole", "h+", "Quasiparticle",
+      "A quasiparticle representing the absence of an electron in an atomic shell. "
+      "Carries an effective positive charge (+1e) and behaves as a mobile positive charge carrier. "
+      "Arises dynamically when electrons are ionized from atoms via photoelectric effect, Compton "
+      "scattering, or thermal excitation. Recombines with free electrons, emitting a photon.",
+      0.511f, +1.0f, 0.5f, "Condensed matter physics" },
+
+    // 68: Plasmon
+    { "Plasmon", "Pl", "Quasiparticle",
+      "Collective oscillation of free electron density in a plasma. Arises when electrons "
+      "bunch against the positive ion background and oscillate at the plasma frequency. "
+      "Ubiquitous in stellar plasmas, solar wind, and interstellar medium. Decays via Landau damping.",
+      0.01f, 0.0f, 1.0f, "Plasma physics" },
+
+    // 69: Phonon
+    { "Phonon", "Ph", "Quasiparticle",
+      "Quantized lattice vibration in a crystalline solid. In neutron star crusts, iron-group "
+      "nuclei form a body-centered cubic lattice where thermal energy propagates as phonons. "
+      "Critical for neutron star cooling and thermal conductivity. Decays via anharmonic scattering.",
+      0.001f, 0.0f, 0.0f, "Condensed matter / astrophysics" },
+
+    // 70: Magnon
+    { "Magnon", "Mn", "Quasiparticle",
+      "Quantized spin wave excitation in magnetized matter. Propagates as a collective "
+      "precession of magnetic moments. In neutron star magnetospheres (B ~ 10^12 Gauss), "
+      "magnons carry spin information through the crust. Decays via magnetic damping.",
+      0.01f, 0.0f, 1.0f, "Magnetism / astrophysics" },
+
+    // 71: Polaron
+    { "Polaron", "Po", "Quasiparticle",
+      "An electron dressed by a cloud of displaced ions from the surrounding medium. "
+      "The lattice polarization distortion follows the electron, increasing its effective mass. "
+      "Forms in dense plasma interiors where electron-ion coupling is strong. "
+      "Decays when the polarization cloud disperses.",
+      1.0f, -1.0f, 0.5f, "Condensed matter physics" },
+
+    // 72: Cooper Pair
+    { "Cooper Pair", "CP", "Quasiparticle",
+      "A bound pair of fermions (neutrons in neutron star interiors) that forms a bosonic "
+      "condensate below the superfluid critical temperature. The pairing is mediated by "
+      "attractive nuclear interactions. Cooper pairs flow without friction, enabling neutron "
+      "star superfluidity. Very long-lived in cold superfluid conditions.",
+      1879.13f, 0.0f, 0.0f, "Nuclear / condensed matter" },
+
+    // 73: Roton
+    { "Roton", "Ro", "Quasiparticle",
+      "Quantized vortex excitation in a superfluid. Represents a local minimum in the "
+      "superfluid excitation spectrum at finite momentum. In neutron star interiors, rotons "
+      "arise when the superfluid is perturbed by rotation or thermal fluctuations. "
+      "Decays via viscous dissipation in the superfluid.",
+      0.1f, 0.0f, 0.0f, "Superfluid physics" },
 };

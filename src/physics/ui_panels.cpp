@@ -74,6 +74,8 @@ void PhysicsInterface::draw_top_bar(SimConfig& cfg) {
             ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.4f, 1.0f), ">> RUNNING");
         else
             ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.2f, 1.0f), "|| PAUSED");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Simulation state\nSpace = pause/resume");
 
         // ── Timestep ──
         ImGui::SameLine(0, 20);
@@ -95,6 +97,7 @@ void PhysicsInterface::draw_top_bar(SimConfig& cfg) {
                 else        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.08f, 0.10f, 0.18f, 0.7f));
                 char btn_id[16]; snprintf(btn_id, sizeof(btn_id), "%s###TS%d", labels[i], i);
                 if (ImGui::SmallButton(btn_id)) cfg.time_scale = presets[i];
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Set time scale to %.2fx", presets[i]);
                 ImGui::PopStyleColor();
             }
             ImGui::PopStyleVar();
@@ -108,16 +111,22 @@ void PhysicsInterface::draw_top_bar(SimConfig& cfg) {
             char etemp_buf[64];
             format_temperature(emergent_temp_display, etemp_buf, sizeof(etemp_buf), prefs.temp_unit);
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "T: %s", etemp_buf);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Emergent temperature (from particle kinetic energy)\nOrange = measured from simulation");
         } else {
             char temp_buf[64];
             format_temperature(cfg.temperature_kelvin, temp_buf, sizeof(temp_buf), prefs.temp_unit);
             ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "T: %s", temp_buf);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Configured temperature\nBlue = thermostat setpoint");
         }
 
         // ── B-field ──
         if (cfg.magnetic_feedback_enabled && emergent_bfield_display > 0.001f) {
             ImGui::SameLine(0, 12);
             ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "B: %.3f T", emergent_bfield_display);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Emergent magnetic field strength (Tesla)\nFrom charged particle currents");
         }
 
         // ── FPS ──
@@ -126,6 +135,8 @@ void PhysicsInterface::draw_top_bar(SimConfig& cfg) {
             ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
             ImGui::SameLine(0, 10);
             ImGui::Text("%.0f fps", fps_display);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Frames per second\nToggle in Settings > Display");
         }
 
         // ── Energy + Entropy ──
@@ -137,6 +148,8 @@ void PhysicsInterface::draw_top_bar(SimConfig& cfg) {
             float total_MeV = total_energy_display * E_SCALE_MEV;
             fmt_energy_ev(ebuf, sizeof(ebuf), total_MeV);
             ImGui::Text("E: %s", ebuf);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Total system energy (kinetic + potential)");
         }
         {
             ImGui::SameLine(0, 8);
@@ -215,22 +228,27 @@ void PhysicsInterface::draw_top_bar(SimConfig& cfg) {
         if (select_mode) {
             ImGui::SameLine(0, 12);
             ImGui::TextColored(ImVec4(0.0f, 0.9f, 0.9f, 1.0f), "[SELECT]");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Select mode (F4)\nClick particles to inspect");
         }
         if (thermo_probe_placement_mode) {
             ImGui::SameLine(0, 12);
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "[THERMO]");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Thermometer probe\nClick to place temperature sensor");
         }
         if (velocity_meter_mode) {
             ImGui::SameLine(0, 12);
             ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "[VEL]");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Velocity meter\nClick a particle to track speed");
         }
         if (ruler_placement_mode) {
             ImGui::SameLine(0, 12);
             ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.3f, 1.0f), "[RULER]");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Distance ruler\nClick two points to measure");
         }
         if (density_counter_placement_mode) {
             ImGui::SameLine(0, 12);
             ImGui::TextColored(ImVec4(0.6f, 0.3f, 1.0f, 1.0f), "[DENSITY]");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Density counter\nClick to place particle density sensor");
         }
 
     }
@@ -385,22 +403,55 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
             ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.18f, 0.20f, 0.32f, 1.0f));
             if (ImGui::Begin("##MenuPopup", &show_tools_popup, popup_flags)) {
 
+                // Helper: draw a toggle menu item with a colored ON/OFF indicator
+                auto toggle_item = [&](const char* label, bool& flag, const char* tooltip = nullptr) -> bool {
+                    ImVec4 dot_col = flag
+                        ? ImVec4(0.3f, 0.85f, 0.5f, 1.0f)   // green dot when ON
+                        : ImVec4(0.35f, 0.35f, 0.4f, 0.6f);  // dim gray when OFF
+                    if (flag) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 1.0f, 0.8f, 1.0f));
+                    }
+                    // Draw colored dot before the label
+                    ImVec2 p = ImGui::GetCursorScreenPos();
+                    float y_center = p.y + ImGui::GetTextLineHeight() * 0.5f;
+                    ImGui::GetWindowDrawList()->AddCircleFilled(
+                        ImVec2(p.x + 5.0f, y_center), 3.5f, ImGui::ColorConvertFloat4ToU32(dot_col));
+                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.0f);
+                    bool clicked = ImGui::MenuItem(label, nullptr, flag);
+                    if (flag) ImGui::PopStyleColor();
+                    if (clicked) {
+                        flag = !flag;
+                        show_tools_popup = false;
+                    }
+                    if (tooltip && ImGui::IsItemHovered())
+                        ImGui::SetTooltip("%s", tooltip);
+                    return clicked;
+                };
+
                 // ── Simulation ──
                 if (ImGui::TreeNodeEx("Simulation", ImGuiTreeNodeFlags_DefaultOpen)) {
                     if (ImGui::MenuItem(sim_running ? "Pause (Space)" : "Resume (Space)")) {
                         sim_running = !sim_running;
+                        show_tools_popup = false;
                     }
-                    if (ImGui::MenuItem("Spawn (F3)", nullptr, spawn_menu_visible)) {
-                        spawn_menu_visible = !spawn_menu_visible;
+                    toggle_item("Spawn (F3)", spawn_menu_visible);
+                    {
+                        bool sel_tmp = select_mode;
+                        if (toggle_item("Select (F4)", sel_tmp)) {
+                            select_mode = sel_tmp;
+                            if (select_mode) { pending_spawn = false; force_obj_placement_mode = false; }
+                        }
                     }
-                    if (ImGui::MenuItem("Select (F4)", nullptr, select_mode)) {
-                        select_mode = !select_mode;
-                        if (select_mode) { pending_spawn = false; force_obj_placement_mode = false; }
-                    }
+                    toggle_item("Carrier Mode", cfg.carrier_mode_enabled,
+                                "Visible force carrier exchange between particles\n"
+                                "Photons between charges, gluons between quarks,\n"
+                                "W/Z between weak-interacting particles");
+                    toggle_item("Quasi Mode", cfg.quasi_mode_enabled,
+                                "Quasiparticle spawning and physics effects\n"
+                                "Plasmons, phonons, magnons, polarons,\n"
+                                "Cooper pairs, rotons in appropriate environments");
                     ImGui::Separator();
-                    if (ImGui::MenuItem("Settings", nullptr, show_settings_menu)) {
-                        show_settings_menu = !show_settings_menu;
-                    }
+                    toggle_item("Settings", show_settings_menu);
                     if (ImGui::MenuItem("Reset (F2)")) {
                         request_reset = true;
                         show_tools_popup = false;
@@ -460,14 +511,14 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
 
                 // ── View ─────────────────────────────────────────────────────
                 if (ImGui::TreeNodeEx("View", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    ImGui::MenuItem("Event Log", nullptr, &show_decay_log);
-                    ImGui::MenuItem("Particle List", nullptr, &show_particle_list);
-                    ImGui::MenuItem("Element List", nullptr, &show_element_list);
-                    ImGui::MenuItem("Particle Bestiary", nullptr, &show_particle_bestiary);
-                    ImGui::MenuItem("Element Bestiary", nullptr, &show_element_bestiary);
-                    ImGui::MenuItem("Molecule Bestiary", nullptr, &show_molecule_bestiary);
-                    ImGui::MenuItem("Achievements", nullptr, &show_achievements_panel);
-                    ImGui::MenuItem("Particle Textures", nullptr, &show_texture_panel);
+                    toggle_item("Event Log", show_decay_log);
+                    toggle_item("Particle List", show_particle_list);
+                    toggle_item("Element List", show_element_list);
+                    toggle_item("Particle Bestiary", show_particle_bestiary);
+                    toggle_item("Element Bestiary", show_element_bestiary);
+                    toggle_item("Molecule Bestiary", show_molecule_bestiary);
+                    toggle_item("Achievements", show_achievements_panel);
+                    toggle_item("Particle Textures", show_texture_panel);
                     ImGui::TreePop();
                 }
 
@@ -475,29 +526,33 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
 
                 // ── Visualization ───────────────────────────────────────────
                 if (ImGui::TreeNodeEx("Visualization")) {
-                    ImGui::MenuItem("Show Trails", nullptr, &cfg.show_trails);
-                    ImGui::MenuItem("Electron Cloud", nullptr, &show_electron_cloud);
-                    ImGui::MenuItem("Orbit Paths", nullptr, &show_orbit_paths);
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Show predicted Keplerian orbits\nfor bound electrons around nuclei");
-                    ImGui::MenuItem("Trajectory Tracer", nullptr, &show_trajectory_tracer);
-                    ImGui::MenuItem("Energy Heatmap", nullptr, &show_energy_heatmap);
-                    ImGui::MenuItem("Velocity Field", nullptr, &show_velocity_field);
-                    ImGui::MenuItem("Magnetic Field", nullptr, &show_magnetic_field);
-                    ImGui::MenuItem("Gravity Map", nullptr, &show_gravity_map);
+                    toggle_item("Show Trails", cfg.show_trails);
+                    toggle_item("Electron Cloud", show_electron_cloud);
+                    toggle_item("Orbit Paths", show_orbit_paths,
+                                "Show predicted Keplerian orbits\nfor bound electrons around nuclei");
+                    toggle_item("Trajectory Tracer", show_trajectory_tracer);
+                    toggle_item("Energy Heatmap", show_energy_heatmap);
+                    toggle_item("Velocity Field", show_velocity_field);
+                    toggle_item("Magnetic Field", show_magnetic_field);
+                    toggle_item("Strong Field", show_strong_field,
+                                "Show strong nuclear force field lines\nYukawa potential around quarks and nucleons\nColor = QCD charge (red/green/blue)");
+                    toggle_item("Weak Field", show_weak_field,
+                                "Show weak force field around W/Z bosons\nVery short range (exponential decay)\nViolet = W, Indigo = Z, Magenta = Higgs");
+                    toggle_item("Gravity Field", show_gravity_field,
+                                "Show gravitational field lines\nConverge on massive particles\nBlue intensity = mass");
+                    toggle_item("Gravity Map", show_gravity_map);
                     ImGui::Separator();
-                    ImGui::MenuItem("Mass-Energy Gravity (E=mc²)", nullptr, &gr_mass_energy);
-                    ImGui::MenuItem("Frame Dragging (Spin)", nullptr, &gr_frame_dragging);
-                    ImGui::MenuItem("Gravitational Waves", nullptr, &gr_grav_waves);
-                    ImGui::MenuItem("GW Ripples", nullptr, &show_grav_waves);
+                    toggle_item("Mass-Energy Gravity (E=mc\xc2\xb2)", gr_mass_energy);
+                    toggle_item("Frame Dragging (Spin)", gr_frame_dragging);
+                    toggle_item("Gravitational Waves", gr_grav_waves);
+                    toggle_item("GW Ripples", show_grav_waves);
                     ImGui::Separator();
-                    ImGui::MenuItem("Orbital Drive", nullptr, &orbital_drive);
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Orbital tangential drive + velocity boost.\nON = electrons actively driven to orbital speed.\nOFF = natural Coulomb orbits with quantum barrier only.");
+                    toggle_item("Orbital Drive", orbital_drive,
+                                "Orbital tangential drive + velocity boost.\nON = electrons actively driven to orbital speed.\nOFF = natural Coulomb orbits with quantum barrier only.");
                     ImGui::Separator();
-                    ImGui::MenuItem("Force Vectors", nullptr, &show_force_vectors);
-                    ImGui::MenuItem("Wave Mode", nullptr, &wave_mode);
-                    ImGui::MenuItem("Atom Grid", nullptr, &show_atom_grid);
+                    toggle_item("Force Vectors", show_force_vectors);
+                    toggle_item("Wave Mode", wave_mode);
+                    toggle_item("Atom Grid", show_atom_grid);
                     ImGui::TreePop();
                 }
 
@@ -590,6 +645,7 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                     }
                     if (ImGui::MenuItem("Nuclear Debug", nullptr, show_nuclear_debug)) {
                         show_nuclear_debug = !show_nuclear_debug;
+                        show_tools_popup = false;
                     }
                     ImGui::Separator();
                     if (ImGui::MenuItem("Halt Velocities")) {
@@ -626,16 +682,25 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
 void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
     ImGuiIO& io = ImGui::GetIO();
     float max_h = io.DisplaySize.y - 64.0f;
+    ImVec2 def_size(300, std::min(700.0f, max_h));
 
-    ImGui::SetNextWindowPos(ImVec2(10, 48), ImGuiCond_FirstUseEver);  // below 42px top bar
-    ImGui::SetNextWindowSize(ImVec2(300, std::min(700.0f, max_h)), ImGuiCond_FirstUseEver);
+    if (retile_windows_) {
+        ImGui::SetNextWindowPos(tile_pos_[TW_SETTINGS]);
+        ImGui::SetNextWindowSize(tile_size_[TW_SETTINGS]);
+    } else {
+        ImGui::SetNextWindowPos(find_free_window_pos(def_size), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(def_size, ImGuiCond_Appearing);
+    }
     ImGui::SetNextWindowSizeConstraints(ImVec2(280, 200), ImVec2(350, max_h));
 
-    if (!ImGui::Begin("Settings", &settings_visible)) {
+    bool open = ImGui::Begin("Settings", &settings_visible);
+    record_window_rect(TW_SETTINGS);
+    if (!open) {
         wobble_window(1.0f);
         ImGui::End();
         return;
     }
+    draw_minimize_button(TW_SETTINGS);
 
     // ── Environment ──────────────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Environment", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1169,6 +1234,22 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
         }
     }
 
+    // ── Carrier Mode (parameters only — toggle is in bottom bar menu) ────
+    if (cfg.carrier_mode_enabled) {
+        if (ImGui::CollapsingHeader("Carrier Mode")) {
+            ImGui::SliderInt("Max Carriers/Tick", &cfg.carrier_max_per_tick, 1, 10);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Maximum force carriers spawned per frame\n"
+                                 "Higher = more visible exchanges, more particles");
+
+            ImGui::SliderFloat("Exchange Radius", &cfg.carrier_exchange_radius, 20.0f, 100.0f, "%.0f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Maximum distance for carrier exchange\n"
+                                 "Carriers spawn between interacting particle pairs\n"
+                                 "within this radius");
+        }
+    }
+
     wobble_window(1.0f);
     ImGui::End();
 }
@@ -1183,16 +1264,25 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
 void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
     ImGuiIO& io = ImGui::GetIO();
     float max_h = io.DisplaySize.y - 64.0f;
+    ImVec2 def_size(380, std::min(720.0f, max_h));
 
-    ImGui::SetNextWindowPos(ImVec2(10, 48), ImGuiCond_FirstUseEver);  // below 42px top bar
-    ImGui::SetNextWindowSize(ImVec2(380, std::min(720.0f, max_h)), ImGuiCond_FirstUseEver);
+    if (retile_windows_) {
+        ImGui::SetNextWindowPos(tile_pos_[TW_SPAWN_MENU]);
+        ImGui::SetNextWindowSize(tile_size_[TW_SPAWN_MENU]);
+    } else {
+        ImGui::SetNextWindowPos(find_free_window_pos(def_size), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(def_size, ImGuiCond_Appearing);
+    }
     ImGui::SetNextWindowSizeConstraints(ImVec2(340, 200), ImVec2(420, max_h));
 
-    if (!ImGui::Begin("Spawn Particles", &spawn_menu_visible)) {
+    bool open = ImGui::Begin("Spawn Particles", &spawn_menu_visible);
+    record_window_rect(TW_SPAWN_MENU);
+    if (!open) {
         wobble_window(2.0f);
         ImGui::End();
         return;
     }
+    draw_minimize_button(TW_SPAWN_MENU);
 
     // ── Periodic Table ──────────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Periodic Table", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -2089,15 +2179,21 @@ void PhysicsInterface::draw_texture_panel() {
     float panel_h = io.DisplaySize.y * 0.7f;
 
     ImVec2 tex_size(panel_w, panel_h);
-    ImGui::SetNextWindowSize(tex_size, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(clamp_window_pos(
-        ImVec2(io.DisplaySize.x * 0.5f - panel_w * 0.5f,
-               io.DisplaySize.y * 0.15f), tex_size), ImGuiCond_FirstUseEver);
+    if (retile_windows_) {
+        ImGui::SetNextWindowPos(tile_pos_[TW_TEXTURE_PANEL]);
+        ImGui::SetNextWindowSize(tile_size_[TW_TEXTURE_PANEL]);
+    } else {
+        ImGui::SetNextWindowPos(find_free_window_pos(tex_size), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(tex_size, ImGuiCond_Appearing);
+    }
 
-    if (!ImGui::Begin("Particle Textures", &show_texture_panel)) {
+    bool open = ImGui::Begin("Particle Textures", &show_texture_panel);
+    record_window_rect(TW_TEXTURE_PANEL);
+    if (!open) {
         ImGui::End();
         return;
     }
+    draw_minimize_button(TW_TEXTURE_PANEL);
 
     // Convenience buttons
     if (ImGui::Button("All Procedural")) {

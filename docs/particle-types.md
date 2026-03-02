@@ -1,8 +1,9 @@
 # Particle Types
 
-67 types across 14 families. Types 0&ndash;32 cover the Standard Model and Beyond Standard Model;
+74 types across 15 families. Types 0&ndash;32 cover the Standard Model and Beyond Standard Model;
 types 33&ndash;66 are hypothetical (dark matter candidates, SUSY sparticles, GUT bosons,
-theoretical extremes).
+theoretical extremes); types 67&ndash;73 are quasiparticles (collective excitations in condensed
+matter).
 
 <details>
 <summary><b>Full particle table</b> (click to expand)</summary>
@@ -89,6 +90,14 @@ theoretical extremes).
 <tr><td rowspan="2"><b>New Class</b></td>
   <td>65</td><td><b>Paraparticle</b></td><td>~0</td><td>0</td><td>+0.33</td><td>Exotic statistics</td></tr>
 <tr><td>66</td><td><b>Dyn. Axion QP</b></td><td>100.0</td><td>0</td><td>0</td><td>Condensed-matter axion analog</td></tr>
+<tr><td rowspan="7"><b>Quasiparticles</b></td>
+  <td>67</td><td><b>Electron Hole</b></td><td>1.0</td><td>+1</td><td>+0.5</td><td>Vacancy in electron sea, attracts electrons</td></tr>
+<tr><td>68</td><td><b>Plasmon</b></td><td>0.5</td><td>0</td><td>0</td><td>Collective electron oscillation in plasma</td></tr>
+<tr><td>69</td><td><b>Phonon</b></td><td>100.0</td><td>0</td><td>0</td><td>Lattice vibration in dense nucleon matter</td></tr>
+<tr><td>70</td><td><b>Magnon</b></td><td>100.0</td><td>0</td><td>+1</td><td>Spin wave in magnetized matter</td></tr>
+<tr><td>71</td><td><b>Polaron</b></td><td>0.8</td><td>-1</td><td>+0.5</td><td>Electron dressed in phonon cloud</td></tr>
+<tr><td>72</td><td><b>Cooper Pair</b></td><td>0.012</td><td>0</td><td>0</td><td>Paired neutrons, superfluid condensate</td></tr>
+<tr><td>73</td><td><b>Roton</b></td><td>0.05</td><td>0</td><td>0</td><td>Vortex excitation in superfluid</td></tr>
 </tbody>
 </table>
 

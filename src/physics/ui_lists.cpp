@@ -74,11 +74,13 @@ void PhysicsInterface::draw_element_list() {
     float max_h = io.DisplaySize.y - 120.0f;
     ImVec2 win_size(win_w, max_h * 0.7f);
 
-    ImGui::SetNextWindowPos(clamp_window_pos(
-        ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
-               io.DisplaySize.y * 0.5f - max_h * 0.35f), win_size),
-        ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
+    if (retile_windows_) {
+        ImGui::SetNextWindowPos(tile_pos_[TW_ELEMENT_LIST]);
+        ImGui::SetNextWindowSize(tile_size_[TW_ELEMENT_LIST]);
+    } else {
+        ImGui::SetNextWindowPos(find_free_window_pos(win_size), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
+    }
     ImGui::SetNextWindowSizeConstraints(ImVec2(450, 150), ImVec2(660, max_h));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.05f, 0.09f, 0.95f));
@@ -111,11 +113,14 @@ void PhysicsInterface::draw_element_list() {
         snprintf(title, sizeof(title), "Elements (%d)###ElementList",
                  static_cast<int>(element_list.size()));
 
-    if (!ImGui::Begin(title, &show_element_list)) {
+    bool el_open = ImGui::Begin(title, &show_element_list);
+    record_window_rect(TW_ELEMENT_LIST);
+    if (!el_open) {
         ImGui::End();
         ImGui::PopStyleColor(3);
         return;
     }
+    draw_minimize_button(TW_ELEMENT_LIST);
 
     // ── Filter buttons ──
     struct FilterDef { const char* label; int mode; ImVec4 col; int count; };
@@ -448,11 +453,13 @@ void PhysicsInterface::draw_particle_list(const Particles& particles) {
     float max_h = io.DisplaySize.y - 120.0f;
     ImVec2 win_size(win_w, max_h * 0.7f);
 
-    ImGui::SetNextWindowPos(clamp_window_pos(
-        ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
-               io.DisplaySize.y * 0.5f - max_h * 0.35f), win_size),
-        ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
+    if (retile_windows_) {
+        ImGui::SetNextWindowPos(tile_pos_[TW_PARTICLE_LIST]);
+        ImGui::SetNextWindowSize(tile_size_[TW_PARTICLE_LIST]);
+    } else {
+        ImGui::SetNextWindowPos(find_free_window_pos(win_size), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
+    }
     ImGui::SetNextWindowSizeConstraints(ImVec2(460, 150), ImVec2(620, max_h));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.05f, 0.09f, 0.95f));
@@ -462,11 +469,14 @@ void PhysicsInterface::draw_particle_list(const Particles& particles) {
     char ptitle[64];
     snprintf(ptitle, sizeof(ptitle), "Particles (%u)###ParticleList", active_particle_display);
 
-    if (!ImGui::Begin(ptitle, &show_particle_list)) {
+    bool pl_open = ImGui::Begin(ptitle, &show_particle_list);
+    record_window_rect(TW_PARTICLE_LIST);
+    if (!pl_open) {
         ImGui::End();
         ImGui::PopStyleColor(3);
         return;
     }
+    draw_minimize_button(TW_PARTICLE_LIST);
 
     // ── Type filter buttons (same pattern as event log) ──
     float wrap_x = ImGui::GetContentRegionAvail().x - 10.0f;
@@ -647,11 +657,13 @@ void PhysicsInterface::draw_particle_bestiary() {
     float max_h = io.DisplaySize.y - 80.0f;
     ImVec2 win_size(win_w, max_h * 0.75f);
 
-    ImGui::SetNextWindowPos(clamp_window_pos(
-        ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
-               io.DisplaySize.y * 0.5f - max_h * 0.4f), win_size),
-        ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
+    if (retile_windows_) {
+        ImGui::SetNextWindowPos(tile_pos_[TW_PARTICLE_BESTIARY]);
+        ImGui::SetNextWindowSize(tile_size_[TW_PARTICLE_BESTIARY]);
+    } else {
+        ImGui::SetNextWindowPos(find_free_window_pos(win_size), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
+    }
     ImGui::SetNextWindowSizeConstraints(ImVec2(600, 300), ImVec2(1200, max_h));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.04f, 0.08f, 0.96f));
@@ -666,11 +678,14 @@ void PhysicsInterface::draw_particle_bestiary() {
     char title[80];
     snprintf(title, sizeof(title), "Particle Bestiary (%d active types)###Bestiary", active_types);
 
-    if (!ImGui::Begin(title, &show_particle_bestiary)) {
+    bool pb_open = ImGui::Begin(title, &show_particle_bestiary);
+    record_window_rect(TW_PARTICLE_BESTIARY);
+    if (!pb_open) {
         ImGui::End();
         ImGui::PopStyleColor(3);
         return;
     }
+    draw_minimize_button(TW_PARTICLE_BESTIARY);
 
     // Grid layout
     const float cell_w = 110.0f;
@@ -882,11 +897,13 @@ void PhysicsInterface::draw_element_bestiary() {
     float max_h = io.DisplaySize.y - 80.0f;
     ImVec2 win_size(win_w, max_h * 0.75f);
 
-    ImGui::SetNextWindowPos(clamp_window_pos(
-        ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
-               io.DisplaySize.y * 0.5f - max_h * 0.4f), win_size),
-        ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
+    if (retile_windows_) {
+        ImGui::SetNextWindowPos(tile_pos_[TW_ELEMENT_BESTIARY]);
+        ImGui::SetNextWindowSize(tile_size_[TW_ELEMENT_BESTIARY]);
+    } else {
+        ImGui::SetNextWindowPos(find_free_window_pos(win_size), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
+    }
     ImGui::SetNextWindowSizeConstraints(ImVec2(600, 300), ImVec2(1200, max_h));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.03f, 0.04f, 0.07f, 0.96f));
@@ -903,11 +920,14 @@ void PhysicsInterface::draw_element_bestiary() {
     snprintf(title, sizeof(title), "Element Bestiary (%d/%d discovered)###ElemBestiary",
              discovered_elements, FULL_ELEMENT_COUNT);
 
-    if (!ImGui::Begin(title, &show_element_bestiary)) {
+    bool eb_open = ImGui::Begin(title, &show_element_bestiary);
+    record_window_rect(TW_ELEMENT_BESTIARY);
+    if (!eb_open) {
         ImGui::End();
         ImGui::PopStyleColor(3);
         return;
     }
+    draw_minimize_button(TW_ELEMENT_BESTIARY);
 
     const float cell_w = 88.0f;
     const float cell_h = 105.0f;
@@ -1046,11 +1066,13 @@ void PhysicsInterface::draw_molecule_bestiary() {
     float max_h = io.DisplaySize.y - 80.0f;
     ImVec2 win_size(win_w, max_h * 0.65f);
 
-    ImGui::SetNextWindowPos(clamp_window_pos(
-        ImVec2(io.DisplaySize.x * 0.5f - win_w * 0.5f,
-               io.DisplaySize.y * 0.5f - max_h * 0.4f), win_size),
-                            ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
+    if (retile_windows_) {
+        ImGui::SetNextWindowPos(tile_pos_[TW_MOLECULE_BESTIARY]);
+        ImGui::SetNextWindowSize(tile_size_[TW_MOLECULE_BESTIARY]);
+    } else {
+        ImGui::SetNextWindowPos(find_free_window_pos(win_size), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(win_size, ImGuiCond_Appearing);
+    }
     ImGui::SetNextWindowSizeConstraints(ImVec2(500, 200), ImVec2(1000, max_h));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.03f, 0.05f, 0.06f, 0.96f));
@@ -1061,11 +1083,14 @@ void PhysicsInterface::draw_molecule_bestiary() {
     snprintf(title, sizeof(title), "Molecule Bestiary (%d discovered)###MolBestiary",
              static_cast<int>(molecule_bestiary.size()));
 
-    if (!ImGui::Begin(title, &show_molecule_bestiary)) {
+    bool mb_open = ImGui::Begin(title, &show_molecule_bestiary);
+    record_window_rect(TW_MOLECULE_BESTIARY);
+    if (!mb_open) {
         ImGui::End();
         ImGui::PopStyleColor(3);
         return;
     }
+    draw_minimize_button(TW_MOLECULE_BESTIARY);
 
     if (molecule_bestiary.empty()) {
         ImVec2 avail = ImGui::GetContentRegionAvail();

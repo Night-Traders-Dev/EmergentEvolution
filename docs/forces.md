@@ -23,6 +23,7 @@ Additional force behaviors:
 - **Higgs field** &mdash; tunable VEV (0&ndash;500), mass coupling to heavy particles
 - **Hard-sphere collisions** &mdash; elastic position correction + velocity impulse (restitution 0.95)
 - **Synchrotron radiation** &mdash; charged particles radiate energy proportional to q&#178;&gamma;&#178;v&#178; (subtle long-term drain)
+- **Quasiparticles** (types 67&ndash;73) &mdash; GPU fast-path: skip nuclear/EM/strong forces, weak gravity only (0.5&times;), 0.92&times; velocity damping, Brownian thermal kicks, accelerated energy decay. CPU effects: plasmon oscillating field, phonon lattice kicks, magnon Lorentz deflection, polaron ion drag, Cooper pair superfluidity boost, roton tangential vortex
 
 ## General Relativity Extensions
 

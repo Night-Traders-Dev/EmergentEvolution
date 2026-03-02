@@ -15,7 +15,7 @@ EmergentEvolution/
 │   ├── simulation.h             # PhysicsSimulation class definition
 │   ├── simulation.cpp           # Core: tick loop, init, reset, input, spatial grid, achievements
 │   ├── nuclear.cpp              # Annihilation, fusion, fission, nuclear decay, photoelectric,
-│   │                            #   pion decay, spallation
+│   │                            #   pion decay, spallation, carrier exchange, quasiparticles
 │   ├── orbital.cpp              # Orbital assignment, nucleus repulsion, bonds, shell transitions
 │   ├── decay.cpp                # Particle decay, hadronization, bremsstrahlung, weak flavor change
 │   ├── quantum.cpp              # Virtual pairs, neutrino scattering/oscillations, entanglement
@@ -30,23 +30,23 @@ EmergentEvolution/
 │   ├── ui_tools.cpp             # Decay log, nuclear debug, accelerator, force objects, measurement
 │   ├── ui_overlays.cpp          # Visualization overlays (heatmap, fields, trajectories, etc.)
 │   ├── ui_data.h                # Shared UI data tables (elements, particle names/colors, formatting)
-│   ├── phys_particles.h/.cpp    # 67 particle types, masses, charges, environments
+│   ├── phys_particles.h/.cpp    # 74 particle types, masses, charges, environments
 │   ├── molecules.h              # ~50 molecule templates with geometry
-│   ├── achievements.h/.cpp      # 64 achievements, persistence, Steam API names
+│   ├── achievements.h/.cpp      # 126 achievements, persistence, Steam API names
 │   ├── audio.h/.cpp             # Background music + 10 SFX channels via miniaudio
 │   ├── save_load.h/.cpp         # Binary .ppsg/.ppel/.ppmol serialization
 │   ├── paths.h                  # Platform-appropriate data directory (XDG / AppData)
 │   ├── error_dialog.h/.cpp      # Native OS error dialogs (MessageBox / zenity)
 │   ├── steam_integration.h/.cpp # Optional Steamworks SDK wrapper (no-op stubs)
 │   ├── tutorial.h/.cpp          # 10-step interactive tutorial system
-│   ├── scenarios.h/.cpp         # 12 guided scenarios with goals
+│   ├── scenarios.h/.cpp         # 18 guided scenarios with goals (Cosmic Evolution arc)
 │   ├── encyclopedia.h           # Particle type descriptions and metadata
 │   └── main.cpp                 # Entry point
 ├── shaders/
 │   ├── physics.comp             # GPU: forces, collisions, bonds, fields, bloom, wave rendering
 │   ├── fullscreen.vert/.frag    # Render pipeline
 ├── assets/                      # Icons, music, Windows resources
-│   ├── particles/              # 67 custom particle texture PNGs (128x128 RGBA)
+│   ├── particles/              # 74 custom particle texture PNGs (128x128 RGBA)
 │   └── sfx/                    # 10 procedural WAV sound effects
 ├── tools/
 │   ├── ppmol/

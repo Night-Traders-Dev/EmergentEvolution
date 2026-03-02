@@ -452,6 +452,13 @@ inline const char* const PHYS_TYPE_NAMES[PHYS_PARTICLE_TYPES] = {
     "Tachyon", "Preon", "Inflaton", "Majoron", "Odderon",
     "Glueball", "Skyrmion", "X17", "Chameleon",
     "Paraparticle", "Dyn. Axion QP",
+    "Electron Hole",
+    "Plasmon",
+    "Phonon",
+    "Magnon",
+    "Polaron",
+    "Cooper Pair",
+    "Roton",
 };
 
 inline const char* const PHYS_TYPE_LABELS[PHYS_PARTICLE_TYPES] = {
@@ -469,6 +476,8 @@ inline const char* const PHYS_TYPE_LABELS[PHYS_PARTICLE_TYPES] = {
     "Ta", "Pr", "In", "Mj", "Od",
     "Gb", "Sk", "X17", "Ch",
     "Pp", "Dq",
+    "h+",
+    "Pl", "Ph", "Mn", "Po", "CP", "Ro",
 };
 
 inline const ImVec4 PHYS_TYPE_UI_COLORS[PHYS_PARTICLE_TYPES] = {
@@ -539,4 +548,11 @@ inline const ImVec4 PHYS_TYPE_UI_COLORS[PHYS_PARTICLE_TYPES] = {
     ImVec4(0.7f, 0.5f, 0.3f, 1.0f),   // chameleon
     ImVec4(0.9f, 0.2f, 1.0f, 1.0f),   // paraparticle
     ImVec4(0.4f, 0.7f, 0.95f, 1.0f),  // dyn axion QP
+    ImVec4(1.0f, 0.75f, 0.25f, 1.0f), // electron hole
+    ImVec4(0.3f, 1.0f, 0.95f, 1.0f), // plasmon — cyan
+    ImVec4(0.95f, 0.95f, 0.4f, 1.0f),// phonon — pale yellow
+    ImVec4(1.0f, 0.45f, 0.15f, 1.0f),// magnon — orange-red
+    ImVec4(0.7f, 0.35f, 0.9f, 1.0f), // polaron — purple
+    ImVec4(0.6f, 0.85f, 1.0f, 1.0f), // cooper pair — ice blue
+    ImVec4(0.2f, 0.9f, 0.7f, 1.0f),  // roton — teal-green
 };

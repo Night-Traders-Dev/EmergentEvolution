@@ -13,12 +13,12 @@
 
 ---
 
-Particle Playground is a real-time physics sandbox that simulates 67 particle types across the
-Standard Model, Beyond Standard Model, and 34 hypothetical particles. All four fundamental forces
-run simultaneously on Vulkan compute shaders with optional general relativity extensions
-(mass-energy equivalence, frame dragging, gravitational waves with physical tidal forces).
+Particle Playground is a real-time physics sandbox that simulates 74 particle types across the
+Standard Model, Beyond Standard Model, 34 hypothetical particles, and 7 quasiparticles. All four
+fundamental forces run simultaneously on Vulkan compute shaders with optional general relativity
+extensions (mass-energy equivalence, frame dragging, gravitational waves with physical tidal forces).
 CPU-side processes handle nuclear reactions, decay, orbital mechanics, covalent bonding,
-hadronization, and more.
+hadronization, carrier exchange, and quasiparticle dynamics.
 
 Up to **100,000 particles** in real time. GPU handles O(n&#178;) pairwise forces; CPU physics
 uses a **spatial acceleration grid** with **OpenMP** parallelization for O(n) neighbor queries.
@@ -39,6 +39,8 @@ uses a **spatial acceleration grid** with **OpenMP** parallelization for O(n) ne
 - [Spallation & Photonuclear Processes](docs/spallation-photonuclear.md)
 - [Hadronization & Color Confinement](docs/hadronization-color-confinement.md)
 - [Gluon Interactions](docs/gluon-interactions.md)
+- [Carrier Exchange](docs/carrier-exchange.md)
+- [Quasiparticles](docs/quasiparticles.md)
 - [Virtual Particles & Casimir Effect](docs/virtual-particles-casimir.md)
 - [Quantum Entanglement](docs/quantum-entanglement.md)
 - [Emergent Thermodynamics](docs/emergent-thermodynamics.md)

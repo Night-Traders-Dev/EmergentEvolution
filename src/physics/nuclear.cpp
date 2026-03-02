@@ -1,5 +1,6 @@
 #include "physics/simulation.h"
 #include "physics/sim_helpers.h"
+#include "physics/ui_data.h"
 #include <imgui.h>
 #include <algorithm>
 #include <random>
@@ -97,7 +98,6 @@ void PhysicsSimulation::check_annihilation() {
             iface.push_notification(amsg, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
             iface.push_decay_event(amsg, PhysicsInterface::DEVT_ANNIHILATION,
                 ImVec4(1.0f, 0.3f, 0.3f, 1.0f), std::string(adetail));
-            cfg.shake_intensity = std::max(cfg.shake_intensity, 12.0f);
         }
 
         glm::vec2 mid = (readback_positions_[i] + readback_positions_[best_j]) * 0.5f;
@@ -339,7 +339,6 @@ void PhysicsSimulation::check_fusion() {
             char msg[64];
             snprintf(msg, sizeof(msg), "Fusion: p+p (%.1f keV)", best_KE_cm * 1000.0f);
             iface.push_notification(msg, ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
-            cfg.shake_intensity = std::max(cfg.shake_intensity, 8.0f);
             {
                 char fd[256];
                 snprintf(fd, sizeof(fd),
@@ -423,7 +422,6 @@ void PhysicsSimulation::check_fusion() {
             readback_energies_[j] = std::min(readback_energies_[j] + mev_to_ebuf(E_bind * 0.5f), 1.0f);
             iface.push_notification("Fusion: p + n \xe2\x86\x92 deuteron",
                                     ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
-            cfg.shake_intensity = std::max(cfg.shake_intensity, 8.0f);
             {
                 glm::vec2 rv = readback_velocities_[j] - readback_velocities_[i];
                 float ke_cm = cm_kinetic_energy(m_proton, m_neutron, glm::dot(rv, rv));
@@ -578,7 +576,6 @@ void PhysicsSimulation::check_fission() {
             snprintf(msg, sizeof(msg), "Fission: %d-nucleon cluster split + %dn",
                      static_cast<int>(cluster.size()), free_neutrons);
             iface.push_notification(msg, ImVec4(1.0f, 0.6f, 0.2f, 1.0f));
-            cfg.shake_intensity = std::max(cfg.shake_intensity, 10.0f);
             char detail[512];
             snprintf(detail, sizeof(detail),
                 "Neutron #%u KE: %.2f MeV\nCluster size: %d nucleons (p=%d)\nFragments: 2 x %d nucleons\nFree neutrons ejected: %d (%.2f MeV each)\nE_fission total: %.2f MeV",
@@ -1189,6 +1186,25 @@ void PhysicsSimulation::check_photoelectric() {
                 any_changed = true;
                 interaction_count++;
                 try_unlock(ACH_FIRST_PHOTOELECTRIC);
+
+                // Spawn electron hole at nucleus position (vacancy left behind)
+                if (orbital_parent >= 0 && static_cast<uint32_t>(orbital_parent) < n) {
+                    for (uint32_t h = 0; h < cfg.particle_count; ++h) {
+                        if (readback_energies_[h] < 0.01f) {
+                            readback_positions_[h] = readback_positions_[orbital_parent];
+                            readback_velocities_[h] = rand_dir() * 5.0f;
+                            readback_energies_[h] = 1.0f;
+                            write_spawn_genome(particles, h, ELECTRON_HOLE_TYPE_PHYS, rng, frame_counter_);
+                            particles.orbital_parent[h] = -1;
+                            particles.orbital_shell[h] = -1;
+                            cpu_particles_dirty_ = true;
+                            iface.push_decay_event("Electron hole spawned (photoelectric)",
+                                PhysicsInterface::DEVT_ELECTRON_HOLE, ImVec4(1.0f, 0.75f, 0.25f, 1.0f), "");
+                            break;
+                        }
+                    }
+                }
+
                 {
                     char detail[512];
                     snprintf(detail, sizeof(detail),
@@ -1220,6 +1236,24 @@ void PhysicsSimulation::check_photoelectric() {
                     particles.orbital_shell[best_e] = -1;
                     particles.excitation_timer[best_e] = 0;
                     particles.genomes[best_e * GENOME_SIZE + 2] = 0.0f;
+
+                    // Spawn electron hole at nucleus position
+                    if (orbital_parent >= 0 && static_cast<uint32_t>(orbital_parent) < n) {
+                        for (uint32_t h = 0; h < cfg.particle_count; ++h) {
+                            if (readback_energies_[h] < 0.01f) {
+                                readback_positions_[h] = readback_positions_[orbital_parent];
+                                readback_velocities_[h] = rand_dir() * 5.0f;
+                                readback_energies_[h] = 1.0f;
+                                write_spawn_genome(particles, h, ELECTRON_HOLE_TYPE_PHYS, rng, frame_counter_);
+                                particles.orbital_parent[h] = -1;
+                                particles.orbital_shell[h] = -1;
+                                cpu_particles_dirty_ = true;
+                                iface.push_decay_event("Electron hole spawned (Compton)",
+                                    PhysicsInterface::DEVT_ELECTRON_HOLE, ImVec4(1.0f, 0.75f, 0.25f, 1.0f), "");
+                                break;
+                            }
+                        }
+                    }
                 } else {
                     // Excite: promote electron to next shell
                     int next_shell = shell + 1;
@@ -2156,6 +2190,794 @@ void PhysicsSimulation::check_spallation() {
 
     if (any_spallated) {
         cpu_particles_dirty_ = true;
+    }
+}
+
+// ── Electron-hole recombination ──────────────────────────────────────────────
+
+void PhysicsSimulation::check_recombination() {
+    if (readback_positions_.empty()) return;
+
+    const uint32_t n = cfg.particle_count;
+    const float RECOMB_RADIUS = 40.0f;
+    const float RECOMB_RADIUS_SQ = RECOMB_RADIUS * RECOMB_RADIUS;
+    const int MAX_RECOMB_PER_FRAME = 50;
+
+    int recomb_count = 0;
+    bool any_changed = false;
+    std::mt19937 rng(frame_counter_ * 777777777u + 67);
+
+    auto rand_dir = [&]() -> glm::vec2 {
+        std::uniform_real_distribution<float> angle_d(0.0f, 6.28318530718f);
+        float a = angle_d(rng);
+        return glm::vec2(std::cos(a), std::sin(a));
+    };
+
+    // Find dormant slot for photon spawn
+    auto find_dormant = [&](uint32_t start) -> uint32_t {
+        for (uint32_t i = start; i < n; ++i)
+            if (readback_energies_[i] < 0.01f) return i;
+        return UINT32_MAX;
+    };
+
+    // Scan for electron holes
+    for (uint32_t i = 0; i < n && recomb_count < MAX_RECOMB_PER_FRAME; ++i) {
+        if (readback_energies_[i] < 0.01f) continue;
+        if (particles.types[i] != ELECTRON_HOLE_TYPE_PHYS) continue;
+
+        // Find nearest free electron
+        float best_dist_sq = RECOMB_RADIUS_SQ;
+        uint32_t best_e = UINT32_MAX;
+        auto search = [&](uint32_t j) {
+            if (j == i) return;
+            if (readback_energies_[j] < 0.01f) return;
+            if (particles.types[j] != ELECTRON_TYPE_PHYS) return;
+            // Only free electrons (not bound to atoms)
+            if (j < particles.orbital_parent.size() && particles.orbital_parent[j] >= 0) return;
+            glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
+            float d2 = delta.x * delta.x + delta.y * delta.y;
+            if (d2 < best_dist_sq) {
+                best_dist_sq = d2;
+                best_e = j;
+            }
+        };
+
+        if (iface.prefs.spatial_grid)
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, RECOMB_RADIUS, search);
+        else
+            for (uint32_t j = 0; j < n; ++j) search(j);
+
+        if (best_e == UINT32_MAX) continue;
+
+        // Recombination: hole + free electron → photon
+        glm::vec2 midpoint = (readback_positions_[i] + readback_positions_[best_e]) * 0.5f;
+
+        // Deactivate hole
+        readback_energies_[i] = 0.0f;
+        readback_velocities_[i] = glm::vec2(0.0f);
+
+        // Deactivate electron
+        readback_energies_[best_e] = 0.0f;
+        readback_velocities_[best_e] = glm::vec2(0.0f);
+
+        // Spawn recombination photon
+        uint32_t slot = find_dormant(0);
+        if (slot != UINT32_MAX) {
+            readback_positions_[slot] = midpoint;
+            readback_velocities_[slot] = rand_dir() * C_SIM;
+            readback_energies_[slot] = 0.5f;
+            write_spawn_genome(particles, slot, PHOTON_TYPE_PHYS, rng, frame_counter_);
+            particles.orbital_parent[slot] = -1;
+            particles.orbital_shell[slot] = -1;
+        }
+
+        any_changed = true;
+        recomb_count++;
+        iface.push_decay_event("Electron hole recombined: h\xe2\x81\xba + e\xe2\x81\xbb \xe2\x86\x92 \xce\xb3",
+            PhysicsInterface::DEVT_ELECTRON_HOLE, ImVec4(1.0f, 0.75f, 0.25f, 1.0f), "");
+    }
+
+    if (any_changed) {
+        cpu_particles_dirty_ = true;
+    }
+}
+
+// ── Carrier Mode: visible force carrier exchange ─────────────────────────────
+
+void PhysicsSimulation::check_carrier_exchange() {
+    if (!cfg.carrier_mode_enabled) return;
+    const uint32_t n = cfg.particle_count;
+    if (n == 0 || readback_positions_.empty()) return;
+
+    std::mt19937 rng(frame_counter_ * 123456789u + 42u);
+    std::uniform_real_distribution<float> prob(0.0f, 1.0f);
+    int spawned = 0;
+    const int max_spawn = cfg.carrier_max_per_tick;
+    const float radius = cfg.carrier_exchange_radius;
+    const float radius_sq = radius * radius;
+
+    auto find_dormant = [&](uint32_t start) -> uint32_t {
+        for (uint32_t k = start; k < n; ++k)
+            if (readback_energies_[k] < 0.01f) return k;
+        for (uint32_t k = 0; k < start; ++k)
+            if (readback_energies_[k] < 0.01f) return k;
+        return UINT32_MAX;
+    };
+
+    // ── Classification helpers ──
+    auto is_neutrino_flags = [](uint32_t flags) {
+        return (flags & BEHAVIOR_NEUTRINO) != 0;
+    };
+    auto is_baryon = [](uint32_t t) {
+        return t == PROTON_TYPE || t == NEUTRON_TYPE || t == ANTIPROTON_TYPE_PHYS;
+    };
+    auto is_cc_lepton = [](uint32_t t) {
+        return t == ELECTRON_TYPE_PHYS || t == POSITRON_TYPE_PHYS ||
+               t == MUON_TYPE_PHYS || t == ANTIMUON_TYPE_PHYS ||
+               t == TAU_TYPE_PHYS || t == ANTITAU_TYPE_PHYS;
+    };
+    auto is_massive_fermion = [](uint32_t t, uint32_t flags) {
+        if (t >= PHYS_PARTICLE_TYPES) return false;
+        if (flags & (BEHAVIOR_PHOTON | BEHAVIOR_GLUON | BEHAVIOR_GRAVITON |
+                     BEHAVIOR_DARK_ENERGY)) return false;
+        return PHYS_REST_MASS_MEV[t] > 0.1f;
+    };
+
+    // Carrier candidate result
+    struct CarrierMatch {
+        uint32_t carrier_type;
+        float    probability;
+        PhysicsInterface::DecayEventType evt;
+    };
+
+    // Shuffle start index to avoid bias
+    std::uniform_int_distribution<uint32_t> start_dist(0, n > 1 ? n - 1 : 0);
+    uint32_t start_idx = start_dist(rng);
+
+    for (uint32_t iter = 0; iter < n && spawned < max_spawn; ++iter) {
+        uint32_t i = (start_idx + iter) % n;
+        if (readback_energies_[i] < 0.05f) continue;
+
+        uint32_t type_i = particles.types[i];
+        if (type_i >= PHYS_PARTICLE_TYPES) continue;
+        uint32_t flags_i = particles.behavior_flags[type_i];
+
+        // Skip existing force carriers, virtual particles, dark energy quanta
+        if (flags_i & (BEHAVIOR_PHOTON | BEHAVIOR_VIRTUAL | BEHAVIOR_GLUON |
+                       BEHAVIOR_WEAK_BOSON | BEHAVIOR_HIGGS | BEHAVIOR_GRAVITON |
+                       BEHAVIOR_DARK_ENERGY)) continue;
+
+        float charge_i = PHYS_CHARGE[type_i];
+        float mass_i = PHYS_REST_MASS_MEV[type_i];
+        bool is_quark_i = (flags_i & BEHAVIOR_QUARK) != 0;
+        bool is_charged_i = std::abs(charge_i) > 0.01f;
+        bool is_neutrino_i = is_neutrino_flags(flags_i);
+        bool is_baryon_i = is_baryon(type_i);
+
+        // Every matter particle can participate in at least gravity
+        // so we don't filter here — carrier selection happens per-pair
+
+        // Find nearest suitable partner
+        float best_dist_sq = radius_sq;
+        uint32_t best_j = UINT32_MAX;
+        CarrierMatch best_match{UINT32_MAX, 0.0f, PhysicsInterface::DEVT_CARRIER_EM};
+
+        auto search = [&](uint32_t j) {
+            if (j == i) return;
+            if (readback_energies_[j] < 0.01f) return;
+            uint32_t type_j = particles.types[j];
+            if (type_j >= PHYS_PARTICLE_TYPES) return;
+            uint32_t flags_j = particles.behavior_flags[type_j];
+            if (flags_j & (BEHAVIOR_PHOTON | BEHAVIOR_VIRTUAL | BEHAVIOR_GLUON |
+                           BEHAVIOR_WEAK_BOSON | BEHAVIOR_HIGGS | BEHAVIOR_GRAVITON |
+                           BEHAVIOR_DARK_ENERGY)) return;
+
+            glm::vec2 delta = readback_positions_[j] - readback_positions_[i];
+            float d2 = delta.x * delta.x + delta.y * delta.y;
+            if (d2 >= best_dist_sq) return;
+
+            float charge_j = PHYS_CHARGE[type_j];
+            bool is_quark_j = (flags_j & BEHAVIOR_QUARK) != 0;
+            bool is_charged_j = std::abs(charge_j) > 0.01f;
+            bool is_neutrino_j = is_neutrino_flags(flags_j);
+            bool is_baryon_j = is_baryon(type_j);
+
+            // ── Determine carrier by interaction type (priority order) ──
+            CarrierMatch m{UINT32_MAX, 0.0f, PhysicsInterface::DEVT_CARRIER_EM};
+
+            // 1) QCD color: quark ↔ quark → gluon
+            if (is_quark_i && is_quark_j) {
+                m = {GLUON_TYPE_PHYS, 0.005f * cfg.alpha_s_scale,
+                     PhysicsInterface::DEVT_CARRIER_QCD};
+            }
+            // 2) Yukawa nuclear: baryon ↔ baryon → gluon (nuclear force mediator)
+            else if (is_baryon_i && is_baryon_j) {
+                m = {GLUON_TYPE_PHYS, 0.003f * cfg.yukawa_strength,
+                     PhysicsInterface::DEVT_CARRIER_NUCLEAR};
+            }
+            // 3) EM Coulomb: charged ↔ charged → photon
+            else if (is_charged_i && is_charged_j) {
+                float q_prod = std::abs(charge_i * charge_j);
+                m = {PHOTON_TYPE_PHYS, 0.003f * q_prod,
+                     PhysicsInterface::DEVT_CARRIER_EM};
+            }
+            // 4) Weak CC: lepton ↔ neutrino → W±
+            else if ((is_cc_lepton(type_i) && is_neutrino_j) ||
+                     (is_neutrino_i && is_cc_lepton(type_j))) {
+                float q_sum = charge_i + charge_j;
+                uint32_t w_type = (q_sum < 0.0f) ? W_MINUS_TYPE_PHYS : W_PLUS_TYPE_PHYS;
+                m = {w_type, 0.0003f, PhysicsInterface::DEVT_CARRIER_WEAK};
+            }
+            // 5) Weak CC: quark ↔ lepton/neutrino → W±
+            else if ((is_quark_i && !is_quark_j) || (!is_quark_i && is_quark_j)) {
+                float q_sum = charge_i + charge_j;
+                uint32_t w_type = (q_sum < 0.0f) ? W_MINUS_TYPE_PHYS : W_PLUS_TYPE_PHYS;
+                m = {w_type, 0.0004f, PhysicsInterface::DEVT_CARRIER_WEAK};
+            }
+            // 6) Weak NC: neutrino ↔ neutrino → Z⁰
+            else if (is_neutrino_i && is_neutrino_j) {
+                m = {Z_BOSON_TYPE_PHYS, 0.0002f, PhysicsInterface::DEVT_CARRIER_WEAK};
+            }
+            // 7) Neutral ↔ neutral (DM, neutron↔neutrino, etc.) → Z⁰ (weak NC)
+            else if (!is_charged_i && !is_charged_j && !is_quark_i && !is_quark_j) {
+                m = {Z_BOSON_TYPE_PHYS, 0.0002f, PhysicsInterface::DEVT_CARRIER_WEAK};
+            }
+
+            if (m.carrier_type != UINT32_MAX) {
+                best_dist_sq = d2;
+                best_j = j;
+                best_match = m;
+            }
+        };
+
+        if (iface.prefs.spatial_grid)
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, radius, search);
+        else
+            for (uint32_t j = 0; j < n; ++j) search(j);
+
+        if (best_j == UINT32_MAX) continue;
+
+        // ── Rare carrier overrides: graviton & Higgs ──
+        // These can override the primary carrier via separate probability rolls
+        uint32_t final_carrier = best_match.carrier_type;
+        float final_P = best_match.probability;
+        auto final_evt = best_match.evt;
+
+        uint32_t type_j = particles.types[best_j];
+        float mass_j = (type_j < PHYS_PARTICLE_TYPES)
+            ? PHYS_REST_MASS_MEV[type_j] : 0.0f;
+        uint32_t flags_j = (type_j < PHYS_PARTICLE_TYPES)
+            ? particles.behavior_flags[type_j] : 0u;
+
+        // Graviton: any two massive particles (very rare, scales with mass product)
+        if (mass_i > 0.1f && mass_j > 0.1f && cfg.gravity_strength > 0.0f) {
+            float P_grav = 0.0002f * std::min(1.0f, (mass_i * mass_j) / (938.0f * 938.0f));
+            if (prob(rng) < P_grav) {
+                final_carrier = GRAVITON_TYPE_PHYS;
+                final_P = 1.0f;  // already passed probability gate
+                final_evt = PhysicsInterface::DEVT_CARRIER_GRAVITY;
+            }
+        }
+
+        // Higgs: massive fermion ↔ massive fermion (scales with heavier mass)
+        if (final_carrier != GRAVITON_TYPE_PHYS &&
+            is_massive_fermion(type_i, flags_i) &&
+            is_massive_fermion(particles.types[best_j], flags_j)) {
+            float heavier = std::max(mass_i, mass_j);
+            float P_higgs = 0.0001f * std::min(1.0f, heavier / 125100.0f);
+            // Top quark has strongest Yukawa coupling to Higgs
+            if (type_i == TOP_QUARK_TYPE || type_i == ANTI_TOP_TYPE ||
+                particles.types[best_j] == TOP_QUARK_TYPE ||
+                particles.types[best_j] == ANTI_TOP_TYPE)
+                P_higgs *= 50.0f;
+            if (prob(rng) < P_higgs) {
+                final_carrier = HIGGS_TYPE_PHYS;
+                final_P = 1.0f;
+                final_evt = PhysicsInterface::DEVT_CARRIER_HIGGS;
+            }
+        }
+
+        // Primary probability gate (graviton/Higgs already gated above)
+        if (final_P < 1.0f && prob(rng) >= final_P) continue;
+
+        // ── Spawn carrier ──
+        uint32_t slot = find_dormant(i + 1);
+        if (slot == UINT32_MAX) continue;
+
+        glm::vec2 dir = readback_positions_[best_j] - readback_positions_[i];
+        float dist = std::sqrt(best_dist_sq);
+        if (dist > 0.1f) dir /= dist;
+        else dir = glm::vec2(1.0f, 0.0f);
+
+        // Energy: small fraction of source particle, capped
+        float E_carrier = readback_energies_[i] * 0.08f;
+        E_carrier = std::min(E_carrier, 0.3f);
+        readback_energies_[i] -= E_carrier;
+
+        write_spawn_genome(particles, slot, final_carrier, rng, frame_counter_);
+
+        // Spawn at source particle, offset slightly toward partner
+        readback_positions_[slot] = readback_positions_[i] + dir * 4.0f;
+
+        // Massless carriers at C_SIM, massive (W/Z/Higgs) slower
+        bool massless_carrier = (final_carrier == PHOTON_TYPE_PHYS ||
+                                 final_carrier == GLUON_TYPE_PHYS ||
+                                 final_carrier == GRAVITON_TYPE_PHYS);
+        float speed = massless_carrier ? C_SIM : C_SIM * 0.5f;
+        readback_velocities_[slot] = dir * speed;
+        readback_energies_[slot] = E_carrier;
+
+        // Mark as virtual (short lifetime)
+        particles.genomes[slot * GENOME_SIZE + 3] = 0.5f;
+
+        particles.orbital_parent[slot] = -1;
+        particles.orbital_shell[slot] = -1;
+
+        // ── Event log — distinct type per carrier ──
+        {
+            const char* carrier_name = "?";
+            ImVec4 col(0.6f, 0.4f, 1.0f, 1.0f);
+            if (final_carrier == PHOTON_TYPE_PHYS) {
+                carrier_name = "\xce\xb3"; col = ImVec4(1.0f, 1.0f, 0.3f, 1.0f);
+            } else if (final_carrier == GLUON_TYPE_PHYS && final_evt == PhysicsInterface::DEVT_CARRIER_NUCLEAR) {
+                carrier_name = "g(nuc)"; col = ImVec4(1.0f, 0.7f, 0.3f, 1.0f);
+            } else if (final_carrier == GLUON_TYPE_PHYS) {
+                carrier_name = "g"; col = ImVec4(0.3f, 1.0f, 0.3f, 1.0f);
+            } else if (final_carrier == W_PLUS_TYPE_PHYS) {
+                carrier_name = "W\xe2\x81\xba"; col = ImVec4(0.6f, 0.4f, 1.0f, 1.0f);
+            } else if (final_carrier == W_MINUS_TYPE_PHYS) {
+                carrier_name = "W\xe2\x81\xbb"; col = ImVec4(0.6f, 0.4f, 1.0f, 1.0f);
+            } else if (final_carrier == Z_BOSON_TYPE_PHYS) {
+                carrier_name = "Z\xc2\xb0"; col = ImVec4(0.6f, 0.4f, 1.0f, 1.0f);
+            } else if (final_carrier == GRAVITON_TYPE_PHYS) {
+                carrier_name = "G"; col = ImVec4(0.4f, 0.6f, 1.0f, 1.0f);
+            } else if (final_carrier == HIGGS_TYPE_PHYS) {
+                carrier_name = "H"; col = ImVec4(1.0f, 0.5f, 0.8f, 1.0f);
+            }
+            char msg[128], detail[256];
+            const char* src_name = (type_i < PHYS_PARTICLE_TYPES)
+                ? PHYS_TYPE_NAMES[type_i] : "?";
+            const char* dst_name = (type_j < PHYS_PARTICLE_TYPES)
+                ? PHYS_TYPE_NAMES[type_j] : "?";
+            snprintf(msg, sizeof(msg), "%s \xe2\x86\x94 %s via %s",
+                     src_name, dst_name, carrier_name);
+            snprintf(detail, sizeof(detail),
+                     "Carrier exchange: %s emitted from #%u (%s) toward #%u (%s)\n"
+                     "Energy: %.3f MeV, distance: %.1f px",
+                     carrier_name, i, src_name, best_j, dst_name,
+                     E_carrier, dist);
+            iface.push_decay_event(msg, final_evt, col, std::string(detail));
+        }
+
+        ++spawned;
+    }
+
+    if (spawned > 0)
+        cpu_particles_dirty_ = true;
+}
+
+// ── Quasiparticle spawning ───────────────────────────────────────────────────
+// Plasmon, Phonon, Magnon, Polaron, Cooper Pair, Roton — environment-dependent
+
+void PhysicsSimulation::check_quasiparticles() {
+    const uint32_t n = cfg.particle_count;
+    if (n == 0 || readback_positions_.empty()) return;
+
+    std::mt19937 rng(frame_counter_ * 7919u + 104729u);
+    std::uniform_real_distribution<float> prob(0.0f, 1.0f);
+    std::uniform_real_distribution<float> angle(0.0f, 6.2832f);
+    int spawned = 0;
+    const int MAX_QP_PER_TICK = 3;
+    uint32_t env = cfg.environment_mode;
+
+    auto find_dormant = [&](uint32_t start) -> uint32_t {
+        for (uint32_t k = start; k < n; ++k)
+            if (readback_energies_[k] < 0.01f) return k;
+        for (uint32_t k = 0; k < start; ++k)
+            if (readback_energies_[k] < 0.01f) return k;
+        return UINT32_MAX;
+    };
+
+    auto spawn_qp = [&](uint32_t slot, uint32_t qp_type, glm::vec2 pos,
+                         glm::vec2 vel, float energy, const char* msg, ImVec4 col,
+                         const std::string& detail = "") {
+        write_spawn_genome(particles, slot, qp_type, rng, frame_counter_);
+        readback_positions_[slot] = pos;
+        readback_velocities_[slot] = vel;
+        readback_energies_[slot] = energy;
+        particles.orbital_parent[slot] = -1;
+        particles.orbital_shell[slot] = -1;
+        iface.push_decay_event(msg, PhysicsInterface::DEVT_QUASIPARTICLE, col, detail);
+        ++spawned;
+    };
+
+    // Shuffle start to avoid bias
+    std::uniform_int_distribution<uint32_t> start_dist(0, n > 1 ? n - 1 : 0);
+    uint32_t start_idx = start_dist(rng);
+
+    // ── Plasmon: collective electron oscillation in plasma ──
+    // Envs: Hydrogen Plasma(1), Solar Core(3), QGP(7), Electroweak(8), Big Bang(13)
+    bool plasma_env = (env == 1 || env == 3 || env == 7 || env == 8 || env == 13);
+    if ((plasma_env || emergent_temperature_ > 500.0f) && spawned < MAX_QP_PER_TICK) {
+        for (uint32_t iter = 0; iter < n && spawned < MAX_QP_PER_TICK; ++iter) {
+            uint32_t i = (start_idx + iter) % n;
+            if (readback_energies_[i] < 0.05f) continue;
+            uint32_t ti = particles.types[i];
+            if (ti != ELECTRON_TYPE_PHYS) continue;
+
+            // Count nearby electrons (density check)
+            int electron_count = 0;
+            glm::vec2 centroid(0.0f);
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, 40.0f, [&](uint32_t j) {
+                if (j == i) return;
+                if (readback_energies_[j] < 0.01f) return;
+                if (particles.types[j] == ELECTRON_TYPE_PHYS && electron_count < 8) {
+                    centroid += readback_positions_[j];
+                    ++electron_count;
+                }
+            });
+
+            if (electron_count < 3) continue;
+            if (prob(rng) >= 0.002f) continue;
+
+            uint32_t slot = find_dormant(i + 1);
+            if (slot == UINT32_MAX) break;
+
+            centroid = (centroid + readback_positions_[i]) / float(electron_count + 1);
+            float a = angle(rng);
+            float speed = 20.0f + emergent_temperature_ * 0.05f;
+            char detail[256];
+            snprintf(detail, sizeof(detail),
+                     "Collective oscillation of %d electrons within 40px\n"
+                     "Seed electron #%u  E: %.3f MeV\n"
+                     "Emergent temp: %.1f  |  Env: %u\n"
+                     "Spawned at centroid → slot #%u  speed: %.1f",
+                     electron_count + 1, i, readback_energies_[i],
+                     emergent_temperature_, env, slot, speed);
+            spawn_qp(slot, PLASMON_TYPE_PHYS, centroid,
+                      glm::vec2(std::cos(a), std::sin(a)) * speed,
+                      0.05f, "Plasmon (electron density oscillation)",
+                      ImVec4(0.3f, 1.0f, 0.95f, 1.0f), std::string(detail));
+            break;  // one plasmon attempt per tick
+        }
+    }
+
+    // ── Phonon: lattice vibration in dense nucleon environments ──
+    bool neutron_star = (env == 2);
+    if (neutron_star && spawned < MAX_QP_PER_TICK) {
+        for (uint32_t iter = 0; iter < n && spawned < MAX_QP_PER_TICK; ++iter) {
+            uint32_t i = (start_idx + iter * 7) % n;
+            if (readback_energies_[i] < 0.05f) continue;
+            uint32_t ti = particles.types[i];
+            if (ti != NEUTRON_TYPE && ti != PROTON_TYPE) continue;
+
+            // Count nearby nucleons (lattice density)
+            int nucleon_count = 0;
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, 20.0f, [&](uint32_t j) {
+                if (j == i) return;
+                if (readback_energies_[j] < 0.01f) return;
+                uint32_t tj = particles.types[j];
+                if ((tj == NEUTRON_TYPE || tj == PROTON_TYPE) && nucleon_count < 4)
+                    ++nucleon_count;
+            });
+
+            if (nucleon_count < 2) continue;
+            if (prob(rng) >= 0.003f) continue;
+
+            uint32_t slot = find_dormant(i + 1);
+            if (slot == UINT32_MAX) break;
+
+            float a = angle(rng);
+            float speed = 30.0f;
+            char detail[256];
+            snprintf(detail, sizeof(detail),
+                     "Lattice vibration from %d nucleons within 20px\n"
+                     "Source %s #%u  E: %.3f MeV\n"
+                     "Neutron star env  |  Spawned → slot #%u",
+                     nucleon_count + 1, (ti == NEUTRON_TYPE ? "Neutron" : "Proton"),
+                     i, readback_energies_[i], slot);
+            spawn_qp(slot, PHONON_TYPE_PHYS, readback_positions_[i] + glm::vec2(3.0f, 0.0f),
+                      glm::vec2(std::cos(a), std::sin(a)) * speed,
+                      0.03f, "Phonon (lattice vibration)",
+                      ImVec4(0.95f, 0.95f, 0.4f, 1.0f), std::string(detail));
+            break;
+        }
+    }
+
+    // ── Magnon: spin wave in strong magnetic field ──
+    if (emergent_bfield_ > 0.3f && spawned < MAX_QP_PER_TICK) {
+        for (uint32_t iter = 0; iter < n && spawned < MAX_QP_PER_TICK; ++iter) {
+            uint32_t i = (start_idx + iter * 11) % n;
+            if (readback_energies_[i] < 0.1f) continue;
+            uint32_t ti = particles.types[i];
+            if (ti >= PHYS_PARTICLE_TYPES) continue;
+            float qi = PHYS_CHARGE[ti];
+            if (std::abs(qi) < 0.01f) continue;  // only from moving charges
+
+            float v_mag = std::sqrt(readback_velocities_[i].x * readback_velocities_[i].x +
+                                    readback_velocities_[i].y * readback_velocities_[i].y);
+            if (v_mag < 0.3f * C_SIM) continue;
+
+            float P = 0.001f * emergent_bfield_;
+            if (prob(rng) >= P) continue;
+
+            uint32_t slot = find_dormant(i + 1);
+            if (slot == UINT32_MAX) break;
+
+            // Perpendicular to velocity
+            glm::vec2 perp(-readback_velocities_[i].y, readback_velocities_[i].x);
+            if (v_mag > 0.1f) perp /= v_mag;
+            float speed = 40.0f;
+            const char* src_name = (ti < PHYS_PARTICLE_TYPES) ? PHYS_TYPE_NAMES[ti] : "?";
+            char detail[256];
+            snprintf(detail, sizeof(detail),
+                     "Spin wave from fast charged particle\n"
+                     "%s #%u  q=%.1f  |v|=%.2fc  E: %.3f MeV\n"
+                     "Emergent B-field: %.3f  |  P(spawn): %.4f\n"
+                     "Launched perpendicular → slot #%u",
+                     src_name, i, qi, v_mag / C_SIM, readback_energies_[i],
+                     emergent_bfield_, P, slot);
+            spawn_qp(slot, MAGNON_TYPE_PHYS, readback_positions_[i] + perp * 3.0f,
+                      perp * speed,
+                      0.04f, "Magnon (spin wave excitation)",
+                      ImVec4(1.0f, 0.45f, 0.15f, 1.0f), std::string(detail));
+            break;
+        }
+    }
+
+    // ── Polaron: electron dressed by ion cloud in dense plasma ──
+    bool dense_env = (env == 2 || env == 3 || env == 7);
+    if (dense_env && spawned < MAX_QP_PER_TICK) {
+        for (uint32_t iter = 0; iter < n && spawned < MAX_QP_PER_TICK; ++iter) {
+            uint32_t i = (start_idx + iter * 13) % n;
+            if (readback_energies_[i] < 0.05f) continue;
+            if (particles.types[i] != ELECTRON_TYPE_PHYS) continue;
+
+            // Count nearby ions
+            int ion_count = 0;
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, 30.0f, [&](uint32_t j) {
+                if (j == i) return;
+                if (readback_energies_[j] < 0.01f) return;
+                uint32_t tj = particles.types[j];
+                if (tj < PHYS_PARTICLE_TYPES && PHYS_CHARGE[tj] > 0.5f && ion_count < 4)
+                    ++ion_count;
+            });
+
+            if (ion_count < 2) continue;
+            if (prob(rng) >= 0.001f) continue;
+
+            // Transform the electron into a polaron in-place
+            float E_old = readback_energies_[i];
+            float v_old = std::sqrt(readback_velocities_[i].x * readback_velocities_[i].x +
+                                    readback_velocities_[i].y * readback_velocities_[i].y);
+            write_spawn_genome(particles, i, POLARON_TYPE_PHYS, rng, frame_counter_);
+            readback_energies_[i] = E_old;
+            // Slow down (heavier effective mass)
+            readback_velocities_[i] *= 0.5f;
+            char pol_detail[256];
+            snprintf(pol_detail, sizeof(pol_detail),
+                     "Electron #%u dressed by %d nearby ions\n"
+                     "E: %.3f MeV  |v|: %.2fc → %.2fc (mass drag)\n"
+                     "Env: %u  |  In-place type conversion",
+                     i, ion_count, E_old, v_old / C_SIM, v_old * 0.5f / C_SIM, env);
+            iface.push_decay_event("e\xe2\x81\xbb \xe2\x86\x92 Polaron (ion cloud dressing)",
+                PhysicsInterface::DEVT_QUASIPARTICLE, ImVec4(0.7f, 0.35f, 0.9f, 1.0f),
+                std::string(pol_detail));
+            ++spawned;
+            break;
+        }
+    }
+
+    // ── Cooper Pair: paired neutrons in cold superfluid ──
+    if (neutron_star && emergent_temperature_ < 200.0f && spawned < MAX_QP_PER_TICK) {
+        for (uint32_t iter = 0; iter < n && spawned < MAX_QP_PER_TICK; ++iter) {
+            uint32_t i = (start_idx + iter * 17) % n;
+            if (readback_energies_[i] < 0.05f) continue;
+            if (particles.types[i] != NEUTRON_TYPE) continue;
+
+            float vi_mag = std::sqrt(readback_velocities_[i].x * readback_velocities_[i].x +
+                                     readback_velocities_[i].y * readback_velocities_[i].y);
+            if (vi_mag > 0.1f * C_SIM) continue;  // must be slow
+
+            // Find a nearby slow neutron partner
+            uint32_t partner = UINT32_MAX;
+            float best_d2 = 15.0f * 15.0f;
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, 15.0f, [&](uint32_t j) {
+                if (j == i || j == partner) return;
+                if (readback_energies_[j] < 0.01f) return;
+                if (particles.types[j] != NEUTRON_TYPE) return;
+                float vj = std::sqrt(readback_velocities_[j].x * readback_velocities_[j].x +
+                                     readback_velocities_[j].y * readback_velocities_[j].y);
+                if (vj > 0.1f * C_SIM) return;
+                glm::vec2 d = readback_positions_[j] - readback_positions_[i];
+                float d2 = d.x * d.x + d.y * d.y;
+                if (d2 < best_d2) { best_d2 = d2; partner = j; }
+            });
+
+            if (partner == UINT32_MAX) continue;
+            if (prob(rng) >= 0.002f) continue;
+
+            // Merge two neutrons into a Cooper pair
+            glm::vec2 midpoint = (readback_positions_[i] + readback_positions_[partner]) * 0.5f;
+            glm::vec2 total_p = readback_velocities_[i] + readback_velocities_[partner];
+            float E_i = readback_energies_[i], E_p = readback_energies_[partner];
+            float total_E = E_i + E_p;
+            float vp_mag = std::sqrt(readback_velocities_[partner].x * readback_velocities_[partner].x +
+                                     readback_velocities_[partner].y * readback_velocities_[partner].y);
+
+            // Build detail before we zero the sources
+            char cp_detail[256];
+            snprintf(cp_detail, sizeof(cp_detail),
+                     "Neutron pairing in cold superfluid\n"
+                     "n #%u  E: %.3f MeV  |v|: %.2fc\n"
+                     "n #%u  E: %.3f MeV  |v|: %.2fc\n"
+                     "Emergent temp: %.1f (< 200 threshold)\n"
+                     "Merged \xe2\x86\x92 slot #%u  total E: %.3f MeV",
+                     i, E_i, vi_mag / C_SIM,
+                     partner, E_p, vp_mag / C_SIM,
+                     emergent_temperature_,
+                     i, total_E);
+
+            // Deactivate both neutrons
+            readback_energies_[i] = 0.0f;
+            readback_velocities_[i] = glm::vec2(0.0f);
+            readback_energies_[partner] = 0.0f;
+            readback_velocities_[partner] = glm::vec2(0.0f);
+
+            // Spawn Cooper pair in one of the slots
+            write_spawn_genome(particles, i, COOPER_PAIR_TYPE_PHYS, rng, frame_counter_);
+            readback_positions_[i] = midpoint;
+            readback_velocities_[i] = total_p * 0.5f;  // conserve momentum
+            readback_energies_[i] = total_E;
+            particles.orbital_parent[i] = -1;
+            particles.orbital_shell[i] = -1;
+            iface.push_decay_event("n + n \xe2\x86\x92 Cooper Pair (superfluid condensate)",
+                PhysicsInterface::DEVT_QUASIPARTICLE, ImVec4(0.6f, 0.85f, 1.0f, 1.0f),
+                std::string(cp_detail));
+            ++spawned;
+            cpu_particles_dirty_ = true;
+            break;
+        }
+    }
+
+    // ── Roton: vortex excitation from energetic Cooper Pairs ──
+    if (neutron_star && spawned < MAX_QP_PER_TICK) {
+        for (uint32_t iter = 0; iter < n && spawned < MAX_QP_PER_TICK; ++iter) {
+            uint32_t i = (start_idx + iter * 19) % n;
+            if (readback_energies_[i] < 0.2f) continue;
+            if (particles.types[i] != COOPER_PAIR_TYPE_PHYS) continue;
+
+            if (prob(rng) >= 0.001f) continue;
+
+            uint32_t slot = find_dormant(i + 1);
+            if (slot == UINT32_MAX) break;
+
+            // Spawn perpendicular to Cooper pair's velocity
+            glm::vec2 v = readback_velocities_[i];
+            float vmag = std::sqrt(v.x * v.x + v.y * v.y);
+            glm::vec2 perp = (vmag > 0.1f)
+                ? glm::vec2(-v.y, v.x) / vmag
+                : glm::vec2(std::cos(angle(rng)), std::sin(angle(rng)));
+
+            float E_roton = readback_energies_[i] * 0.1f;
+            readback_energies_[i] -= E_roton;
+
+            char rt_detail[256];
+            snprintf(rt_detail, sizeof(rt_detail),
+                     "Vortex excitation from energetic Cooper Pair\n"
+                     "Cooper Pair #%u  E: %.3f MeV  |v|: %.2fc\n"
+                     "Energy transferred: %.3f MeV (10%%)\n"
+                     "Launched perpendicular → slot #%u",
+                     i, readback_energies_[i] + E_roton, vmag / C_SIM,
+                     E_roton, slot);
+            spawn_qp(slot, ROTON_TYPE_PHYS, readback_positions_[i] + perp * 4.0f,
+                      perp * 25.0f,
+                      E_roton, "Roton (superfluid vortex excitation)",
+                      ImVec4(0.2f, 0.9f, 0.7f, 1.0f), std::string(rt_detail));
+            break;
+        }
+    }
+
+    if (spawned > 0)
+        cpu_particles_dirty_ = true;
+
+    // ── Quasiparticle physics effects on nearby particles ──────────────────
+    // Each living quasiparticle exerts real forces on surrounding matter
+    for (uint32_t i = 0; i < n; ++i) {
+        if (readback_energies_[i] < 0.01f) continue;
+        uint32_t ti = particles.types[i];
+
+        if (ti == PLASMON_TYPE_PHYS) {
+            // Plasmon: oscillating electric field pushes/pulls nearby electrons
+            // Phase oscillates with frame counter — creates wave-like sloshing
+            float phase = std::sin(float(frame_counter_ + i * 37) * 0.5f);
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, 35.0f, [&](uint32_t j) {
+                if (j == i || readback_energies_[j] < 0.01f) return;
+                uint32_t tj = particles.types[j];
+                if (tj >= PHYS_PARTICLE_TYPES) return;
+                float qj = PHYS_CHARGE[tj];
+                if (std::abs(qj) < 0.01f) return;
+                glm::vec2 d = readback_positions_[j] - readback_positions_[i];
+                float r2 = d.x * d.x + d.y * d.y + 1.0f;
+                float r = std::sqrt(r2);
+                // Oscillating radial push/pull scaled by charge
+                float strength = phase * qj * 8.0f / r2;
+                readback_velocities_[j] += (d / r) * strength;
+            });
+
+        } else if (ti == PHONON_TYPE_PHYS) {
+            // Phonon: vibrates nearby nucleons, transferring kinetic energy
+            glm::vec2 vph = readback_velocities_[i];
+            float vph_mag = std::sqrt(vph.x * vph.x + vph.y * vph.y);
+            if (vph_mag < 0.1f) continue;
+            glm::vec2 vph_dir = vph / vph_mag;
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, 20.0f, [&](uint32_t j) {
+                if (j == i || readback_energies_[j] < 0.01f) return;
+                uint32_t tj = particles.types[j];
+                if (tj != NEUTRON_TYPE && tj != PROTON_TYPE) return;
+                // Kick nucleon along phonon's travel direction
+                readback_velocities_[j] += vph_dir * 3.0f;
+                readback_energies_[j] += 0.005f;
+                // Phonon loses energy as it transfers
+                readback_energies_[i] = std::max(0.0f, readback_energies_[i] - 0.002f);
+            });
+
+        } else if (ti == MAGNON_TYPE_PHYS) {
+            // Magnon: deflects charged particles — magnetic perturbation
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, 30.0f, [&](uint32_t j) {
+                if (j == i || readback_energies_[j] < 0.01f) return;
+                uint32_t tj = particles.types[j];
+                if (tj >= PHYS_PARTICLE_TYPES) return;
+                float qj = PHYS_CHARGE[tj];
+                if (std::abs(qj) < 0.01f) return;
+                // Lorentz-like deflection: F perpendicular to v
+                glm::vec2 vj = readback_velocities_[j];
+                float deflect = qj * 4.0f * emergent_bfield_;
+                readback_velocities_[j] += glm::vec2(-vj.y, vj.x) * deflect * 0.01f;
+            });
+
+        } else if (ti == POLARON_TYPE_PHYS) {
+            // Polaron: drags nearby ions slightly — mutual coupling
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, 25.0f, [&](uint32_t j) {
+                if (j == i || readback_energies_[j] < 0.01f) return;
+                uint32_t tj = particles.types[j];
+                if (tj >= PHYS_PARTICLE_TYPES) return;
+                if (PHYS_CHARGE[tj] < 0.5f) return;  // only positive ions
+                glm::vec2 d = readback_positions_[i] - readback_positions_[j];
+                float r2 = d.x * d.x + d.y * d.y + 1.0f;
+                // Attract ions toward polaron (phonon cloud polarization)
+                readback_velocities_[j] += d * (2.0f / r2);
+            });
+
+        } else if (ti == COOPER_PAIR_TYPE_PHYS) {
+            // Cooper Pair: superfluid effect — reduces scattering of nearby particles
+            // Nearby particles lose less energy (friction damping reduced)
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, 30.0f, [&](uint32_t j) {
+                if (j == i || readback_energies_[j] < 0.01f) return;
+                uint32_t tj = particles.types[j];
+                if (tj > NEUTRON_TYPE && tj != PROTON_TYPE) return;  // only nucleons
+                // Slight energy boost — superfluidity prevents dissipation
+                float v_mag = std::sqrt(readback_velocities_[j].x * readback_velocities_[j].x +
+                                        readback_velocities_[j].y * readback_velocities_[j].y);
+                if (v_mag > 0.01f && v_mag < 0.2f * C_SIM) {
+                    // Gentle push to maintain flow (reduce friction)
+                    readback_velocities_[j] *= 1.005f;
+                }
+            });
+
+        } else if (ti == ROTON_TYPE_PHYS) {
+            // Roton: vortex — creates rotational velocity field
+            grid_.query(readback_positions_[i].x, readback_positions_[i].y, 25.0f, [&](uint32_t j) {
+                if (j == i || readback_energies_[j] < 0.01f) return;
+                glm::vec2 d = readback_positions_[j] - readback_positions_[i];
+                float r2 = d.x * d.x + d.y * d.y + 1.0f;
+                float r = std::sqrt(r2);
+                // Tangential velocity — swirl around roton center
+                glm::vec2 tangent(-d.y, d.x);
+                float vortex_strength = 5.0f / r2;
+                readback_velocities_[j] += tangent * (vortex_strength / r);
+            });
+        }
     }
 }
 

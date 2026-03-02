@@ -10,7 +10,7 @@ static constexpr uint32_t REGION_W           = 2560;
 static constexpr uint32_t REGION_H           = 1440;
 static constexpr uint32_t WORLD_W            = REGION_W * 4;  // 10240 — simulation world bounds
 static constexpr uint32_t WORLD_H            = REGION_H * 4;  // 5760
-static constexpr uint32_t MAX_PARTICLE_TYPES = 68;
+static constexpr uint32_t MAX_PARTICLE_TYPES = 74;
 static constexpr uint32_t GROUP_DENSITY      = 256;
 static constexpr uint32_t GENOME_SIZE        = 4;   // floats per particle: charge, electronegativity, reactivity, bond_strength
 
@@ -47,7 +47,8 @@ static constexpr uint32_t ATOM_VALENCE[MAX_PARTICLE_TYPES] = {
     0, 0, 0, 0, 0, 0,   // 50-55: force carriers (gravitino..dilaton)
     0, 0, 0, 0, 0, 0, 0, 0, 0,  // 56-64: theoretical extremes
     0, 0,                // 65-66: new class (paraparticle, dyn axion QP)
-    0,                   // 67: reserved
+    0,                   // 67: electron hole
+    0, 0, 0, 0, 0, 0,   // 68-73: quasiparticles (plasmon..roton)
 };
 
 enum ParticleBehavior : uint32_t {
@@ -262,6 +263,14 @@ struct SimConfig {
     bool     entanglement_enabled       = true;
     float    entanglement_coupling      = 0.15f;  // velocity coupling fraction (0=none, 1=full mirror)
     float    entanglement_decoherence   = 0.005f; // probability per tick of breaking (0=permanent)
+
+    // Carrier Mode — visible force carrier exchange between particles
+    bool     carrier_mode_enabled       = true;
+    int      carrier_max_per_tick       = 5;
+    float    carrier_exchange_radius    = 50.0f;
+
+    // Quasi Mode — quasiparticle spawning and physics effects
+    bool     quasi_mode_enabled         = true;
 
     // Thermodynamic feedback
     bool  thermo_feedback_enabled   = true;

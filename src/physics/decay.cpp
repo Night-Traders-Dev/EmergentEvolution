@@ -1324,6 +1324,74 @@ void PhysicsSimulation::check_decay() {
                 break;
             }
 
+            // ── Electron hole: quasiparticle disappears (vacancy filled thermally) ──
+            case ELECTRON_HOLE_TYPE_PHYS: {
+                readback_energies_[i] = 0.0f;
+                readback_velocities_[i] = glm::vec2(0.0f);
+                iface.push_decay_event("Electron hole decayed",
+                    PhysicsInterface::DEVT_ELECTRON_HOLE, ImVec4(1.0f, 0.75f, 0.25f, 1.0f), "");
+                break;
+            }
+
+            case PLASMON_TYPE_PHYS: {
+                readback_energies_[i] = 0.0f;
+                readback_velocities_[i] = glm::vec2(0.0f);
+                iface.push_decay_event("Plasmon damped (Landau)",
+                    PhysicsInterface::DEVT_QUASIPARTICLE, ImVec4(0.3f, 1.0f, 0.95f, 1.0f), "");
+                break;
+            }
+            case PHONON_TYPE_PHYS: {
+                readback_energies_[i] = 0.0f;
+                readback_velocities_[i] = glm::vec2(0.0f);
+                iface.push_decay_event("Phonon scattered (thermal)",
+                    PhysicsInterface::DEVT_QUASIPARTICLE, ImVec4(0.95f, 0.95f, 0.4f, 1.0f), "");
+                break;
+            }
+            case MAGNON_TYPE_PHYS: {
+                readback_energies_[i] = 0.0f;
+                readback_velocities_[i] = glm::vec2(0.0f);
+                iface.push_decay_event("Magnon damped (magnetic)",
+                    PhysicsInterface::DEVT_QUASIPARTICLE, ImVec4(1.0f, 0.45f, 0.15f, 1.0f), "");
+                break;
+            }
+            case POLARON_TYPE_PHYS: {
+                // Polaron decays back into a free electron
+                particles.types[i] = ELECTRON_TYPE_PHYS;
+                write_spawn_genome(particles, i, ELECTRON_TYPE_PHYS, rng, frame_counter_);
+                readback_energies_[i] *= 0.8f;  // some energy lost to lattice
+                iface.push_decay_event("Polaron \xe2\x86\x92 e\xe2\x81\xbb (cloud dispersed)",
+                    PhysicsInterface::DEVT_QUASIPARTICLE, ImVec4(0.7f, 0.35f, 0.9f, 1.0f), "");
+                break;
+            }
+            case COOPER_PAIR_TYPE_PHYS: {
+                // Cooper pair breaks into two neutrons
+                readback_energies_[i] *= 0.5f;
+                particles.types[i] = NEUTRON_TYPE;
+                write_spawn_genome(particles, i, NEUTRON_TYPE, rng, frame_counter_);
+                // Try to spawn second neutron
+                for (uint32_t k = 0; k < n; ++k) {
+                    if (readback_energies_[k] < 0.01f) {
+                        write_spawn_genome(particles, k, NEUTRON_TYPE, rng, frame_counter_);
+                        readback_positions_[k] = readback_positions_[i] + glm::vec2(4.0f, 0.0f);
+                        readback_velocities_[k] = -readback_velocities_[i] * 0.5f;
+                        readback_energies_[k] = readback_energies_[i];
+                        particles.orbital_parent[k] = -1;
+                        particles.orbital_shell[k] = -1;
+                        break;
+                    }
+                }
+                iface.push_decay_event("Cooper pair broken \xe2\x86\x92 n + n",
+                    PhysicsInterface::DEVT_QUASIPARTICLE, ImVec4(0.6f, 0.85f, 1.0f, 1.0f), "");
+                break;
+            }
+            case ROTON_TYPE_PHYS: {
+                readback_energies_[i] = 0.0f;
+                readback_velocities_[i] = glm::vec2(0.0f);
+                iface.push_decay_event("Roton dissipated (viscous)",
+                    PhysicsInterface::DEVT_QUASIPARTICLE, ImVec4(0.2f, 0.9f, 0.7f, 1.0f), "");
+                break;
+            }
+
             default:
                 any_decayed = false;  // unknown type, skip
                 break;

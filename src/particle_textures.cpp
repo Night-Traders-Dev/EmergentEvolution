@@ -204,8 +204,13 @@ void ParticleTextureManager::load_textures(VulkanContext& ctx, const std::string
         ++loaded;
     }
 
+    // Default to textured rendering for types that have a custom texture
+    for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
+        if (has_texture[t]) render_modes[t] = RENDER_TEXTURED;
+    }
+
     if (loaded > 0)
-        std::cerr << "[textures] Loaded " << loaded << " custom particle textures\n";
+        std::cerr << "[textures] Loaded " << loaded << " custom particle textures (set as default)\n";
 }
 
 // ── Hot-reload single texture ────────────────────────────────────────────────

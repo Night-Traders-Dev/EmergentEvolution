@@ -1391,8 +1391,10 @@ void PhysicsSimulation::check_achievements() {
         // Chemistry: scenarios 5-6
         for (int i = 5; i < 7; i++)
             if (!achievements.scenarios_completed[i]) all_chem = false;
-        // Cosmology: scenarios 7-9
+        // Cosmology: scenarios 7-9, 12-17 (skip sandbox at 10-11)
         for (int i = 7; i < 10; i++)
+            if (!achievements.scenarios_completed[i]) all_cosmo = false;
+        for (int i = 12; i < 18; i++)
             if (!achievements.scenarios_completed[i]) all_cosmo = false;
 
         if (all_nuclear) try_unlock(ACH_ALL_NUCLEAR_SCENARIOS);
@@ -1599,6 +1601,11 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                     check_photoelectric();
                     check_spallation();
                     check_bremsstrahlung();
+                    check_recombination();
+                    if (cfg.carrier_mode_enabled)
+                        check_carrier_exchange();
+                    if (cfg.quasi_mode_enabled)
+                        check_quasiparticles();
                 }
                 if (quality >= 1 && frame4) {
                     check_neutrino_scattering();
@@ -2313,6 +2320,97 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 }
             }
         }
+    }
+
+    // ── Collect strong field sources ─────────────────────────────────────────
+    if (iface.show_strong_field) {
+        iface.strong_sources.clear();
+        float vis_hw = static_cast<float>(REGION_W) / (2.0f * cfg.current_camera_zoom)
+                     + cfg.interaction_radius * 0.3f;
+        float vis_hh = static_cast<float>(REGION_H) / (2.0f * cfg.current_camera_zoom)
+                     + cfg.interaction_radius * 0.3f;
+        for (uint32_t pi = 0; pi < cfg.particle_count; ++pi) {
+            if (readback_energies_[pi] <= 0.0f) continue;
+            glm::vec2 rel = readback_positions_[pi] - cfg.camera_origin;
+            if (std::abs(rel.x) > vis_hw || std::abs(rel.y) > vis_hh) continue;
+
+            uint32_t pt = particles.types[pi];
+            if (pt >= PHYS_PARTICLE_TYPES) continue;
+            // Strong force participants: nucleons, quarks, gluons, and QCD-active particles
+            bool is_nucleon = (pt == PROTON_TYPE || pt == NEUTRON_TYPE);
+            bool is_quark = (pt >= UP_QUARK_TYPE && pt <= ANTI_BOTTOM_TYPE);
+            bool is_gluon = (pt == GLUON_TYPE_PHYS);
+            bool is_qcd = (pt == SIMP_TYPE_PHYS || pt == SQUARK_TYPE_PHYS ||
+                           pt == GLUINO_TYPE_PHYS || pt == GLUEBALL_TYPE_PHYS ||
+                           pt == ODDERON_TYPE_PHYS || pt == SKYRMION_TYPE_PHYS);
+            if (!is_nucleon && !is_quark && !is_gluon && !is_qcd) continue;
+
+            float color_charge = particles.genomes[pi * GENOME_SIZE + 2];
+            float mass_mev = PHYS_REST_MASS_MEV[pt];
+            iface.strong_sources.push_back({
+                readback_positions_[pi], color_charge, mass_mev, is_gluon
+            });
+        }
+    } else {
+        iface.strong_sources.clear();
+    }
+
+    // ── Collect weak field sources ──────────────────────────────────────────
+    if (iface.show_weak_field) {
+        iface.weak_sources.clear();
+        float vis_hw = static_cast<float>(REGION_W) / (2.0f * cfg.current_camera_zoom) + 50.0f;
+        float vis_hh = static_cast<float>(REGION_H) / (2.0f * cfg.current_camera_zoom) + 50.0f;
+        for (uint32_t pi = 0; pi < cfg.particle_count; ++pi) {
+            if (readback_energies_[pi] <= 0.0f) continue;
+            glm::vec2 rel = readback_positions_[pi] - cfg.camera_origin;
+            if (std::abs(rel.x) > vis_hw || std::abs(rel.y) > vis_hh) continue;
+
+            uint32_t pt = particles.types[pi];
+            if (pt >= PHYS_PARTICLE_TYPES) continue;
+            // Weak force mediators: W+, W-, Z0, Higgs
+            bool is_weak = (pt == W_PLUS_TYPE_PHYS || pt == W_MINUS_TYPE_PHYS ||
+                            pt == Z_BOSON_TYPE_PHYS || pt == HIGGS_TYPE_PHYS);
+            // Also include weak-interacting BSM particles
+            bool is_bsm_weak = (pt == WINO_TYPE_PHYS || pt == ZINO_TYPE_PHYS ||
+                                pt == HIGGSINO_TYPE_PHYS);
+            if (!is_weak && !is_bsm_weak) continue;
+
+            float mass_mev = PHYS_REST_MASS_MEV[pt];
+            float coupling = is_weak ? 1.0f : 0.6f;
+            iface.weak_sources.push_back({
+                readback_positions_[pi], coupling, mass_mev, pt
+            });
+        }
+    } else {
+        iface.weak_sources.clear();
+    }
+
+    // ── Collect gravity field sources ───────────────────────────────────────
+    if (iface.show_gravity_field) {
+        iface.gravity_field_sources.clear();
+        float vis_hw = static_cast<float>(REGION_W) / (2.0f * cfg.current_camera_zoom)
+                     + cfg.interaction_radius;
+        float vis_hh = static_cast<float>(REGION_H) / (2.0f * cfg.current_camera_zoom)
+                     + cfg.interaction_radius;
+        // Cap sources for performance (pick heaviest visible particles)
+        constexpr int MAX_GRAVITY_SOURCES = 300;
+        for (uint32_t pi = 0; pi < cfg.particle_count; ++pi) {
+            if (readback_energies_[pi] <= 0.0f) continue;
+            glm::vec2 rel = readback_positions_[pi] - cfg.camera_origin;
+            if (std::abs(rel.x) > vis_hw || std::abs(rel.y) > vis_hh) continue;
+
+            uint32_t pt = particles.types[pi];
+            if (pt >= PHYS_PARTICLE_TYPES) continue;
+            float mass_mev = PHYS_REST_MASS_MEV[pt];
+            if (mass_mev < 0.001f) continue;  // skip massless (photons, gluons, gravitons, neutrinos)
+
+            iface.gravity_field_sources.push_back({
+                readback_positions_[pi], mass_mev
+            });
+            if (static_cast<int>(iface.gravity_field_sources.size()) >= MAX_GRAVITY_SOURCES) break;
+        }
+    } else {
+        iface.gravity_field_sources.clear();
     }
 
     // ── Gravitational wave ripple propagation & emission ────────────────────

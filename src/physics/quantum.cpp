@@ -20,13 +20,9 @@ void PhysicsSimulation::check_virtual_pairs() {
 
     std::mt19937 rng(frame_counter_ * 1664525u + 1013904223u);
     std::uniform_real_distribution<float> unit(0.0f, 1.0f);
-    // Spawn virtual pairs within the camera's visible area (not a fixed rectangle)
-    float half_vw = static_cast<float>(REGION_W) / (2.0f * cfg.current_camera_zoom);
-    float half_vh = static_cast<float>(REGION_H) / (2.0f * cfg.current_camera_zoom);
-    std::uniform_real_distribution<float> x_dist(cfg.camera_origin.x - half_vw,
-                                                  cfg.camera_origin.x + half_vw);
-    std::uniform_real_distribution<float> y_dist(cfg.camera_origin.y - half_vh,
-                                                  cfg.camera_origin.y + half_vh);
+    // Spawn virtual pairs across the full simulation world (viewport-independent)
+    std::uniform_real_distribution<float> x_dist(0.0f, static_cast<float>(WORLD_W));
+    std::uniform_real_distribution<float> y_dist(0.0f, static_cast<float>(WORLD_H));
 
     auto find_dormant = [&](uint32_t start) -> uint32_t {
         for (uint32_t k = start; k < n; ++k)

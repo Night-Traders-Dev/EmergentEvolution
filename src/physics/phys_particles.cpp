@@ -83,6 +83,14 @@ static const glm::vec4 PHYS_COLORS[PHYS_PARTICLE_TYPES] = {
     // 65-66: New Class — distinctive
     { 0.9f, 0.2f, 1.0f, 1.0f },   // 65 Paraparticle    — vivid magenta
     { 0.3f, 0.6f, 0.9f, 0.6f },   // 66 Dyn. Axion QP   — soft sky blue
+    // 67-73: Quasiparticles
+    { 1.0f, 0.75f, 0.25f, 1.0f }, // 67 Electron Hole   — warm amber
+    { 0.3f, 1.0f, 0.95f, 1.0f },  // 68 Plasmon          — cyan
+    { 0.95f, 0.95f, 0.4f, 1.0f }, // 69 Phonon           — pale yellow
+    { 1.0f, 0.45f, 0.15f, 1.0f }, // 70 Magnon           — orange-red
+    { 0.7f, 0.35f, 0.9f, 1.0f },  // 71 Polaron          — purple
+    { 0.6f, 0.85f, 1.0f, 1.0f },  // 72 Cooper Pair      — ice blue
+    { 0.2f, 0.9f, 0.7f, 1.0f },   // 73 Roton            — teal-green
 };
 
 // ── Environment abundance tables ─────────────────────────────────────────────
@@ -255,6 +263,15 @@ void physics_gen_data(Particles& p, const SimConfig& cfg) {
     // ── New Class (2025-2026) ───────────────────────────────────────────────
     p.behavior_flags[PARAPARTICLE_TYPE_PHYS]     = BEHAVIOR_WEAK_BOSON | BEHAVIOR_EXOTIC;
     p.behavior_flags[DYN_AXION_QP_TYPE_PHYS]     = BEHAVIOR_NEUTRINO | BEHAVIOR_EXOTIC;
+
+    // ── Quasiparticles ────────────────────────────────────────────────────────
+    p.behavior_flags[ELECTRON_HOLE_TYPE_PHYS]  = BEHAVIOR_IONIC_POS | BEHAVIOR_EXOTIC;
+    p.behavior_flags[PLASMON_TYPE_PHYS]        = BEHAVIOR_EXOTIC;
+    p.behavior_flags[PHONON_TYPE_PHYS]         = BEHAVIOR_EXOTIC;
+    p.behavior_flags[MAGNON_TYPE_PHYS]         = BEHAVIOR_EXOTIC;
+    p.behavior_flags[POLARON_TYPE_PHYS]        = BEHAVIOR_LEPTON | BEHAVIOR_EXOTIC;
+    p.behavior_flags[COOPER_PAIR_TYPE_PHYS]    = BEHAVIOR_MASS_ULTRA | BEHAVIOR_EXOTIC;
+    p.behavior_flags[ROTON_TYPE_PHYS]          = BEHAVIOR_EXOTIC;
 
     // Force matrix: zeroed (physics is computed in shader, not from matrix)
     p.forces.resize(MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES, 0.0f);

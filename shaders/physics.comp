@@ -171,6 +171,13 @@ const uint X17_TYPE             = 63u;
 const uint CHAMELEON_TYPE       = 64u;
 const uint PARAPARTICLE_TYPE    = 65u;
 const uint DYN_AXION_QP_TYPE    = 66u;
+const uint ELECTRON_HOLE_TYPE   = 67u;
+const uint PLASMON_TYPE         = 68u;
+const uint PHONON_TYPE          = 69u;
+const uint MAGNON_TYPE          = 70u;
+const uint POLARON_TYPE         = 71u;
+const uint COOPER_PAIR_TYPE     = 72u;
+const uint ROTON_TYPE           = 73u;
 
 // ── Behavior flags (must match types.h) ─────────────────────────────────────
 const uint BEHAVIOR_PHOTON      = 1024u;       // 1 << 10
@@ -709,6 +716,63 @@ void apply_physics(uint i) {
         return;
     }
 
+    // ── Quasiparticle fast-path (types 67-73) ───────────────────────────────
+    // Quasiparticles are collective excitations — skip nuclear/EM/strong forces.
+    // Only experience weak gravity, heavy damping, and thermal kicks.
+    if (type_a >= ELECTRON_HOLE_TYPE && type_a <= ROTON_TYPE) {
+        float qp_damp = 0.92;
+        vel_a *= qp_damp;
+
+        vec2 qp_force = vec2(0.0);
+        float mass_a_qp = 1.0 / max(get_mass_inv(type_a), 0.001);
+
+        // Weak gravitational interaction with nearby particles
+        int qp_cx = clamp(int(pos_a.x / GRID_CELL_SIZE), 0, GRID_COLS - 1);
+        int qp_cy = clamp(int(pos_a.y / GRID_CELL_SIZE), 0, GRID_ROWS - 1);
+        for (int gy = max(0, qp_cy - 1); gy <= min(GRID_ROWS - 1, qp_cy + 1); gy++) {
+        for (int gx = max(0, qp_cx - 1); gx <= min(GRID_COLS - 1, qp_cx + 1); gx++) {
+            uint gs, ge; grid_cell_range(gx, gy, gs, ge);
+            for (uint gk = gs; gk < ge; gk++) {
+                uint j = grid_indices.data[gk];
+                if (j == i) continue;
+                float e_j = in_energy_buffer.data[j];
+                if (e_j < 0.001) continue;
+                vec2 delta = in_pos_buffer.data[j] - pos_a;
+                float d2 = dot(delta, delta);
+                if (d2 > 10000.0 || d2 < 0.01) continue;
+                float dist = sqrt(d2);
+                vec2 n = delta / dist;
+                uint type_j = type_buffer.data[j];
+                float mass_j = 1.0 / max(get_mass_inv(type_j), 0.001);
+                // 0.5× gravity coupling — quasiparticles weakly feel gravity
+                float f_grav = params.gravity_strength * 0.5 * mass_a_qp * mass_j / (d2 + 25.0);
+                qp_force += n * f_grav;
+            }
+        } }
+
+        // Accelerated energy decay
+        float qp_decay = get_decay(i);
+        float qp_energy = max(energy - max(qp_decay, 0.02) * params.dt, 0.0);
+
+        // Brownian thermal kicks
+        if (params.temperature > 0.001) {
+            uint qp_seed = (i * 1664525u + params.step * 1013904223u) ^ 0x9e3779b9u;
+            qp_seed ^= (qp_seed >> 17u); qp_seed *= 0xbf58476du; qp_seed ^= (qp_seed >> 31u);
+            float qp_angle = float(qp_seed) * (6.28318 / 4294967296.0);
+            qp_force += vec2(cos(qp_angle), sin(qp_angle)) * params.temperature * 0.5
+                      * sqrt(mass_a_qp);
+        }
+
+        vel_a += qp_force * params.dt * get_mass_inv(type_a);
+
+        out_energy_buffer.data[i] = qp_energy;
+        out_pos_buffer.data[i]    = pos_a + vel_a * params.dt;
+        out_vel_buffer.data[i]    = vel_a;
+        angle_out_buffer.data[i]  = angle_in_buffer.data[i];
+        avel_out_buffer.data[i]   = avel_in_buffer.data[i];
+        return;
+    }
+
     // ── Full pairwise physics ────────────────────────────────────────────────
     float mass_inv_a = get_mass_inv(type_a);
     float charge_a   = get_charge(i);
@@ -775,8 +839,9 @@ void apply_physics(uint i) {
         uint  type_b = type_buffer.data[j];
         uint  flags_b = behavior_buffer.data[type_b];
 
-        // Skip non-interacting particles (neutrinos, W/Z bosons, Higgs)
+        // Skip non-interacting particles (neutrinos, W/Z bosons, Higgs, quasiparticles)
         if ((flags_b & (BEHAVIOR_NEUTRINO | BEHAVIOR_WEAK_BOSON | BEHAVIOR_HIGGS_FLAG)) != 0u) continue;
+        if (type_b >= ELECTRON_HOLE_TYPE && type_b <= ROTON_TYPE) continue;
 
         // ── Photon-matter interaction (Compton scattering + EM field) ───────
         if ((flags_b & BEHAVIOR_PHOTON) != 0u) {

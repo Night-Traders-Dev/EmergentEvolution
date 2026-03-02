@@ -864,21 +864,53 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     draw_bottom_bar(cfg, request_reset);
     draw_top_bar(cfg);
 
-    // Clear minimized bits for windows that are no longer open
-    if (!spawn_menu_visible)     set_minimized(TW_SPAWN_MENU, false);
-    if (!settings_visible)       set_minimized(TW_SETTINGS, false);
-    if (!show_element_list)      set_minimized(TW_ELEMENT_LIST, false);
-    if (!show_particle_list)     set_minimized(TW_PARTICLE_LIST, false);
-    if (!show_particle_bestiary) set_minimized(TW_PARTICLE_BESTIARY, false);
-    if (!show_element_bestiary)  set_minimized(TW_ELEMENT_BESTIARY, false);
-    if (!show_molecule_bestiary) set_minimized(TW_MOLECULE_BESTIARY, false);
-    if (!show_decay_log)         set_minimized(TW_DECAY_LOG, false);
-    if (!show_nuclear_debug)     set_minimized(TW_NUCLEAR_DEBUG, false);
-    if (!show_texture_panel)     set_minimized(TW_TEXTURE_PANEL, false);
-    if (!show_save_dialog)       set_minimized(TW_SAVE_DIALOG, false);
-    if (!show_load_dialog)       set_minimized(TW_LOAD_DIALOG, false);
-    if (!show_repository)        set_minimized(TW_REPOSITORY, false);
-    if (!accel_mode)             set_minimized(TW_ACCELERATOR, false);
+    // Clear minimized bits and window rects for closed windows
+    auto clear_closed = [&](bool flag, TaskbarWindow tw) {
+        if (!flag) { set_minimized(tw, false); window_rect_valid_[tw] = false; }
+    };
+    clear_closed(spawn_menu_visible, TW_SPAWN_MENU);
+    clear_closed(settings_visible, TW_SETTINGS);
+    clear_closed(show_element_list, TW_ELEMENT_LIST);
+    clear_closed(show_particle_list, TW_PARTICLE_LIST);
+    clear_closed(show_particle_bestiary, TW_PARTICLE_BESTIARY);
+    clear_closed(show_element_bestiary, TW_ELEMENT_BESTIARY);
+    clear_closed(show_molecule_bestiary, TW_MOLECULE_BESTIARY);
+    clear_closed(show_decay_log, TW_DECAY_LOG);
+    clear_closed(show_nuclear_debug, TW_NUCLEAR_DEBUG);
+    clear_closed(show_texture_panel, TW_TEXTURE_PANEL);
+    clear_closed(show_save_dialog, TW_SAVE_DIALOG);
+    clear_closed(show_load_dialog, TW_LOAD_DIALOG);
+    clear_closed(show_repository, TW_REPOSITORY);
+    clear_closed(accel_mode, TW_ACCELERATOR);
+
+    // ── Auto-tile when window count reaches 3+ ──
+    {
+        TaskbarWindow open_wnd[TW_COUNT];
+        int open_count = 0;
+        for (int i = 0; i < (int)TW_COUNT; i++) {
+            auto tw = static_cast<TaskbarWindow>(i);
+            if (is_window_open(tw) && !is_minimized(tw))
+                open_wnd[open_count++] = tw;
+        }
+        if (open_count >= 3 && open_count > prev_open_count_) {
+            auto& io = ImGui::GetIO();
+            float top = 48.0f, bottom = 40.0f, gap = 6.0f;
+            float avail_w = io.DisplaySize.x - 2 * gap;
+            float avail_h = io.DisplaySize.y - top - bottom - 2 * gap;
+            int cols = static_cast<int>(std::ceil(std::sqrt(static_cast<float>(open_count))));
+            int rows = (open_count + cols - 1) / cols;
+            float tw = avail_w / cols;
+            float th = avail_h / rows;
+            for (int i = 0; i < open_count; i++) {
+                int c = i % cols;
+                int r = i / cols;
+                tile_pos_[open_wnd[i]]  = ImVec2(gap + c * tw, top + gap + r * th);
+                tile_size_[open_wnd[i]] = ImVec2(tw - gap, th - gap);
+            }
+            retile_windows_ = true;
+        }
+        prev_open_count_ = open_count;
+    }
 
     // Draw settings panel
     if (settings_visible && !is_minimized(TW_SETTINGS))
@@ -1391,6 +1423,9 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     if (show_energy_heatmap)    draw_energy_heatmap(cfg);
     if (show_velocity_field)    draw_velocity_field(cfg);
     if (show_magnetic_field)    draw_magnetic_field(cfg);
+    if (show_strong_field)      draw_strong_field(cfg);
+    if (show_weak_field)        draw_weak_field(cfg);
+    if (show_gravity_field)     draw_gravity_field(cfg);
     if (show_gravity_map)       draw_gravity_map(cfg);
     if (show_grav_waves)        draw_grav_waves(cfg);
     if (show_trajectory_tracer) draw_trajectory_traces(cfg);
@@ -1440,5 +1475,103 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     // Draw notifications last so they render on top of all windows
     draw_notifications();
 
+    retile_windows_ = false;
     pop_theme();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Window Management: intelligent placement & auto-tiling ──────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+bool PhysicsInterface::is_window_open(TaskbarWindow tw) const {
+    switch (tw) {
+        case TW_SPAWN_MENU:        return spawn_menu_visible;
+        case TW_SETTINGS:          return settings_visible;
+        case TW_ELEMENT_LIST:      return show_element_list;
+        case TW_PARTICLE_LIST:     return show_particle_list;
+        case TW_PARTICLE_BESTIARY: return show_particle_bestiary;
+        case TW_ELEMENT_BESTIARY:  return show_element_bestiary;
+        case TW_MOLECULE_BESTIARY: return show_molecule_bestiary;
+        case TW_DECAY_LOG:         return show_decay_log;
+        case TW_NUCLEAR_DEBUG:     return show_nuclear_debug;
+        case TW_TEXTURE_PANEL:     return show_texture_panel;
+        case TW_SAVE_DIALOG:       return show_save_dialog;
+        case TW_LOAD_DIALOG:       return show_load_dialog;
+        case TW_REPOSITORY:        return show_repository;
+        case TW_ACCELERATOR:       return accel_mode;
+        default: return false;
+    }
+}
+
+void PhysicsInterface::record_window_rect(TaskbarWindow tw) {
+    window_rects_[tw] = { ImGui::GetWindowPos(), ImGui::GetWindowSize() };
+    window_rect_valid_[tw] = true;
+}
+
+ImVec2 PhysicsInterface::find_free_window_pos(ImVec2 win_size) {
+    auto& io = ImGui::GetIO();
+    float top = 48.0f;
+
+    // Collect occupied rects from tracked windows
+    ImVec2 occ_pos[TW_COUNT], occ_size[TW_COUNT];
+    int occ = 0;
+    for (int i = 0; i < (int)TW_COUNT; i++) {
+        if (window_rect_valid_[i]) {
+            occ_pos[occ] = window_rects_[i].pos;
+            occ_size[occ] = window_rects_[i].size;
+            occ++;
+        }
+    }
+
+    // Try cascade positions (diagonal offset), avoiding overlap
+    for (int slot = 0; slot < 16; slot++) {
+        float x = 60.0f + slot * 36.0f;
+        float y = top + 20.0f + slot * 36.0f;
+        ImVec2 cand = clamp_window_pos(ImVec2(x, y), win_size);
+
+        bool overlaps = false;
+        for (int j = 0; j < occ; j++) {
+            if (cand.x < occ_pos[j].x + occ_size[j].x && cand.x + win_size.x > occ_pos[j].x &&
+                cand.y < occ_pos[j].y + occ_size[j].y && cand.y + win_size.y > occ_pos[j].y) {
+                overlaps = true;
+                break;
+            }
+        }
+        if (!overlaps) return cand;
+    }
+
+    // Fallback: center screen
+    return clamp_window_pos(
+        ImVec2(io.DisplaySize.x * 0.5f - win_size.x * 0.5f,
+               io.DisplaySize.y * 0.5f - win_size.y * 0.5f), win_size);
+}
+
+void PhysicsInterface::draw_minimize_button(TaskbarWindow tw) {
+    ImVec2 wp = ImGui::GetWindowPos();
+    ImVec2 ws = ImGui::GetWindowSize();
+    float fsz = ImGui::GetFontSize();
+    float px = ImGui::GetStyle().FramePadding.x;
+    float py = ImGui::GetStyle().FramePadding.y;
+
+    // Position left of the close button (close is at MaxX - px - fsz)
+    float x = wp.x + ws.x - px - fsz * 2 - 4.0f;
+    float y = wp.y + py;
+    ImVec2 mn(x, y), mx(x + fsz, y + fsz);
+
+    bool in_rect = ImGui::IsMouseHoveringRect(mn, mx, false);
+    bool win_hov = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+    bool hov = in_rect && win_hov;
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (hov) {
+        dl->AddRectFilled(mn, mx, IM_COL32(70, 70, 110, 180), 2.0f);
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            set_minimized(tw, true);
+        ImGui::SetTooltip("Minimize to taskbar");
+    }
+
+    // Draw "_" minimize icon (horizontal line near bottom of button)
+    float ly = mx.y - 4.0f;
+    ImU32 col = hov ? IM_COL32(255, 255, 255, 255) : IM_COL32(180, 180, 200, 180);
+    dl->AddLine(ImVec2(mn.x + 3, ly), ImVec2(mx.x - 3, ly), col, 1.5f);
 }

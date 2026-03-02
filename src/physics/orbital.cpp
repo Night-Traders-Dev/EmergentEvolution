@@ -966,6 +966,22 @@ void PhysicsSimulation::check_shell_transitions() {
                     else outward = glm::vec2(1.0f, 0.0f);
                     readback_velocities_[i] += outward * 40.0f;
                     cpu_particles_dirty_ = true;
+
+                    // Spawn electron hole at nucleus position
+                    {
+                        uint32_t slot = find_dormant(0);
+                        if (slot != UINT32_MAX) {
+                            readback_positions_[slot] = detected_nuclei_[ni].center;
+                            readback_velocities_[slot] = glm::vec2(0.0f);
+                            readback_energies_[slot] = 1.0f;
+                            write_spawn_genome(particles, slot, ELECTRON_HOLE_TYPE_PHYS, rng, frame_counter_);
+                            particles.orbital_parent[slot] = -1;
+                            particles.orbital_shell[slot] = -1;
+                            iface.push_decay_event("Electron hole spawned (thermal ionization)",
+                                PhysicsInterface::DEVT_ELECTRON_HOLE, ImVec4(1.0f, 0.75f, 0.25f, 1.0f), "");
+                        }
+                    }
+
                     transition_count++;
                     iface.push_decay_event(
                         "Ionization: excited e\xe2\x81\xbb escaped atom",

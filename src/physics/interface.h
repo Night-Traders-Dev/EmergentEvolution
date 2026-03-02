@@ -371,6 +371,11 @@ public:
     bool  show_gravity_map     = false;
     bool  show_grav_waves      = false;  // GW ripple visualization
 
+    // Force field overlays (CPU-side visualization, separate from GPU field_flags)
+    bool  show_strong_field    = false;
+    bool  show_weak_field      = false;
+    bool  show_gravity_field   = false;
+
     // General Relativity extensions (GPU gravity)
     bool  gr_mass_energy    = true;   // E=mc² gravitational mass (bit 9)
     bool  gr_frame_dragging = true;   // spin-gravity coupling (bit 10)
@@ -408,6 +413,31 @@ public:
         float mass_mev;         // rest mass in MeV (for momentum scaling)
     };
     std::vector<MagneticSource> magnetic_sources;
+
+    // Strong field sources (populated by simulation when show_strong_field)
+    struct StrongSource {
+        glm::vec2 pos;
+        float color_charge;  // genome[2]: ~1=red, ~2=green, ~3=blue (QCD color)
+        float mass_mev;
+        bool is_gluon;       // gluons carry two color charges
+    };
+    std::vector<StrongSource> strong_sources;
+
+    // Weak field sources (populated by simulation when show_weak_field)
+    struct WeakSource {
+        glm::vec2 pos;
+        float coupling;      // effective weak interaction strength
+        float mass_mev;
+        uint32_t type;       // particle type index
+    };
+    std::vector<WeakSource> weak_sources;
+
+    // Gravity field sources (populated by simulation when show_gravity_field)
+    struct GravityFieldSource {
+        glm::vec2 pos;
+        float mass_mev;
+    };
+    std::vector<GravityFieldSource> gravity_field_sources;
 
     // Gravitational wave ripples (expanding rings from accelerating masses)
     struct GWRing {
@@ -501,6 +531,20 @@ public:
         if (v) minimized_windows |= (1u << tw); else minimized_windows &= ~(1u << tw);
     }
     void toggle_minimized(TaskbarWindow tw) { minimized_windows ^= (1u << tw); }
+
+    // Window management — intelligent placement & auto-tiling
+    struct WindowRect { ImVec2 pos, size; };
+    WindowRect window_rects_[TW_COUNT] = {};
+    bool window_rect_valid_[TW_COUNT] = {};
+    int prev_open_count_ = 0;
+    bool retile_windows_ = false;
+    ImVec2 tile_pos_[TW_COUNT];
+    ImVec2 tile_size_[TW_COUNT];
+
+    void record_window_rect(TaskbarWindow tw);
+    ImVec2 find_free_window_pos(ImVec2 win_size);
+    bool is_window_open(TaskbarWindow tw) const;
+    void draw_minimize_button(TaskbarWindow tw);
 
     // Emergent feedback display
     float emergent_temp_display   = 0.0f;
@@ -635,8 +679,16 @@ public:
         DEVT_BREMSSTRAHLUNG,        // Bremsstrahlung photon emission
         DEVT_NEUTRINO,              // Neutrino scatter / oscillation
         DEVT_WEAK_SCATTER,          // Weak flavor-changing scattering
+        DEVT_ELECTRON_HOLE,         // Electron hole spawn / recombination / decay
+        DEVT_CARRIER_EM,            // EM force carrier (photon) exchange
+        DEVT_CARRIER_QCD,           // QCD force carrier (gluon) exchange
+        DEVT_CARRIER_WEAK,          // Weak force carrier (Z/W) exchange
+        DEVT_CARRIER_GRAVITY,       // Graviton exchange
+        DEVT_CARRIER_HIGGS,         // Higgs boson exchange
+        DEVT_CARRIER_NUCLEAR,       // Yukawa nuclear carrier (gluon between nucleons)
+        DEVT_QUASIPARTICLE,         // Quasiparticle spawn / decay
     };
-    static constexpr int DEVT_COUNT = 16;
+    static constexpr int DEVT_COUNT = 24;
     struct DecayLogEntry {
         std::string description;
         std::string details;        // multi-line detail shown on click
@@ -657,7 +709,7 @@ public:
     struct ParticleTextureManager* texture_mgr = nullptr;  // set by simulation
 
     int32_t expanded_event_idx = -1;  // which event is expanded in log
-    bool event_filter[DEVT_COUNT] = {true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true};
+    bool event_filter[DEVT_COUNT] = {true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true};
 
     void push_decay_event(const char* desc, DecayEventType type, ImVec4 color = ImVec4(1,0.6f,0.2f,1));
     void push_decay_event(const char* desc, DecayEventType type, ImVec4 color, const std::string& details);
@@ -712,6 +764,9 @@ private:
     void draw_orbit_paths(const SimConfig& cfg);
     void draw_gravity_map(const SimConfig& cfg);
     void draw_grav_waves(const SimConfig& cfg);
+    void draw_strong_field(const SimConfig& cfg);
+    void draw_weak_field(const SimConfig& cfg);
+    void draw_gravity_field(const SimConfig& cfg);
     void draw_measurement_panel();
     void draw_credits();
     void draw_howto();

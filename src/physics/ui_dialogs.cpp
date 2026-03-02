@@ -2432,7 +2432,11 @@ void PhysicsInterface::save_event_to_disk(const char* desc, DecayEventType type)
     static const char* TYPE_TAGS[] = {
         "DECAY", "NUCLEAR", "FUSION", "FISSION", "ANNIHILATION",
         "PHOTOELECTRIC", "SPALLATION", "PAIR_PROD", "PION_PROD",
-        "VMD", "PHOTODISINT", "BOND_FORM", "BOND_BREAK"
+        "VMD", "PHOTODISINT", "BOND_FORM", "BOND_BREAK",
+        "BREMSSTRAHLUNG", "NEUTRINO", "WEAK_SCATTER", "ELECTRON_HOLE",
+        "CARRIER_EM", "CARRIER_QCD", "CARRIER_WEAK",
+        "CARRIER_GRAVITY", "CARRIER_HIGGS", "CARRIER_NUCLEAR",
+        "QUASIPARTICLE"
     };
     const std::string& data_dir = get_data_dir();
     std::ofstream f((data_dir + "event_log.txt").c_str(), std::ios::app);
@@ -2473,7 +2477,7 @@ void PhysicsInterface::draw_notifications() {
     float card_w = 260.0f;
     float card_pad = 4.0f;
     float start_x = std::max(10.0f, io.DisplaySize.x - card_w - 10.0f);
-    float start_y = 44.0f;
+    float start_y = 50.0f;
 
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
         | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize
@@ -2746,9 +2750,14 @@ void PhysicsInterface::draw_save_load_dialog() {
     ImVec2 center(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
     ImVec2 size = use_thumbnails ? ImVec2(720, 520) : ImVec2(520, 480);
 
-    ImGui::SetNextWindowPos(clamp_window_pos(
-        ImVec2(center.x - size.x * 0.5f, center.y - size.y * 0.5f), size), ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(size, ImGuiCond_Appearing);
+    TaskbarWindow sl_tw = show_save_dialog ? TW_SAVE_DIALOG : TW_LOAD_DIALOG;
+    if (retile_windows_) {
+        ImGui::SetNextWindowPos(tile_pos_[sl_tw]);
+        ImGui::SetNextWindowSize(tile_size_[sl_tw]);
+    } else {
+        ImGui::SetNextWindowPos(find_free_window_pos(size), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(size, ImGuiCond_Appearing);
+    }
 
     const char* title = show_molecule_import_dialog ? "Import Molecule###SaveLoad"
                       : show_import_dialog ? "Import Element###SaveLoad"
@@ -2756,7 +2765,10 @@ void PhysicsInterface::draw_save_load_dialog() {
                                           : "Load Simulation###SaveLoad";
     bool open = true;
 
-    if (ImGui::Begin(title, &open, ImGuiWindowFlags_NoCollapse)) {
+    bool sl_vis = ImGui::Begin(title, &open, ImGuiWindowFlags_NoCollapse);
+    record_window_rect(sl_tw);
+    if (sl_vis) {
+        draw_minimize_button(sl_tw);
         // ── Path bar ─────────────────────────────────────────────────────
         ImGui::Text("Path:");
         ImGui::SameLine();

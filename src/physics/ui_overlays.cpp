@@ -533,11 +533,6 @@ void PhysicsInterface::draw_magnetic_field(const SimConfig& cfg) {
         }
     }
 
-    // Legend — bottom-left corner
-    ImVec2 legend_pos(10, wh - 30);
-    fg->AddText(legend_pos, IM_COL32(100, 100, 255, 200), "B<0");
-    fg->AddText(ImVec2(legend_pos.x + 40, legend_pos.y), IM_COL32(180, 180, 180, 200), "|");
-    fg->AddText(ImVec2(legend_pos.x + 52, legend_pos.y), IM_COL32(255, 100, 100, 200), "B>0");
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -629,6 +624,318 @@ void PhysicsInterface::draw_gravity_map(const SimConfig& cfg) {
     fg->AddText(ImVec2(legend_pos.x + 14, legend_pos.y), IM_COL32(180, 140, 255, 200), "Light");
     fg->AddCircleFilled(ImVec2(legend_pos.x + 66, legend_pos.y + 6), 6, IM_COL32(0, 220, 255, 180));
     fg->AddText(ImVec2(legend_pos.x + 76, legend_pos.y), IM_COL32(100, 230, 255, 200), "Heavy");
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Strong Field Visualization ──────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// Yukawa-range field lines around quarks, gluons, and nucleons.
+// Color-coded by QCD color charge: red/green/blue.
+// Lines trace through the combined strong potential using Euler integration.
+
+void PhysicsInterface::draw_strong_field(const SimConfig& cfg) {
+    if (strong_sources.empty()) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    ImDrawList* fg = ImGui::GetForegroundDrawList();
+    float ww = io.DisplaySize.x, wh = io.DisplaySize.y;
+    float scx = ww / static_cast<float>(REGION_W);
+    float scy = wh / static_cast<float>(REGION_H);
+
+    auto w2s = [&](glm::vec2 w) -> ImVec2 {
+        glm::vec2 s = glm::vec2(ww, wh) * 0.5f
+                    + (w - cfg.camera_origin) * cfg.current_camera_zoom * glm::vec2(scx, scy);
+        return ImVec2(s.x, s.y);
+    };
+
+    int src_count = static_cast<int>(strong_sources.size());
+    int lines_per = (src_count <= 10) ? 8 :
+                    (src_count <= 40) ? 5 :
+                    (src_count <= 120) ? 3 : 2;
+    int line_steps = (src_count <= 40) ? 32 :
+                     (src_count <= 120) ? 20 : 12;
+    constexpr int MAX_STEPS = 32;
+    constexpr float STEP_SIZE = 4.0f;
+    // Yukawa range: pion Compton wavelength ~1.4fm, mapped to sim units
+    const float YUKAWA_RANGE = std::min(60.0f, cfg.interaction_radius * 0.3f);
+    const float YUKAWA_LAMBDA = 15.0f;  // screening length in sim pixels
+
+    // Compute strong field at a point: Yukawa potential from all sources
+    auto compute_F = [&](glm::vec2 pos) -> glm::vec2 {
+        glm::vec2 F_total(0.0f);
+        for (const auto& s : strong_sources) {
+            glm::vec2 dr = s.pos - pos;  // toward source (attractive)
+            float r = glm::length(dr);
+            if (r < 1.0f || r > YUKAWA_RANGE) continue;
+            float inv_r = 1.0f / r;
+            glm::vec2 r_hat = dr * inv_r;
+            // Yukawa: F = g² * exp(-r/λ) / r² * r̂  (attractive, pointing toward source)
+            float strength = s.mass_mev * 0.001f;  // scale by mass
+            float yukawa = strength * std::exp(-r / YUKAWA_LAMBDA) * inv_r * inv_r;
+            // Linear confinement term (Cornell): σ·r (pulls harder at distance)
+            float confinement = strength * 0.01f * r * inv_r;
+            F_total += r_hat * (yukawa + confinement);
+        }
+        return F_total;
+    };
+
+    for (size_t si = 0; si < strong_sources.size(); ++si) {
+        const auto& src = strong_sources[si];
+
+        // QCD color charge → RGB color
+        float cc = src.color_charge;
+        uint8_t cr, cg, cb;
+        if (cc < 1.5f) {
+            cr = 220; cg = 60; cb = 60;     // red
+        } else if (cc < 2.5f) {
+            cr = 60; cg = 200; cb = 80;     // green
+        } else {
+            cr = 60; cg = 100; cb = 220;    // blue
+        }
+
+        uint8_t alpha = static_cast<uint8_t>(field_intensity * 140.0f);
+        if (alpha < 5) continue;
+        ImU32 col = IM_COL32(cr, cg, cb, alpha);
+
+        for (int li = 0; li < lines_per; ++li) {
+            float angle = static_cast<float>(li) * 6.2831853f / static_cast<float>(lines_per);
+            glm::vec2 dir(std::cos(angle), std::sin(angle));
+            glm::vec2 cur = src.pos + dir * 4.0f;
+
+            ImVec2 pts[MAX_STEPS + 1];
+            pts[0] = w2s(cur);
+            int steps = 0;
+
+            for (int step = 0; step < line_steps; ++step) {
+                glm::vec2 F = compute_F(cur);
+                float F_mag = glm::length(F);
+                // Mix outward direction with field direction for radial emanation
+                glm::vec2 advance = dir * 0.3f;
+                if (F_mag > 1e-6f) advance += (F / F_mag) * 0.7f;
+                float adv_mag = glm::length(advance);
+                if (adv_mag < 1e-6f) break;
+                cur += (advance / adv_mag) * STEP_SIZE;
+                steps++;
+                pts[step + 1] = w2s(cur);
+
+                float d = glm::length(cur - src.pos);
+                if (d > YUKAWA_RANGE) break;
+            }
+
+            if (steps >= 2) {
+                fg->AddPolyline(pts, steps + 1, col, ImDrawFlags_None, 1.5f);
+            }
+        }
+
+        // Gluon sources get a small glow ring
+        if (src.is_gluon) {
+            ImVec2 center = w2s(src.pos);
+            fg->AddCircle(center, 6.0f * cfg.current_camera_zoom * scx,
+                          IM_COL32(cr, cg, cb, alpha / 2), 12, 1.0f);
+        }
+    }
+
+    // Draw "flux tubes" between nearby quark-antiquark or quark-quark pairs
+    constexpr float TUBE_MAX_DIST = 50.0f;
+    constexpr int MAX_TUBES = 200;
+    int tubes = 0;
+    for (size_t i = 0; i < strong_sources.size() && tubes < MAX_TUBES; ++i) {
+        for (size_t j = i + 1; j < strong_sources.size() && tubes < MAX_TUBES; ++j) {
+            float d = glm::length(strong_sources[i].pos - strong_sources[j].pos);
+            if (d < 2.0f || d > TUBE_MAX_DIST) continue;
+
+            ImVec2 a = w2s(strong_sources[i].pos);
+            ImVec2 b = w2s(strong_sources[j].pos);
+
+            uint8_t tube_alpha = static_cast<uint8_t>(
+                field_intensity * 80.0f * (1.0f - d / TUBE_MAX_DIST));
+            if (tube_alpha < 3) continue;
+
+            fg->AddLine(a, b, IM_COL32(120, 220, 80, tube_alpha), 2.0f);
+            tubes++;
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Weak Field Visualization ────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// Very short-range exponential halos around W/Z bosons and Higgs.
+// Purple/violet color scheme with concentric fading rings.
+
+void PhysicsInterface::draw_weak_field(const SimConfig& cfg) {
+    if (weak_sources.empty()) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    ImDrawList* fg = ImGui::GetForegroundDrawList();
+    float ww = io.DisplaySize.x, wh = io.DisplaySize.y;
+    float scx = ww / static_cast<float>(REGION_W);
+    float scy = wh / static_cast<float>(REGION_H);
+    float zoom = cfg.current_camera_zoom;
+
+    auto w2s = [&](glm::vec2 w) -> ImVec2 {
+        glm::vec2 s = glm::vec2(ww, wh) * 0.5f
+                    + (w - cfg.camera_origin) * zoom * glm::vec2(scx, scy);
+        return ImVec2(s.x, s.y);
+    };
+
+    // Weak force range is extremely short (mediator mass ~80-91 GeV)
+    // In sim units: ~15-25px
+    constexpr float WEAK_RANGE_BASE = 20.0f;
+    constexpr int RADIAL_LINES = 8;
+
+    for (const auto& src : weak_sources) {
+        ImVec2 center = w2s(src.pos);
+
+        // Skip if offscreen
+        float screen_range = WEAK_RANGE_BASE * zoom * scx;
+        if (center.x < -screen_range || center.x > ww + screen_range ||
+            center.y < -screen_range || center.y > wh + screen_range) continue;
+
+        float base_alpha = field_intensity * 160.0f * std::min(src.coupling, 1.0f);
+        if (base_alpha < 3.0f) continue;
+
+        // Color: W bosons = violet, Z boson = indigo, Higgs = magenta, others = purple
+        uint8_t cr, cg, cb;
+        if (src.type == W_PLUS_TYPE_PHYS || src.type == W_MINUS_TYPE_PHYS) {
+            cr = 160; cg = 60; cb = 220;    // violet
+        } else if (src.type == Z_BOSON_TYPE_PHYS) {
+            cr = 80; cg = 60; cb = 200;     // indigo
+        } else if (src.type == HIGGS_TYPE_PHYS) {
+            cr = 200; cg = 60; cb = 180;    // magenta
+        } else {
+            cr = 140; cg = 80; cb = 200;    // purple
+        }
+
+        // Concentric fading rings (3 rings)
+        for (int ring = 1; ring <= 3; ++ring) {
+            float frac = static_cast<float>(ring) / 3.0f;
+            float r = screen_range * frac;
+            float decay = std::exp(-frac * 3.0f);  // exponential falloff
+            uint8_t ring_alpha = static_cast<uint8_t>(base_alpha * decay);
+            if (ring_alpha < 2) continue;
+            fg->AddCircle(center, r, IM_COL32(cr, cg, cb, ring_alpha), 24, 1.2f);
+        }
+
+        // Short radial lines
+        for (int li = 0; li < RADIAL_LINES; ++li) {
+            float angle = static_cast<float>(li) * 6.2831853f / static_cast<float>(RADIAL_LINES);
+            float inner_r = 3.0f * zoom * scx;
+            float outer_r = screen_range * 0.8f;
+
+            ImVec2 inner(center.x + std::cos(angle) * inner_r,
+                         center.y + std::sin(angle) * inner_r);
+            ImVec2 outer(center.x + std::cos(angle) * outer_r,
+                         center.y + std::sin(angle) * outer_r);
+
+            uint8_t line_alpha = static_cast<uint8_t>(base_alpha * 0.6f);
+            fg->AddLine(inner, outer, IM_COL32(cr, cg, cb, line_alpha), 1.0f);
+        }
+
+        // Central glow dot
+        uint8_t center_alpha = static_cast<uint8_t>(std::min(base_alpha * 1.2f, 255.0f));
+        fg->AddCircleFilled(center, 3.0f * zoom * scx,
+                            IM_COL32(cr, cg, cb, center_alpha), 12);
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Gravity Field Visualization ─────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// Radial field lines converging on massive particles.
+// Traces through the combined gravitational field using Euler integration.
+// Blue-gray color scheme, line length proportional to mass.
+
+void PhysicsInterface::draw_gravity_field(const SimConfig& cfg) {
+    if (gravity_field_sources.empty()) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    ImDrawList* fg = ImGui::GetForegroundDrawList();
+    float ww = io.DisplaySize.x, wh = io.DisplaySize.y;
+    float scx = ww / static_cast<float>(REGION_W);
+    float scy = wh / static_cast<float>(REGION_H);
+
+    auto w2s = [&](glm::vec2 w) -> ImVec2 {
+        glm::vec2 s = glm::vec2(ww, wh) * 0.5f
+                    + (w - cfg.camera_origin) * cfg.current_camera_zoom * glm::vec2(scx, scy);
+        return ImVec2(s.x, s.y);
+    };
+
+    int src_count = static_cast<int>(gravity_field_sources.size());
+    int lines_per = (src_count <= 10) ? 8 :
+                    (src_count <= 40) ? 5 :
+                    (src_count <= 150) ? 3 : 2;
+    int line_steps = (src_count <= 40) ? 48 :
+                     (src_count <= 150) ? 28 : 16;
+    constexpr int MAX_STEPS = 48;
+    constexpr float STEP_SIZE = 5.0f;
+    const float MAX_RANGE = cfg.interaction_radius;
+
+    // Compute gravitational field at a point: sum of G*M/r² toward each source
+    auto compute_G = [&](glm::vec2 pos) -> glm::vec2 {
+        glm::vec2 G_total(0.0f);
+        for (const auto& s : gravity_field_sources) {
+            glm::vec2 dr = s.pos - pos;  // toward source
+            float r = glm::length(dr);
+            if (r < 2.0f || r > MAX_RANGE) continue;
+            float inv_r = 1.0f / r;
+            glm::vec2 r_hat = dr * inv_r;
+            // Newton: g = G*M/r² toward mass
+            float grav = s.mass_mev * 0.0001f * inv_r * inv_r;
+            G_total += r_hat * grav;
+        }
+        return G_total;
+    };
+
+    for (size_t si = 0; si < gravity_field_sources.size(); ++si) {
+        const auto& src = gravity_field_sources[si];
+
+        // Effective range scales with mass (heavier → farther reach)
+        float log_mass = std::log(1.0f + src.mass_mev / 100.0f);
+        float src_range = std::min(MAX_RANGE, 30.0f + log_mass * 40.0f);
+
+        // Color intensity scales with mass
+        float mass_frac = std::clamp(log_mass / 5.0f, 0.0f, 1.0f);
+
+        // Blue-gray gradient: light → deeper blue for heavier
+        uint8_t cr = static_cast<uint8_t>(100 - mass_frac * 60);
+        uint8_t cg = static_cast<uint8_t>(130 + mass_frac * 40);
+        uint8_t cb = static_cast<uint8_t>(180 + mass_frac * 75);
+        uint8_t alpha = static_cast<uint8_t>(field_intensity * 130.0f * std::min(mass_frac + 0.3f, 1.0f));
+        if (alpha < 5) continue;
+        ImU32 col = IM_COL32(cr, cg, cb, alpha);
+
+        // Seed field lines on a ring OUTSIDE the source, trace INWARD
+        float seed_r = src_range * 0.9f;
+
+        for (int li = 0; li < lines_per; ++li) {
+            float angle = static_cast<float>(li) * 6.2831853f / static_cast<float>(lines_per);
+            glm::vec2 seed = src.pos + glm::vec2(std::cos(angle), std::sin(angle)) * seed_r;
+
+            ImVec2 pts[MAX_STEPS + 1];
+            pts[0] = w2s(seed);
+            glm::vec2 cur = seed;
+            int steps = 0;
+
+            for (int step = 0; step < line_steps; ++step) {
+                glm::vec2 G = compute_G(cur);
+                float G_mag = glm::length(G);
+                if (G_mag < 1e-8f) break;
+
+                cur += (G / G_mag) * STEP_SIZE;
+                steps++;
+                pts[step + 1] = w2s(cur);
+
+                // Stop if converged near a source
+                float d_to_src = glm::length(cur - src.pos);
+                if (d_to_src < 5.0f) break;
+            }
+
+            if (steps >= 2) {
+                fg->AddPolyline(pts, steps + 1, col, ImDrawFlags_None, 1.0f);
+            }
+        }
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
