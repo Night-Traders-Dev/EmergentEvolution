@@ -5,6 +5,7 @@
 #include "physics/audio.h"
 #include "physics/repository.h"
 #include "physics/paths.h"
+#include "physics/scenarios.h"
 #include <filesystem>
 #include "particle_textures.h"
 #include <imgui.h>
@@ -17,8 +18,21 @@
 
 static bool spawn_button(int type_idx, const char* label, ImVec4 color,
                           int current_spawn_type, int current_spawn_group,
-                          const char* tooltip, ImVec2 size = ImVec2(45, 32))
+                          const char* tooltip, bool disabled = false,
+                          ImVec2 size = ImVec2(45, 32))
 {
+    if (disabled) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.12f, 0.14f, 0.50f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.15f, 0.15f, 0.17f, 0.55f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.12f, 0.14f, 0.50f));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.35f, 0.40f, 0.60f));
+        ImGui::Button(label, size);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("[Restricted] %s", tooltip);
+        ImGui::PopStyleColor(4);
+        return false;
+    }
+
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(color.x * 0.35f, color.y * 0.35f, color.z * 0.35f, 0.80f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
         ImVec4(color.x * 0.55f, color.y * 0.55f, color.z * 0.55f, 0.90f));
@@ -1262,6 +1276,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
 // ── Spawn menu ───────────────────────────────────────────────────────────────
 
 void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
+    const ScenarioSpawnRules* rules = active_spawn_rules;
     ImGuiIO& io = ImGui::GetIO();
     float max_h = io.DisplaySize.y - 64.0f;
     ImVec2 def_size(380, std::min(720.0f, max_h));
@@ -1296,11 +1311,14 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
                     continue;
                 }
                 const auto& e = ELEMENTS[idx];
-                bool selected = (spawn_atom_Z == e.Z);
+                bool elem_disabled = rules && (rules->max_element_Z < 0 || e.Z > rules->max_element_Z);
+                bool selected = !elem_disabled && (spawn_atom_Z == e.Z);
 
                 // Color by category
                 ImVec4 color(0.15f, 0.30f, 0.20f, 0.80f);  // default
-                if (e.Z == 2 || e.Z == 10 || e.Z == 18)
+                if (elem_disabled) {
+                    color = ImVec4(0.12f, 0.12f, 0.14f, 0.50f);
+                } else if (e.Z == 2 || e.Z == 10 || e.Z == 18)
                     color = ImVec4(0.25f, 0.15f, 0.40f, 0.80f);  // noble gas
                 else if (e.Z == 1 || e.Z == 6 || e.Z == 7 || e.Z == 8 ||
                          e.Z == 9 || e.Z == 15 || e.Z == 16 || e.Z == 17)
@@ -1317,11 +1335,16 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
                 if (selected)
                     color = ImVec4(0.15f, 0.45f, 0.60f, 0.90f);
 
+                if (elem_disabled)
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.35f, 0.40f, 0.60f));
+
                 ImGui::PushStyleColor(ImGuiCol_Button, color);
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                    ImVec4(color.x * 1.5f, color.y * 1.5f, color.z * 1.5f, 0.95f));
+                    elem_disabled ? ImVec4(0.15f, 0.15f, 0.17f, 0.55f)
+                                  : ImVec4(color.x * 1.5f, color.y * 1.5f, color.z * 1.5f, 0.95f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                    ImVec4(0.302f, 0.749f, 0.953f, 0.80f));
+                    elem_disabled ? ImVec4(0.12f, 0.12f, 0.14f, 0.50f)
+                                  : ImVec4(0.302f, 0.749f, 0.953f, 0.80f));
                 if (selected) {
                     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.302f, 0.749f, 0.953f, 1.0f));
                     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
@@ -1329,16 +1352,20 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
 
                 char btn_id[32];
                 snprintf(btn_id, sizeof(btn_id), "%s##pt%d", e.symbol, e.Z);
-                if (ImGui::Button(btn_id, btn_size)) {
+                if (ImGui::Button(btn_id, btn_size) && !elem_disabled) {
                     spawn_atom_Z = e.Z;
                     spawn_atom_N = e.N;
                     spawn_group = -1;
                     pending_spawn = true;
                 }
                 if (ImGui::IsItemHovered()) {
-                    int total = e.Z * 2 + e.N;
-                    ImGui::SetTooltip("%s (Z=%d)\n%dp + %dn + %de = %d particles",
-                        e.name, e.Z, e.Z, e.N, e.Z, total);
+                    if (elem_disabled) {
+                        ImGui::SetTooltip("[Restricted] %s (Z=%d)", e.name, e.Z);
+                    } else {
+                        int total = e.Z * 2 + e.N;
+                        ImGui::SetTooltip("%s (Z=%d)\n%dp + %dn + %de = %d particles",
+                            e.name, e.Z, e.Z, e.N, e.Z, total);
+                    }
                 }
 
                 if (selected) {
@@ -1346,6 +1373,8 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
                     ImGui::PopStyleColor();
                 }
                 ImGui::PopStyleColor(3);
+                if (elem_disabled)
+                    ImGui::PopStyleColor();  // text color
             }
         }
 
@@ -1386,6 +1415,10 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
 
     // ── Molecules ────────────────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Molecules")) {
+        bool mol_disabled = rules && !rules->allow_molecules;
+        if (mol_disabled) {
+            ImGui::TextColored(ImVec4(0.35f, 0.35f, 0.40f, 0.60f), "[Restricted in this scenario]");
+        } else {
         // ── Scan cached .ppmol files from repository ────────────────────────
         struct CachedMol {
             std::string formula;       // parsed from filename (e.g. "H2O")
@@ -1633,61 +1666,65 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
                 ImGui::PopStyleColor(2);
             }
         }
+        } // else (mol not disabled)
     }
+
+    // Helper: check if a type is restricted by active scenario
+    auto dis = [&](int t) { return rules && !rules->is_type_allowed(static_cast<uint32_t>(t)); };
 
     // ── Leptons ──────────────────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Leptons")) {
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Generation 1:");
         if (spawn_button(ELECTRON_TYPE_PHYS, "e-", PHYS_TYPE_UI_COLORS[ELECTRON_TYPE_PHYS],
-                          spawn_type, spawn_group, "Electron"))
+                          spawn_type, spawn_group, "Electron", dis(ELECTRON_TYPE_PHYS)))
             { spawn_type = ELECTRON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(POSITRON_TYPE_PHYS, "e+", PHYS_TYPE_UI_COLORS[POSITRON_TYPE_PHYS],
-                          spawn_type, spawn_group, "Positron"))
+                          spawn_type, spawn_group, "Positron", dis(POSITRON_TYPE_PHYS)))
             { spawn_type = POSITRON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(NEUTRINO_TYPE_PHYS, "ve", PHYS_TYPE_UI_COLORS[NEUTRINO_TYPE_PHYS],
-                          spawn_type, spawn_group, "Electron neutrino"))
+                          spawn_type, spawn_group, "Electron neutrino", dis(NEUTRINO_TYPE_PHYS)))
             { spawn_type = NEUTRINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
 
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Generation 2:");
         if (spawn_button(MUON_TYPE_PHYS, "mu-", PHYS_TYPE_UI_COLORS[MUON_TYPE_PHYS],
-                          spawn_type, spawn_group, "Muon (decays ~100 frames)"))
+                          spawn_type, spawn_group, "Muon (decays ~100 frames)", dis(MUON_TYPE_PHYS)))
             { spawn_type = MUON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(ANTIMUON_TYPE_PHYS, "mu+", PHYS_TYPE_UI_COLORS[ANTIMUON_TYPE_PHYS],
-                          spawn_type, spawn_group, "Anti-muon"))
+                          spawn_type, spawn_group, "Anti-muon", dis(ANTIMUON_TYPE_PHYS)))
             { spawn_type = ANTIMUON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(MU_NEUTRINO_TYPE_PHYS, "vmu", PHYS_TYPE_UI_COLORS[MU_NEUTRINO_TYPE_PHYS],
-                          spawn_type, spawn_group, "Muon neutrino"))
+                          spawn_type, spawn_group, "Muon neutrino", dis(MU_NEUTRINO_TYPE_PHYS)))
             { spawn_type = MU_NEUTRINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
 
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Generation 3:");
         if (spawn_button(TAU_TYPE_PHYS, "tau-", PHYS_TYPE_UI_COLORS[TAU_TYPE_PHYS],
-                          spawn_type, spawn_group, "Tau (decays ~5 frames)"))
+                          spawn_type, spawn_group, "Tau (decays ~5 frames)", dis(TAU_TYPE_PHYS)))
             { spawn_type = TAU_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(ANTITAU_TYPE_PHYS, "tau+", PHYS_TYPE_UI_COLORS[ANTITAU_TYPE_PHYS],
-                          spawn_type, spawn_group, "Anti-tau"))
+                          spawn_type, spawn_group, "Anti-tau", dis(ANTITAU_TYPE_PHYS)))
             { spawn_type = ANTITAU_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(TAU_NEUTRINO_TYPE_PHYS, "vtau", PHYS_TYPE_UI_COLORS[TAU_NEUTRINO_TYPE_PHYS],
-                          spawn_type, spawn_group, "Tau neutrino"))
+                          spawn_type, spawn_group, "Tau neutrino", dis(TAU_NEUTRINO_TYPE_PHYS)))
             { spawn_type = TAU_NEUTRINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
 
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Composites:");
         if (spawn_button(PROTON_TYPE, "p", PHYS_TYPE_UI_COLORS[PROTON_TYPE],
-                          spawn_type, spawn_group, "Proton"))
+                          spawn_type, spawn_group, "Proton", dis(PROTON_TYPE)))
             { spawn_type = PROTON_TYPE; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(NEUTRON_TYPE, "n", PHYS_TYPE_UI_COLORS[NEUTRON_TYPE],
-                          spawn_type, spawn_group, "Neutron"))
+                          spawn_type, spawn_group, "Neutron", dis(NEUTRON_TYPE)))
             { spawn_type = NEUTRON_TYPE; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(ANTIPROTON_TYPE_PHYS, "p-", PHYS_TYPE_UI_COLORS[ANTIPROTON_TYPE_PHYS],
-                          spawn_type, spawn_group, "Antiproton"))
+                          spawn_type, spawn_group, "Antiproton", dis(ANTIPROTON_TYPE_PHYS)))
             { spawn_type = ANTIPROTON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
     }
 
@@ -1695,53 +1732,53 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
     if (ImGui::CollapsingHeader("Quarks")) {
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Matter:");
         if (spawn_button(UP_QUARK_TYPE, "u", PHYS_TYPE_UI_COLORS[UP_QUARK_TYPE],
-                          spawn_type, spawn_group, "Up quark (+2/3)"))
+                          spawn_type, spawn_group, "Up quark (+2/3)", dis(UP_QUARK_TYPE)))
             { spawn_type = UP_QUARK_TYPE; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(DOWN_QUARK_TYPE, "d", PHYS_TYPE_UI_COLORS[DOWN_QUARK_TYPE],
-                          spawn_type, spawn_group, "Down quark (-1/3)"))
+                          spawn_type, spawn_group, "Down quark (-1/3)", dis(DOWN_QUARK_TYPE)))
             { spawn_type = DOWN_QUARK_TYPE; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(STRANGE_QUARK_TYPE, "s", PHYS_TYPE_UI_COLORS[STRANGE_QUARK_TYPE],
-                          spawn_type, spawn_group, "Strange quark (-1/3, decays)"))
+                          spawn_type, spawn_group, "Strange quark (-1/3, decays)", dis(STRANGE_QUARK_TYPE)))
             { spawn_type = STRANGE_QUARK_TYPE; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
 
         if (spawn_button(CHARM_QUARK_TYPE, "c", PHYS_TYPE_UI_COLORS[CHARM_QUARK_TYPE],
-                          spawn_type, spawn_group, "Charm quark (+2/3, decays fast)"))
+                          spawn_type, spawn_group, "Charm quark (+2/3, decays fast)", dis(CHARM_QUARK_TYPE)))
             { spawn_type = CHARM_QUARK_TYPE; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(TOP_QUARK_TYPE, "t", PHYS_TYPE_UI_COLORS[TOP_QUARK_TYPE],
-                          spawn_type, spawn_group, "Top quark (+2/3, instant decay)"))
+                          spawn_type, spawn_group, "Top quark (+2/3, instant decay)", dis(TOP_QUARK_TYPE)))
             { spawn_type = TOP_QUARK_TYPE; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(BOTTOM_QUARK_TYPE, "b", PHYS_TYPE_UI_COLORS[BOTTOM_QUARK_TYPE],
-                          spawn_type, spawn_group, "Bottom quark (-1/3, decays)"))
+                          spawn_type, spawn_group, "Bottom quark (-1/3, decays)", dis(BOTTOM_QUARK_TYPE)))
             { spawn_type = BOTTOM_QUARK_TYPE; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
 
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Antimatter:");
         if (spawn_button(ANTI_UP_TYPE, "u~", PHYS_TYPE_UI_COLORS[ANTI_UP_TYPE],
-                          spawn_type, spawn_group, "Anti-up (-2/3)"))
+                          spawn_type, spawn_group, "Anti-up (-2/3)", dis(ANTI_UP_TYPE)))
             { spawn_type = ANTI_UP_TYPE; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(ANTI_DOWN_TYPE, "d~", PHYS_TYPE_UI_COLORS[ANTI_DOWN_TYPE],
-                          spawn_type, spawn_group, "Anti-down (+1/3)"))
+                          spawn_type, spawn_group, "Anti-down (+1/3)", dis(ANTI_DOWN_TYPE)))
             { spawn_type = ANTI_DOWN_TYPE; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(ANTI_STRANGE_TYPE, "s~", PHYS_TYPE_UI_COLORS[ANTI_STRANGE_TYPE],
-                          spawn_type, spawn_group, "Anti-strange (+1/3)"))
+                          spawn_type, spawn_group, "Anti-strange (+1/3)", dis(ANTI_STRANGE_TYPE)))
             { spawn_type = ANTI_STRANGE_TYPE; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
 
         if (spawn_button(ANTI_CHARM_TYPE, "c~", PHYS_TYPE_UI_COLORS[ANTI_CHARM_TYPE],
-                          spawn_type, spawn_group, "Anti-charm (-2/3)"))
+                          spawn_type, spawn_group, "Anti-charm (-2/3)", dis(ANTI_CHARM_TYPE)))
             { spawn_type = ANTI_CHARM_TYPE; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(ANTI_TOP_TYPE, "t~", PHYS_TYPE_UI_COLORS[ANTI_TOP_TYPE],
-                          spawn_type, spawn_group, "Anti-top (-2/3)"))
+                          spawn_type, spawn_group, "Anti-top (-2/3)", dis(ANTI_TOP_TYPE)))
             { spawn_type = ANTI_TOP_TYPE; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(ANTI_BOTTOM_TYPE, "b~", PHYS_TYPE_UI_COLORS[ANTI_BOTTOM_TYPE],
-                          spawn_type, spawn_group, "Anti-bottom (+1/3)"))
+                          spawn_type, spawn_group, "Anti-bottom (+1/3)", dis(ANTI_BOTTOM_TYPE)))
             { spawn_type = ANTI_BOTTOM_TYPE; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
     }
 
@@ -1749,200 +1786,201 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
     if (ImGui::CollapsingHeader("Bosons")) {
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Gauge:");
         if (spawn_button(PHOTON_TYPE_PHYS, "y", PHYS_TYPE_UI_COLORS[PHOTON_TYPE_PHYS],
-                          spawn_type, spawn_group, "Photon (massless, stable)"))
+                          spawn_type, spawn_group, "Photon (massless, stable)", dis(PHOTON_TYPE_PHYS)))
             { spawn_type = PHOTON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(GLUON_TYPE_PHYS, "g", PHYS_TYPE_UI_COLORS[GLUON_TYPE_PHYS],
-                          spawn_type, spawn_group, "Gluon (strong force mediator)"))
+                          spawn_type, spawn_group, "Gluon (strong force mediator)", dis(GLUON_TYPE_PHYS)))
             { spawn_type = GLUON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
 
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Weak / Scalar:");
         if (spawn_button(W_PLUS_TYPE_PHYS, "W+", PHYS_TYPE_UI_COLORS[W_PLUS_TYPE_PHYS],
-                          spawn_type, spawn_group, "W+ boson (instant decay)"))
+                          spawn_type, spawn_group, "W+ boson (instant decay)", dis(W_PLUS_TYPE_PHYS)))
             { spawn_type = W_PLUS_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(W_MINUS_TYPE_PHYS, "W-", PHYS_TYPE_UI_COLORS[W_MINUS_TYPE_PHYS],
-                          spawn_type, spawn_group, "W- boson (instant decay)"))
+                          spawn_type, spawn_group, "W- boson (instant decay)", dis(W_MINUS_TYPE_PHYS)))
             { spawn_type = W_MINUS_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(Z_BOSON_TYPE_PHYS, "Z0", PHYS_TYPE_UI_COLORS[Z_BOSON_TYPE_PHYS],
-                          spawn_type, spawn_group, "Z0 boson (instant decay)"))
+                          spawn_type, spawn_group, "Z0 boson (instant decay)", dis(Z_BOSON_TYPE_PHYS)))
             { spawn_type = Z_BOSON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
 
         if (spawn_button(HIGGS_TYPE_PHYS, "H0", PHYS_TYPE_UI_COLORS[HIGGS_TYPE_PHYS],
-                          spawn_type, spawn_group, "Higgs boson (instant decay)"))
+                          spawn_type, spawn_group, "Higgs boson (instant decay)", dis(HIGGS_TYPE_PHYS)))
             { spawn_type = HIGGS_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
     }
 
     // ── Hypothetical ────────────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Hypothetical")) {
         if (spawn_button(GRAVITON_TYPE_PHYS, "G", PHYS_TYPE_UI_COLORS[GRAVITON_TYPE_PHYS],
-                          spawn_type, spawn_group, "Graviton (spin-2, massless)"))
+                          spawn_type, spawn_group, "Graviton (spin-2, massless)", dis(GRAVITON_TYPE_PHYS)))
             { spawn_type = GRAVITON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(DARK_MATTER_TYPE_PHYS, "DM", PHYS_TYPE_UI_COLORS[DARK_MATTER_TYPE_PHYS],
-                          spawn_type, spawn_group, "Dark Matter (WIMP, gravity-only)"))
+                          spawn_type, spawn_group, "Dark Matter (WIMP, gravity-only)", dis(DARK_MATTER_TYPE_PHYS)))
             { spawn_type = DARK_MATTER_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(DARK_ENERGY_TYPE_PHYS, "DE", PHYS_TYPE_UI_COLORS[DARK_ENERGY_TYPE_PHYS],
-                          spawn_type, spawn_group, "Dark Energy (repulsive field)"))
+                          spawn_type, spawn_group, "Dark Energy (repulsive field)", dis(DARK_ENERGY_TYPE_PHYS)))
             { spawn_type = DARK_ENERGY_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
 
         // ── Dark Matter Candidates ──
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Dark Matter Candidates:");
         if (spawn_button(AXINO_TYPE_PHYS, "Ax", PHYS_TYPE_UI_COLORS[AXINO_TYPE_PHYS],
-                          spawn_type, spawn_group, "Axino (SUSY partner of axion)"))
+                          spawn_type, spawn_group, "Axino (SUSY partner of axion)", dis(AXINO_TYPE_PHYS)))
             { spawn_type = AXINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(WIMPZILLA_TYPE_PHYS, "WZ", PHYS_TYPE_UI_COLORS[WIMPZILLA_TYPE_PHYS],
-                          spawn_type, spawn_group, "WIMPzilla (super-heavy ~10^12 GeV)"))
+                          spawn_type, spawn_group, "WIMPzilla (super-heavy ~10^12 GeV)", dis(WIMPZILLA_TYPE_PHYS)))
             { spawn_type = WIMPZILLA_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(SIMP_TYPE_PHYS, "SI", PHYS_TYPE_UI_COLORS[SIMP_TYPE_PHYS],
-                          spawn_type, spawn_group, "SIMP (strongly self-interacting)"))
+                          spawn_type, spawn_group, "SIMP (strongly self-interacting)", dis(SIMP_TYPE_PHYS)))
             { spawn_type = SIMP_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
 
         if (spawn_button(STERILE_NEUTRINO_TYPE_PHYS, "Ns", PHYS_TYPE_UI_COLORS[STERILE_NEUTRINO_TYPE_PHYS],
-                          spawn_type, spawn_group, "Sterile Neutrino (no weak force)"))
+                          spawn_type, spawn_group, "Sterile Neutrino (no weak force)", dis(STERILE_NEUTRINO_TYPE_PHYS)))
             { spawn_type = STERILE_NEUTRINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(DARK_PHOTON_TYPE_PHYS, "A'", PHYS_TYPE_UI_COLORS[DARK_PHOTON_TYPE_PHYS],
-                          spawn_type, spawn_group, "Dark Photon (dark EM carrier)"))
+                          spawn_type, spawn_group, "Dark Photon (dark EM carrier)", dis(DARK_PHOTON_TYPE_PHYS)))
             { spawn_type = DARK_PHOTON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(QBALL_TYPE_PHYS, "QB", PHYS_TYPE_UI_COLORS[QBALL_TYPE_PHYS],
-                          spawn_type, spawn_group, "Q-Ball (stable field soliton, charged)"))
+                          spawn_type, spawn_group, "Q-Ball (stable field soliton, charged)", dis(QBALL_TYPE_PHYS)))
             { spawn_type = QBALL_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
 
         // ── Supersymmetric Sparticles ──
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Supersymmetric (Sparticles):");
         if (spawn_button(SELECTRON_TYPE_PHYS, "e~", PHYS_TYPE_UI_COLORS[SELECTRON_TYPE_PHYS],
-                          spawn_type, spawn_group, "Selectron (scalar e-, 200 GeV)"))
+                          spawn_type, spawn_group, "Selectron (scalar e-, 200 GeV)", dis(SELECTRON_TYPE_PHYS)))
             { spawn_type = SELECTRON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(SMUON_TYPE_PHYS, "mu~", PHYS_TYPE_UI_COLORS[SMUON_TYPE_PHYS],
-                          spawn_type, spawn_group, "Smuon (scalar muon, 300 GeV)"))
+                          spawn_type, spawn_group, "Smuon (scalar muon, 300 GeV)", dis(SMUON_TYPE_PHYS)))
             { spawn_type = SMUON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(STAU_TYPE_PHYS, "ta~", PHYS_TYPE_UI_COLORS[STAU_TYPE_PHYS],
-                          spawn_type, spawn_group, "Stau (scalar tau, 150 GeV, long-lived)"))
+                          spawn_type, spawn_group, "Stau (scalar tau, 150 GeV, long-lived)", dis(STAU_TYPE_PHYS)))
             { spawn_type = STAU_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(SQUARK_TYPE_PHYS, "q~", PHYS_TYPE_UI_COLORS[SQUARK_TYPE_PHYS],
-                          spawn_type, spawn_group, "Squark (scalar quark, 1.5 TeV, color-charged)"))
+                          spawn_type, spawn_group, "Squark (scalar quark, 1.5 TeV, color-charged)", dis(SQUARK_TYPE_PHYS)))
             { spawn_type = SQUARK_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
 
         if (spawn_button(GLUINO_TYPE_PHYS, "g~", PHYS_TYPE_UI_COLORS[GLUINO_TYPE_PHYS],
-                          spawn_type, spawn_group, "Gluino (fermionic gluon, 2 TeV)"))
+                          spawn_type, spawn_group, "Gluino (fermionic gluon, 2 TeV)", dis(GLUINO_TYPE_PHYS)))
             { spawn_type = GLUINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(PHOTINO_TYPE_PHYS, "y~", PHYS_TYPE_UI_COLORS[PHOTINO_TYPE_PHYS],
-                          spawn_type, spawn_group, "Photino (fermionic photon, 100 GeV)"))
+                          spawn_type, spawn_group, "Photino (fermionic photon, 100 GeV)", dis(PHOTINO_TYPE_PHYS)))
             { spawn_type = PHOTINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(WINO_TYPE_PHYS, "W~", PHYS_TYPE_UI_COLORS[WINO_TYPE_PHYS],
-                          spawn_type, spawn_group, "Wino (fermionic W, 300 GeV)"))
+                          spawn_type, spawn_group, "Wino (fermionic W, 300 GeV)", dis(WINO_TYPE_PHYS)))
             { spawn_type = WINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(ZINO_TYPE_PHYS, "Z~", PHYS_TYPE_UI_COLORS[ZINO_TYPE_PHYS],
-                          spawn_type, spawn_group, "Zino (fermionic Z, 300 GeV)"))
+                          spawn_type, spawn_group, "Zino (fermionic Z, 300 GeV)", dis(ZINO_TYPE_PHYS)))
             { spawn_type = ZINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
 
         if (spawn_button(HIGGSINO_TYPE_PHYS, "H~", PHYS_TYPE_UI_COLORS[HIGGSINO_TYPE_PHYS],
-                          spawn_type, spawn_group, "Higgsino (fermionic Higgs, 200 GeV)"))
+                          spawn_type, spawn_group, "Higgsino (fermionic Higgs, 200 GeV)", dis(HIGGSINO_TYPE_PHYS)))
             { spawn_type = HIGGSINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(NEUTRALINO_TYPE_PHYS, "N1", PHYS_TYPE_UI_COLORS[NEUTRALINO_TYPE_PHYS],
-                          spawn_type, spawn_group, "Neutralino (stable LSP, DM candidate)"))
+                          spawn_type, spawn_group, "Neutralino (stable LSP, DM candidate)", dis(NEUTRALINO_TYPE_PHYS)))
             { spawn_type = NEUTRALINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(SNEUTRINO_TYPE_PHYS, "v~", PHYS_TYPE_UI_COLORS[SNEUTRINO_TYPE_PHYS],
-                          spawn_type, spawn_group, "Sneutrino (scalar neutrino, 200 GeV)"))
+                          spawn_type, spawn_group, "Sneutrino (scalar neutrino, 200 GeV)", dis(SNEUTRINO_TYPE_PHYS)))
             { spawn_type = SNEUTRINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
 
         // ── Force Carriers & Exotic ──
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Force Carriers & Exotic:");
         if (spawn_button(GRAVITINO_TYPE_PHYS, "G~", PHYS_TYPE_UI_COLORS[GRAVITINO_TYPE_PHYS],
-                          spawn_type, spawn_group, "Gravitino (SUSY graviton, spin-3/2)"))
+                          spawn_type, spawn_group, "Gravitino (SUSY graviton, spin-3/2)", dis(GRAVITINO_TYPE_PHYS)))
             { spawn_type = GRAVITINO_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(X_BOSON_TYPE_PHYS, "X", PHYS_TYPE_UI_COLORS[X_BOSON_TYPE_PHYS],
-                          spawn_type, spawn_group, "X Boson (GUT, proton decay, 10^15 GeV)"))
+                          spawn_type, spawn_group, "X Boson (GUT, proton decay, 10^15 GeV)", dis(X_BOSON_TYPE_PHYS)))
             { spawn_type = X_BOSON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(Y_BOSON_TYPE_PHYS, "Y", PHYS_TYPE_UI_COLORS[Y_BOSON_TYPE_PHYS],
-                          spawn_type, spawn_group, "Y Boson (GUT, proton decay, 10^15 GeV)"))
+                          spawn_type, spawn_group, "Y Boson (GUT, proton decay, 10^15 GeV)", dis(Y_BOSON_TYPE_PHYS)))
             { spawn_type = Y_BOSON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
 
         if (spawn_button(MONOPOLE_TYPE_PHYS, "MM", PHYS_TYPE_UI_COLORS[MONOPOLE_TYPE_PHYS],
-                          spawn_type, spawn_group, "Magnetic Monopole (radial B-field, 10^16 GeV)"))
+                          spawn_type, spawn_group, "Magnetic Monopole (radial B-field, 10^16 GeV)", dis(MONOPOLE_TYPE_PHYS)))
             { spawn_type = MONOPOLE_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(RADION_TYPE_PHYS, "Ra", PHYS_TYPE_UI_COLORS[RADION_TYPE_PHYS],
-                          spawn_type, spawn_group, "Radion (extra-dimension size, 1 TeV)"))
+                          spawn_type, spawn_group, "Radion (extra-dimension size, 1 TeV)", dis(RADION_TYPE_PHYS)))
             { spawn_type = RADION_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(DILATON_TYPE_PHYS, "Di", PHYS_TYPE_UI_COLORS[DILATON_TYPE_PHYS],
-                          spawn_type, spawn_group, "Dilaton (string theory scale, 10 GeV)"))
+                          spawn_type, spawn_group, "Dilaton (string theory scale, 10 GeV)", dis(DILATON_TYPE_PHYS)))
             { spawn_type = DILATON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
 
         // ── Theoretical Extremes ──
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Theoretical Extremes:");
         if (spawn_button(TACHYON_TYPE_PHYS, "Ta", PHYS_TYPE_UI_COLORS[TACHYON_TYPE_PHYS],
-                          spawn_type, spawn_group, "Tachyon (superluminal, imaginary mass)"))
+                          spawn_type, spawn_group, "Tachyon (superluminal, imaginary mass)", dis(TACHYON_TYPE_PHYS)))
             { spawn_type = TACHYON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(PREON_TYPE_PHYS, "Pr", PHYS_TYPE_UI_COLORS[PREON_TYPE_PHYS],
-                          spawn_type, spawn_group, "Preon (sub-quark constituent, confined)"))
+                          spawn_type, spawn_group, "Preon (sub-quark constituent, confined)", dis(PREON_TYPE_PHYS)))
             { spawn_type = PREON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(INFLATON_TYPE_PHYS, "In", PHYS_TYPE_UI_COLORS[INFLATON_TYPE_PHYS],
-                          spawn_type, spawn_group, "Inflaton (cosmic inflation driver)"))
+                          spawn_type, spawn_group, "Inflaton (cosmic inflation driver)", dis(INFLATON_TYPE_PHYS)))
             { spawn_type = INFLATON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(MAJORON_TYPE_PHYS, "Mj", PHYS_TYPE_UI_COLORS[MAJORON_TYPE_PHYS],
-                          spawn_type, spawn_group, "Majoron (neutrino mass, nearly invisible)"))
+                          spawn_type, spawn_group, "Majoron (neutrino mass, nearly invisible)", dis(MAJORON_TYPE_PHYS)))
             { spawn_type = MAJORON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
 
         if (spawn_button(ODDERON_TYPE_PHYS, "Od", PHYS_TYPE_UI_COLORS[ODDERON_TYPE_PHYS],
-                          spawn_type, spawn_group, "Odderon (3-gluon bound state)"))
+                          spawn_type, spawn_group, "Odderon (3-gluon bound state)", dis(ODDERON_TYPE_PHYS)))
             { spawn_type = ODDERON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(GLUEBALL_TYPE_PHYS, "Gb", PHYS_TYPE_UI_COLORS[GLUEBALL_TYPE_PHYS],
-                          spawn_type, spawn_group, "Glueball (pure-glue bound state)"))
+                          spawn_type, spawn_group, "Glueball (pure-glue bound state)", dis(GLUEBALL_TYPE_PHYS)))
             { spawn_type = GLUEBALL_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(SKYRMION_TYPE_PHYS, "Sk", PHYS_TYPE_UI_COLORS[SKYRMION_TYPE_PHYS],
-                          spawn_type, spawn_group, "Skyrmion (topological soliton, baryon-like)"))
+                          spawn_type, spawn_group, "Skyrmion (topological soliton, baryon-like)", dis(SKYRMION_TYPE_PHYS)))
             { spawn_type = SKYRMION_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(X17_TYPE_PHYS, "X17", PHYS_TYPE_UI_COLORS[X17_TYPE_PHYS],
-                          spawn_type, spawn_group, "X17 (fifth-force boson, 17 MeV)"))
+                          spawn_type, spawn_group, "X17 (fifth-force boson, 17 MeV)", dis(X17_TYPE_PHYS)))
             { spawn_type = X17_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
 
         if (spawn_button(CHAMELEON_TYPE_PHYS, "Ch", PHYS_TYPE_UI_COLORS[CHAMELEON_TYPE_PHYS],
-                          spawn_type, spawn_group, "Chameleon (environment-dependent mass)"))
+                          spawn_type, spawn_group, "Chameleon (environment-dependent mass)", dis(CHAMELEON_TYPE_PHYS)))
             { spawn_type = CHAMELEON_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
 
         // ── New Class (2025-2026) ──
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "New Class (2025-2026):");
         if (spawn_button(PARAPARTICLE_TYPE_PHYS, "Pp", PHYS_TYPE_UI_COLORS[PARAPARTICLE_TYPE_PHYS],
-                          spawn_type, spawn_group, "Paraparticle (exotic statistics)"))
+                          spawn_type, spawn_group, "Paraparticle (exotic statistics)", dis(PARAPARTICLE_TYPE_PHYS)))
             { spawn_type = PARAPARTICLE_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
         ImGui::SameLine();
         if (spawn_button(DYN_AXION_QP_TYPE_PHYS, "Dq", PHYS_TYPE_UI_COLORS[DYN_AXION_QP_TYPE_PHYS],
-                          spawn_type, spawn_group, "Dyn. Axion Quasiparticle (topological EM)"))
+                          spawn_type, spawn_group, "Dyn. Axion Quasiparticle (topological EM)", dis(DYN_AXION_QP_TYPE_PHYS)))
             { spawn_type = DYN_AXION_QP_TYPE_PHYS; spawn_group = -1; spawn_atom_Z = -1; pending_spawn = true; }
     }
 
     // ── Hadrons ──────────────────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Hadrons")) {
+        bool hadrons_disabled = rules && !rules->allow_hadrons;
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Baryons (3 quarks):");
         for (int h = 0; h < HADRON_TEMPLATE_COUNT_VAL; ++h) {
             if (h == 7) {
@@ -1952,23 +1990,35 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
 
             int group_id = GROUP_TEMPLATE_COUNT_VAL + h;
             bool selected = (spawn_group == group_id);
-            if (selected) {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.45f, 0.60f, 0.90f));
-                ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.302f, 0.749f, 0.953f, 1.0f));
-                ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
-            }
 
-            if (ImGui::Button(HADRON_TEMPLATES[h].label, ImVec2(50, 30))) {
-                spawn_group = group_id;
-                spawn_atom_Z = -1;
-                pending_spawn = true;
-            }
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s (%u quarks)", HADRON_TEMPLATES[h].name, HADRON_TEMPLATES[h].count);
+            if (hadrons_disabled) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.12f, 0.14f, 0.50f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.15f, 0.15f, 0.17f, 0.55f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.12f, 0.14f, 0.50f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.35f, 0.40f, 0.60f));
+                ImGui::Button(HADRON_TEMPLATES[h].label, ImVec2(50, 30));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("[Restricted] %s", HADRON_TEMPLATES[h].name);
+                ImGui::PopStyleColor(4);
+            } else {
+                if (selected) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.45f, 0.60f, 0.90f));
+                    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.302f, 0.749f, 0.953f, 1.0f));
+                    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
+                }
 
-            if (selected) {
-                ImGui::PopStyleVar();
-                ImGui::PopStyleColor(2);
+                if (ImGui::Button(HADRON_TEMPLATES[h].label, ImVec2(50, 30))) {
+                    spawn_group = group_id;
+                    spawn_atom_Z = -1;
+                    pending_spawn = true;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s (%u quarks)", HADRON_TEMPLATES[h].name, HADRON_TEMPLATES[h].count);
+
+                if (selected) {
+                    ImGui::PopStyleVar();
+                    ImGui::PopStyleColor(2);
+                }
             }
 
             int row_idx = (h < 7) ? h : (h - 7);
@@ -1979,6 +2029,10 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
 
     // ── Force Objects ─────────────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Force Objects")) {
+        bool fo_disabled = rules && !rules->allow_force_objects;
+        if (fo_disabled) {
+            ImGui::TextColored(ImVec4(0.35f, 0.35f, 0.40f, 0.60f), "[Restricted in this scenario]");
+        }
         ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f), "Click to place in world:");
 
         static const char* fo_labels[] = {
@@ -2013,36 +2067,49 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
         for (int fi = 0; fi < 5; ++fi) {
             if (fi > 0) ImGui::SameLine();
 
-            bool active = (force_obj_placement_mode && force_obj_placement_type == fi);
-            ImVec4 c = fo_colors[fi];
+            if (fo_disabled) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.12f, 0.14f, 0.50f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.15f, 0.15f, 0.17f, 0.55f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.12f, 0.14f, 0.50f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.35f, 0.40f, 0.60f));
+                char fid[32];
+                snprintf(fid, sizeof(fid), "%s##fo%d", fo_labels[fi], fi);
+                ImGui::Button(fid, ImVec2(52, 30));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("[Restricted] %s", fo_tips[fi]);
+                ImGui::PopStyleColor(4);
+            } else {
+                bool active = (force_obj_placement_mode && force_obj_placement_type == fi);
+                ImVec4 c = fo_colors[fi];
 
-            ImGui::PushStyleColor(ImGuiCol_Button,
-                ImVec4(c.x * 0.3f, c.y * 0.3f, c.z * 0.3f, 0.80f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                ImVec4(c.x * 0.5f, c.y * 0.5f, c.z * 0.5f, 0.90f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                ImVec4(c.x * 0.7f, c.y * 0.7f, c.z * 0.7f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                    ImVec4(c.x * 0.3f, c.y * 0.3f, c.z * 0.3f, 0.80f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                    ImVec4(c.x * 0.5f, c.y * 0.5f, c.z * 0.5f, 0.90f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                    ImVec4(c.x * 0.7f, c.y * 0.7f, c.z * 0.7f, 1.0f));
 
-            if (active) {
-                ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(c.x, c.y, c.z, 1.0f));
-                ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
+                if (active) {
+                    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(c.x, c.y, c.z, 1.0f));
+                    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
+                }
+
+                char fid[32];
+                snprintf(fid, sizeof(fid), "%s##fo%d", fo_labels[fi], fi);
+                if (ImGui::Button(fid, ImVec2(52, 30))) {
+                    force_obj_placement_mode = !active;
+                    force_obj_placement_type = fi;
+                    pending_spawn = false;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", fo_tips[fi]);
+
+                if (active) {
+                    ImGui::PopStyleVar();
+                    ImGui::PopStyleColor();
+                }
+                ImGui::PopStyleColor(3);
             }
-
-            char fid[32];
-            snprintf(fid, sizeof(fid), "%s##fo%d", fo_labels[fi], fi);
-            if (ImGui::Button(fid, ImVec2(52, 30))) {
-                force_obj_placement_mode = !active;
-                force_obj_placement_type = fi;
-                pending_spawn = false;
-            }
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s", fo_tips[fi]);
-
-            if (active) {
-                ImGui::PopStyleVar();
-                ImGui::PopStyleColor();
-            }
-            ImGui::PopStyleColor(3);
         }
 
         // Second row: utility force objects (6-8) + Mirror
@@ -2051,41 +2118,63 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
             int fi = fo_row2[ri];
             if (ri > 0) ImGui::SameLine();
 
-            bool active = (force_obj_placement_mode && force_obj_placement_type == fi);
-            ImVec4 c = fo_colors[fi];
+            if (fo_disabled) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.12f, 0.14f, 0.50f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.15f, 0.15f, 0.17f, 0.55f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.12f, 0.14f, 0.50f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.35f, 0.40f, 0.60f));
+                char fid[32];
+                snprintf(fid, sizeof(fid), "%s##fo%d", fo_labels[fi], fi);
+                ImGui::Button(fid, ImVec2(52, 30));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("[Restricted] %s", fo_tips[fi]);
+                ImGui::PopStyleColor(4);
+            } else {
+                bool active = (force_obj_placement_mode && force_obj_placement_type == fi);
+                ImVec4 c = fo_colors[fi];
 
-            ImGui::PushStyleColor(ImGuiCol_Button,
-                ImVec4(c.x * 0.3f, c.y * 0.3f, c.z * 0.3f, 0.80f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                ImVec4(c.x * 0.5f, c.y * 0.5f, c.z * 0.5f, 0.90f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                ImVec4(c.x * 0.7f, c.y * 0.7f, c.z * 0.7f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                    ImVec4(c.x * 0.3f, c.y * 0.3f, c.z * 0.3f, 0.80f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                    ImVec4(c.x * 0.5f, c.y * 0.5f, c.z * 0.5f, 0.90f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                    ImVec4(c.x * 0.7f, c.y * 0.7f, c.z * 0.7f, 1.0f));
 
-            if (active) {
-                ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(c.x, c.y, c.z, 1.0f));
-                ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
+                if (active) {
+                    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(c.x, c.y, c.z, 1.0f));
+                    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
+                }
+
+                char fid[32];
+                snprintf(fid, sizeof(fid), "%s##fo%d", fo_labels[fi], fi);
+                if (ImGui::Button(fid, ImVec2(52, 30))) {
+                    force_obj_placement_mode = !active;
+                    force_obj_placement_type = fi;
+                    pending_spawn = false;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", fo_tips[fi]);
+
+                if (active) {
+                    ImGui::PopStyleVar();
+                    ImGui::PopStyleColor();
+                }
+                ImGui::PopStyleColor(3);
             }
-
-            char fid[32];
-            snprintf(fid, sizeof(fid), "%s##fo%d", fo_labels[fi], fi);
-            if (ImGui::Button(fid, ImVec2(52, 30))) {
-                force_obj_placement_mode = !active;
-                force_obj_placement_type = fi;
-                pending_spawn = false;
-            }
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s", fo_tips[fi]);
-
-            if (active) {
-                ImGui::PopStyleVar();
-                ImGui::PopStyleColor();
-            }
-            ImGui::PopStyleColor(3);
         }
         ImGui::SameLine();
 
         // Mirror button (separate — uses two-click placement)
-        {
+        if (fo_disabled) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.12f, 0.14f, 0.50f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.15f, 0.15f, 0.17f, 0.55f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.12f, 0.14f, 0.50f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.35f, 0.40f, 0.60f));
+            ImGui::Button("Mirror##fo5", ImVec2(70, 30));
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("[Restricted] Reflective mirror");
+            ImGui::PopStyleColor(4);
+        } else {
             ImVec4 mc(0.7f, 0.7f, 0.8f, 1.0f);
             ImGui::PushStyleColor(ImGuiCol_Button,
                 ImVec4(mc.x * 0.3f, mc.y * 0.3f, mc.z * 0.3f, 0.80f));

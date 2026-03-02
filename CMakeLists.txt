@@ -83,6 +83,7 @@ add_executable(particle_physics
     # Onboarding & gameplay
     src/physics/tutorial.cpp
     src/physics/scenarios.cpp
+    src/physics/cutscenes.cpp
 
     # UI component modules (split from interface.cpp)
     src/physics/ui_panels.cpp

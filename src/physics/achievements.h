@@ -207,6 +207,9 @@ public:
     // Scenario completion tracking (indexed by scenario_idx)
     bool scenarios_completed[20] = {};
 
+    // Cutscene tracking: bit i = intro for scenario i has been watched
+    uint32_t cutscene_intros_seen = 0;
+
 private:
     // Bitfield for unlocked achievements (ACH_COUNT <= 128, two uint64_t slots)
     uint64_t unlocked_bits_[2] = {};

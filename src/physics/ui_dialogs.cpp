@@ -3,6 +3,7 @@
 #include "physics/phys_particles.h"
 #include "physics/tutorial.h"
 #include "physics/scenarios.h"
+#include "physics/cutscenes.h"
 #include "physics/ui_data.h"
 #include "physics/audio.h"
 #include "physics/repository.h"
@@ -1403,7 +1404,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         float btn_h = 40.0f;
         float btn_spacing = 48.0f;
         float title_h = title_size.y + 20.0f;  // title + gap to first button
-        float menu_h = title_h + btn_spacing * 10 + btn_h + 30.0f; // 11 buttons + hint
+        float menu_h = title_h + btn_spacing * 11 + btn_h + 30.0f; // 12 buttons + hint
         float menu_top = cy - menu_h * 0.5f;
 
         ImGui::SetCursorPos(ImVec2(cx - title_size.x * 0.5f, menu_top));
@@ -1500,8 +1501,16 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
             show_pause_menu = false;
         }
 
-        // Credits
+        // Cutscenes
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 8));
+        if (ImGui::Button("Cutscenes", ImVec2(btn_w, btn_h))) {
+            menu_click();
+            show_cutscene_gallery = true;
+            show_pause_menu = false;
+        }
+
+        // Credits
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 9));
         if (ImGui::Button("Credits", ImVec2(btn_w, btn_h))) {
             menu_click();
             show_credits_ = true;
@@ -1509,7 +1518,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         }
 
         // Settings
-        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 9));
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 10));
         if (ImGui::Button("Settings", ImVec2(btn_w, btn_h))) {
             menu_click();
             show_settings_menu = true;
@@ -1517,7 +1526,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         }
 
         // Quit
-        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 10));
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 11));
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.4f, 0.08f, 0.08f, 0.90f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.6f, 0.15f, 0.15f, 0.95f));
         if (ImGui::Button("Quit", ImVec2(btn_w, btn_h))) {
@@ -1530,7 +1539,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         ImGui::PopStyleVar();
 
         // Hint text
-        float hint_y = btn_y + btn_spacing * 11 + 10.0f;
+        float hint_y = btn_y + btn_spacing * 12 + 10.0f;
         const char* hint = "Press Escape to resume";
         ImVec2 hint_size = ImGui::CalcTextSize(hint);
         ImGui::SetCursorPos(ImVec2(cx - hint_size.x * 0.5f, hint_y));
@@ -3157,6 +3166,30 @@ void PhysicsInterface::draw_scenario_menu() {
         }
         ImGui::PopStyleVar();
 
+        // Reset All button (right-aligned at tab level)
+        if (achievements_ptr) {
+            bool any_done = false;
+            for (int j = 0; j < 20 && !any_done; ++j)
+                if (achievements_ptr->scenarios_completed[j]) any_done = true;
+            if (any_done) {
+                const char* ra_label = "Reset All";
+                ImVec2 ra_size = ImGui::CalcTextSize(ra_label);
+                float ra_x = tab_start_x + total_tab_w + 20.0f;
+                ImGui::SetCursorPos(ImVec2(ra_x, tab_y + 2.0f));
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.12f, 0.12f, 0.60f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.45f, 0.15f, 0.15f, 0.80f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.35f, 0.35f, 0.80f));
+                if (ImGui::Button(ra_label, ImVec2(ra_size.x + 16.0f, 24.0f))) {
+                    for (int j = 0; j < 20; ++j)
+                        achievements_ptr->scenarios_completed[j] = false;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Reset all scenario completion progress");
+                ImGui::PopStyleColor(4);
+            }
+        }
+
         // Scenario cards grid
         int count = ScenarioManager::scenario_count();
         float card_w = 340.0f;
@@ -3258,9 +3291,26 @@ void PhysicsInterface::draw_scenario_menu() {
             ImGui::TextColored(ImVec4(0.65f, 0.68f, 0.78f, 1.0f), "%s", s.description);
             ImGui::PopTextWrapPos();
 
+            // Reset button (visible only when completed)
+            ImGui::PushID(i);
+            if (completed) {
+                ImGui::SetCursorPos(ImVec2(x + card_w - 145.0f, y + card_h - 36.0f));
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.12f, 0.12f, 0.90f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.50f, 0.18f, 0.18f, 0.95f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.35f, 0.10f, 0.10f, 1.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+                if (ImGui::Button("Reset", ImVec2(55.0f, 28.0f))) {
+                    if (achievements_ptr && i < 20)
+                        achievements_ptr->scenarios_completed[i] = false;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Reset completion for this scenario");
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor(3);
+            }
+
             // Start button (or Replay if completed)
             ImGui::SetCursorPos(ImVec2(x + card_w - 75.0f, y + card_h - 36.0f));
-            ImGui::PushID(i);
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.35f, 0.55f, 0.90f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.45f, 0.70f, 0.95f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.30f, 0.50f, 1.0f));
@@ -3455,6 +3505,7 @@ void PhysicsInterface::draw_scenario_goal_hud() {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.4f, 0.4f, 0.8f));
         if (ImGui::Button("X", ImVec2(20.0f, bg_h - 4.0f))) {
             scenarios_ptr->end();
+            active_spawn_rules = nullptr;
         }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("End scenario");
         ImGui::PopStyleColor(3);
@@ -3757,6 +3808,652 @@ void PhysicsInterface::draw_howto() {
             show_pause_menu = true;
         }
         ImGui::PopStyleVar();
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Cutscene System ─────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+void PhysicsInterface::play_cutscene(int scenario_idx, bool is_completion) {
+    if (scenario_idx < 0 || scenario_idx >= CUTSCENE_SCENARIO_COUNT) return;
+    const CutsceneDef& def = is_completion ? CUTSCENE_COMPLETIONS[scenario_idx]
+                                           : CUTSCENE_INTROS[scenario_idx];
+    if (def.line_count <= 0 || def.title[0] == '\0') return;  // stub / sandbox
+
+    cutscene_scenario_idx_ = scenario_idx;
+    cutscene_is_completion_ = is_completion;
+    cutscene_state_ = CS_FADE_IN;
+    cutscene_time_ = 0.0f;
+    cutscene_line_time_ = 0.0f;
+    cutscene_line_idx_ = 0;
+    cutscene_fade_time_ = 0.0f;
+    cutscene_particles_inited_ = false;
+    cutscene_was_running_ = sim_running;
+    sim_running = false;
+}
+
+void PhysicsInterface::init_cutscene_particles(int scene, uint32_t color1, uint32_t color2) {
+    ImGuiIO& io = ImGui::GetIO();
+    float W = io.DisplaySize.x, H = io.DisplaySize.y;
+    float scale = std::min(W / 616.0f, H / 353.0f);
+
+    cutscene_particles_.clear();
+    cutscene_trails_.clear();
+
+    std::mt19937 rng(42 + cutscene_scenario_idx_ * 7 + (cutscene_is_completion_ ? 1000 : 0));
+    auto randf = [&]() { return std::uniform_real_distribution<float>(0.0f, 1.0f)(rng); };
+    auto randf_range = [&](float lo, float hi) {
+        return std::uniform_real_distribution<float>(lo, hi)(rng);
+    };
+
+    auto pick_color = [&](float t) -> ImU32 {
+        // Blend between color1 and color2
+        int r1 = (color1 >> IM_COL32_R_SHIFT) & 0xFF, r2 = (color2 >> IM_COL32_R_SHIFT) & 0xFF;
+        int g1 = (color1 >> IM_COL32_G_SHIFT) & 0xFF, g2 = (color2 >> IM_COL32_G_SHIFT) & 0xFF;
+        int b1 = (color1 >> IM_COL32_B_SHIFT) & 0xFF, b2 = (color2 >> IM_COL32_B_SHIFT) & 0xFF;
+        int a1 = (color1 >> IM_COL32_A_SHIFT) & 0xFF, a2 = (color2 >> IM_COL32_A_SHIFT) & 0xFF;
+        return IM_COL32(r1 + (int)((r2 - r1) * t), g1 + (int)((g2 - g1) * t),
+                        b1 + (int)((b2 - b1) * t), a1 + (int)((a2 - a1) * t));
+    };
+    auto make_glow = [](ImU32 c, int a) -> ImU32 {
+        return (c & ~IM_COL32_A_MASK) | ((uint32_t)a << IM_COL32_A_SHIFT);
+    };
+
+    float cx = W * 0.5f, cy = H * 0.45f;
+
+    switch ((CutsceneScene)scene) {
+    case CS_NUCLEUS: {
+        // Center cluster + orbiting particles + ambient
+        for (int i = 0; i < 12; ++i) {
+            SplashParticle p{};
+            p.orbit = false;
+            p.x = cx + randf_range(-20, 20) * scale;
+            p.y = cy + randf_range(-20, 20) * scale;
+            p.vx = randf_range(-0.1f, 0.1f);
+            p.vy = randf_range(-0.1f, 0.1f);
+            p.base_r = randf_range(3.0f, 5.0f) * scale;
+            p.r = p.base_r;
+            p.color = pick_color(randf() * 0.3f);
+            p.glow_color = make_glow(p.color, 50);
+            p.pulse_phase = randf() * 6.28f;
+            cutscene_particles_.push_back(p);
+        }
+        for (int i = 0; i < 10; ++i) {
+            SplashParticle p{};
+            p.orbit = true;
+            p.cx = cx; p.cy = cy;
+            p.orbit_r = randf_range(60, 140) * scale;
+            p.orbit_speed = randf_range(0.008f, 0.025f) * (randf() > 0.5f ? 1.0f : -1.0f);
+            p.phase = randf() * 6.28f;
+            p.tilt_x = randf_range(0.6f, 1.0f);
+            p.tilt_y = randf_range(0.6f, 1.0f);
+            p.x = p.cx + cosf(p.phase) * p.orbit_r * p.tilt_x;
+            p.y = p.cy + sinf(p.phase) * p.orbit_r * p.tilt_y;
+            p.base_r = randf_range(2.0f, 4.0f) * scale;
+            p.r = p.base_r;
+            p.color = pick_color(randf());
+            p.glow_color = make_glow(p.color, 40);
+            p.pulse_phase = randf() * 6.28f;
+            cutscene_particles_.push_back(p);
+        }
+        for (int i = 0; i < 60; ++i) {
+            SplashParticle p{};
+            p.orbit = false;
+            p.x = randf() * W; p.y = randf() * H;
+            p.vx = randf_range(-0.15f, 0.15f);
+            p.vy = randf_range(-0.15f, 0.15f);
+            p.base_r = randf_range(1.0f, 2.5f) * scale;
+            p.r = p.base_r;
+            p.color = pick_color(randf());
+            p.glow_color = make_glow(p.color, 25);
+            p.pulse_phase = randf() * 6.28f;
+            cutscene_particles_.push_back(p);
+        }
+        break;
+    }
+    case CS_NEBULA: {
+        for (int i = 0; i < 120; ++i) {
+            SplashParticle p{};
+            p.orbit = false;
+            p.x = randf() * W; p.y = randf() * H;
+            p.vx = randf_range(-0.2f, 0.2f);
+            p.vy = randf_range(-0.2f, 0.2f);
+            p.base_r = randf_range(1.0f, 3.5f) * scale;
+            p.r = p.base_r;
+            p.color = pick_color(randf());
+            p.glow_color = make_glow(p.color, 30);
+            p.pulse_phase = randf() * 6.28f;
+            cutscene_particles_.push_back(p);
+        }
+        break;
+    }
+    case CS_COLLISION: {
+        // Left stream
+        for (int i = 0; i < 50; ++i) {
+            SplashParticle p{};
+            p.orbit = false;
+            p.x = randf_range(0, W * 0.2f);
+            p.y = cy + randf_range(-80, 80) * scale;
+            p.vx = randf_range(0.3f, 0.8f);
+            p.vy = randf_range(-0.1f, 0.1f);
+            p.base_r = randf_range(1.5f, 3.5f) * scale;
+            p.r = p.base_r;
+            p.color = pick_color(randf() * 0.4f);
+            p.glow_color = make_glow(p.color, 35);
+            p.pulse_phase = randf() * 6.28f;
+            cutscene_particles_.push_back(p);
+        }
+        // Right stream
+        for (int i = 0; i < 50; ++i) {
+            SplashParticle p{};
+            p.orbit = false;
+            p.x = randf_range(W * 0.8f, W);
+            p.y = cy + randf_range(-80, 80) * scale;
+            p.vx = randf_range(-0.8f, -0.3f);
+            p.vy = randf_range(-0.1f, 0.1f);
+            p.base_r = randf_range(1.5f, 3.5f) * scale;
+            p.r = p.base_r;
+            p.color = pick_color(0.6f + randf() * 0.4f);
+            p.glow_color = make_glow(p.color, 35);
+            p.pulse_phase = randf() * 6.28f;
+            cutscene_particles_.push_back(p);
+        }
+        break;
+    }
+    case CS_EXPANSION: {
+        for (int i = 0; i < 100; ++i) {
+            SplashParticle p{};
+            p.orbit = false;
+            float angle = randf() * 6.28f;
+            float speed = randf_range(0.2f, 1.0f);
+            p.x = cx + randf_range(-15, 15) * scale;
+            p.y = cy + randf_range(-15, 15) * scale;
+            p.vx = cosf(angle) * speed;
+            p.vy = sinf(angle) * speed;
+            p.base_r = randf_range(1.5f, 4.0f) * scale;
+            p.r = p.base_r;
+            p.color = pick_color(randf());
+            p.glow_color = make_glow(p.color, 40);
+            p.pulse_phase = randf() * 6.28f;
+            cutscene_particles_.push_back(p);
+        }
+        break;
+    }
+    case CS_LATTICE: {
+        int grid = 8;
+        float spacing_x = W * 0.6f / (float)grid;
+        float spacing_y = H * 0.5f / (float)grid;
+        float ox = W * 0.2f, oy = H * 0.25f;
+        for (int gy = 0; gy < grid; ++gy) {
+            for (int gx = 0; gx < grid; ++gx) {
+                SplashParticle p{};
+                p.orbit = false;
+                p.x = ox + gx * spacing_x + randf_range(-3, 3) * scale;
+                p.y = oy + gy * spacing_y + randf_range(-3, 3) * scale;
+                p.vx = randf_range(-0.3f, 0.3f);
+                p.vy = randf_range(-0.3f, 0.3f);
+                p.base_r = randf_range(2.0f, 3.5f) * scale;
+                p.r = p.base_r;
+                float t = (float)(gy * grid + gx) / (float)(grid * grid);
+                p.color = pick_color(t);
+                p.glow_color = make_glow(p.color, 30);
+                p.pulse_phase = randf() * 6.28f;
+                cutscene_particles_.push_back(p);
+            }
+        }
+        break;
+    }
+    case CS_MOLECULE: {
+        // 3 clusters at triangle vertices
+        ImVec2 centers[3] = {
+            {cx - 80.0f * scale, cy + 40.0f * scale},
+            {cx + 80.0f * scale, cy + 40.0f * scale},
+            {cx, cy - 70.0f * scale},
+        };
+        for (int c = 0; c < 3; ++c) {
+            for (int i = 0; i < 8; ++i) {
+                SplashParticle p{};
+                p.orbit = false;
+                p.x = centers[c].x + randf_range(-18, 18) * scale;
+                p.y = centers[c].y + randf_range(-18, 18) * scale;
+                p.vx = randf_range(-0.15f, 0.15f);
+                p.vy = randf_range(-0.15f, 0.15f);
+                p.base_r = randf_range(2.0f, 4.0f) * scale;
+                p.r = p.base_r;
+                p.color = pick_color((float)c / 3.0f + randf() * 0.2f);
+                p.glow_color = make_glow(p.color, 35);
+                p.pulse_phase = randf() * 6.28f;
+                p.type_idx = c;  // cluster index for force lines
+                cutscene_particles_.push_back(p);
+            }
+        }
+        // Ambient
+        for (int i = 0; i < 30; ++i) {
+            SplashParticle p{};
+            p.orbit = false;
+            p.x = randf() * W; p.y = randf() * H;
+            p.vx = randf_range(-0.1f, 0.1f);
+            p.vy = randf_range(-0.1f, 0.1f);
+            p.base_r = randf_range(1.0f, 2.0f) * scale;
+            p.r = p.base_r;
+            p.color = pick_color(randf());
+            p.glow_color = make_glow(p.color, 20);
+            p.pulse_phase = randf() * 6.28f;
+            p.type_idx = -1;
+            cutscene_particles_.push_back(p);
+        }
+        break;
+    }
+    }
+
+    cutscene_trails_.resize(cutscene_particles_.size());
+    cutscene_particles_inited_ = true;
+}
+
+void PhysicsInterface::draw_cutscene() {
+    ImGuiIO& io = ImGui::GetIO();
+    float dt = io.DeltaTime;
+    cutscene_time_ += dt;
+
+    const CutsceneDef& def = cutscene_is_completion_
+        ? CUTSCENE_COMPLETIONS[cutscene_scenario_idx_]
+        : CUTSCENE_INTROS[cutscene_scenario_idx_];
+
+    ImDrawList* bg = ImGui::GetBackgroundDrawList();
+    float W = io.DisplaySize.x, H = io.DisplaySize.y;
+    float scale = std::min(W / 616.0f, H / 353.0f);
+
+    // Init particles on first frame
+    if (!cutscene_particles_inited_)
+        init_cutscene_particles((int)def.scene, def.color1, def.color2);
+
+    // ── State machine ──────────────────────────────────────────────────────
+    float master_alpha = 1.0f;
+    constexpr float FADE_DURATION = 0.8f;
+    constexpr float LINE_FADE_IN = 0.5f;
+    constexpr float LINE_FADE_OUT = 0.5f;
+
+    if (cutscene_state_ == CS_FADE_IN) {
+        cutscene_fade_time_ += dt;
+        master_alpha = std::min(cutscene_fade_time_ / FADE_DURATION, 1.0f);
+        if (cutscene_fade_time_ >= FADE_DURATION) {
+            cutscene_state_ = CS_PLAYING;
+            cutscene_line_time_ = 0.0f;
+        }
+    } else if (cutscene_state_ == CS_FADE_OUT) {
+        cutscene_fade_time_ += dt;
+        master_alpha = 1.0f - std::min(cutscene_fade_time_ / FADE_DURATION, 1.0f);
+        if (cutscene_fade_time_ >= FADE_DURATION) {
+            cutscene_state_ = CS_INACTIVE;
+            // Auto-advance: completion cutscene → start next scenario
+            if (cutscene_is_completion_) {
+                int next = cutscene_scenario_idx_ + 1;
+                while (next < CUTSCENE_SCENARIO_COUNT && (next == 10 || next == 11)) next++;
+                if (next < CUTSCENE_SCENARIO_COUNT) {
+                    request_scenario_start = next;
+                    return;
+                }
+            }
+            sim_running = cutscene_was_running_;
+            return;
+        }
+    }
+
+    // ── 1. Background ──────────────────────────────────────────────────────
+    int bg_a = (int)(master_alpha * 255);
+    bg->AddRectFilled(ImVec2(0, 0), ImVec2(W, H), IM_COL32(2, 8, 16, bg_a));
+
+    // Background nebula glows
+    auto apply_alpha = [&](uint32_t col) -> ImU32 {
+        int a = (col >> IM_COL32_A_SHIFT) & 0xFF;
+        a = (int)(a * master_alpha);
+        return (col & ~IM_COL32_A_MASK) | ((uint32_t)a << IM_COL32_A_SHIFT);
+    };
+
+    draw_radial_glow(bg, W * 0.3f + sinf(cutscene_time_ * 0.2f) * 30.0f,
+                     H * 0.4f + cosf(cutscene_time_ * 0.15f) * 20.0f,
+                     300.0f * scale, apply_alpha(def.bg_glow), IM_COL32(0, 0, 0, 0));
+    draw_radial_glow(bg, W * 0.7f, H * 0.6f, 200.0f * scale,
+                     apply_alpha(def.bg_glow), IM_COL32(0, 0, 0, 0));
+
+    // ── 2. Update particles ────────────────────────────────────────────────
+    for (auto& p : cutscene_particles_) {
+        p.r = p.base_r * (1.0f + 0.2f * sinf(cutscene_time_ * 2.0f + p.pulse_phase));
+        if (p.orbit) {
+            p.phase += p.orbit_speed * dt * 60.0f;
+            p.x = p.cx + cosf(p.phase) * p.orbit_r * p.tilt_x;
+            p.y = p.cy + sinf(p.phase) * p.orbit_r * p.tilt_y;
+        } else {
+            p.x += p.vx * dt * 60.0f;
+            p.y += p.vy * dt * 60.0f;
+            // Lattice: damped vibration (particles stay near grid positions)
+            if ((CutsceneScene)def.scene == CS_LATTICE) {
+                p.vx *= 0.98f;
+                p.vy *= 0.98f;
+            }
+            if (p.x < -10) p.x = W + 10;
+            if (p.x > W + 10) p.x = -10;
+            if (p.y < -10) p.y = H + 10;
+            if (p.y > H + 10) p.y = -10;
+        }
+    }
+
+    // ── 3. Update trails ───────────────────────────────────────────────────
+    for (size_t i = 0; i < cutscene_particles_.size(); ++i) {
+        cutscene_trails_[i].push_back(ImVec2(cutscene_particles_[i].x, cutscene_particles_[i].y));
+        if (cutscene_trails_[i].size() > 10)
+            cutscene_trails_[i].erase(cutscene_trails_[i].begin());
+    }
+
+    // ── 4. Draw trails ─────────────────────────────────────────────────────
+    for (size_t i = 0; i < cutscene_particles_.size(); ++i) {
+        auto& trail = cutscene_trails_[i];
+        for (size_t j = 1; j < trail.size(); ++j) {
+            float t = (float)j / (float)trail.size();
+            float alpha = t * 0.3f * master_alpha;
+            float width = cutscene_particles_[i].r * (0.2f + 0.5f * t);
+            ImU32 col = (cutscene_particles_[i].color & ~IM_COL32_A_MASK) |
+                        ((uint32_t)(alpha * 255) << IM_COL32_A_SHIFT);
+            bg->AddLine(trail[j-1], trail[j], col, width);
+        }
+    }
+
+    // ── 5. Force lines between nearby particles ────────────────────────────
+    float force_dist = 65.0f * scale;
+    for (size_t i = 0; i < cutscene_particles_.size(); ++i) {
+        for (size_t j = i + 1; j < cutscene_particles_.size(); ++j) {
+            float dx = cutscene_particles_[j].x - cutscene_particles_[i].x;
+            float dy = cutscene_particles_[j].y - cutscene_particles_[i].y;
+            float dist2 = dx * dx + dy * dy;
+            if (dist2 < force_dist * force_dist && dist2 > 25.0f) {
+                float dist = sqrtf(dist2);
+                float alpha = (1.0f - dist / force_dist) * 0.1f * master_alpha;
+                ImVec2 a(cutscene_particles_[i].x, cutscene_particles_[i].y);
+                ImVec2 b(cutscene_particles_[j].x, cutscene_particles_[j].y);
+                bg->AddLine(a, b, IM_COL32(0, 140, 255, (int)(alpha * 200)), 2.5f);
+                bg->AddLine(a, b, IM_COL32(100, 200, 255, (int)(alpha * 255)), 1.0f);
+            }
+        }
+    }
+
+    // ── 6. Draw particles ──────────────────────────────────────────────────
+    for (auto& p : cutscene_particles_) {
+        ImU32 glow = apply_alpha(p.glow_color);
+        draw_radial_glow(bg, p.x, p.y, p.r * 3.5f, glow, IM_COL32(0, 0, 0, 0));
+        ImU32 col = apply_alpha(p.color);
+        bg->AddCircleFilled(ImVec2(p.x, p.y), p.r, col);
+        bg->AddCircleFilled(ImVec2(p.x - p.r * 0.15f, p.y - p.r * 0.15f),
+                            p.r * 0.4f, IM_COL32(220, 240, 255, (int)(60 * master_alpha)));
+    }
+
+    // ── 7. Vignette + scanlines ────────────────────────────────────────────
+    draw_vignette(bg, W, H);
+    float scanline_gap = 4.0f * scale;
+    if (scanline_gap < 2.0f) scanline_gap = 2.0f;
+    for (float y = 0; y < H; y += scanline_gap)
+        bg->AddRectFilled(ImVec2(0, y + scanline_gap * 0.5f), ImVec2(W, y + scanline_gap),
+                          IM_COL32(0, 0, 0, (int)(6 * master_alpha)));
+
+    // ── 8. Text overlay ────────────────────────────────────────────────────
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
+        | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav
+        | ImGuiWindowFlags_NoBackground;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+
+    if (ImGui::Begin("##CutsceneOverlay", nullptr, flags)) {
+        // Title (centered, with glow shadows)
+        float title_scale = 2.0f;
+        bool has_title_font = (title_font != nullptr);
+        if (has_title_font) {
+            ImGui::PushFont(title_font);
+        } else {
+            ImGui::GetFont()->Scale = title_scale;
+            ImGui::PushFont(ImGui::GetFont());
+        }
+
+        ImVec2 title_sz = ImGui::CalcTextSize(def.title);
+        float title_x = W * 0.5f - title_sz.x * 0.5f;
+        float title_y = H * 0.28f;
+
+        // Glow shadow layers
+        for (int g = 3; g >= 1; --g) {
+            float ga = (0.12f / (float)g) * master_alpha;
+            float off = (float)g * 2.0f;
+            ImGui::SetCursorPos(ImVec2(title_x + off, title_y + off));
+            // Extract title color from color1
+            float tr = (float)((def.color1 >> IM_COL32_R_SHIFT) & 0xFF) / 255.0f;
+            float tg = (float)((def.color1 >> IM_COL32_G_SHIFT) & 0xFF) / 255.0f;
+            float tb = (float)((def.color1 >> IM_COL32_B_SHIFT) & 0xFF) / 255.0f;
+            ImGui::TextColored(ImVec4(tr, tg, tb, ga), "%s", def.title);
+        }
+
+        // Title text
+        ImGui::SetCursorPos(ImVec2(title_x, title_y));
+        ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, master_alpha), "%s", def.title);
+
+        if (!has_title_font) ImGui::GetFont()->Scale = 1.0f;
+        ImGui::PopFont();
+
+        // Current text line (centered, below title)
+        if (cutscene_state_ == CS_PLAYING && cutscene_line_idx_ < def.line_count) {
+            cutscene_line_time_ += dt;
+            const CutsceneTextLine& line = def.lines[cutscene_line_idx_];
+            float total_line_dur = LINE_FADE_IN + line.hold + LINE_FADE_OUT;
+
+            float line_alpha = 1.0f;
+            if (cutscene_line_time_ < LINE_FADE_IN) {
+                line_alpha = cutscene_line_time_ / LINE_FADE_IN;
+            } else if (cutscene_line_time_ > LINE_FADE_IN + line.hold) {
+                float fade_t = cutscene_line_time_ - LINE_FADE_IN - line.hold;
+                line_alpha = 1.0f - std::min(fade_t / LINE_FADE_OUT, 1.0f);
+            }
+            line_alpha *= master_alpha;
+
+            // Auto-advance to next line
+            if (cutscene_line_time_ >= total_line_dur) {
+                cutscene_line_idx_++;
+                cutscene_line_time_ = 0.0f;
+                if (cutscene_line_idx_ >= def.line_count) {
+                    // Start fade out
+                    cutscene_state_ = CS_FADE_OUT;
+                    cutscene_fade_time_ = 0.0f;
+                }
+            } else {
+                ImVec2 text_sz = ImGui::CalcTextSize(line.text);
+                float text_x = W * 0.5f - text_sz.x * 0.5f;
+                float text_y = H * 0.55f;
+
+                // Text glow shadow
+                for (int g = 2; g >= 1; --g) {
+                    float ga = (0.08f / (float)g) * line_alpha;
+                    float off = (float)g * 1.0f;
+                    ImGui::SetCursorPos(ImVec2(text_x + off, text_y + off));
+                    ImGui::TextColored(ImVec4(0.3f, 0.6f, 1.0f, ga), "%s", line.text);
+                }
+                ImGui::SetCursorPos(ImVec2(text_x, text_y));
+                ImGui::TextColored(ImVec4(0.85f, 0.9f, 1.0f, line_alpha), "%s", line.text);
+            }
+        }
+
+        // "Click to continue" hint (pulsing)
+        float hint_pulse = (0.25f + 0.15f * sinf(cutscene_time_ * 3.0f)) * master_alpha;
+        const char* hint = "Click or press any key to continue";
+        ImVec2 hint_sz = ImGui::CalcTextSize(hint);
+        ImGui::SetCursorPos(ImVec2(W * 0.5f - hint_sz.x * 0.5f, H - 35.0f * scale));
+        ImGui::TextColored(ImVec4(0.4f, 0.5f, 0.7f, hint_pulse), "%s", hint);
+
+        // ── Input handling ─────────────────────────────────────────────────
+        bool skip = ImGui::IsMouseClicked(0) || ImGui::IsKeyPressed(ImGuiKey_Space)
+                 || ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_Escape);
+        if (skip && cutscene_state_ == CS_PLAYING) {
+            // Advance to next line or end
+            cutscene_line_idx_++;
+            cutscene_line_time_ = 0.0f;
+            if (cutscene_line_idx_ >= def.line_count) {
+                cutscene_state_ = CS_FADE_OUT;
+                cutscene_fade_time_ = 0.0f;
+            }
+        } else if (skip && cutscene_state_ == CS_FADE_IN) {
+            // Skip fade-in
+            cutscene_state_ = CS_PLAYING;
+            cutscene_line_time_ = 0.0f;
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+}
+
+void PhysicsInterface::draw_cutscene_gallery() {
+    ImGuiIO& io = ImGui::GetIO();
+    float W = io.DisplaySize.x, H = io.DisplaySize.y;
+
+    // Fullscreen overlay
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGuiWindowFlags overlay_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
+        | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav;
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.03f, 0.06f, 0.95f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+
+    if (ImGui::Begin("##CutsceneGallery", nullptr, overlay_flags)) {
+        float cx = W * 0.5f;
+
+        // Title
+        float old_scale = ImGui::GetFont()->Scale;
+        ImGui::GetFont()->Scale = 1.8f;
+        ImGui::PushFont(ImGui::GetFont());
+        const char* title = "CUTSCENES";
+        ImVec2 title_sz = ImGui::CalcTextSize(title);
+        ImGui::SetCursorPos(ImVec2(cx - title_sz.x * 0.5f, 25.0f));
+        ImGui::TextColored(ImVec4(0.302f, 0.749f, 0.953f, 1.0f), "%s", title);
+        ImGui::GetFont()->Scale = old_scale;
+        ImGui::PopFont();
+
+        // Subtitle
+        const char* subtitle = "Rewatch unlocked cutscenes";
+        ImVec2 sub_sz = ImGui::CalcTextSize(subtitle);
+        ImGui::SetCursorPos(ImVec2(cx - sub_sz.x * 0.5f, 65.0f));
+        ImGui::TextColored(ImVec4(0.4f, 0.5f, 0.65f, 0.8f), "%s", subtitle);
+
+        // Scrollable child for scenario cards
+        float panel_top = 95.0f;
+        float panel_bottom = H - 70.0f;
+        ImGui::SetCursorPos(ImVec2(0, panel_top));
+        ImGui::BeginChild("##CutsceneList", ImVec2(W, panel_bottom - panel_top), false,
+                          ImGuiWindowFlags_NoBackground);
+
+        float card_w = 320.0f;
+        float card_h = 72.0f;
+        float card_spacing = 8.0f;
+        int cols = std::max(1, (int)((W - 40.0f) / (card_w + card_spacing)));
+        float grid_w = cols * (card_w + card_spacing) - card_spacing;
+        float grid_x = (W - grid_w) * 0.5f;
+
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+
+        int card_idx = 0;
+        for (int i = 0; i < CUTSCENE_SCENARIO_COUNT; ++i) {
+            if (i == 10 || i == 11) continue;  // skip sandbox
+
+            const CutsceneDef& intro_def = CUTSCENE_INTROS[i];
+            if (intro_def.title[0] == '\0') continue;
+
+            int col = card_idx % cols;
+            int row = card_idx / cols;
+            float x = grid_x + col * (card_w + card_spacing);
+            float y = row * (card_h + card_spacing) + 5.0f;
+
+            // Card background
+            ImVec2 card_tl(x, y);
+            ImVec2 card_br(x + card_w, y + card_h);
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            ImVec2 wpos = ImGui::GetWindowPos();
+            ImVec2 abs_tl(wpos.x + card_tl.x, wpos.y + card_tl.y);
+            ImVec2 abs_br(wpos.x + card_br.x, wpos.y + card_br.y);
+            dl->AddRectFilled(abs_tl, abs_br, IM_COL32(15, 20, 35, 200), 6.0f);
+            dl->AddRect(abs_tl, abs_br, IM_COL32(40, 60, 100, 120), 6.0f);
+
+            // Scenario name + category
+            const auto& sc = ScenarioManager::get(i);
+            ImGui::SetCursorPos(ImVec2(x + 10, y + 8));
+            ImGui::TextColored(ImVec4(0.85f, 0.9f, 1.0f, 1.0f), "%s", sc.name);
+
+            ImGui::SameLine(0, 8);
+            ImGui::TextColored(ImVec4(0.4f, 0.55f, 0.7f, 0.7f), "[%s]", sc.category);
+
+            // Intro / Completion buttons
+            bool intro_unlocked = achievements_ptr &&
+                (achievements_ptr->cutscene_intros_seen & (1u << i));
+            bool comp_unlocked = achievements_ptr &&
+                i < 20 && achievements_ptr->scenarios_completed[i];
+
+            float btn_y_pos = y + 38;
+            float btn_w = 100.0f;
+            float btn_h_small = 26.0f;
+
+            // Intro button
+            ImGui::SetCursorPos(ImVec2(x + 10, btn_y_pos));
+            if (!intro_unlocked) {
+                ImGui::BeginDisabled();
+                ImGui::Button("Intro##ci_i", ImVec2(btn_w, btn_h_small));
+                ImGui::EndDisabled();
+            } else {
+                if (ImGui::Button(("Intro##ci" + std::to_string(i)).c_str(),
+                                  ImVec2(btn_w, btn_h_small))) {
+                    show_cutscene_gallery = false;
+                    play_cutscene(i, false);
+                }
+            }
+
+            // Completion button
+            ImGui::SetCursorPos(ImVec2(x + 10 + btn_w + 8, btn_y_pos));
+            if (!comp_unlocked) {
+                ImGui::BeginDisabled();
+                ImGui::Button("Complete##cc_c", ImVec2(btn_w, btn_h_small));
+                ImGui::EndDisabled();
+            } else {
+                if (ImGui::Button(("Complete##cc" + std::to_string(i)).c_str(),
+                                  ImVec2(btn_w, btn_h_small))) {
+                    show_cutscene_gallery = false;
+                    play_cutscene(i, true);
+                }
+            }
+
+            card_idx++;
+        }
+
+        ImGui::PopStyleVar();  // FrameRounding
+        ImGui::Dummy(ImVec2(0, 10));
+        ImGui::EndChild();
+
+        // Back button
+        float back_w = 160.0f;
+        ImGui::SetCursorPos(ImVec2(cx - back_w * 0.5f, panel_bottom + 10.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+        if (ImGui::Button("Back##cutscene_gallery", ImVec2(back_w, 36.0f))) {
+            show_cutscene_gallery = false;
+            show_pause_menu = true;
+        }
+        ImGui::PopStyleVar();
+
+        // ESC to close
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            show_cutscene_gallery = false;
+            show_pause_menu = true;
+        }
     }
     ImGui::End();
     ImGui::PopStyleVar(2);

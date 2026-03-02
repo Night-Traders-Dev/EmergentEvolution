@@ -870,6 +870,20 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         return;
     }
 
+    // Cutscene playback (blocks all other UI)
+    if (cutscene_state_ != CS_INACTIVE) {
+        draw_cutscene();
+        pop_theme();
+        return;
+    }
+
+    // Cutscene gallery (blocks other UI when visible)
+    if (show_cutscene_gallery) {
+        draw_cutscene_gallery();
+        pop_theme();
+        return;
+    }
+
     // Pause menu (blocks other UI when visible)
     if (show_pause_menu) {
         draw_pause_menu(cfg, request_reset);

@@ -6,6 +6,57 @@
 #include <cmath>
 #include <imgui.h>
 
+// ── Spawn rules helpers ──────────────────────────────────────────────────────
+
+static ScenarioSpawnRules make_rules(const int* types, int type_count,
+                                      int max_z, bool mol, bool fo, bool had) {
+    ScenarioSpawnRules r;
+    r.allowed_base[0] = 0; r.allowed_base[1] = 0;
+    for (int i = 0; i < type_count; i++) {
+        uint32_t t = static_cast<uint32_t>(types[i]);
+        if (t < 64)  r.allowed_base[0] |= (1ULL << t);
+        else if (t < 128) r.allowed_base[1] |= (1ULL << (t - 64));
+    }
+    r.max_element_Z = max_z;
+    r.allow_molecules = mol;
+    r.allow_force_objects = fo;
+    r.allow_hadrons = had;
+    return r;
+}
+
+static ScenarioSpawnRules rules_sm_all(int max_z, bool mol, bool fo, bool had) {
+    ScenarioSpawnRules r;
+    r.allowed_base[0] = 0; r.allowed_base[1] = 0;
+    for (int t = 0; t <= 32; t++)
+        r.allowed_base[0] |= (1ULL << t);
+    r.max_element_Z = max_z;
+    r.allow_molecules = mol;
+    r.allow_force_objects = fo;
+    r.allow_hadrons = had;
+    return r;
+}
+
+// Unrestricted (sandbox)
+static constexpr ScenarioSpawnRules RULES_UNRESTRICTED = {};
+
+// ── Per-scenario spawn type lists ────────────────────────────────────────────
+
+static const int TYPES_FIRST_LIGHT[] = {0, 1, 2, 3, 4};
+static const int TYPES_H_FACTORY[]   = {0, 1, 2, 3};
+static const int TYPES_SOLAR[]       = {0, 1, 2, 3, 4, 6};
+static const int TYPES_CHAIN[]       = {0, 1, 2, 3};
+static const int TYPES_ANTIMATTER[]  = {0, 1, 2, 3, 4, 5, 6, 7, 8, 11};
+static const int TYPES_WATER[]       = {0, 1, 2, 3};
+static const int TYPES_CHEM[]        = {0, 1, 2, 3};
+static const int TYPES_DARK[]        = {0, 1, 2, 3, 4, 30, 31, 32};
+static const int TYPES_NUCLEO[]      = {0, 1, 2, 3, 4, 6};
+static const int TYPES_QGP[]         = {3, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28};
+static const int TYPES_NEUTRON[]     = {0, 1, 2, 3, 6};
+static const int TYPES_SUSY[]        = {0, 1, 2, 3, 4, 6, 7, 8, 25, 26, 27, 28, 29,
+                                         39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49};
+
+#define ARRLEN(a) (static_cast<int>(sizeof(a) / sizeof(a[0])))
+
 // ── Scenario setup functions ─────────────────────────────────────────────────
 
 static void setup_first_light(PhysicsSimulation& sim) {
@@ -760,131 +811,113 @@ static const ScenarioTask TASKS_THE_COLLIDER[] = {
 static const Scenario SCENARIOS[] = {
     { "First Light",
       "Create your first photon from atomic interactions.",
-      "Nuclear",
-      "The Dawn of Stars",
-      setup_first_light,
-      TASKS_FIRST_LIGHT, 3 },
+      "Nuclear", "The Dawn of Stars",
+      setup_first_light, TASKS_FIRST_LIGHT, 3,
+      make_rules(TYPES_FIRST_LIGHT, ARRLEN(TYPES_FIRST_LIGHT), 2, false, false, false) },
 
     { "Hydrogen Factory",
       "Build complete hydrogen atoms with electrons.",
-      "Nuclear",
-      "Building the Periodic Table",
-      setup_hydrogen_factory,
-      TASKS_HYDROGEN_FACTORY, 3 },
+      "Nuclear", "Building the Periodic Table",
+      setup_hydrogen_factory, TASKS_HYDROGEN_FACTORY, 3,
+      make_rules(TYPES_H_FACTORY, ARRLEN(TYPES_H_FACTORY), 1, false, false, false) },
 
     { "Solar Core",
       "Trigger nuclear fusion in the heart of a star.",
-      "Nuclear",
-      "Heart of a Star",
-      setup_solar_core,
-      TASKS_SOLAR_CORE, 4 },
+      "Nuclear", "Heart of a Star",
+      setup_solar_core, TASKS_SOLAR_CORE, 4,
+      make_rules(TYPES_SOLAR, ARRLEN(TYPES_SOLAR), 2, false, true, false) },
 
     { "Chain Reaction",
       "Cause a fission chain reaction.",
-      "Nuclear",
-      "Critical Mass",
-      setup_chain_reaction,
-      TASKS_CHAIN_REACTION, 3 },
+      "Nuclear", "Critical Mass",
+      setup_chain_reaction, TASKS_CHAIN_REACTION, 3,
+      make_rules(TYPES_CHAIN, ARRLEN(TYPES_CHAIN), 92, false, false, false) },
 
     { "Antimatter Lab",
       "Create and observe particle-antiparticle annihilation.",
-      "Nuclear",
-      "Through the Looking Glass",
-      setup_antimatter_lab,
-      TASKS_ANTIMATTER_LAB, 4 },
+      "Nuclear", "Through the Looking Glass",
+      setup_antimatter_lab, TASKS_ANTIMATTER_LAB, 4,
+      make_rules(TYPES_ANTIMATTER, ARRLEN(TYPES_ANTIMATTER), 2, false, false, false) },
 
     { "Water World",
       "Form H2O water molecules through covalent bonding.",
-      "Chemistry",
-      "Recipe for Life",
-      setup_water_world,
-      TASKS_WATER_WORLD, 4 },
+      "Chemistry", "Recipe for Life",
+      setup_water_world, TASKS_WATER_WORLD, 4,
+      make_rules(TYPES_WATER, ARRLEN(TYPES_WATER), 8, true, false, false) },
 
     { "Chemistry Set",
       "Create different molecule types from mixed atoms.",
-      "Chemistry",
-      "The Molecular Workshop",
-      setup_chemistry_set,
-      TASKS_CHEMISTRY_SET, 3 },
+      "Chemistry", "The Molecular Workshop",
+      setup_chemistry_set, TASKS_CHEMISTRY_SET, 3,
+      make_rules(TYPES_CHEM, ARRLEN(TYPES_CHEM), 17, true, false, false) },
 
     { "Dark Sector",
       "Observe dark matter and dark energy.",
-      "Cosmology",
-      "The Invisible Universe",
-      setup_dark_sector,
-      TASKS_DARK_SECTOR, 3 },
+      "Cosmology", "The Invisible Universe",
+      setup_dark_sector, TASKS_DARK_SECTOR, 3,
+      make_rules(TYPES_DARK, ARRLEN(TYPES_DARK), 2, false, true, false) },
 
     { "Particle Zoo",
       "Discover the menagerie of fundamental particles.",
-      "Cosmology",
-      "Catalogue of Creation",
-      setup_particle_zoo,
-      TASKS_PARTICLE_ZOO, 4 },
+      "Cosmology", "Catalogue of Creation",
+      setup_particle_zoo, TASKS_PARTICLE_ZOO, 4,
+      rules_sm_all(26, false, true, true) },
 
     { "Stellar Nucleosynthesis",
       "Build elements up to Iron through fusion chains.",
-      "Cosmology",
-      "Forging the Elements",
-      setup_nucleosynthesis,
-      TASKS_NUCLEOSYNTHESIS, 4 },
+      "Cosmology", "Forging the Elements",
+      setup_nucleosynthesis, TASKS_NUCLEOSYNTHESIS, 4,
+      make_rules(TYPES_NUCLEO, ARRLEN(TYPES_NUCLEO), 26, false, true, false) },
 
     { "Free Play: Lab",
       "Empty lab. Create whatever you want!",
-      "Sandbox",
-      nullptr,
-      setup_free_lab,
-      nullptr, 0 },
+      "Sandbox", nullptr,
+      setup_free_lab, nullptr, 0,
+      RULES_UNRESTRICTED },
 
     { "Free Play: Space",
       "Cosmic void with primordial particles.",
-      "Sandbox",
-      nullptr,
-      setup_free_space,
-      nullptr, 0 },
+      "Sandbox", nullptr,
+      setup_free_space, nullptr, 0,
+      RULES_UNRESTRICTED },
 
     // ── Cosmic Evolution arc (indices 12-17) ─────────────────────────────
 
     { "Quark Soup",
       "Witness the universe's first microsecond — quarks and gluons in primal chaos.",
-      "Cosmology",
-      "The First Microsecond",
-      setup_quark_soup,
-      TASKS_QUARK_SOUP, 3 },
+      "Cosmology", "The First Microsecond",
+      setup_quark_soup, TASKS_QUARK_SOUP, 3,
+      make_rules(TYPES_QGP, ARRLEN(TYPES_QGP), -1, false, false, true) },
 
     { "Cosmic Dawn",
       "From the Big Bang inferno to the first atoms and light.",
-      "Cosmology",
-      "From Fire to First Light",
-      setup_cosmic_dawn,
-      TASKS_COSMIC_DAWN, 4 },
+      "Cosmology", "From Fire to First Light",
+      setup_cosmic_dawn, TASKS_COSMIC_DAWN, 4,
+      rules_sm_all(2, false, false, true) },
 
     { "Neutron Star",
       "Explore the superfluid heart of a dead star.",
-      "Cosmology",
-      "Heart of a Dead Star",
-      setup_neutron_star_scenario,
-      TASKS_NEUTRON_STAR, 4 },
+      "Cosmology", "Heart of a Dead Star",
+      setup_neutron_star_scenario, TASKS_NEUTRON_STAR, 4,
+      make_rules(TYPES_NEUTRON, ARRLEN(TYPES_NEUTRON), 2, false, true, false) },
 
     { "Magnetar",
       "The most magnetic object in the universe breeds spin waves.",
-      "Cosmology",
-      "The Most Magnetic Object in the Universe",
-      setup_magnetar,
-      TASKS_MAGNETAR, 3 },
+      "Cosmology", "The Most Magnetic Object in the Universe",
+      setup_magnetar, TASKS_MAGNETAR, 3,
+      make_rules(TYPES_NEUTRON, ARRLEN(TYPES_NEUTRON), 2, false, true, false) },
 
     { "SUSY World",
       "Step beyond the Standard Model into supersymmetry.",
-      "Cosmology",
-      "Beyond the Standard Model",
-      setup_susy_world,
-      TASKS_SUSY_WORLD, 3 },
+      "Cosmology", "Beyond the Standard Model",
+      setup_susy_world, TASKS_SUSY_WORLD, 3,
+      make_rules(TYPES_SUSY, ARRLEN(TYPES_SUSY), -1, false, false, false) },
 
     { "The Collider",
       "Smash particles together at humanity's frontier of discovery.",
-      "Cosmology",
-      "Smashing the Frontier",
-      setup_the_collider,
-      TASKS_THE_COLLIDER, 4 },
+      "Cosmology", "Smashing the Frontier",
+      setup_the_collider, TASKS_THE_COLLIDER, 4,
+      rules_sm_all(26, false, true, true) },
 };
 
 static constexpr int SCENARIO_COUNT = sizeof(SCENARIOS) / sizeof(SCENARIOS[0]);
@@ -952,7 +985,7 @@ void ScenarioManager::end() {
 }
 
 const Scenario& ScenarioManager::current() const {
-    static const Scenario empty = { "", "", "", nullptr, nullptr, nullptr, 0 };
+    static const Scenario empty = { "", "", "", nullptr, nullptr, nullptr, 0, {} };
     if (scenario_idx < 0 || scenario_idx >= SCENARIO_COUNT) return empty;
     return SCENARIOS[scenario_idx];
 }

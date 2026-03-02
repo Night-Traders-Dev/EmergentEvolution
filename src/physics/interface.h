@@ -632,6 +632,7 @@ public:
     class ScenarioManager* scenarios_ptr = nullptr;  // set by simulation
     bool show_scenario_menu = false;
     int  request_scenario_start = -1;  // set by UI, consumed by simulation tick
+    const struct ScenarioSpawnRules* active_spawn_rules = nullptr;  // set during active scenario
 
     // Camera navigation (set by info card click, consumed by simulation)
     int32_t navigate_to_particle = -1;
@@ -722,6 +723,7 @@ public:
     void save_molecule_bestiary();
     void load_molecule_bestiary();
     void set_vk_ctx(VulkanContext* ctx) { vk_ctx_ = ctx; }
+    void play_cutscene(int scenario_idx, bool is_completion);
 
 private:
     void push_theme();
@@ -797,6 +799,25 @@ private:
     void draw_splash_nebula();
     void init_splash_collider();
     void draw_splash_collider();
+
+    // Cutscene state
+    enum CutsceneState { CS_INACTIVE, CS_FADE_IN, CS_PLAYING, CS_FADE_OUT };
+    CutsceneState cutscene_state_ = CS_INACTIVE;
+    int   cutscene_scenario_idx_ = -1;   // which scenario
+    bool  cutscene_is_completion_ = false; // intro or completion
+    float cutscene_time_ = 0.0f;         // global animation timer
+    float cutscene_line_time_ = 0.0f;    // per-line timer
+    int   cutscene_line_idx_ = 0;        // current text line index
+    float cutscene_fade_time_ = 0.0f;    // fade-in/out timer
+    bool  cutscene_particles_inited_ = false;
+    std::vector<SplashParticle> cutscene_particles_;
+    std::vector<std::vector<ImVec2>> cutscene_trails_;
+    bool  show_cutscene_gallery = false;
+    bool  cutscene_was_running_ = false;  // restore sim_running on exit
+
+    void draw_cutscene();
+    void draw_cutscene_gallery();
+    void init_cutscene_particles(int scene, uint32_t color1, uint32_t color2);
 
     // Thumbnail cache for save/load dialog
     struct ThumbnailEntry {

@@ -11,6 +11,21 @@ struct ScenarioTask {
     bool (*check)(const PhysicsSimulation& sim);
 };
 
+// ── Spawn restrictions per scenario ──────────────────────────────────────────
+
+struct ScenarioSpawnRules {
+    uint64_t allowed_base[2] = {~0ULL, ~0ULL};  // bits 0-127 (particle types), default all
+    int max_element_Z = 118;       // max Z in periodic table (-1 = no elements)
+    bool allow_molecules = true;
+    bool allow_force_objects = true;
+    bool allow_hadrons = true;
+
+    bool is_type_allowed(uint32_t t) const {
+        if (t >= 128) return true;  // mesons/reserved always allowed
+        return (allowed_base[t / 64] >> (t % 64)) & 1ULL;
+    }
+};
+
 struct Scenario {
     const char* name;
     const char* description;
@@ -19,6 +34,7 @@ struct Scenario {
     void (*setup)(PhysicsSimulation& sim);
     const ScenarioTask* tasks;
     int task_count;            // 0 = sandbox (no goals)
+    ScenarioSpawnRules spawn_rules;  // which particles the player may spawn
 };
 
 class ScenarioManager {

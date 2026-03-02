@@ -4,6 +4,7 @@
 #include "physics/phys_particles.h"
 #include "physics/molecules.h"
 #include "physics/save_load.h"
+#include "physics/cutscenes.h"
 #include "physics/sim_helpers.h"
 #include "physics/ui_data.h"
 #include "stb_image_write.h"
@@ -1650,10 +1651,15 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 scenarios.check_goal(*this);
                 if (scenarios.goal_complete) {
                     iface.push_notification("Scenario Complete!", ImVec4(0.2f, 1.0f, 0.4f, 1.0f));
+                    iface.active_spawn_rules = nullptr;  // lift restrictions on completion
                     if (scenarios.scenario_idx >= 0 && scenarios.scenario_idx < 20) {
                         achievements.scenarios_completed[scenarios.scenario_idx] = true;
                         try_unlock(ACH_FIRST_SCENARIO_COMPLETE);
                     }
+                    // Play completion cutscene
+                    int sidx = scenarios.scenario_idx;
+                    if (sidx != 10 && sidx != 11 && sidx >= 0 && sidx < CUTSCENE_SCENARIO_COUNT)
+                        iface.play_cutscene(sidx, true);
                 } else if (scenarios.task_just_completed) {
                     iface.push_notification("Task Complete!", ImVec4(0.3f, 0.9f, 1.0f, 1.0f));
                 }
@@ -3044,8 +3050,15 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         int idx = iface.request_scenario_start;
         iface.request_scenario_start = -1;
         scenarios.start_scenario(idx, *this);
+        iface.active_spawn_rules = &ScenarioManager::get(idx).spawn_rules;
         is_active = true;
         iface.sim_running = true;
+        // Play intro cutscene (skip sandbox scenarios 10,11)
+        if (idx != 10 && idx != 11 && idx < CUTSCENE_SCENARIO_COUNT)
+            iface.play_cutscene(idx, false);
+        // Mark intro as seen for gallery unlock
+        if (idx < 18)
+            achievements.cutscene_intros_seen |= (1u << idx);
     }
 
     // ── Element export request ───────────────────────────────────────────────
