@@ -1,6 +1,6 @@
 # Scenarios & Gameplay
 
-18 guided scenarios with multi-step objectives across four categories. Each scenario features a
+20 guided scenarios with multi-step objectives across four categories. Each scenario features a
 narrative storyline and 3&ndash;4 sequential tasks that guide you through progressively deeper
 physics concepts. The six **Cosmic Evolution** scenarios form a connected arc tracing the
 universe's history from the quark-gluon plasma through neutron stars and particle colliders.
@@ -27,6 +27,8 @@ universe's history from the quark-gluon plasma through neutron stars and particl
 | **Cosmology** | Magnetar | *The Most Magnetic Object in the Universe* | 3 |
 | **Cosmology** | SUSY World | *Beyond the Standard Model* | 3 |
 | **Cosmology** | The Collider | *Smashing the Frontier* | 4 |
+| **Chemistry** | Chirality Lab | *The Handed Universe* | 4 |
+| **Nuclear** | Parity Violation | *Wu's Experiment* | 4 |
 
 ## Multi-Task System
 
@@ -209,6 +211,28 @@ Smash particles together to reveal nature's deepest secrets.
 | 2 | Create a muon | High-energy collisions produce muons from the second generation |
 | 3 | Observe pair production | Energetic collisions near nuclei produce electron-positron pairs |
 | 4 | Discover 15 particle types | Keep firing the accelerator at higher energies |
+
+### Chemistry: Chirality Lab &mdash; *The Handed Universe*
+
+Discover molecular handedness and the origin of biological homochirality.
+
+| Task | Objective | Hint |
+|---|---|---|
+| 1 | Create a chiral molecule | Build organic molecules with carbon bonded to 3+ different elements |
+| 2 | Create 3 distinct chiral molecules | Try mixing C, H, N, O, F, and Cl in different combinations |
+| 3 | Create a molecule with 2+ chiral centers | Larger organic molecules have more stereocenters |
+| 4 | Have 5+ chiral molecules at once | Life prefers one handedness &mdash; build a homochiral world |
+
+### Nuclear: Parity Violation &mdash; *Wu's Experiment*
+
+The weak force breaks the mirror &mdash; observe parity violation in beta decay.
+
+| Task | Objective | Hint |
+|---|---|---|
+| 1 | Observe a beta decay | Neutron-rich nuclei undergo beta-minus decay |
+| 2 | Observe 5 parity-violating decays | Every weak decay is left-handed &mdash; nature has no mirror symmetry |
+| 3 | Observe 20 parity violations | High temperature and dense matter produce frequent weak decays |
+| 4 | Witness 50 left-handed weak decays | Wu's cobalt-60 experiment proved the weak force is maximally parity-violating |
 
 ## Goal HUD
 

@@ -13,7 +13,7 @@ EmergentEvolution/
 │   └── miniaudio.h              # Single-header audio (MP3 decode + playback)
 ├── src/physics/
 │   ├── simulation.h             # PhysicsSimulation class definition
-│   ├── simulation.cpp           # Core: tick loop, init, reset, input, spatial grid, achievements
+│   ├── simulation.cpp           # Core: tick loop, init, reset, input, spatial grid, achievements, chirality
 │   ├── nuclear.cpp              # Annihilation, fusion, fission, nuclear decay, photoelectric,
 │   │                            #   pion decay, spallation, carrier exchange, quasiparticles
 │   ├── orbital.cpp              # Orbital assignment, nucleus repulsion, bonds, shell transitions
@@ -34,14 +34,14 @@ EmergentEvolution/
 │   ├── phys_particles.h/.cpp    # 282 particle types, masses, charges, environments
 │   ├── meson_data.h             # 188 PDG meson definitions (types 74–261), masses, spins, decays
 │   ├── molecules.h              # ~50 molecule templates with geometry
-│   ├── achievements.h/.cpp      # 234 achievements (inc. 118 periodic table), lifetime stats, persistence
+│   ├── achievements.h/.cpp      # 239 achievements (inc. 118 periodic table, 5 chirality), lifetime stats, persistence
 │   ├── audio.h/.cpp             # Background music + 10 SFX channels via miniaudio
 │   ├── save_load.h/.cpp         # Binary .ppsg/.ppel/.ppmol serialization
 │   ├── paths.h                  # Platform-appropriate data directory (XDG / AppData)
 │   ├── error_dialog.h/.cpp      # Native OS error dialogs (MessageBox / zenity)
 │   ├── steam_integration.h/.cpp # Optional Steamworks SDK wrapper (no-op stubs)
 │   ├── tutorial.h/.cpp          # 10-step interactive tutorial system
-│   ├── scenarios.h/.cpp         # 18 guided scenarios with goals (Cosmic Evolution arc)
+│   ├── scenarios.h/.cpp         # 20 guided scenarios with goals (Cosmic Evolution + Chirality arcs)
 │   ├── encyclopedia.h           # Particle type descriptions and metadata
 │   └── main.cpp                 # Entry point
 ├── shaders/

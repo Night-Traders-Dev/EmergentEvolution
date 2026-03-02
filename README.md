@@ -19,8 +19,8 @@ meson states (light unflavored, strange, charmed, bottom, charmonium, bottomoniu
 candidates). All four fundamental forces run simultaneously on Vulkan compute shaders with optional
 general relativity extensions (mass-energy equivalence, frame dragging, gravitational waves with
 physical tidal forces). CPU-side processes handle nuclear reactions, decay, meson decay with PDG
-branching ratios, orbital mechanics, covalent bonding, hadronization to specific meson types,
-carrier exchange, and quasiparticle dynamics.
+branching ratios, orbital mechanics, covalent bonding, chirality detection, hadronization to
+specific meson types, carrier exchange, and quasiparticle dynamics.
 
 Up to **100,000 particles** in real time. GPU handles O(n&#178;) pairwise forces; CPU physics
 uses a **spatial acceleration grid** with **OpenMP** parallelization for O(n) neighbor queries.

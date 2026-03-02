@@ -7,8 +7,8 @@ Five binary formats for simulation and progression data:
 | **Simulation** | `.ppsg` | Full state: config, particles, types, force objects, UI state | Ctrl+S / Ctrl+L, bottom bar, pause menu |
 | **Element** | `.ppel` | Single element: Z, N, electrons, relative positions | Element Detail Card > Export; Menu > Tools > Import |
 | **Molecule** | `.ppmol` | Molecule: formula, atoms, bond list, relative positions | Molecule Detail Card > Export; Menu > Tools > Import |
-| **Achievements** | `.ppach` | 256-bit unlock bitfield, session counters, discovery state | Automatic (v5, backward-compatible with v1&ndash;v4) |
-| **Lifetime Stats** | `.ppstats` | Career totals, per-type/element stats, all-time peaks | Automatic (auto-saved every 30s and on exit) |
+| **Achievements** | `.ppach` | 256-bit unlock bitfield, session counters, discovery state | Automatic (v6, backward-compatible with v1&ndash;v5) |
+| **Lifetime Stats** | `.ppstats` | Career totals, per-type/element stats, chirality, all-time peaks | Automatic (auto-saved every 30s and on exit) |
 
 Simulation saves capture a 320&times;180 PNG thumbnail. The load dialog displays saves as a
 card grid with preview images, names, dates, and file sizes. Element and molecule files store

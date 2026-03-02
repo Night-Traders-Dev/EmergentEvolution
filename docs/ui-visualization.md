@@ -3,11 +3,12 @@
 ## Info Cards
 
 Clicking a particle shows its type, charge, spin, mass, age, momentum, temperature, relativistic
-energy (eV, PDG rest masses, E = &gamma;m&#8320;c&#178;), and intrinsic magnetic moment
-(anomalous moments for nucleons, Dirac g=2 for leptons). If part of a nucleus, a clickable link
-opens the **Element Detail Card** with full composition, stability info, magnetic moment,
-and Move/Delete/Duplicate/Export actions. Molecules open a **Molecule Detail Card** with Hill
-formula, bond count, and clickable constituent atoms.
+energy (eV, PDG rest masses, E = &gamma;m&#8320;c&#178;), intrinsic magnetic moment
+(anomalous moments for nucleons, Dirac g=2 for leptons), and helicity (left/right-handed for
+spin-1/2 fermions). If part of a nucleus, a clickable link opens the **Element Detail Card**
+with full composition, stability info, magnetic moment, and Move/Delete/Duplicate/Export actions.
+Molecules open a **Molecule Detail Card** with Hill formula, bond count, chirality status
+(chiral center count or achiral), and clickable constituent atoms.
 
 ## Top Stats Bar
 
@@ -181,7 +182,7 @@ Linux, `%APPDATA%\ParticlePlayground\` on Windows).
 
 ## Achievements
 
-234 milestones across 8 categories:
+239 milestones across 9 categories:
 
 | Category | Count | Examples |
 |---|---|---|
@@ -191,6 +192,7 @@ Linux, `%APPDATA%\ParticlePlayground\` on Windows).
 | **Thermodynamics** | 6 | Getting Warm, Quark Epoch, Absolute Zero, Planck Epoch |
 | **Milestones** | 28 | CERN at Home, Collider Veteran, Galaxy, Marathon Physicist, Lore Master |
 | **Chemistry** | 9 | Chemical Bond, Molecular Library, Universal Solvent, Bond Builder |
+| **Chirality** | 5 | Mirror Molecule, Stereochemist, Broken Mirror, Homochiral World, Enantiomer |
 | **Scenarios** | 5 | First Steps, Nuclear Physicist, Chemist, Scenario Master |
 | **Periodic Table** | 118 | One achievement per element (Z=1 Hydrogen through Z=118 Oganesson) |
 
@@ -198,7 +200,7 @@ The **Periodic Table** category renders as an interactive 18-column grid matchin
 periodic table layout (10 rows including lanthanides/actinides). Discovered elements light up
 gold with tooltips showing the element name, symbol, and atomic number.
 
-Persist via `.ppach` file (v4 format, backward-compatible with v1&ndash;v3). Steam achievement
+Persist via `.ppach` file (v6 format, backward-compatible with v1&ndash;v5). Steam achievement
 integration ready (optional, builds without Steamworks SDK).
 
 ## Lifetime Statistics
@@ -210,7 +212,8 @@ every 30 seconds). The statistics panel is accessible from the achievements scre
 |---|---|
 | **Career Totals** | Play time, simulations, total ticks, particles spawned, types observed |
 | **Nuclear Reactions** | Fusions, fissions, annihilations, decays, spallations, pair productions, photoelectric |
-| **Quantum & EM** | Virtual pairs, carrier exchanges, shell transitions, bremsstrahlung, neutrino oscillations, meson decays |
+| **Quantum & EM** | Virtual pairs, carrier exchanges, shell transitions, bremsstrahlung, neutrino oscillations, meson decays, left-handed weak decays |
+| **Chirality & Symmetry** | Chiral molecules found, distinct chiral formulas, parity violations |
 | **Chemistry** | Bonds formed, distinct molecules, total molecules formed, largest molecule (atoms) |
 | **Records** | Peak temperature, peak particles, peak entangled, heaviest element created |
 | **Gameplay** | Accelerator fires, scenarios completed, environments explored |
@@ -218,7 +221,7 @@ every 30 seconds). The statistics panel is accessible from the achievements scre
 | **Top Elements** | Top 10 elements by total created (with peak counts) |
 
 Per-particle-type tracking covers all 74 physics types; per-element tracking covers Z=1&ndash;118.
-Session counters persist in `.ppach` (v5); lifetime aggregates persist in `.ppstats` (v2).
+Session counters persist in `.ppach` (v6); lifetime aggregates persist in `.ppstats` (v3).
 
 ## Sound Effects
 
