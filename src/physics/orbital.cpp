@@ -813,6 +813,9 @@ void PhysicsSimulation::update_bonds() {
 
     if (any_changed) {
         cpu_particles_dirty_ = true;
+        if (new_bonds > 0) {
+            audio.play(AudioPlayer::SFX_BOND, frame_counter_);
+        }
     }
 }
 

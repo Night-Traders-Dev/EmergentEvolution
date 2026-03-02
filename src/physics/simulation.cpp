@@ -497,6 +497,7 @@ void PhysicsSimulation::reset() {
     iface.accel_phase = 0;
     iface.accel_source_idx = -1;
     iface.accel_stream_timer = 0;
+    iface.accel_free_origin_set = false;
     iface.mirror_placement_mode = false;
     iface.mirror_placement_phase = 0;
     iface.thermo_probe_placement_mode = false;
@@ -720,7 +721,7 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
             push_undo_snapshot();
             if (!cfg.start_empty) {
                 int pc = static_cast<int>(std::max(2.0f,
-                    std::pow(iface.particle_count_slider, 2.0f)));
+                    std::pow(iface.prefs.particle_count_slider, 2.0f)));
                 cfg.particle_count = static_cast<uint32_t>(pc);
             } else {
                 cfg.particle_count = cfg.pool_size;
@@ -822,9 +823,17 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
                                             ImVec4(0.3f, 1.0f, 0.5f, 1.0f));
                 }
             } else if (iface.accel_phase == 1 && iface.accel_fire_mode != 2) {
-                // Single or Triple shot on click
-                push_undo_snapshot();
-                do_accelerator_fire(world_pos);
+                if (iface.accel_source_idx < 0 && !iface.accel_free_origin_set) {
+                    // Free-fire: first click sets spawn origin
+                    iface.accel_free_origin = world_pos;
+                    iface.accel_free_origin_set = true;
+                    iface.push_notification("Origin set - click to aim and fire!",
+                                            ImVec4(0.5f, 0.8f, 1.0f, 1.0f));
+                } else {
+                    // Targeted or free-fire with origin: fire
+                    push_undo_snapshot();
+                    do_accelerator_fire(world_pos);
+                }
             }
         }
         else if (iface.mirror_placement_mode) {
@@ -930,20 +939,37 @@ void PhysicsSimulation::handle_input(GLFWwindow* window, double dt) {
     if (lmb && lmb_down_ && iface.accel_mode && iface.accel_phase == 1
         && iface.accel_fire_mode == 2 && !ImGui::GetIO().WantCaptureMouse)
     {
-        iface.accel_stream_timer++;
-        if (iface.accel_stream_timer >= iface.accel_stream_interval) {
-            iface.accel_stream_timer = 0;
-            // Recompute world_pos from current mouse
+        // Free-fire stream: first click sets origin, then stream fires
+        if (iface.accel_source_idx < 0 && !iface.accel_free_origin_set) {
             double mx, my;
             glfwGetCursorPos(window, &mx, &my);
             int ww, wh;
             glfwGetFramebufferSize(window, &ww, &wh);
             float asx = static_cast<float>(REGION_W) / static_cast<float>(ww);
             float asy = static_cast<float>(REGION_H) / static_cast<float>(wh);
-            glm::vec2 aim_world = cfg.camera_origin +
+            glm::vec2 origin = cfg.camera_origin +
                 (glm::vec2(static_cast<float>(mx), static_cast<float>(my))
                  - glm::vec2(ww * 0.5f, wh * 0.5f)) * glm::vec2(asx, asy) / cfg.current_camera_zoom;
-            do_accelerator_fire(aim_world);
+            iface.accel_free_origin = origin;
+            iface.accel_free_origin_set = true;
+            iface.push_notification("Origin set - aim stream!",
+                                    ImVec4(0.5f, 0.8f, 1.0f, 1.0f));
+        } else {
+            iface.accel_stream_timer++;
+            if (iface.accel_stream_timer >= iface.accel_stream_interval) {
+                iface.accel_stream_timer = 0;
+                // Recompute world_pos from current mouse
+                double mx, my;
+                glfwGetCursorPos(window, &mx, &my);
+                int ww, wh;
+                glfwGetFramebufferSize(window, &ww, &wh);
+                float asx = static_cast<float>(REGION_W) / static_cast<float>(ww);
+                float asy = static_cast<float>(REGION_H) / static_cast<float>(wh);
+                glm::vec2 aim_world = cfg.camera_origin +
+                    (glm::vec2(static_cast<float>(mx), static_cast<float>(my))
+                     - glm::vec2(ww * 0.5f, wh * 0.5f)) * glm::vec2(asx, asy) / cfg.current_camera_zoom;
+                do_accelerator_fire(aim_world);
+            }
         }
     }
     if (!lmb) iface.accel_stream_timer = 0;
@@ -1334,8 +1360,8 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     if (iface.field_higgs)   cfg.field_flags |= (1u << 4);
     if (iface.wave_mode)     cfg.field_flags |= (1u << 5);
     if (iface.show_collision_radii) cfg.field_flags |= (1u << 6);
-    if (iface.hide_virtual_trails)  cfg.field_flags |= (1u << 7);
-    if (iface.hide_bond_visuals)    cfg.field_flags |= (1u << 8);
+    if (iface.prefs.hide_virtual_trails)  cfg.field_flags |= (1u << 7);
+    if (iface.prefs.hide_bond_visuals)    cfg.field_flags |= (1u << 8);
     if (iface.field_dark_energy) cfg.field_flags |= (1u << 12);
     // GR gravity extensions
     if (iface.gr_mass_energy)       cfg.field_flags |= (1u << 9);
@@ -2684,7 +2710,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         push_undo_snapshot();
         if (!cfg.start_empty) {
             int pc = static_cast<int>(std::max(2.0f,
-                std::pow(iface.particle_count_slider, 2.0f)));
+                std::pow(iface.prefs.particle_count_slider, 2.0f)));
             cfg.particle_count = static_cast<uint32_t>(pc);
         } else {
             cfg.particle_count = cfg.pool_size;

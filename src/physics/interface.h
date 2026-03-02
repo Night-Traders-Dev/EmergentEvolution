@@ -49,6 +49,12 @@ struct UserPrefs {
     int   quality_preset   = 2;      // 0=Low, 1=Medium, 2=High, 3=Ultra, 4=Custom
     float sfx_volume       = 0.7f;   // 0.0-1.0 sound effect volume
     bool  sfx_muted        = false;  // mute SFX toggle
+
+    // v5 fields — visual overlays + particle count
+    bool  hide_bond_visuals       = false;  // hide bond lines (spring physics still active)
+    bool  hide_virtual_trails     = false;  // hide virtual particle rendering
+    bool  hide_entanglement_lines = false;  // hide entanglement dashed lines
+    float particle_count_slider   = 70.0f;  // sqrt-scale particle count (70^2 = ~5000)
 };
 
 // ── Keybinding system ─────────────────────────────────────────────────────────
@@ -324,6 +330,8 @@ public:
     uint32_t accel_stream_timer = 0;        // frame counter for stream rate
     uint32_t accel_stream_interval = 3;     // fire every N frames in stream
     glm::vec2 accel_source_world_pos = {};  // updated each tick for aim rendering
+    bool     accel_free_origin_set = false; // free-fire: origin has been placed
+    glm::vec2 accel_free_origin = {};       // free-fire: spawn/fire origin point
 
     // ── Measurement Tools ────────────────────────────────────────────────────
     std::vector<ThermometerProbe> thermo_probes;
@@ -475,9 +483,6 @@ public:
     bool  field_dark_energy = false;
     float field_intensity = 0.5f;
     bool  show_collision_radii = false;
-    bool  hide_virtual_trails  = false;
-    bool  hide_bond_visuals       = false;  // hide bond lines (shader + overlay), keep spring physics
-    bool  hide_entanglement_lines = false;  // hide dashed lines, keep velocity coupling
 
     // Bottom bar auto-hide
     float bottom_bar_offset = 0.0f;  // 0.0 = fully visible, 1.0 = fully hidden
@@ -581,7 +586,6 @@ public:
     float log_temperature = 0.0f;  // log10(1) = 0.0 → 1 K
 
     // Sliders
-    float particle_count_slider = 70.0f;   // sqrt(5000) ~ 70
     int   seed_value = 0;
 
     // Event notifications (top-right toast stack)

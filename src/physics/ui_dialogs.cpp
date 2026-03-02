@@ -1421,9 +1421,15 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.25f, 0.40f, 0.95f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.20f, 0.35f, 1.0f));
 
+        // Click SFX helper
+        auto menu_click = [&]() {
+            if (audio_ptr) audio_ptr->play(AudioPlayer::SFX_CLICK);
+        };
+
         // Resume
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y));
         if (ImGui::Button("Resume", ImVec2(btn_w, btn_h))) {
+            menu_click();
             show_pause_menu = false;
             sim_running = true;
         }
@@ -1431,6 +1437,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         // New
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing));
         if (ImGui::Button("New Simulation", ImVec2(btn_w, btn_h))) {
+            menu_click();
             show_pause_menu = false;
             request_reset = true;
         }
@@ -1438,6 +1445,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         // Scenarios
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 2));
         if (ImGui::Button("Scenarios", ImVec2(btn_w, btn_h))) {
+            menu_click();
             show_scenario_menu = true;
             show_pause_menu = false;
         }
@@ -1445,6 +1453,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         // Save
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 3));
         if (ImGui::Button("Save", ImVec2(btn_w, btn_h))) {
+            menu_click();
             show_save_dialog = true;
             show_load_dialog = false;
             show_pause_menu = false;
@@ -1454,6 +1463,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         // Load
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 4));
         if (ImGui::Button("Load", ImVec2(btn_w, btn_h))) {
+            menu_click();
             show_load_dialog = true;
             show_save_dialog = false;
             show_pause_menu = false;
@@ -1463,6 +1473,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         // How To Play
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 5));
         if (ImGui::Button("How To Play", ImVec2(btn_w, btn_h))) {
+            menu_click();
             show_howto = true;
             show_pause_menu = false;
         }
@@ -1471,6 +1482,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 6));
         if (ParticleRepository::is_available()) {
             if (ImGui::Button("Repository", ImVec2(btn_w, btn_h))) {
+                menu_click();
                 show_repository = true;
                 show_pause_menu = false;
             }
@@ -1483,6 +1495,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         // Achievements
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 7));
         if (ImGui::Button("Achievements", ImVec2(btn_w, btn_h))) {
+            menu_click();
             show_achievements_panel = true;
             show_pause_menu = false;
         }
@@ -1490,6 +1503,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         // Credits
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 8));
         if (ImGui::Button("Credits", ImVec2(btn_w, btn_h))) {
+            menu_click();
             show_credits_ = true;
             show_pause_menu = false;
         }
@@ -1497,6 +1511,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         // Settings
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 9));
         if (ImGui::Button("Settings", ImVec2(btn_w, btn_h))) {
+            menu_click();
             show_settings_menu = true;
             show_pause_menu = false;
         }
@@ -1506,6 +1521,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.4f, 0.08f, 0.08f, 0.90f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.6f, 0.15f, 0.15f, 0.95f));
         if (ImGui::Button("Quit", ImVec2(btn_w, btn_h))) {
+            menu_click();
             request_quit = true;
         }
         ImGui::PopStyleColor(2);
@@ -1724,21 +1740,27 @@ void PhysicsInterface::draw_settings_menu() {
             ImGui::Dummy(ImVec2(0, 12));
             ImGui::SeparatorText("Visual Overlays");
             {
-                bool show_bonds = !hide_bond_visuals;
-                if (ImGui::Checkbox("Show Bond Lines", &show_bonds))
-                    hide_bond_visuals = !show_bonds;
+                bool show_bonds = !prefs.hide_bond_visuals;
+                if (ImGui::Checkbox("Show Bond Lines", &show_bonds)) {
+                    prefs.hide_bond_visuals = !show_bonds;
+                    save_prefs();
+                }
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Toggle covalent bond line rendering\nPhysics (spring forces) still active when hidden");
 
-                bool show_virtual = !hide_virtual_trails;
-                if (ImGui::Checkbox("Show Virtual Particles", &show_virtual))
-                    hide_virtual_trails = !show_virtual;
+                bool show_virtual = !prefs.hide_virtual_trails;
+                if (ImGui::Checkbox("Show Virtual Particles", &show_virtual)) {
+                    prefs.hide_virtual_trails = !show_virtual;
+                    save_prefs();
+                }
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Toggle virtual particle rendering\nCasimir forces still active when hidden");
 
-                bool show_entangle = !hide_entanglement_lines;
-                if (ImGui::Checkbox("Show Entanglement Lines", &show_entangle))
-                    hide_entanglement_lines = !show_entangle;
+                bool show_entangle = !prefs.hide_entanglement_lines;
+                if (ImGui::Checkbox("Show Entanglement Lines", &show_entangle)) {
+                    prefs.hide_entanglement_lines = !show_entangle;
+                    save_prefs();
+                }
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Toggle entanglement dashed line overlay\nVelocity coupling still active when hidden");
             }
@@ -1828,10 +1850,11 @@ void PhysicsInterface::draw_settings_menu() {
             ImGui::Dummy(ImVec2(0, 12));
             ImGui::SeparatorText("Particles");
             {
-                int pc = static_cast<int>(std::round(particle_count_slider * particle_count_slider));
+                int pc = static_cast<int>(std::round(prefs.particle_count_slider * prefs.particle_count_slider));
                 char fmt[64];
                 snprintf(fmt, sizeof(fmt), "%%.0f  (%d particles)", pc);
-                ImGui::SliderFloat("Max Particles", &particle_count_slider, 10.0f, 316.0f, fmt);
+                if (ImGui::SliderFloat("Max Particles", &prefs.particle_count_slider, 10.0f, 316.0f, fmt))
+                    save_prefs();
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Drag to set max particle count (sqrt scale)\n10\xc2\xb2=100 up to 316\xc2\xb2=~100,000");
                 ImGui::TextColored(tc.text_dim, "Active: %u  |  Dormant: %u",

@@ -22,6 +22,7 @@ void PhysicsSimulation::do_accelerator_fire(glm::vec2 aim_world_pos) {
     compute.read_current_state(vk, readback_positions_, readback_velocities_, readback_energies_);
 
     glm::vec2 dir;
+    glm::vec2 spawn_origin;
     if (src >= 0 && src < static_cast<int32_t>(cfg.particle_count)) {
         // Targeted mode: fire toward selected target
         if (readback_energies_[src] < 0.01f) {
@@ -35,12 +36,14 @@ void PhysicsSimulation::do_accelerator_fire(glm::vec2 aim_world_pos) {
         float dist = glm::length(dir);
         if (dist < 1.0f) return;
         dir /= dist;
+        spawn_origin = aim_world_pos;
     } else {
-        // Free-fire mode: fire outward from camera center through click point
-        dir = aim_world_pos - cfg.camera_origin;
+        // Free-fire mode: fire from stored origin toward click point
+        dir = aim_world_pos - iface.accel_free_origin;
         float dist = glm::length(dir);
         if (dist < 1.0f) dir = glm::vec2(1.0f, 0.0f);
         else dir /= dist;
+        spawn_origin = iface.accel_free_origin;
     }
 
     uint32_t fire_type = static_cast<uint32_t>(iface.accel_fire_type);
@@ -78,8 +81,8 @@ void PhysicsSimulation::do_accelerator_fire(glm::vec2 aim_world_pos) {
         if (slot == UINT32_MAX) break;
         search_from = slot + 1;
 
-        // Spawn behind click point (away from target) so particle flies through
-        glm::vec2 spawn_pos = aim_world_pos - sd * offset_dist;
+        // Spawn at origin (slightly offset in fire direction)
+        glm::vec2 spawn_pos = spawn_origin + sd * offset_dist;
         spawn_pos.x = std::fmod(spawn_pos.x + rw, rw);
         spawn_pos.y = std::fmod(spawn_pos.y + rh, rh);
 
@@ -108,6 +111,7 @@ void PhysicsSimulation::do_accelerator_fire(glm::vec2 aim_world_pos) {
     if (any_spawned) {
         compute.write_particle_state(vk, readback_positions_, readback_velocities_, readback_energies_);
         compute.upload_dynamic_data(vk, particles);
+        audio.play(AudioPlayer::SFX_COLLISION, frame_counter_);
         try_unlock(ACH_FIRST_ACCELERATOR);
         // Cosmic ray: fire at near-lightspeed
         if (speed >= 295.0f) try_unlock(ACH_COSMIC_RAY);

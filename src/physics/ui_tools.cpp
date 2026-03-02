@@ -570,6 +570,7 @@ void PhysicsInterface::draw_accelerator_panel() {
             accel_phase = 0;
             accel_source_idx = -1;
             accel_stream_timer = 0;
+            accel_free_origin_set = false;
         }
         return;
     }
@@ -578,6 +579,7 @@ void PhysicsInterface::draw_accelerator_panel() {
         accel_phase = 0;
         accel_source_idx = -1;
         accel_stream_timer = 0;
+        accel_free_origin_set = false;
     }
 
     // ── Status ──
@@ -587,22 +589,37 @@ void PhysicsInterface::draw_accelerator_panel() {
         if (ImGui::SmallButton("Skip##notgt")) {
             accel_phase = 1;
             accel_source_idx = -1;  // free-fire mode (no target)
+            accel_free_origin_set = false;
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Fire without a target\n(particles fly in click direction)");
+            ImGui::SetTooltip("Fire without a target\n(click to place origin, then click to aim)");
     } else if (accel_source_idx >= 0) {
         ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "Click to fire at target!");
         ImGui::SameLine();
         if (ImGui::SmallButton("Change Target")) {
             accel_phase = 0;
             accel_source_idx = -1;
+            accel_free_origin_set = false;
         }
-    } else {
-        ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "Click to fire (free aim)");
+    } else if (!accel_free_origin_set) {
+        ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "Click to place fire origin");
         ImGui::SameLine();
         if (ImGui::SmallButton("Set Target")) {
             accel_phase = 0;
             accel_source_idx = -1;
+            accel_free_origin_set = false;
+        }
+    } else {
+        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "Click to aim and fire!");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Move Origin")) {
+            accel_free_origin_set = false;
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Set Target")) {
+            accel_phase = 0;
+            accel_source_idx = -1;
+            accel_free_origin_set = false;
         }
     }
 

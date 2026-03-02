@@ -182,6 +182,7 @@ void PhysicsSimulation::check_annihilation() {
 
     if (any_annihilated) {
         cpu_particles_dirty_ = true;
+        audio.play(AudioPlayer::SFX_ANNIHILATION, frame_counter_);
     }
 }
 
@@ -446,6 +447,7 @@ void PhysicsSimulation::check_fusion() {
             readback_energies_[i] = std::clamp(readback_energies_[i], 0.0f, 1.0f);
         }
         cpu_particles_dirty_ = true;
+        audio.play(AudioPlayer::SFX_FUSION, frame_counter_);
     }
 }
 
@@ -593,6 +595,7 @@ void PhysicsSimulation::check_fission() {
 
     if (any_fissioned) {
         cpu_particles_dirty_ = true;
+        audio.play(AudioPlayer::SFX_FISSION, frame_counter_);
     }
 }
 
@@ -1343,6 +1346,7 @@ void PhysicsSimulation::check_photoelectric() {
 
     if (any_changed) {
         cpu_particles_dirty_ = true;
+        audio.play(AudioPlayer::SFX_PHOTON, frame_counter_);
     }
 }
 

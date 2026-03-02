@@ -1332,6 +1332,7 @@ void PhysicsSimulation::check_decay() {
 
     if (any_decayed) {
         cpu_particles_dirty_ = true;
+        audio.play(AudioPlayer::SFX_DECAY, frame_counter_);
     }
 }
 

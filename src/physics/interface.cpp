@@ -40,11 +40,12 @@ void PhysicsInterface::init() {
 // ── Settings persistence ────────────────────────────────────────────────────
 
 static constexpr uint32_t PPCFG_MAGIC   = 0x47464350;  // "PCFG" little-endian
-static constexpr uint32_t PPCFG_VERSION = 4;
+static constexpr uint32_t PPCFG_VERSION = 5;
 
 // Historical struct sizes (for backward-compat migration)
 static constexpr size_t PPCFG_V2_SIZE = 52;   // temp_unit .. event_log_save
 static constexpr size_t PPCFG_V3_SIZE = 72;   // + autosave_interval .. tutorial_done
+static constexpr size_t PPCFG_V4_SIZE = 104;  // + vsync .. sfx_muted
 
 void PhysicsInterface::save_prefs() {
     const std::string& data_dir = get_data_dir();
@@ -90,6 +91,7 @@ void PhysicsInterface::load_prefs() {
     size_t read_size = sizeof(UserPrefs);
     if (version == 2)      read_size = PPCFG_V2_SIZE;
     else if (version == 3) read_size = PPCFG_V3_SIZE;
+    else if (version == 4) read_size = PPCFG_V4_SIZE;
 
     f.read(reinterpret_cast<char*>(&loaded), static_cast<std::streamsize>(read_size));
     if (!f.good()) return;
@@ -116,6 +118,12 @@ void PhysicsInterface::load_prefs() {
         prefs.quality_preset = defaults.quality_preset;
         prefs.sfx_volume = defaults.sfx_volume;
         prefs.sfx_muted = defaults.sfx_muted;
+    }
+    if (version <= 4) {
+        prefs.hide_bond_visuals = defaults.hide_bond_visuals;
+        prefs.hide_virtual_trails = defaults.hide_virtual_trails;
+        prefs.hide_entanglement_lines = defaults.hide_entanglement_lines;
+        prefs.particle_count_slider = defaults.particle_count_slider;
     }
 }
 
@@ -998,6 +1006,94 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
         }
     }
 
+    // ── Accelerator free-fire aim visualization ──
+    if (accel_mode && accel_phase == 1 && accel_source_idx < 0 && accel_free_origin_set
+        && accel_fire_type >= 0 && static_cast<uint32_t>(accel_fire_type) < PHYS_PARTICLE_TYPES) {
+        ImGuiIO& io = ImGui::GetIO();
+        float win_w = io.DisplaySize.x;
+        float win_h = io.DisplaySize.y;
+        float scx = win_w / static_cast<float>(REGION_W);
+        float scy = win_h / static_cast<float>(REGION_H);
+
+        auto w2s = [&](glm::vec2 w) -> ImVec2 {
+            glm::vec2 s = glm::vec2(win_w, win_h) * 0.5f
+                        + (w - cfg.camera_origin) * cfg.current_camera_zoom * glm::vec2(scx, scy);
+            return ImVec2(s.x, s.y);
+        };
+
+        ImVec2 origin_scr = w2s(accel_free_origin);
+        ImVec2 mouse = io.MousePos;
+
+        // Direction from origin toward mouse (fire direction)
+        float dx = mouse.x - origin_scr.x;
+        float dy = mouse.y - origin_scr.y;
+        float len = std::sqrt(dx * dx + dy * dy);
+
+        if (len > 1.0f) {
+            float nx = dx / len;
+            float ny = dy / len;
+
+            ImVec4 tc = PHYS_TYPE_UI_COLORS[accel_fire_type];
+            ImU32 line_col = ImGui::ColorConvertFloat4ToU32(ImVec4(tc.x, tc.y, tc.z, 0.6f));
+            ImU32 dot_col  = ImGui::ColorConvertFloat4ToU32(ImVec4(tc.x, tc.y, tc.z, 1.0f));
+            ImU32 origin_col = ImGui::ColorConvertFloat4ToU32(ImVec4(tc.x, tc.y, tc.z, 0.8f));
+
+            ImDrawList* fg = ImGui::GetForegroundDrawList();
+
+            // Origin indicator (diamond shape)
+            float os = 8.0f;
+            fg->AddQuadFilled(
+                ImVec2(origin_scr.x, origin_scr.y - os),
+                ImVec2(origin_scr.x + os, origin_scr.y),
+                ImVec2(origin_scr.x, origin_scr.y + os),
+                ImVec2(origin_scr.x - os, origin_scr.y),
+                origin_col);
+            fg->AddCircle(origin_scr, 12.0f, dot_col, 16, 1.5f);
+
+            // Dashed aim line from origin toward mouse
+            float dash = 8.0f, gap = 4.0f, t = 0.0f;
+            bool draw_seg = true;
+            while (t < len) {
+                float seg = draw_seg ? dash : gap;
+                seg = std::min(seg, len - t);
+                if (draw_seg) {
+                    ImVec2 a(origin_scr.x + nx * t, origin_scr.y + ny * t);
+                    ImVec2 b(origin_scr.x + nx * (t + seg), origin_scr.y + ny * (t + seg));
+                    fg->AddLine(a, b, line_col, 2.0f);
+                }
+                t += seg;
+                draw_seg = !draw_seg;
+            }
+
+            // Arrowhead at mouse end (aim direction)
+            float as = 10.0f;
+            ImVec2 tip = mouse;
+            ImVec2 left(tip.x - nx*as + ny*as*0.5f, tip.y - ny*as - nx*as*0.5f);
+            ImVec2 right(tip.x - nx*as - ny*as*0.5f, tip.y - ny*as + nx*as*0.5f);
+            fg->AddTriangleFilled(tip, left, right, dot_col);
+
+            // Triple shot spread lines
+            if (accel_fire_mode == 1) {
+                float spread = 5.0f * 3.14159265f / 180.0f;
+                float base_a = std::atan2(ny, nx);
+                ImU32 spread_col = ImGui::ColorConvertFloat4ToU32(ImVec4(tc.x, tc.y, tc.z, 0.25f));
+                for (int s = -1; s <= 1; s += 2) {
+                    float a = base_a + s * spread;
+                    ImVec2 end(origin_scr.x + std::cos(a) * len,
+                              origin_scr.y + std::sin(a) * len);
+                    fg->AddLine(origin_scr, end, spread_col, 1.0f);
+                }
+            }
+
+            // Stream mode: pulsing indicator at origin
+            if (accel_fire_mode == 2) {
+                float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(ImGui::GetFrameCount()) * 0.15f);
+                ImU32 pulse_col = ImGui::ColorConvertFloat4ToU32(ImVec4(tc.x, tc.y, tc.z, pulse * 0.4f));
+                fg->AddCircleFilled(origin_scr, 8.0f, pulse_col);
+            }
+        }
+    }
+
     // ── Mirror placement preview overlay ──
     if (mirror_placement_mode && mirror_placement_phase == 1) {
         ImGuiIO& mio = ImGui::GetIO();
@@ -1175,7 +1271,7 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     }
 
     // ── Entanglement visualization overlay ──
-    if (cfg.entanglement_enabled && !hide_entanglement_lines
+    if (cfg.entanglement_enabled && !prefs.hide_entanglement_lines
         && readback_positions_ptr && entangled_partners_ptr
         && readback_count > 0) {
         ImGuiIO& eio = ImGui::GetIO();
@@ -1226,7 +1322,7 @@ void PhysicsInterface::render_imgui(SimConfig& cfg, Particles& particles, ForceO
     }
 
     // ── Covalent bond overlay ──────────────────────────────────────────────
-    if (cfg.bonds_enabled && !hide_bond_visuals && bond_data_ptr && readback_positions_ptr && readback_count > 0) {
+    if (cfg.bonds_enabled && !prefs.hide_bond_visuals && bond_data_ptr && readback_positions_ptr && readback_count > 0) {
         ImGuiIO& bio = ImGui::GetIO();
         float bwin_w = bio.DisplaySize.x, bwin_h = bio.DisplaySize.y;
         float scx = bwin_w / static_cast<float>(REGION_W);

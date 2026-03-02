@@ -655,7 +655,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.pressure_resistance = 60.0f;
                     cfg.interaction_radius = 120.0f;
                     cfg.gravity_strength = 1.0f;
-                    particle_count_slider = 100.0f;
+                    prefs.particle_count_slider = 100.0f;
                     break;
                 case 2:  // Neutron Star Surface
                     cfg.start_empty = false;
@@ -665,7 +665,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.pressure_resistance = 80.0f;
                     cfg.interaction_radius = 80.0f;
                     cfg.gravity_strength = 1.0f;
-                    particle_count_slider = 120.0f;
+                    prefs.particle_count_slider = 120.0f;
                     break;
                 case 3:  // Solar Core
                     cfg.start_empty = false;
@@ -675,7 +675,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.pressure_resistance = 60.0f;
                     cfg.interaction_radius = 120.0f;
                     cfg.gravity_strength = 1.0f;
-                    particle_count_slider = 110.0f;
+                    prefs.particle_count_slider = 110.0f;
                     break;
                 case 4:  // Particle Soup
                     cfg.start_empty = false;
@@ -685,7 +685,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.pressure_resistance = 60.0f;
                     cfg.interaction_radius = 120.0f;
                     cfg.gravity_strength = 1.0f;
-                    particle_count_slider = 80.0f;
+                    prefs.particle_count_slider = 80.0f;
                     break;
                 case 5:  // Alpha Emitter
                     cfg.start_empty = false;
@@ -695,7 +695,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.pressure_resistance = 60.0f;
                     cfg.interaction_radius = 120.0f;
                     cfg.gravity_strength = 1.0f;
-                    particle_count_slider = 60.0f;
+                    prefs.particle_count_slider = 60.0f;
                     break;
                 case 6:  // Heavy Nucleus
                     cfg.start_empty = false;
@@ -705,7 +705,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.pressure_resistance = 80.0f;
                     cfg.interaction_radius = 100.0f;
                     cfg.gravity_strength = 1.0f;
-                    particle_count_slider = 50.0f;
+                    prefs.particle_count_slider = 50.0f;
                     break;
                 case 7:  // Quark-Gluon Plasma
                     cfg.start_empty = false;
@@ -718,7 +718,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.string_tension = 10.0f;
                     cfg.hadronization_enabled = false;  // quarks deconfined in QGP
                     cfg.weak_coupling = 0.5f;
-                    particle_count_slider = 100.0f;
+                    prefs.particle_count_slider = 100.0f;
                     break;
                 case 8:  // Electroweak Era
                     cfg.start_empty = false;
@@ -730,7 +730,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.gravity_strength = 1.0f;
                     cfg.weak_coupling = 1.0f;
                     cfg.string_tension = 50.0f;
-                    particle_count_slider = 80.0f;
+                    prefs.particle_count_slider = 80.0f;
                     break;
                 case 9:  // Meson Factory
                     cfg.start_empty = false;
@@ -742,7 +742,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.gravity_strength = 1.0f;
                     cfg.string_tension = 60.0f;
                     cfg.weak_coupling = 0.2f;
-                    particle_count_slider = 90.0f;
+                    prefs.particle_count_slider = 90.0f;
                     break;
                 case 10:  // Particle Accelerator
                     cfg.start_empty = false;
@@ -756,7 +756,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.weak_coupling = 0.0f;
                     cfg.string_tension = 50.0f;
                     cfg.time_scale = 3.0f;
-                    particle_count_slider = 60.0f;
+                    prefs.particle_count_slider = 60.0f;
                     break;
                 case 13:  // Big Bang
                     cfg.start_empty = false;
@@ -772,15 +772,15 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
                     cfg.hadronization_enabled = false;
                     cfg.viscosity_strength = 0.1f;
                     cfg.time_scale = 1.0f;
-                    particle_count_slider = 150.0f;
+                    prefs.particle_count_slider = 150.0f;
                     break;
             }
             log_temperature = std::log10(std::max(1.0f, cfg.temperature_kelvin));
         }
 
         if (!cfg.start_empty) {
-            ImGui::SliderFloat("Count", &particle_count_slider, 1.0f, 317.0f, "%.0f");
-            int pc = static_cast<int>(std::max(2.0f, std::pow(particle_count_slider, 2.0f)));
+            ImGui::SliderFloat("Count", &prefs.particle_count_slider, 1.0f, 317.0f, "%.0f");
+            int pc = static_cast<int>(std::max(2.0f, std::pow(prefs.particle_count_slider, 2.0f)));
             ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f),
                 "Particles: %d  (applied on Reset)", pc);
         } else {
@@ -1124,7 +1124,7 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Spontaneous particle-antiparticle pairs\nfrom quantum vacuum fluctuations\n(Casimir effect source)");
 
-        ImGui::Checkbox("Hide Virtual Trails", &hide_virtual_trails);
+        ImGui::Checkbox("Hide Virtual Trails", &prefs.hide_virtual_trails);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Hide virtual particle rendering\nwhile keeping the physics active");
 
