@@ -1,4 +1,4 @@
-#include "physics/steam_integration.h"
+#include "physics/features/steam_integration.h"
 #include <cstdio>
 
 #ifdef HAS_STEAM

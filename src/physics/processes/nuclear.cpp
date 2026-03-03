@@ -1,6 +1,6 @@
-#include "physics/simulation.h"
-#include "physics/sim_helpers.h"
-#include "physics/ui_data.h"
+#include "physics/core/simulation.h"
+#include "physics/core/sim_helpers.h"
+#include "physics/ui/ui_data.h"
 #include <imgui.h>
 #include <algorithm>
 #include <random>

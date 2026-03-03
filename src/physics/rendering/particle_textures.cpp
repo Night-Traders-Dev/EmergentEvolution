@@ -1,6 +1,6 @@
-#include "particle_textures.h"
-#include "physics/ui_data.h"
-#include "stb_image.h"
+#include "physics/rendering/particle_textures.h"
+#include "physics/ui/ui_data.h"
+#include "third_party/stb_image.h"
 #include <cstring>
 #include <algorithm>
 #include <filesystem>

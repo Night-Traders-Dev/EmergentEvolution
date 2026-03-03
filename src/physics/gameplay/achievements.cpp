@@ -1,5 +1,5 @@
-#include "physics/achievements.h"
-#include "physics/ui_data.h"
+#include "physics/gameplay/achievements.h"
+#include "physics/ui/ui_data.h"
 #include <fstream>
 #include <cstring>
 #include <cstdio>

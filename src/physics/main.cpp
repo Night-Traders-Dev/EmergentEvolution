@@ -1,7 +1,7 @@
-#include "physics/simulation.h"
-#include "physics/error_dialog.h"
-#include "physics/steam_integration.h"
-#include "stb_image.h"
+#include "physics/core/simulation.h"
+#include "common/error_dialog.h"
+#include "physics/features/steam_integration.h"
+#include "third_party/stb_image.h"
 #include <GLFW/glfw3.h>
 #include <stdexcept>
 #include <iostream>
@@ -12,7 +12,7 @@
 #include <omp.h>
 #endif
 #ifdef PORTABLE_BUILD
-#include "embedded_resources.h"
+#include "common/embedded_resources.h"
 #endif
 #ifdef _WIN32
 #include <windows.h>

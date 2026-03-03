@@ -71,23 +71,23 @@ FetchContent_MakeAvailable(imgui)
 
 add_library(pp_common STATIC
     # Vulkan abstraction
-    src/vulkan_context.cpp
+    src/common/vulkan_context.cpp
 
     # Minimal ImGui renderer (swap-chain + ImGui, no compute)
     src/common/simple_renderer.cpp
 
     # Image I/O
-    src/stb_image_impl.cpp
-    src/stb_image_write_impl.cpp
+    src/common/stb_image_impl.cpp
+    src/common/stb_image_write_impl.cpp
 
     # Audio engine (miniaudio implementation unit)
-    src/physics/audio.cpp
+    src/common/audio.cpp
 
     # Error dialogs
-    src/physics/error_dialog.cpp
+    src/common/error_dialog.cpp
 
     # HTTP client (libcurl or WinHTTP backend)
-    src/physics/http_client.cpp
+    src/common/http_client.cpp
 
     # ImGui core
     ${imgui_SOURCE_DIR}/imgui.cpp
@@ -103,6 +103,7 @@ add_library(pp_common STATIC
 # PUBLIC: propagated to all targets that link pp_common
 target_include_directories(pp_common PUBLIC
     src/
+    src/third_party/
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
 )
@@ -158,56 +159,58 @@ target_compile_options(pp_common PRIVATE
 )
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Particle Physics — subatomic particle simulation (existing)
+# Particle Physics — subatomic particle simulation
 # ═══════════════════════════════════════════════════════════════════════════════
 
 add_executable(particle_physics
     src/physics/main.cpp
-    src/physics/simulation.cpp
-    src/physics/phys_particles.cpp
-    src/physics/interface.cpp
-    src/physics/save_load.cpp
-    src/physics/achievements.cpp
-    src/physics/steam_integration.cpp
 
-    # Physics process modules
-    src/physics/nuclear.cpp
-    src/physics/orbital.cpp
-    src/physics/decay.cpp
-    src/physics/meson_decays.cpp
-    src/physics/quantum.cpp
-    src/physics/cp_violation.cpp
-    src/physics/spawning.cpp
+    # Core — simulation engine, types, particle definitions
+    src/physics/core/simulation.cpp
+    src/physics/core/phys_particles.cpp
 
-    # Onboarding & gameplay
-    src/physics/tutorial.cpp
-    src/physics/scenarios.cpp
-    src/physics/cutscenes.cpp
+    # Processes — CPU-side physics (nuclear, decay, quantum, etc.)
+    src/physics/processes/nuclear.cpp
+    src/physics/processes/orbital.cpp
+    src/physics/processes/decay.cpp
+    src/physics/processes/meson_decays.cpp
+    src/physics/processes/quantum.cpp
+    src/physics/processes/cp_violation.cpp
+    src/physics/processes/spawning.cpp
 
-    # UI component modules
-    src/physics/ui_panels.cpp
-    src/physics/ui_cards.cpp
-    src/physics/ui_lists.cpp
-    src/physics/ui_dialogs.cpp
-    src/physics/ui_tools.cpp
-    src/physics/ui_overlays.cpp
-    src/physics/ui_repository.cpp
+    # Rendering — Vulkan compute pipeline, renderer, particle buffers
+    src/physics/rendering/compute_pipeline.cpp
+    src/physics/rendering/renderer.cpp
+    src/physics/rendering/particles.cpp
+    src/physics/rendering/particle_textures.cpp
 
-    # Online repository (uses http_client from pp_common)
-    src/physics/repository.cpp
+    # UI — ImGui interface, panels, cards, dialogs, overlays
+    src/physics/ui/interface.cpp
+    src/physics/ui/ui_panels.cpp
+    src/physics/ui/ui_cards.cpp
+    src/physics/ui/ui_lists.cpp
+    src/physics/ui/ui_dialogs.cpp
+    src/physics/ui/ui_tools.cpp
+    src/physics/ui/ui_overlays.cpp
+    src/physics/ui/ui_repository.cpp
 
-    # Physics-specific infrastructure (tightly coupled to types.h/SimConfig)
-    src/compute_pipeline.cpp
-    src/renderer.cpp
-    src/particles.cpp
-    src/particle_textures.cpp
+    # Gameplay — achievements, scenarios, tutorial, cutscenes
+    src/physics/gameplay/achievements.cpp
+    src/physics/gameplay/scenarios.cpp
+    src/physics/gameplay/tutorial.cpp
+    src/physics/gameplay/cutscenes.cpp
+
+    # Features — save/load, online repository, Steam integration
+    src/physics/features/save_load.cpp
+    src/physics/features/repository.cpp
+    src/physics/features/steam_integration.cpp
 )
 
 target_link_libraries(particle_physics PRIVATE pp_common)
 
 # cJSON — needed for repository JSON parsing (when HTTP is available)
 if(CURL_FOUND OR WIN32)
-    target_sources(particle_physics PRIVATE src/cjson/cJSON.c)
+    target_sources(particle_physics PRIVATE src/third_party/cjson/cJSON.c)
 endif()
 
 # Windows .exe icon + version info
@@ -252,6 +255,7 @@ target_link_libraries(pp_launcher PRIVATE pp_common)
 add_executable(particle_cosmos
     src/cosmos/main.cpp
     src/cosmos/cosmos_app.cpp
+    src/cosmos/cosmos_raytracer.cpp
 )
 target_link_libraries(particle_cosmos PRIVATE pp_common)
 
@@ -301,6 +305,8 @@ compile_shader(fullscreen.vert   fullscreen.vert.spv)
 compile_shader(fullscreen.frag   fullscreen.frag.spv)
 compile_shader(overlay.vert      overlay.vert.spv)
 compile_shader(overlay.frag      overlay.frag.spv)
+compile_shader(cosmos_rt.vert    cosmos_rt.vert.spv)
+compile_shader(cosmos_rt.frag    cosmos_rt.frag.spv)
 
 add_custom_target(shaders ALL DEPENDS
     ${SHADER_BIN_DIR}/physics.spv
@@ -308,8 +314,11 @@ add_custom_target(shaders ALL DEPENDS
     ${SHADER_BIN_DIR}/fullscreen.frag.spv
     ${SHADER_BIN_DIR}/overlay.vert.spv
     ${SHADER_BIN_DIR}/overlay.frag.spv
+    ${SHADER_BIN_DIR}/cosmos_rt.vert.spv
+    ${SHADER_BIN_DIR}/cosmos_rt.frag.spv
 )
 add_dependencies(particle_physics shaders)
+add_dependencies(particle_cosmos shaders)
 
 # ── Portable build: embed shaders + icons into the binary ─────────────────────
 
@@ -344,6 +353,8 @@ if(PORTABLE_BUILD)
     embed_resource(${SHADER_BIN_DIR}/fullscreen.frag.spv      fullscreen_frag_spv)
     embed_resource(${SHADER_BIN_DIR}/overlay.vert.spv         overlay_vert_spv)
     embed_resource(${SHADER_BIN_DIR}/overlay.frag.spv         overlay_frag_spv)
+    embed_resource(${SHADER_BIN_DIR}/cosmos_rt.vert.spv       cosmos_rt_vert_spv)
+    embed_resource(${SHADER_BIN_DIR}/cosmos_rt.frag.spv       cosmos_rt_frag_spv)
 
     # Icons
     embed_resource(${CMAKE_SOURCE_DIR}/assets/icon_32.png     icon_32_png)
@@ -356,6 +367,8 @@ if(PORTABLE_BUILD)
         ${EMBED_DIR}/fullscreen_frag_spv.cpp
         ${EMBED_DIR}/overlay_vert_spv.cpp
         ${EMBED_DIR}/overlay_frag_spv.cpp
+        ${EMBED_DIR}/cosmos_rt_vert_spv.cpp
+        ${EMBED_DIR}/cosmos_rt_frag_spv.cpp
         ${EMBED_DIR}/icon_32_png.cpp
         ${EMBED_DIR}/icon_64_png.cpp
         ${EMBED_DIR}/icon_256_png.cpp

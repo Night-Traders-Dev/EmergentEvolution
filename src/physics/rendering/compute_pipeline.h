@@ -1,8 +1,8 @@
 #pragma once
 
-#include "types.h"
-#include "vulkan_context.h"
-#include "particles.h"
+#include "physics/core/types.h"
+#include "common/vulkan_context.h"
+#include "physics/rendering/particles.h"
 #include <vulkan/vulkan.h>
 #include <string>
 

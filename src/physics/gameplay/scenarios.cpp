@@ -1,6 +1,6 @@
-#include "physics/scenarios.h"
-#include "physics/simulation.h"
-#include "physics/phys_particles.h"
+#include "physics/gameplay/scenarios.h"
+#include "physics/core/simulation.h"
+#include "physics/core/phys_particles.h"
 #include <cstring>
 #include <random>
 #include <cmath>

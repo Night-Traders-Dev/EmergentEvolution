@@ -1,7 +1,7 @@
-#include "physics/repository.h"
-#include "physics/http_client.h"
-#include "physics/save_load.h"
-#include "physics/paths.h"
+#include "physics/features/repository.h"
+#include "common/http_client.h"
+#include "physics/features/save_load.h"
+#include "common/paths.h"
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
@@ -9,7 +9,7 @@
 #include <cstring>
 
 #ifdef HAS_HTTP
-#include "cjson/cJSON.h"
+#include "third_party/cjson/cJSON.h"
 #endif
 
 namespace fs = std::filesystem;

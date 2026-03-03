@@ -3,8 +3,8 @@
 // Shared inline helpers used across multiple simulation .cpp modules.
 // Include this header in any module that calls these utility functions.
 
-#include "physics/phys_particles.h"
-#include "particles.h"
+#include "physics/core/phys_particles.h"
+#include "physics/rendering/particles.h"
 #include <glm/glm.hpp>
 #include <cmath>
 #include <algorithm>

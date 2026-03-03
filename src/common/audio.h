@@ -4,7 +4,7 @@
 // Music: single MP3, looped continuously.
 // SFX: one-shot sounds loaded from assets/sfx/, fire-and-forget playback.
 
-#include "../miniaudio.h"
+#include "third_party/miniaudio.h"
 #include <string>
 #include <cstdio>
 

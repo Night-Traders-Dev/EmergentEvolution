@@ -1,13 +1,13 @@
-#include "physics/simulation.h"
-#include "physics/paths.h"
-#include "physics/steam_integration.h"
-#include "physics/phys_particles.h"
-#include "physics/molecules.h"
-#include "physics/save_load.h"
-#include "physics/cutscenes.h"
-#include "physics/sim_helpers.h"
-#include "physics/ui_data.h"
-#include "stb_image_write.h"
+#include "physics/core/simulation.h"
+#include "common/paths.h"
+#include "physics/features/steam_integration.h"
+#include "physics/core/phys_particles.h"
+#include "physics/data/molecules.h"
+#include "physics/features/save_load.h"
+#include "physics/gameplay/cutscenes.h"
+#include "physics/core/sim_helpers.h"
+#include "physics/ui/ui_data.h"
+#include "third_party/stb_image_write.h"
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -24,7 +24,7 @@
 #include <omp.h>
 #endif
 #ifdef PORTABLE_BUILD
-#include "embedded_resources.h"
+#include "common/embedded_resources.h"
 #endif
 
 namespace fs = std::filesystem;

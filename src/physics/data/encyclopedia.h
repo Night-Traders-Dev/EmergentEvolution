@@ -1,6 +1,6 @@
 #pragma once
 
-#include "physics/phys_particles.h"
+#include "physics/core/phys_particles.h"
 
 struct EncyclopediaEntry {
     const char* name;

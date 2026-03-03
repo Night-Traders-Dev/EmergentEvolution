@@ -3,7 +3,7 @@
 // Shared UI data tables used across multiple interface module files.
 // Include this header in any ui_*.cpp that needs element/particle data.
 
-#include "physics/phys_particles.h"
+#include "physics/core/phys_particles.h"
 #include <imgui.h>
 #include <cstdio>
 #include <cstdint>

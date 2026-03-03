@@ -1,6 +1,6 @@
-#include "physics/interface.h"
-#include "physics/phys_particles.h"
-#include "physics/ui_data.h"
+#include "physics/ui/interface.h"
+#include "physics/core/phys_particles.h"
+#include "physics/ui/ui_data.h"
 #include <imgui.h>
 #include <cstdio>
 #include <cmath>

@@ -1,4 +1,4 @@
-#include "physics/cutscenes.h"
+#include "physics/gameplay/cutscenes.h"
 
 // IM_COL32 macro for standalone compilation (matches imgui.h)
 #ifndef IM_COL32

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "vulkan_context.h"
-#include "types.h"
+#include "common/vulkan_context.h"
+#include "physics/core/types.h"
 #include <string>
 #include <array>
 

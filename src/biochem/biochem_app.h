@@ -18,10 +18,20 @@ public:
     BiochemState    state;
     bool            paused = false;
 
+    // Input state (public for GLFW callbacks)
+    int selected_entity = -1;
+
 private:
     void render_ui();
+    void render_entities();
     void step_simulation(float dt);
     void spawn_nutrient();
+
+    // Simulation subsystems
+    void process_cell_division();
+    void process_virus_infection(float dt);
+    void process_antibody_response(float dt);
+    void process_repulsion();
 
     float nutrient_timer_ = 0.0f;
 };

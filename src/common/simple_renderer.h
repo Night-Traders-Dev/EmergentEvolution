@@ -4,7 +4,7 @@
 // fullscreen-quad — just presents an ImGui frame each tick.
 // Used by the launcher and expansion skeletons.
 
-#include "vulkan_context.h"
+#include "common/vulkan_context.h"
 #include <vector>
 
 struct GLFWwindow;
@@ -19,6 +19,10 @@ struct SimpleRenderer {
     void end_frame(VulkanContext& vk);
 
     bool swapchain_dirty = false;
+
+    // Public accessors for custom rendering passes (e.g. cosmos raytracer)
+    VkRenderPass    render_pass()  const { return render_pass_; }
+    VkCommandBuffer current_cmd()  const { return cmd_bufs_[frame_idx_]; }
 
 private:
     void create_render_pass(VulkanContext& vk);

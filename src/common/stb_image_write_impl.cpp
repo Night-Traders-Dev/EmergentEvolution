@@ -1,2 +1,2 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
+#include "third_party/stb_image_write.h"

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "vulkan_context.h"
-#include "compute_pipeline.h"
+#include "common/vulkan_context.h"
+#include "physics/rendering/compute_pipeline.h"
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>

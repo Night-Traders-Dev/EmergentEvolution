@@ -4,11 +4,11 @@
 // Follows the same structure as check_neutrino_oscillations() in quantum.cpp.
 // Called from simulation.cpp tick() right before check_meson_decays().
 
-#include "physics/simulation.h"
-#include "physics/interface.h"
-#include "physics/phys_particles.h"
-#include "physics/meson_data.h"
-#include "physics/sim_helpers.h"
+#include "physics/core/simulation.h"
+#include "physics/ui/interface.h"
+#include "physics/core/phys_particles.h"
+#include "physics/data/meson_data.h"
+#include "physics/core/sim_helpers.h"
 #include <cmath>
 #include <random>
 

@@ -1,8 +1,8 @@
 #pragma once
 
-#include "types.h"
-#include "particles.h"
-#include "meson_data.h"
+#include "physics/core/types.h"
+#include "physics/rendering/particles.h"
+#include "physics/data/meson_data.h"
 #include <glm/glm.hpp>
 #include <cstdint>
 #include <string>

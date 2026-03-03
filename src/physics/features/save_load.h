@@ -1,7 +1,7 @@
 #pragma once
 
-#include "types.h"
-#include "particles.h"
+#include "physics/core/types.h"
+#include "physics/rendering/particles.h"
 #include <string>
 #include <vector>
 #include <glm/glm.hpp>

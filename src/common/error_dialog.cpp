@@ -1,4 +1,4 @@
-#include "physics/error_dialog.h"
+#include "common/error_dialog.h"
 #include <cstdio>
 #include <cstdlib>
 #include <string>

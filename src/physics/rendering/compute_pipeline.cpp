@@ -1,4 +1,4 @@
-#include "compute_pipeline.h"
+#include "physics/rendering/compute_pipeline.h"
 #include <stdexcept>
 #include <cstring>
 #include <array>

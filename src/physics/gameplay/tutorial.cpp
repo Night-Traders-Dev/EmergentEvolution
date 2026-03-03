@@ -1,5 +1,5 @@
-#include "physics/tutorial.h"
-#include "physics/simulation.h"
+#include "physics/gameplay/tutorial.h"
+#include "physics/core/simulation.h"
 
 // ── Tutorial step definitions ────────────────────────────────────────────────
 

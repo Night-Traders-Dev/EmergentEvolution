@@ -3,9 +3,9 @@
 // Implements particle decay, hadronization, bremsstrahlung,
 // and weak flavor changes.
 
-#include "physics/simulation.h"
-#include "physics/sim_helpers.h"
-#include "physics/meson_data.h"
+#include "physics/core/simulation.h"
+#include "physics/core/sim_helpers.h"
+#include "physics/data/meson_data.h"
 #include <algorithm>
 #include <cmath>
 #include <random>

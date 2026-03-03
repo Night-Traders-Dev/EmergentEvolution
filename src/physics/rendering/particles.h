@@ -1,6 +1,6 @@
 #pragma once
 
-#include "types.h"
+#include "physics/core/types.h"
 #include <cstdint>
 #include <vector>
 #include <random>

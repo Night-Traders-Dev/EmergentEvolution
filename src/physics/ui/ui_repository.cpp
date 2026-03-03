@@ -1,7 +1,7 @@
-#include "physics/interface.h"
-#include "physics/paths.h"
-#include "physics/repository.h"
-#include "physics/ui_data.h"
+#include "physics/ui/interface.h"
+#include "common/paths.h"
+#include "physics/features/repository.h"
+#include "physics/ui/ui_data.h"
 #include <cstdio>
 #include <cstring>
 #include <filesystem>

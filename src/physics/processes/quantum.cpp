@@ -1,5 +1,5 @@
-#include "physics/simulation.h"
-#include "physics/sim_helpers.h"
+#include "physics/core/simulation.h"
+#include "physics/core/sim_helpers.h"
 #include <algorithm>
 #include <random>
 #include <cmath>

@@ -1,9 +1,9 @@
 #pragma once
 
 #include "imgui.h"
-#include "types.h"
-#include "particles.h"
-#include "physics/achievements.h"
+#include "physics/core/types.h"
+#include "physics/rendering/particles.h"
+#include "physics/gameplay/achievements.h"
 #include <vulkan/vulkan.h>
 #include <cstdint>
 #include <ctime>
