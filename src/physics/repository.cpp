@@ -1,4 +1,5 @@
 #include "physics/repository.h"
+#include "physics/http_client.h"
 #include "physics/save_load.h"
 #include "physics/paths.h"
 #include <filesystem>
@@ -7,8 +8,7 @@
 #include <cstdio>
 #include <cstring>
 
-#ifdef HAS_CURL
-#include <curl/curl.h>
+#ifdef HAS_HTTP
 #include "cjson/cJSON.h"
 #endif
 
@@ -17,11 +17,7 @@ namespace fs = std::filesystem;
 // ── Static helpers ──────────────────────────────────────────────────────────
 
 bool ParticleRepository::is_available() {
-#ifdef HAS_CURL
-    return true;
-#else
-    return false;
-#endif
+    return http_is_available();
 }
 
 // ── Init / Destroy ──────────────────────────────────────────────────────────
@@ -47,16 +43,12 @@ void ParticleRepository::init() {
             github_token_.pop_back();
     }
 
-#ifdef HAS_CURL
-    curl_global_init(CURL_GLOBAL_DEFAULT);
-#endif
+    http_global_init();
 }
 
 void ParticleRepository::destroy() {
     join_worker();
-#ifdef HAS_CURL
-    curl_global_cleanup();
-#endif
+    http_global_cleanup();
 }
 
 // ── Thread management ───────────────────────────────────────────────────────
@@ -154,36 +146,10 @@ std::string ParticleRepository::base64_encode(const std::vector<uint8_t>& data) 
     return out;
 }
 
-// ── libcurl callbacks ───────────────────────────────────────────────────────
-
-#ifdef HAS_CURL
-
-static size_t curl_write_string_cb(void* ptr, size_t size, size_t nmemb, void* userdata) {
-    auto* buf = static_cast<std::string*>(userdata);
-    buf->append(static_cast<char*>(ptr), size * nmemb);
-    return size * nmemb;
-}
-
-static size_t curl_write_file_cb(void* ptr, size_t size, size_t nmemb, void* userdata) {
-    auto* f = static_cast<std::ofstream*>(userdata);
-    f->write(static_cast<char*>(ptr), static_cast<std::streamsize>(size * nmemb));
-    return size * nmemb;
-}
-
-static int curl_progress_cb(void* clientp, curl_off_t dltotal, curl_off_t dlnow,
-                             curl_off_t /*ultotal*/, curl_off_t /*ulnow*/) {
-    auto* progress = static_cast<std::atomic<float>*>(clientp);
-    if (dltotal > 0)
-        progress->store(static_cast<float>(dlnow) / static_cast<float>(dltotal));
-    return 0;
-}
-
-#endif // HAS_CURL
-
 // ── Public async API ────────────────────────────────────────────────────────
 
 void ParticleRepository::fetch_listing(int category) {
-#ifdef HAS_CURL
+#ifdef HAS_HTTP
     join_worker();
     status_.store(RepoStatus::Loading);
     progress_.store(0.0f);
@@ -196,12 +162,12 @@ void ParticleRepository::fetch_listing(int category) {
     (void)category;
     status_.store(RepoStatus::Error);
     std::lock_guard<std::mutex> lk(mutex_);
-    status_msg_ = "Online features not available (built without libcurl)";
+    status_msg_ = "Online features not available (no HTTP backend)";
 #endif
 }
 
 void ParticleRepository::download_file(int index) {
-#ifdef HAS_CURL
+#ifdef HAS_HTTP
     std::string url, local_path;
     {
         std::lock_guard<std::mutex> lk(mutex_);
@@ -228,7 +194,7 @@ void ParticleRepository::download_file(int index) {
 }
 
 void ParticleRepository::upload_file(const std::string& local_path, int category) {
-#ifdef HAS_CURL
+#ifdef HAS_HTTP
     {
         std::lock_guard<std::mutex> lk(mutex_);
         if (github_token_.empty()) {
@@ -259,7 +225,7 @@ void ParticleRepository::upload_file(const std::string& local_path, int category
 // ── Worker threads ──────────────────────────────────────────────────────────
 
 void ParticleRepository::worker_fetch_listing(int category) {
-#ifdef HAS_CURL
+#ifdef HAS_HTTP
     const char* subdir = (category == 0) ? "elements" : "molecules";
     const char* ext = (category == 0) ? ".ppel" : ".ppmol";
 
@@ -268,18 +234,9 @@ void ParticleRepository::worker_fetch_listing(int category) {
         "https://api.github.com/repos/%s/%s/contents/%s",
         REPO_OWNER, REPO_NAME, subdir);
 
-    CURL* curl = curl_easy_init();
-    if (!curl) {
-        std::lock_guard<std::mutex> lk(mutex_);
-        status_msg_ = "Failed to initialize HTTP client";
-        status_.store(RepoStatus::Error);
-        return;
-    }
-
-    std::string response;
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, "Accept: application/vnd.github.v3+json");
-    headers = curl_slist_append(headers, "User-Agent: ParticlePlayground");
+    std::vector<std::string> headers;
+    headers.push_back("Accept: application/vnd.github.v3+json");
+    headers.push_back("User-Agent: ParticlePlayground");
 
     std::string token;
     {
@@ -289,31 +246,19 @@ void ParticleRepository::worker_fetch_listing(int category) {
     std::string auth_header;
     if (!token.empty()) {
         auth_header = "Authorization: Bearer " + token;
-        headers = curl_slist_append(headers, auth_header.c_str());
+        headers.push_back(auth_header);
     }
 
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_string_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    auto resp = http_get(url, headers, 15);
 
-    CURLcode res = curl_easy_perform(curl);
-    long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
-
-    if (res != CURLE_OK) {
+    if (!resp.error_msg.empty()) {
         std::lock_guard<std::mutex> lk(mutex_);
-        status_msg_ = std::string("Network error: ") + curl_easy_strerror(res);
+        status_msg_ = "Network error: " + resp.error_msg;
         status_.store(RepoStatus::Error);
         return;
     }
 
-    if (http_code == 404) {
-        // Empty repository or directory not created yet
+    if (resp.status_code == 404) {
         std::lock_guard<std::mutex> lk(mutex_);
         listing_.clear();
         current_category_ = category;
@@ -322,17 +267,17 @@ void ParticleRepository::worker_fetch_listing(int category) {
         return;
     }
 
-    if (http_code != 200) {
+    if (resp.status_code != 200) {
         std::lock_guard<std::mutex> lk(mutex_);
         char msg[128];
-        snprintf(msg, sizeof(msg), "GitHub API error (HTTP %ld)", http_code);
+        snprintf(msg, sizeof(msg), "GitHub API error (HTTP %ld)", resp.status_code);
         status_msg_ = msg;
         status_.store(RepoStatus::Error);
         return;
     }
 
     // Parse JSON array
-    cJSON* root = cJSON_Parse(response.c_str());
+    cJSON* root = cJSON_Parse(resp.body.c_str());
     if (!root || !cJSON_IsArray(root)) {
         if (root) cJSON_Delete(root);
         std::lock_guard<std::mutex> lk(mutex_);
@@ -391,39 +336,22 @@ void ParticleRepository::worker_fetch_listing(int category) {
             "https://raw.githubusercontent.com/%s/%s/main/%s/manifest.json",
             REPO_OWNER, REPO_NAME, subdir);
 
-        CURL* mcurl = curl_easy_init();
-        if (mcurl) {
-            std::string manifest_response;
-            struct curl_slist* mheaders = nullptr;
-            mheaders = curl_slist_append(mheaders, "User-Agent: ParticlePlayground");
-            if (!token.empty()) {
-                mheaders = curl_slist_append(mheaders, auth_header.c_str());
-            }
+        std::vector<std::string> mheaders;
+        mheaders.push_back("User-Agent: ParticlePlayground");
+        if (!token.empty()) mheaders.push_back(auth_header);
 
-            curl_easy_setopt(mcurl, CURLOPT_URL, manifest_url);
-            curl_easy_setopt(mcurl, CURLOPT_HTTPHEADER, mheaders);
-            curl_easy_setopt(mcurl, CURLOPT_WRITEFUNCTION, curl_write_string_cb);
-            curl_easy_setopt(mcurl, CURLOPT_WRITEDATA, &manifest_response);
-            curl_easy_setopt(mcurl, CURLOPT_TIMEOUT, 10L);
-            curl_easy_setopt(mcurl, CURLOPT_FOLLOWLOCATION, 1L);
+        auto mresp = http_get(manifest_url, mheaders, 10);
 
-            CURLcode mres = curl_easy_perform(mcurl);
-            long mhttp = 0;
-            curl_easy_getinfo(mcurl, CURLINFO_RESPONSE_CODE, &mhttp);
-            curl_slist_free_all(mheaders);
-            curl_easy_cleanup(mcurl);
-
-            if (mres == CURLE_OK && mhttp == 200 && !manifest_response.empty()) {
-                cJSON* manifest = cJSON_Parse(manifest_response.c_str());
-                if (manifest && cJSON_IsObject(manifest)) {
-                    for (auto& e : entries) {
-                        if (e.chirality >= 0) continue; // already known from cache
-                        cJSON* val = cJSON_GetObjectItem(manifest, e.name.c_str());
-                        if (val && cJSON_IsNumber(val))
-                            e.chirality = static_cast<int8_t>(val->valueint);
-                    }
-                    cJSON_Delete(manifest);
+        if (mresp.error_msg.empty() && mresp.status_code == 200 && !mresp.body.empty()) {
+            cJSON* manifest = cJSON_Parse(mresp.body.c_str());
+            if (manifest && cJSON_IsObject(manifest)) {
+                for (auto& e : entries) {
+                    if (e.chirality >= 0) continue; // already known from cache
+                    cJSON* val = cJSON_GetObjectItem(manifest, e.name.c_str());
+                    if (val && cJSON_IsNumber(val))
+                        e.chirality = static_cast<int8_t>(val->valueint);
                 }
+                cJSON_Delete(manifest);
             }
         }
     }
@@ -444,48 +372,16 @@ void ParticleRepository::worker_fetch_listing(int category) {
 }
 
 void ParticleRepository::worker_download(std::string url, std::string local_path) {
-#ifdef HAS_CURL
-    CURL* curl = curl_easy_init();
-    if (!curl) {
-        std::lock_guard<std::mutex> lk(mutex_);
-        status_msg_ = "Failed to initialize HTTP client";
-        status_.store(RepoStatus::Error);
-        return;
-    }
+#ifdef HAS_HTTP
+    auto resp = http_get_file(url, local_path, {"User-Agent: ParticlePlayground"},
+                              &progress_, 30);
 
-    std::ofstream file(local_path, std::ios::binary);
-    if (!file.is_open()) {
-        curl_easy_cleanup(curl);
-        std::lock_guard<std::mutex> lk(mutex_);
-        status_msg_ = "Failed to create local file";
-        status_.store(RepoStatus::Error);
-        return;
-    }
-
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, "User-Agent: ParticlePlayground");
-
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_file_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &file);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curl_progress_cb);
-    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progress_);
-
-    CURLcode res = curl_easy_perform(curl);
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
-    file.close();
-
-    if (res != CURLE_OK) {
+    if (!resp.error_msg.empty()) {
         // Remove partial download
         std::error_code ec;
         fs::remove(local_path, ec);
         std::lock_guard<std::mutex> lk(mutex_);
-        status_msg_ = std::string("Download failed: ") + curl_easy_strerror(res);
+        status_msg_ = "Download failed: " + resp.error_msg;
         status_.store(RepoStatus::Error);
         return;
     }
@@ -506,7 +402,7 @@ void ParticleRepository::worker_download(std::string url, std::string local_path
 }
 
 void ParticleRepository::worker_upload(std::string local_path, std::string remote_name, int category) {
-#ifdef HAS_CURL
+#ifdef HAS_HTTP
     // Read file into memory
     std::ifstream f(local_path, std::ios::binary | std::ios::ate);
     if (!f.is_open()) {
@@ -553,54 +449,31 @@ void ParticleRepository::worker_upload(std::string local_path, std::string remot
         "https://api.github.com/repos/%s/%s/contents/%s/%s",
         REPO_OWNER, REPO_NAME, subdir, remote_name.c_str());
 
-    CURL* curl = curl_easy_init();
-    if (!curl) {
-        cJSON_free(json_str);
-        std::lock_guard<std::mutex> lk(mutex_);
-        status_msg_ = "Failed to initialize HTTP client";
-        status_.store(RepoStatus::Error);
-        return;
-    }
+    std::vector<std::string> headers;
+    headers.push_back("Accept: application/vnd.github.v3+json");
+    headers.push_back("User-Agent: ParticlePlayground");
+    headers.push_back("Authorization: Bearer " + token);
+    headers.push_back("Content-Type: application/json");
 
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, "Accept: application/vnd.github.v3+json");
-    headers = curl_slist_append(headers, "User-Agent: ParticlePlayground");
-    std::string auth = "Authorization: Bearer " + token;
-    headers = curl_slist_append(headers, auth.c_str());
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-
-    std::string response;
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_str);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_string_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
-
-    CURLcode res = curl_easy_perform(curl);
-    long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
+    auto resp = http_put(url, json_str, headers, 60);
     cJSON_free(json_str);
 
-    if (res != CURLE_OK) {
+    if (!resp.error_msg.empty()) {
         std::lock_guard<std::mutex> lk(mutex_);
-        status_msg_ = std::string("Upload failed: ") + curl_easy_strerror(res);
+        status_msg_ = "Upload failed: " + resp.error_msg;
         status_.store(RepoStatus::Error);
         return;
     }
 
-    if (http_code != 200 && http_code != 201) {
+    if (resp.status_code != 200 && resp.status_code != 201) {
         std::lock_guard<std::mutex> lk(mutex_);
-        if (http_code == 401 || http_code == 403)
+        if (resp.status_code == 401 || resp.status_code == 403)
             status_msg_ = "Authentication failed — check your token";
-        else if (http_code == 422)
+        else if (resp.status_code == 422)
             status_msg_ = "File already exists (refresh listing first)";
         else {
             char msg[128];
-            snprintf(msg, sizeof(msg), "Upload failed (HTTP %ld)", http_code);
+            snprintf(msg, sizeof(msg), "Upload failed (HTTP %ld)", resp.status_code);
             status_msg_ = msg;
         }
         status_.store(RepoStatus::Error);

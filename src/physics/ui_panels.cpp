@@ -515,7 +515,7 @@ void PhysicsInterface::draw_bottom_bar(SimConfig& cfg, bool& request_reset) {
                         }
                     } else {
                         ImGui::BeginDisabled();
-                        ImGui::MenuItem("Online Repository (needs libcurl)");
+                        ImGui::MenuItem("Online Repository (unavailable)");
                         ImGui::EndDisabled();
                     }
                     ImGui::TreePop();

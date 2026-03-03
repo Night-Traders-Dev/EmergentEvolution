@@ -50,7 +50,10 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 find_package(Steamworks QUIET)
 
 # libcurl — optional, for ParticleRepository online features
-find_package(CURL QUIET)
+# Skip when cross-compiling (host libcurl injects Linux headers into the search path)
+if(NOT CMAKE_CROSSCOMPILING)
+    find_package(CURL QUIET)
+endif()
 
 # ImGui via FetchContent (no install needed)
 FetchContent_Declare(imgui
@@ -95,8 +98,9 @@ add_executable(particle_physics
     src/physics/ui_overlays.cpp
     src/physics/ui_repository.cpp
 
-    # Online repository
+    # Online repository + HTTP client
     src/physics/repository.cpp
+    src/physics/http_client.cpp
     src/stb_image_impl.cpp
     src/stb_image_write_impl.cpp
 
@@ -159,11 +163,15 @@ if(Steamworks_FOUND)
     target_compile_definitions(particle_physics PRIVATE HAS_STEAM)
 endif()
 
-# libcurl + cJSON — link if available, define HAS_CURL for repository features
+# HTTP backend + cJSON — libcurl on Linux, WinHTTP on Windows
 if(CURL_FOUND)
     target_sources(particle_physics PRIVATE src/cjson/cJSON.c)
     target_link_libraries(particle_physics PRIVATE CURL::libcurl)
-    target_compile_definitions(particle_physics PRIVATE HAS_CURL)
+    target_compile_definitions(particle_physics PRIVATE HAS_CURL HAS_HTTP)
+elseif(WIN32)
+    target_sources(particle_physics PRIVATE src/cjson/cJSON.c)
+    target_link_libraries(particle_physics PRIVATE winhttp)
+    target_compile_definitions(particle_physics PRIVATE HAS_WINHTTP HAS_HTTP)
 endif()
 
 # Platform-specific compiler flags
