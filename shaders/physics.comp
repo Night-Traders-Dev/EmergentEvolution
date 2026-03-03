@@ -1501,7 +1501,11 @@ void apply_physics(uint i) {
         }
         else if (fo_type == 3u) {
             // GRAVITY WELL: gravitational attraction on all massive particles
-            float f_grav = fo_str * mass * 200.0 / (fo_dist_sq + 25.0);
+            // At high strength the softening shrinks, approaching a true 1/r²
+            // singularity — simulates a black hole's event horizon where
+            // escape velocity exceeds c within a few pixels of the center.
+            float soften = mix(25.0, 1.0, clamp(fo_str / 100.0, 0.0, 1.0));
+            float f_grav = fo_str * mass * 200.0 / (fo_dist_sq + soften);
             total_force += fo_normal * f_grav;
         }
         else if (fo_type == 4u) {
@@ -2583,9 +2587,21 @@ void render_field(uint i) {
 void render_field_gather(uint pixel_idx) {
     uint tex_w = uint(params.region_size.x);
     uint tex_h = uint(params.region_size.y);
-    if (pixel_idx >= tex_w * tex_h) return;
 
-    ivec2 pixel = ivec2(pixel_idx % tex_w, pixel_idx / tex_w);
+    // Quality scaling: bits 14-15 of field_flags
+    // 0=Low (4×), 1=Medium (2×), 2=High (1×), 3=Ultra (1×, extended range)
+    uint quality = (params.field_flags >> 14) & 3u;
+    uint field_scale = (quality == 0u) ? 4u : (quality == 1u) ? 2u : 1u;
+    uint scaled_w = tex_w / field_scale;
+    uint scaled_h = tex_h / field_scale;
+    if (pixel_idx >= scaled_w * scaled_h) return;
+
+    uint sx = pixel_idx % scaled_w;
+    uint sy = pixel_idx / scaled_w;
+    // Sample from center of the block for smoother downscale
+    vec2 screen_pixel = vec2(float(sx * field_scale), float(sy * field_scale))
+                      + vec2(float(field_scale)) * 0.5;
+    ivec2 pixel = ivec2(screen_pixel);
 
     uint fflags = params.field_flags;
     // Support legacy density_limit encoding for backward compat
@@ -2603,10 +2619,10 @@ void render_field_gather(uint pixel_idx) {
     bool show_higgs  = (fflags & 16u) != 0u;
     bool show_de     = (fflags & (1u << 12)) != 0u;
 
-    // Convert pixel to world coordinates
+    // Convert pixel to world coordinates (use screen_pixel for quality-scaled center)
     vec2 screen_center = params.region_size * 0.5;
     vec2 world_pos = params.camera_origin
-        + (vec2(pixel) - screen_center) / params.camera_zoom;
+        + (screen_pixel - screen_center) / params.camera_zoom;
 
     float intensity = params.local_density_cap;
     vec3 field_total = vec3(0.0);
@@ -2619,6 +2635,7 @@ void render_field_gather(uint pixel_idx) {
     if (show_grav)   max_range = max(max_range, FIELD_MAX_WORLD_RADIUS);
     if (show_higgs)  max_range = max(max_range, 40.0);
     if (show_de)     max_range = max(max_range, FIELD_MAX_WORLD_RADIUS);
+    if (quality == 3u) max_range *= 2.0;  // Ultra: extended sampling radius
 
     // Query GPU spatial grid for nearby particles
     int cell_x = clamp(int(world_pos.x / GRID_CELL_SIZE), 0, GRID_COLS - 1);
@@ -2789,11 +2806,17 @@ void render_field_gather(uint pixel_idx) {
         field_total += fo_color * fo_scale;
     }
 
-    // Write accumulated field to pixel (single write — no contention)
+    // Write accumulated field to pixel block (NxN for downscaled quality)
     if (dot(field_total, field_total) > 0.0) {
-        vec4 existing = imageLoad(out_render_texture, pixel);
-        imageStore(out_render_texture, pixel,
-                   vec4(min(existing.rgb + field_total, vec3(1.0)), 1.0));
+        for (uint dy = 0u; dy < field_scale; dy++) {
+            for (uint dx = 0u; dx < field_scale; dx++) {
+                ivec2 out_px = ivec2(int(sx * field_scale + dx),
+                                     int(sy * field_scale + dy));
+                vec4 existing = imageLoad(out_render_texture, out_px);
+                imageStore(out_render_texture, out_px,
+                           vec4(min(existing.rgb + field_total, vec3(1.0)), 1.0));
+            }
+        }
     }
 }
 

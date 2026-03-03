@@ -1205,6 +1205,11 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
         if (field_em || field_strong || field_weak || field_gravity || field_higgs || field_dark_energy) {
             ImGui::SliderFloat("Brightness", &field_intensity, 0.05f, 2.0f, "%.2f");
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Field visualization brightness");
+
+            static const char* quality_labels[] = { "Low", "Medium", "High", "Ultra" };
+            ImGui::Combo("Quality##field", &field_quality, quality_labels, 4);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Low = 1/4 res (fast)\nMedium = 1/2 res\nHigh = full res (default)\nUltra = full res + extended range");
         }
     }
 

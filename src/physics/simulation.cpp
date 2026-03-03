@@ -554,6 +554,19 @@ void PhysicsSimulation::reset() {
         recount_force_objects();
     }
 
+    // Solar Core: auto-place a potential well at center (stellar confinement)
+    // Inside a uniform-density sphere, gravity is linear with radius — a harmonic
+    // trap simulates the gravitational pressure of the overlying stellar envelope.
+    if (cfg.environment_mode == 3) {
+        force_objects_[0].x          = static_cast<float>(WORLD_W) * 0.5f;
+        force_objects_[0].y          = static_cast<float>(WORLD_H) * 0.5f;
+        force_objects_[0].strength   = 2.0f;
+        force_objects_[0].radius     = 1000.0f;
+        force_objects_[0].force_type = FORCE_OBJ_POTENTIAL_WELL;
+        force_objects_[0].active     = 1;
+        recount_force_objects();
+    }
+
     // Reset bond data
     bond_data_.clear();
     particles.bond_partners_ptr = nullptr;
@@ -1654,7 +1667,7 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
         effective_kelvin = cfg.temperature_kelvin
                          * (1.0f + cfg.thermo_coupling * (correction - 1.0f));
     }
-    cfg.temperature = std::min(2.0f,
+    cfg.temperature = std::min(50.0f,
         0.10f * std::pow(effective_kelvin / 300.0f, 0.25f));
 
     // ── Effective Lorentz strength (with magnetic feedback) ──────────────────
@@ -1681,6 +1694,8 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     if (iface.gr_frame_dragging)    cfg.field_flags |= (1u << 10);
     if (iface.gr_grav_waves)        cfg.field_flags |= (1u << 11);
     if (iface.orbital_drive)        cfg.field_flags |= (1u << 13);
+    // Field visualization quality: bits 14-15 (0=Low, 1=Medium, 2=High, 3=Ultra)
+    cfg.field_flags |= (static_cast<uint32_t>(iface.field_quality & 3) << 14);
 
     // Pass field intensity via legacy density_limit/local_density_cap path
     cfg.density_limit    = (cfg.field_flags != 0) ? 1.0f : 0.0f;
@@ -1794,45 +1809,75 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 grid_.build(readback_positions_, readback_energies_, cfg.particle_count);
 
             // Core physics — always run (frequency reduced by quality level)
+            // Order is shuffled each tick to prevent systematic bias in the event log.
             bool frame2 = (frame_counter_ % 2 == 0);
             bool frame3 = (frame_counter_ % 3 == 0);
             bool frame4 = (frame_counter_ % 4 == 0);
 
-            if (quality >= 2 || (quality == 1 && frame2) || (quality == 0 && frame4))
-                check_annihilation();
-            if (quality >= 2 || (quality == 1 && frame2) || (quality == 0 && frame4))
-                check_fusion();
-            if (quality >= 2 || (quality == 1 && frame2) || (quality == 0 && frame4))
-                check_fission();
-            if (quality >= 2 || (quality == 1) || (quality == 0 && frame2))
-                check_decay();
-            if (quality >= 2 || (quality == 1) || (quality == 0 && frame2))
-                check_pion_decay();
-            if (quality >= 2 || (quality == 1 && frame2) || (quality == 0 && frame4))
-                check_hadronization();
+            {
+                // Shuffled core dispatch (6 subsystems)
+                bool core_gate  = (quality >= 2 || (quality == 1 && frame2) || (quality == 0 && frame4));
+                bool decay_gate = (quality >= 2 || (quality == 1) || (quality == 0 && frame2));
+                int core_order[6] = {0, 1, 2, 3, 4, 5};
+                // Fisher-Yates shuffle seeded from frame counter
+                uint32_t s = frame_counter_ * 2654435761u;
+                for (int k = 5; k > 0; --k) {
+                    s ^= (s >> 13); s *= 1597334677u; s ^= (s >> 16);
+                    int j = static_cast<int>(s % static_cast<uint32_t>(k + 1));
+                    int tmp = core_order[k]; core_order[k] = core_order[j]; core_order[j] = tmp;
+                }
+                for (int ci = 0; ci < 6; ++ci) {
+                    switch (core_order[ci]) {
+                        case 0: if (core_gate)  check_annihilation();  break;
+                        case 1: if (core_gate)  check_fusion();        break;
+                        case 2: if (core_gate)  check_fission();       break;
+                        case 3: if (decay_gate) check_decay();         break;
+                        case 4: if (decay_gate) check_pion_decay();    break;
+                        case 5: if (core_gate)  check_hadronization(); break;
+                    }
+                }
+            }
 
-            // Medium+ interactions
+            // Medium+ interactions (shuffled)
             if (quality >= 1) {
-                if (cfg.virtual_pairs_enabled && (quality >= 2 || frame4))
-                    check_virtual_pairs();
                 if (cfg.entanglement_enabled)
                     update_entanglement();
-                if (quality >= 2 || frame3) {
-                    check_photoelectric();
-                    check_spallation();
-                    check_bremsstrahlung();
-                    check_recombination();
-                    if (cfg.carrier_mode_enabled)
-                        check_carrier_exchange();
-                    if (cfg.quasi_mode_enabled)
-                        check_quasiparticles();
-                    if (cfg.cp_violation_enabled)
-                        check_meson_oscillations();
-                    check_meson_decays();
+
+                // Shuffled medium dispatch (10 subsystems)
+                // Meson oscillations always runs before meson decays (ordering constraint)
+                bool med_gate  = (quality >= 2 || frame3);
+                bool rare_gate = frame4;
+                int med_order[10] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+                uint32_t s = frame_counter_ * 1664525u + 1013904223u;
+                for (int k = 9; k > 0; --k) {
+                    s ^= (s >> 13); s *= 1597334677u; s ^= (s >> 16);
+                    int j = static_cast<int>(s % static_cast<uint32_t>(k + 1));
+                    int tmp = med_order[k]; med_order[k] = med_order[j]; med_order[j] = tmp;
                 }
-                if (quality >= 1 && frame4) {
-                    check_neutrino_scattering();
-                    check_weak_flavor_change();
+                for (int mi = 0; mi < 10; ++mi) {
+                    switch (med_order[mi]) {
+                        case 0: if (cfg.virtual_pairs_enabled && (quality >= 2 || frame4))
+                                    check_virtual_pairs();
+                                break;
+                        case 1: if (med_gate) check_photoelectric();    break;
+                        case 2: if (med_gate) check_spallation();       break;
+                        case 3: if (med_gate) check_bremsstrahlung();   break;
+                        case 4: if (med_gate) check_recombination();    break;
+                        case 5: if (med_gate && cfg.carrier_mode_enabled)
+                                    check_carrier_exchange();
+                                break;
+                        case 6: if (med_gate && cfg.quasi_mode_enabled)
+                                    check_quasiparticles();
+                                break;
+                        case 7: if (med_gate) {
+                                    if (cfg.cp_violation_enabled)
+                                        check_meson_oscillations();
+                                    check_meson_decays();
+                                }
+                                break;
+                        case 8: if (rare_gate) check_neutrino_scattering();  break;
+                        case 9: if (rare_gate) check_weak_flavor_change();   break;
+                    }
                 }
             }
             if (frame_counter_ % 10 == 0)
@@ -2138,7 +2183,11 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
                 if (t < MAX_PARTICLE_TYPES) type_counts[t]++;
 
                 glm::vec2 v = readback_velocities_[i];
-                total_ke += 0.5f * glm::dot(v, v);
+                float v_sq = glm::dot(v, v);
+                constexpr float C_SIM_SQ = C_SIM * C_SIM;
+                float beta_sq = std::min(v_sq / C_SIM_SQ, 1.0f - 1e-6f);
+                float gamma = 1.0f / std::sqrt(1.0f - beta_sq);
+                total_ke += (gamma - 1.0f) * C_SIM_SQ; // relativistic KE per unit mass
                 ke_count++;
 
                 if (t < PHYS_PARTICLE_TYPES) {
@@ -2365,7 +2414,11 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
             if (readback_energies_[i] <= 0.0f) continue;
             glm::vec2 d = readback_positions_[i] - probe.world_pos;
             if (glm::dot(d, d) < r2) {
-                total_ke += 0.5f * glm::dot(readback_velocities_[i], readback_velocities_[i]);
+                float v_sq = glm::dot(readback_velocities_[i], readback_velocities_[i]);
+                constexpr float C2 = C_SIM * C_SIM;
+                float bsq = std::min(v_sq / C2, 1.0f - 1e-6f);
+                float g = 1.0f / std::sqrt(1.0f - bsq);
+                total_ke += (g - 1.0f) * C2;
                 cnt++;
             }
         }
@@ -3307,19 +3360,27 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     if (iface.request_scenario_start >= 0) {
         int idx = iface.request_scenario_start;
         iface.request_scenario_start = -1;
-        scenarios.start_scenario(idx, *this);
-        iface.active_spawn_rules = &ScenarioManager::get(idx).spawn_rules;
-        is_active = true;
-        iface.sim_running = true;
-        // Play intro cutscene (skip if already played via deferred auto-advance)
-        if (!iface.skip_next_intro_cutscene_) {
-            if (idx != 10 && idx != 11 && idx < CUTSCENE_SCENARIO_COUNT)
-                iface.play_cutscene(idx, false);
+
+        // If this scenario has an intro cutscene and we haven't played it yet,
+        // play the cutscene FIRST and defer the heavy scenario load until after.
+        bool has_cutscene = (idx != 10 && idx != 11 && idx < CUTSCENE_SCENARIO_COUNT);
+        if (has_cutscene && !iface.skip_next_intro_cutscene_) {
+            iface.defer_scenario_start(idx);
+            iface.play_cutscene(idx, false);
+            // Mark intro as seen for gallery unlock
+            if (idx < 18)
+                achievements.cutscene_intros_seen |= (1u << idx);
+        } else {
+            // Deferred return or no cutscene: load scenario now
+            scenarios.start_scenario(idx, *this);
+            iface.active_spawn_rules = &ScenarioManager::get(idx).spawn_rules;
+            is_active = true;
+            iface.sim_running = true;
+            iface.skip_next_intro_cutscene_ = false;
+            // Mark intro as seen for gallery unlock
+            if (idx < 18)
+                achievements.cutscene_intros_seen |= (1u << idx);
         }
-        iface.skip_next_intro_cutscene_ = false;
-        // Mark intro as seen for gallery unlock
-        if (idx < 18)
-            achievements.cutscene_intros_seen |= (1u << idx);
     }
 
     // ── Element export request ───────────────────────────────────────────────

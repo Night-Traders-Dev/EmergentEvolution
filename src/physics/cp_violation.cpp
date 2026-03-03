@@ -51,7 +51,9 @@ void PhysicsSimulation::check_meson_oscillations() {
     std::mt19937 rng(frame_counter_ * 314159u + 271828u);
     std::uniform_real_distribution<float> prob(0.0f, 1.0f);
 
-    for (uint32_t i = 0; i < n; ++i) {
+    uint32_t _rs0 = random_start(n, frame_counter_, 0u);
+    for (uint32_t _it = 0; _it < n; ++_it) {
+        uint32_t i = (_rs0 + _it) % n;
         if (readback_energies_[i] < 0.01f) continue;
         uint32_t type = particles.types[i];
 

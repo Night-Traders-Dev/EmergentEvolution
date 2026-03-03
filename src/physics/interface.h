@@ -543,6 +543,7 @@ public:
     bool  field_higgs       = false;
     bool  field_dark_energy = false;
     float field_intensity = 0.5f;
+    int   field_quality   = 2;    // 0=Low, 1=Medium, 2=High, 3=Ultra
     bool  show_collision_radii = false;
 
     // Inactivity timeout — pause + splash after 10 minutes idle
@@ -763,6 +764,7 @@ public:
     void load_molecule_bestiary();
     void set_vk_ctx(VulkanContext* ctx) { vk_ctx_ = ctx; }
     void play_cutscene(int scenario_idx, bool is_completion);
+    void defer_scenario_start(int idx) { cutscene_deferred_scenario_ = idx; }
     bool  skip_next_intro_cutscene_ = false;  // don't re-play intro on deferred start
 
 private:

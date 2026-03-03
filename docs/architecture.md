@@ -20,6 +20,7 @@ EmergentEvolution/
 │   ├── decay.cpp                # Particle decay, hadronization, bremsstrahlung, weak flavor change
 │   ├── meson_decays.cpp         # Meson decay with PDG branching ratios (~60 channels)
 │   ├── quantum.cpp              # Virtual pairs, neutrino scattering/oscillations, entanglement
+│   ├── cp_violation.cpp         # Neutral meson oscillation (K⁰↔K̄⁰, B⁰↔B̄⁰, Bs⁰↔B̄s⁰) and CP violation
 │   ├── spawning.cpp             # Accelerator fire, atom/particle spawning
 │   ├── sim_helpers.h            # Shared inline helpers (Lorentz gamma, energy conversion, etc.)
 │   ├── interface.h              # PhysicsInterface class definition

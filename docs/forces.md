@@ -46,3 +46,25 @@ propagate at c across the entire simulation (1/r amplitude falloff). These rings
 - Amplitude falls off as 1/r, matching real GW strain decay
 - Massless particles (photons, gravitons, gluons, neutrinos) are unaffected
 - Wavefront shell is 30px thick &mdash; force is a transient pulse, not constant
+
+## Force Objects
+
+Nine placeable force objects (**Menu > Tools > Force Objects**) with per-object strength and radius
+sliders:
+
+| Type | Formula | Notes |
+|---|---|---|
+| **EM Field** | Lorentz F=q(v&times;B) | Curves charged particles, no speed loss |
+| **Strong Nuclear** | Yukawa exp(-r/5)/r | Short-range attraction on baryons |
+| **Weak** | Yukawa exp(-r/5)/r&#178; | Short-range boost |
+| **Gravity Well** | F=S&middot;m&middot;200/(r&#178;+&epsilon;) | 1/r&#178; attraction; adaptive softening &epsilon; shrinks from 25 to 1 as strength rises above 100 |
+| **Heat Source** | Thermal noise boost | Random velocity kicks in radius |
+| **Mirror** | Elastic line segment | Swept collision with configurable elasticity |
+| **Coulomb** | K&middot;q/r&#178; | Pure electrostatic point charge |
+| **Vortex** | F&perp; &prop; m/r | Cyclotron-like tangential force |
+| **Potential Well** | F=-k&middot;r | Harmonic trap (linear restoring force) |
+
+**Strength slider**: logarithmic, 0.1&ndash;1000. Tooltip guide: 0.1&ndash;10 normal,
+10&ndash;100 neutron star, 100&ndash;1000 black hole. At black hole strength (&gt;100), the gravity
+well softening drops toward 1px, approaching a true 1/r&#178; singularity where particles within
+~20px accelerate to c in under a second.

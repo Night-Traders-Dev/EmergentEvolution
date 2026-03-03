@@ -1138,7 +1138,10 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     if (field_vis_bits != 0u || (pc.density_limit >= 0.5f && pc.density_limit <= 3.5f)) {
         PushConstants field_pc = pc;
         field_pc.step = 5;
-        uint32_t pixel_count = render_w * render_h;
+        // Quality scaling: bits 14-15 encode 0=Low(4x), 1=Med(2x), 2=High(1x), 3=Ultra(1x)
+        uint32_t quality_bits = (field_pc.field_flags >> 14) & 3u;
+        uint32_t field_scale = (quality_bits == 0u) ? 4 : (quality_bits == 1u) ? 2 : 1;
+        uint32_t pixel_count = (render_w / field_scale) * (render_h / field_scale);
         uint32_t field_groups = pixel_count / 256 + 1;
         vkCmdPushConstants(cmd, pipeline_layout_,
                            VK_SHADER_STAGE_COMPUTE_BIT,

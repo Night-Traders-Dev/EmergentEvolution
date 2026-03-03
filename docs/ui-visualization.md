@@ -57,8 +57,20 @@ Overlays toggled from **Menu > Visualization**:
 
 ## Field Visualization
 
-Five quantum field overlays: electromagnetic (red/blue), strong nuclear (cyan/green), weak (purple),
-gravity (grey), Higgs (gold).
+Six quantum field overlays: electromagnetic (red/blue), strong nuclear (cyan/green), weak (purple),
+gravity (grey), Higgs (gold), dark energy (crimson). Each renders via a per-pixel gather shader
+using the GPU spatial grid for O(k) neighbor lookup.
+
+**Quality levels** (combo box, visible when any field is enabled):
+
+| Level | Resolution | Performance | Notes |
+|---|---|---|---|
+| **Low** | 640&times;360 (1/4) | ~16&times; faster | Blocky 4&times;4 pixel blocks |
+| **Medium** | 1280&times;720 (1/2) | ~4&times; faster | Mild 2&times;2 blockiness |
+| **High** | 2560&times;1440 (full) | Default | Per-pixel accuracy |
+| **Ultra** | 2560&times;1440 (full) | Most expensive | 2&times; sampling radius (120px) |
+
+**Brightness** slider (0.05&ndash;2.0) controls overall field intensity.
 
 ## Measurement Tools
 
@@ -69,7 +81,8 @@ velocity meter (tracks single particle), distance ruler (nanometer scale), densi
 ## Tools
 
 - **Force Objects**: EM field (proper Lorentz F=q(v&times;B), curves charged particles without speed loss),
-  strong nuclear, weak, gravity well, heat source
+  strong nuclear, weak, gravity well (logarithmic strength 0.1&ndash;1000, black hole regime at 100+),
+  heat source, Coulomb point charge, vortex cyclotron, potential well (harmonic trap)
 - **Particle Accelerator**: fire projectiles at a target (single, triple, stream modes)
 - **Mirror**: reflective line segments with configurable elasticity (GPU-side reflection)
 - **Nuclear Debug**: tune reaction thresholds and rates in real time

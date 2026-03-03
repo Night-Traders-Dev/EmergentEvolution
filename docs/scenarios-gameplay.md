@@ -66,7 +66,9 @@ Build complete hydrogen atoms with bound electrons.
 
 ### Nuclear: Solar Core &mdash; *Heart of a Star*
 
-Trigger nuclear fusion in the heart of a star.
+Trigger nuclear fusion in the heart of a star. A **potential well** (harmonic trap) is automatically
+placed at the world center to simulate the gravitational confinement of the overlying stellar
+envelope, preventing particles from dispersing and enabling sustained fusion conditions.
 
 | Task | Objective | Hint |
 |---|---|---|

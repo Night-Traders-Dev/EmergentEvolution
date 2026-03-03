@@ -10,7 +10,7 @@ Fourteen presets spanning vacuum to the Big Bang, selectable from the **Environm
 | 0 | Lab Mode | 1 K | Empty vacuum, manual spawning |
 | 1 | Hydrogen Plasma | 1.5&times;10&#8311; K | Ionized hydrogen, fusion conditions |
 | 2 | Neutron Star | 10&#8313; K | Ultra-dense neutron matter |
-| 3 | Solar Core | 1.5&times;10&#8311; K | Hydrogen + gravity |
+| 3 | Solar Core | 1.5&times;10&#8311; K | Hydrogen + gravity + auto-placed potential well |
 | 4 | Particle Soup | 5&times;10&#179; K | Mixed light particles |
 | 5 | Alpha Emitter | 300 K | Heavy nuclei at room temp |
 | 6 | Heavy Nucleus | 100 K | Cold dense nuclear matter |
@@ -23,6 +23,15 @@ Fourteen presets spanning vacuum to the Big Bang, selectable from the **Environm
 | 13 | Big Bang | 2&times;10&#185;&#8309; K | Singularity-point quark-gluon plasma with Hubble expansion |
 
 </details>
+
+The **Solar Core** preset auto-places a **potential well** (harmonic trap, F = &minus;kr) at the
+world center to simulate the gravitational pressure of the overlying stellar envelope. Inside a
+uniform-density sphere, gravitational acceleration is linear with radius &mdash; the harmonic
+restoring force models this confinement, preventing particles from dispersing and enabling
+sustained fusion at high temperatures.
+
+The **Particle Accelerator** preset auto-places 8 **EM bending magnets** in a ring around the
+center (strength 3.0, radius 120px) to guide charged particles in circular orbits.
 
 The **Big Bang** preset models the quark epoch (~10&#8315;&#185;&#178; to 10&#8315;&#8310; s).
 All particles spawn from a tight central point (&sigma; = 3% of screen) with radial outward

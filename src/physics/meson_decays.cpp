@@ -5,6 +5,7 @@
 #include "physics/interface.h"
 #include "physics/phys_particles.h"
 #include "physics/meson_data.h"
+#include "physics/sim_helpers.h"
 #include "physics/ui_data.h"
 #include <random>
 #include <cstring>
@@ -398,7 +399,9 @@ void PhysicsSimulation::check_meson_decays() {
     std::mt19937 rng(frame_counter_ * 2718281828u + 31415u);
     std::uniform_real_distribution<float> dist01(0.0f, 1.0f);
 
-    for (uint32_t i = 0; i < n && decay_count < MAX_DECAYS_PER_TICK; ++i) {
+    uint32_t _rs0 = random_start(n, frame_counter_, 0u);
+    for (uint32_t _it = 0; _it < n && decay_count < MAX_DECAYS_PER_TICK; ++_it) {
+        uint32_t i = (_rs0 + _it) % n;
         uint32_t t = particles.types[i];
         if (!is_meson_type(t)) continue;
         if (readback_energies_[i] < 0.01f) continue;

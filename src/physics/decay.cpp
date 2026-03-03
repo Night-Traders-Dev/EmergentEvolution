@@ -110,7 +110,9 @@ void PhysicsSimulation::check_decay() {
         return glm::vec2(std::cos(a), std::sin(a));
     };
 
-    for (uint32_t i = 0; i < n; ++i) {
+    uint32_t _rs0 = random_start(n, frame_counter_, 0u);
+    for (uint32_t _it = 0; _it < n; ++_it) {
+        uint32_t i = (_rs0 + _it) % n;
         float energy = readback_energies_[i];
         if (energy < 0.01f || energy > DECAY_THRESHOLD) continue;
 
@@ -1516,7 +1518,9 @@ void PhysicsSimulation::check_hadronization() {
     std::vector<uint32_t> free_quarks;
     free_quarks.reserve(64);
 
-    for (uint32_t i = 0; i < n; ++i) {
+    uint32_t _rs1 = random_start(n, frame_counter_, 1u);
+    for (uint32_t _it = 0; _it < n; ++_it) {
+        uint32_t i = (_rs1 + _it) % n;
         if (readback_energies_[i] < 0.01f) continue;
         uint32_t type = particles.types[i];
         if (!is_any_quark(type)) continue;
@@ -1646,7 +1650,9 @@ void PhysicsSimulation::check_hadronization() {
     if (cfg.temperature_kelvin < HAGEDORN_TEMP) {
         uint32_t baryons_formed = 0;
 
-        for (uint32_t i = 0; i < n && baryons_formed < MAX_BARYON; ++i) {
+        uint32_t _rs2 = random_start(n, frame_counter_, 2u);
+        for (uint32_t _it = 0; _it < n && baryons_formed < MAX_BARYON; ++_it) {
+            uint32_t i = (_rs2 + _it) % n;
             if (readback_energies_[i] < 0.01f) continue;
             if (consumed[i]) continue;
             uint32_t ti = particles.types[i];
@@ -1831,7 +1837,9 @@ void PhysicsSimulation::check_hadronization() {
     // binds with the original quarks: [q_orig + qbar_new] and [q_new + qbar_orig].
     uint32_t breaks = 0;
     if (!suppress_creation) {
-    for (uint32_t i = 0; i < n && breaks < MAX_STRING_BREAK; ++i) {
+    uint32_t _rs3 = random_start(n, frame_counter_, 3u);
+    for (uint32_t _it = 0; _it < n && breaks < MAX_STRING_BREAK; ++_it) {
+        uint32_t i = (_rs3 + _it) % n;
         if (readback_energies_[i] < 0.01f) continue;
         uint32_t ti = particles.types[i];
         if (!is_quark(ti)) continue;  // matter quarks only (avoid double-counting)
@@ -1935,7 +1943,9 @@ void PhysicsSimulation::check_hadronization() {
     constexpr uint32_t MAX_GLUON_EVENTS    = 4;
 
     uint32_t gluon_events = 0;
-    for (uint32_t i = 0; i < n && gluon_events < MAX_GLUON_EVENTS; ++i) {
+    uint32_t _rs4 = random_start(n, frame_counter_, 4u);
+    for (uint32_t _it = 0; _it < n && gluon_events < MAX_GLUON_EVENTS; ++_it) {
+        uint32_t i = (_rs4 + _it) % n;
         if (readback_energies_[i] < 0.01f) continue;
         if (consumed[i]) continue;
         if (particles.types[i] != GLUON_TYPE_PHYS) continue;
@@ -2097,7 +2107,9 @@ void PhysicsSimulation::check_bremsstrahlung() {
         return UINT32_MAX;
     };
 
-    for (uint32_t i = 0; i < n && photons_spawned < MAX_BREMS; ++i) {
+    uint32_t _rs5 = random_start(n, frame_counter_, 5u);
+    for (uint32_t _it = 0; _it < n && photons_spawned < MAX_BREMS; ++_it) {
+        uint32_t i = (_rs5 + _it) % n;
         if (readback_energies_[i] < 0.1f) continue;
         uint32_t type = particles.types[i];
         if (type >= PHYS_PARTICLE_TYPES) continue;
@@ -2181,7 +2193,9 @@ void PhysicsSimulation::check_weak_flavor_change() {
     static const uint32_t ANTI_UP_TYPES[3] = { ANTI_UP_TYPE, ANTI_CHARM_TYPE, ANTI_TOP_TYPE };
     static const uint32_t ANTI_DOWN_TYPES[3] = { ANTI_DOWN_TYPE, ANTI_STRANGE_TYPE, ANTI_BOTTOM_TYPE };
 
-    for (uint32_t i = 0; i < n; ++i) {
+    uint32_t _rs6 = random_start(n, frame_counter_, 6u);
+    for (uint32_t _it = 0; _it < n; ++_it) {
+        uint32_t i = (_rs6 + _it) % n;
         if (readback_energies_[i] < 0.1f) continue;
         uint32_t ti = particles.types[i];
         if (!is_quark(ti) && !is_antiquark(ti)) continue;

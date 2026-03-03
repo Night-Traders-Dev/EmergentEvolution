@@ -807,10 +807,13 @@ void PhysicsInterface::draw_force_object_panel(ForceObject* objects) {
 
             ImGui::Spacing();
             ImGui::TextColored(type_color, "Strength");
-            ImGui::SliderFloat("##fo_str", &obj.strength, 0.1f, 10.0f, "%.2f");
+            ImGui::SliderFloat("##fo_str", &obj.strength, 0.1f, 1000.0f, "%.1f",
+                               ImGuiSliderFlags_Logarithmic);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("0.1-10 = normal\n10-100 = neutron star\n100-1000 = black hole");
 
             ImGui::TextColored(type_color, "Radius");
-            ImGui::SliderFloat("##fo_rad", &obj.radius, 10.0f, 200.0f, "%.0f");
+            ImGui::SliderFloat("##fo_rad", &obj.radius, 10.0f, 500.0f, "%.0f");
         }
 
         // Action buttons

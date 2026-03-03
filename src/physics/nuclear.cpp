@@ -40,7 +40,9 @@ void PhysicsSimulation::check_annihilation() {
 
     std::mt19937 rng(frame_counter_ * 1664525u + 1013904223u);
 
-    for (uint32_t i = 0; i < n; ++i) {
+    uint32_t _rs0 = random_start(n, frame_counter_, 0u);
+    for (uint32_t _it = 0; _it < n; ++_it) {
+        uint32_t i = (_rs0 + _it) % n;
         if (consumed[i]) continue;
         if (readback_energies_[i] < 0.01f) continue;
 
@@ -261,7 +263,9 @@ void PhysicsSimulation::check_fusion() {
     // with quantum tunneling probability (Gamow factor)
     const float FUSION_MIN_E = cfg.fusion_min_energy;
     float m_proton = PHYS_REST_MASS_MEV[PROTON_TYPE];
-    for (uint32_t i = 0; i < n && fusion_count < MAX_FUSIONS_PER_FRAME; ++i) {
+    uint32_t _rs1 = random_start(n, frame_counter_, 1u);
+    for (uint32_t _it = 0; _it < n && fusion_count < MAX_FUSIONS_PER_FRAME; ++_it) {
+        uint32_t i = (_rs1 + _it) % n;
         if (used[i]) continue;
         if (readback_energies_[i] < FUSION_MIN_E) continue;
         if (particles.types[i] != PROTON_TYPE) continue;
@@ -362,7 +366,9 @@ void PhysicsSimulation::check_fusion() {
     // No Coulomb barrier (neutron is uncharged), but requires proximity.
     // In reality, neutron capture cross-section is huge for slow neutrons.
     float m_neutron = PHYS_REST_MASS_MEV[NEUTRON_TYPE];
-    for (uint32_t i = 0; i < n && fusion_count < MAX_FUSIONS_PER_FRAME; ++i) {
+    uint32_t _rs2 = random_start(n, frame_counter_, 2u);
+    for (uint32_t _it = 0; _it < n && fusion_count < MAX_FUSIONS_PER_FRAME; ++_it) {
+        uint32_t i = (_rs2 + _it) % n;
         if (used[i]) continue;
         if (readback_energies_[i] < FUSION_MIN_E) continue;
         if (particles.types[i] != PROTON_TYPE) continue;
@@ -483,7 +489,9 @@ void PhysicsSimulation::check_fission() {
         return glm::vec2(std::cos(a), std::sin(a));
     };
 
-    for (uint32_t i = 0; i < n && fission_count < MAX_FISSIONS_PER_FRAME; ++i) {
+    uint32_t _rs3 = random_start(n, frame_counter_, 3u);
+    for (uint32_t _it = 0; _it < n && fission_count < MAX_FISSIONS_PER_FRAME; ++_it) {
+        uint32_t i = (_rs3 + _it) % n;
         if (used[i]) continue;
         if (readback_energies_[i] < NEUTRON_ENERGY_THRESHOLD) continue;
         if (particles.types[i] != NEUTRON_TYPE) continue;
@@ -1103,7 +1111,9 @@ void PhysicsSimulation::check_photoelectric() {
     };
 
     // Scan all photons for interactions with bound electrons
-    for (uint32_t i = 0; i < n && interaction_count < MAX_INTERACTIONS_PER_FRAME; ++i) {
+    uint32_t _rs4 = random_start(n, frame_counter_, 4u);
+    for (uint32_t _it = 0; _it < n && interaction_count < MAX_INTERACTIONS_PER_FRAME; ++_it) {
+        uint32_t i = (_rs4 + _it) % n;
         if (used[i]) continue;
         if (particles.types[i] != PHOTON_TYPE_PHYS) continue;
         float ph_energy = readback_energies_[i];
@@ -1323,7 +1333,9 @@ void PhysicsSimulation::check_photoelectric() {
     // ── Nuclear Compton scattering: photon + free nucleon ──
     // Photon scatters off a free proton or neutron, transferring momentum.
     // Lower threshold than photodisintegration — just elastic scattering.
-    for (uint32_t i = 0; i < n && interaction_count < MAX_INTERACTIONS_PER_FRAME; ++i) {
+    uint32_t _rs5 = random_start(n, frame_counter_, 5u);
+    for (uint32_t _it = 0; _it < n && interaction_count < MAX_INTERACTIONS_PER_FRAME; ++_it) {
+        uint32_t i = (_rs5 + _it) % n;
         if (used[i]) continue;
         if (particles.types[i] != PHOTON_TYPE_PHYS) continue;
         float ph_energy = readback_energies_[i];
@@ -1424,7 +1436,9 @@ void PhysicsSimulation::check_pion_decay() {
 
     int decays = 0;
 
-    for (uint32_t i = 0; i < n && decays < 4; ++i) {
+    uint32_t _rs6 = random_start(n, frame_counter_, 6u);
+    for (uint32_t _it = 0; _it < n && decays < 4; ++_it) {
+        uint32_t i = (_rs6 + _it) % n;
         if (i >= particles.entangled_partner.size()) break;
         uint32_t j = particles.entangled_partner[i];
         if (j == UINT32_MAX || j >= n) continue;
@@ -1633,7 +1647,9 @@ void PhysicsSimulation::check_spallation() {
     };
 
     // Identify projectiles: any fast-moving massive particle (not photon/neutrino/gluon)
-    for (uint32_t i = 0; i < n && spallation_count < MAX_SPALLATIONS_PER_FRAME; ++i) {
+    uint32_t _rs7 = random_start(n, frame_counter_, 7u);
+    for (uint32_t _it = 0; _it < n && spallation_count < MAX_SPALLATIONS_PER_FRAME; ++_it) {
+        uint32_t i = (_rs7 + _it) % n;
         if (used[i]) continue;
         if (readback_energies_[i] < MIN_PROJECTILE_ENERGY) continue;
 
@@ -1815,7 +1831,9 @@ void PhysicsSimulation::check_spallation() {
         return UINT32_MAX;
     };
 
-    for (uint32_t i = 0; i < n && spallation_count < MAX_SPALLATIONS_PER_FRAME; ++i) {
+    uint32_t _rs8 = random_start(n, frame_counter_, 8u);
+    for (uint32_t _it = 0; _it < n && spallation_count < MAX_SPALLATIONS_PER_FRAME; ++_it) {
+        uint32_t i = (_rs8 + _it) % n;
         if (used[i]) continue;
         if (particles.types[i] != PHOTON_TYPE_PHYS) continue;
         float ph_energy = readback_energies_[i];
@@ -2228,7 +2246,9 @@ void PhysicsSimulation::check_recombination() {
     };
 
     // Scan for electron holes
-    for (uint32_t i = 0; i < n && recomb_count < MAX_RECOMB_PER_FRAME; ++i) {
+    uint32_t _rs9 = random_start(n, frame_counter_, 9u);
+    for (uint32_t _it = 0; _it < n && recomb_count < MAX_RECOMB_PER_FRAME; ++_it) {
+        uint32_t i = (_rs9 + _it) % n;
         if (readback_energies_[i] < 0.01f) continue;
         if (particles.types[i] != ELECTRON_HOLE_TYPE_PHYS) continue;
 
@@ -2893,7 +2913,9 @@ void PhysicsSimulation::check_quasiparticles() {
 
     // ── Quasiparticle physics effects on nearby particles ──────────────────
     // Each living quasiparticle exerts real forces on surrounding matter
-    for (uint32_t i = 0; i < n; ++i) {
+    uint32_t _rs10 = random_start(n, frame_counter_, 10u);
+    for (uint32_t _it = 0; _it < n; ++_it) {
+        uint32_t i = (_rs10 + _it) % n;
         if (readback_energies_[i] < 0.01f) continue;
         uint32_t ti = particles.types[i];
 

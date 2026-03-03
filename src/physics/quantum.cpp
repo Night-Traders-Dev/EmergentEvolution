@@ -192,7 +192,9 @@ void PhysicsSimulation::check_neutrino_scattering() {
     std::uniform_real_distribution<float> prob(0.0f, 1.0f);
     std::uniform_real_distribution<float> angle_dist(0.0f, 6.2831853f);
 
-    for (uint32_t i = 0; i < n; ++i) {
+    uint32_t _rs0 = random_start(n, frame_counter_, 0u);
+    for (uint32_t _it = 0; _it < n; ++_it) {
+        uint32_t i = (_rs0 + _it) % n;
         if (readback_energies_[i] < 0.01f) continue;
         uint32_t type = particles.types[i];
         if ((particles.behavior_flags[type] & BEHAVIOR_NEUTRINO) == 0) continue;
@@ -271,7 +273,9 @@ void PhysicsSimulation::check_neutrino_oscillations() {
     std::uniform_real_distribution<float> prob(0.0f, 1.0f);
 
     // Neutrino type triplets: νₑ(6), νμ(11), ντ(12)
-    for (uint32_t i = 0; i < n; ++i) {
+    uint32_t _rs1 = random_start(n, frame_counter_, 1u);
+    for (uint32_t _it = 0; _it < n; ++_it) {
+        uint32_t i = (_rs1 + _it) % n;
         if (readback_energies_[i] < 0.01f) continue;
         uint32_t type = particles.types[i];
         if (type != NEUTRINO_TYPE_PHYS && type != MU_NEUTRINO_TYPE_PHYS &&
@@ -344,7 +348,9 @@ void PhysicsSimulation::update_entanglement() {
     uint32_t active_count = 0;
     bool any_changed = false;
 
-    for (uint32_t i = 0; i < n; ++i) {
+    uint32_t _rs2 = random_start(n, frame_counter_, 2u);
+    for (uint32_t _it = 0; _it < n; ++_it) {
+        uint32_t i = (_rs2 + _it) % n;
         uint32_t p = particles.entangled_partner[i];
         if (p == 0xFFFFFFFFu || p >= n) continue;
         if (i > p) continue;  // process each pair once (lower index only)

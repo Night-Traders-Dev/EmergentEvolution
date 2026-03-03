@@ -12,3 +12,5 @@
 | Buffers | Double-buffered ping-pong (position, velocity, angle, angular velocity, energy, genome) |
 | Genome | 4 floats per particle: charge, spin, color charge / orbital L, decay rate |
 | Push Constants | 128 bytes &mdash; full simulation parameters per frame |
+| Subsystem dispatch | **Fisher-Yates shuffled** each tick (6 core + 10 medium subsystems) |
+| Particle iteration | **Randomized start index** per subsystem per frame via `random_start()` hash |

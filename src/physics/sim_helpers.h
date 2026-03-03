@@ -34,6 +34,16 @@ inline float compute_gamma(const glm::vec2& vel) {
     return 1.0f / std::sqrt(1.0f - beta * beta);
 }
 
+// Random start index for unbiased particle iteration.
+// Prevents systematic bias toward low-index particles when loops have early exits.
+// Usage: for (uint32_t _it = 0; _it < n; ++_it) { uint32_t i = (start + _it) % n; ... }
+inline uint32_t random_start(uint32_t n, uint32_t frame, uint32_t salt) {
+    if (n == 0) return 0;
+    uint32_t h = frame * 2654435761u ^ salt;
+    h ^= (h >> 16); h *= 0x45d9f3bu; h ^= (h >> 16);
+    return h % n;
+}
+
 // Total relativistic energy E = γm₀c² (in MeV)
 inline float total_rel_energy(uint32_t type, const glm::vec2& vel) {
     float m0 = (type < PHYS_PARTICLE_TYPES) ? PHYS_REST_MASS_MEV[type] : 0.0f;
