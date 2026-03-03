@@ -178,18 +178,129 @@ molecules by formula. Downloaded repository molecules appear with a `[repo]` tag
 positions are computed via iterative force relaxation matching GPU shader constants. Configurable
 count, energy, and scatter radius.
 
+## Bottom Taskbar — Cosmic Sandbox
+
+Auto-hiding 36px bar at screen bottom (gold/cosmic theme). Slides in when the mouse hovers
+near the bottom edge:
+
+- **Menu button** (left) opens a popup organized into Simulation, View, and Navigation sections
+- **Center taskbar buttons**: Settings, Spawn, Bodies &mdash; click to toggle panel visibility,
+  active panels have a gold underline
+- **Right**: accumulated simulation time, timestep rate, and body count
+  (e.g., "T: 3.2 Myr | 1.00 Gyr/s | 8 bodies")
+
+## Bottom Taskbar — Biochemical Simulator
+
+Auto-hiding 36px bar at screen bottom (green/bio theme). Same interaction pattern:
+
+- **Menu button** (left) opens a popup with Simulation, View, and Navigation sections
+- **Center taskbar buttons**: Settings, Spawn, Population &mdash; toggle panel visibility with
+  green underlines for active panels
+- **Right**: alive/total entity count (e.g., "Alive: 42 / 58")
+
 ## Spawn Menu — Cosmic Sandbox
 
-Collapsible panel with 7 celestial body types (Star, Planet, Gas Giant, Moon, Asteroid, Comet,
-Black Hole) displayed as color-coded buttons. Features a logarithmic mass slider, orbital
-velocity checkbox (spawns with circular orbit velocity), and quick presets (Solar System, Binary
-Stars, Asteroid Belt).
+Collapsible panel with 22 celestial body types organized into three sections:
+
+- **Basic**: Star, Planet, Gas Giant, Moon, Asteroid, Comet, Black Hole
+- **Stars** (spectral classes): O, B, A, F, G, K, M, L, T, Y, Wolf-Rayet &mdash; each with
+  appropriate default mass and temperature
+- **Black Holes**: Stellar, Intermediate, Supermassive, Primordial &mdash; each with
+  characteristic mass range
+
+Features a logarithmic mass slider, orbital velocity checkbox (spawns with circular orbit
+velocity), and quick presets (Solar System, Binary Stars, Asteroid Belt). Spawned bodies
+receive a deterministic seed for procedural texture generation.
 
 ## Spawn Menu — Biochemical Simulator
 
 Collapsible panel with 8 biological entity types (Cell, Bacterium, Virus, Nutrient, Toxin,
 Antibody, Red Blood Cell, White Blood Cell) displayed as color-coded buttons. Features an
 energy slider and quick presets (Cell Colony, Virus Outbreak, Nutrient Burst, Immune Response).
+
+## Procedural Planet Textures — Cosmic Sandbox
+
+Planets and moons are rendered with GPU-generated procedural textures driven by physical
+properties. All texturing happens in the fragment shader (`shaders/cosmos_rt.frag`) using
+value noise and fractal Brownian motion (5-octave FBM). Each body&rsquo;s seed ensures
+deterministic, unique surface features.
+
+**Layered surface system:**
+
+| Layer | Description |
+|---|---|
+| **Terrain elevation** | FBM noise mapped to altitude, drives land/ocean separation |
+| **Surface coloring** | Rocky (brown/gray), Frozen (white/blue), Liquid (uniform ocean), Gas (horizontal banding), Mixed (terrain-dependent) |
+| **Ocean layer** | Water (blue with animated waves), methane (dark teal), ammonia (pale yellow), lava (orange-red with pulsing glow) |
+| **Vegetation** | Green tinting on land areas, noise-modulated, requires water + O2 + temperate climate |
+| **Cloud layer** | Animated noise at higher frequency, alpha-blended over surface, coverage controlled by atmosphere |
+| **City lights** | High-frequency noise dots on the dark hemisphere, yellow-white, only on populated bodies |
+| **Atmospheric rim** | Fresnel-based edge glow, color varies with temperature (blue for cool, orange for hot) |
+
+**Physical data mapping** &mdash; textures change automatically based on physical state:
+
+- Increasing temperature melts polar ice caps and reveals brown/blue terrain
+- Very high temperatures produce lava fissures and molten surface features
+- Gas giants display latitude-based banding with noise distortion and great spot features
+- Ocean coverage, cloud density, and vegetation respond to atmosphere composition
+
+**Per-body GPU data** &mdash; the `SphereGPU` struct (64 bytes, 4&times;vec4) passes to the
+shader: position/radius, base color/emissive, seed/surface_type/ocean_coverage/temperature,
+and cloud_coverage/atm_pressure/vegetation/body_flags.
+
+## Timestep System — Cosmic Sandbox
+
+Logarithmic time control spanning 30 orders of magnitude:
+
+| Range | Example rates |
+|---|---|
+| &minus;9 to &minus;1 | 1 ns/s to 100 ms/s (ultra slow-motion) |
+| 0 | 1 s/s (real time) |
+| 1 to 6 | 10 s/s to 11.6 days/s |
+| 7 to 12 | 116 days/s to 31,700 years/s |
+| 13 to 21 | 317 kyr/s to 31.7 Tyr/s |
+
+The settings panel provides a slider (`time_exponent`, &minus;9 to 21) with preset buttons:
+1 s/s, 1 min/s, 1 hr/s, 1 day/s, 1 yr/s, 1 Myr/s, 1 Gyr/s. The bottom bar displays both
+accumulated simulation time and current rate in human-readable format (e.g., "T: 4.6 Gyr |
+1.00 Myr/s").
+
+## Star & Black Hole Classification — Cosmic Sandbox
+
+Stars are automatically classified by spectral type based on surface temperature:
+
+| Class | Temperature | Color | Examples |
+| --- | --- | --- | --- |
+| O | >30,000 K | Blue-violet | Massive hot stars |
+| B | 10,000&ndash;30,000 K | Blue-white | Rigel |
+| A | 7,500&ndash;10,000 K | White | Sirius |
+| F | 6,000&ndash;7,500 K | Yellow-white | Procyon |
+| G | 5,200&ndash;6,000 K | Yellow | Sun |
+| K | 3,700&ndash;5,200 K | Orange | Alpha Centauri B |
+| M | 2,400&ndash;3,700 K | Red | Proxima Centauri |
+| L | 1,300&ndash;2,400 K | Dark red | Brown dwarfs |
+| T | 500&ndash;1,300 K | Magenta | Cool brown dwarfs |
+| Y | <500 K | Dark brown | Ultra-cool dwarfs |
+| Wolf-Rayet | >40,000 K + mass >16 | Bright cyan | Massive evolved stars |
+
+Black holes are classified by mass: Primordial (<3 M&odot;), Stellar (3&ndash;20 M&odot;),
+Intermediate (20&ndash;100,000 M&odot;), Supermassive (>100,000 M&odot;).
+
+Stars evolve through stellar stages (Main Sequence &rarr; Subgiant &rarr; Red Giant &rarr;
+Horizontal Branch &rarr; AGB &rarr; White Dwarf / Neutron Star) and are reclassified as their
+temperature changes.
+
+## Body Inspector — Cosmic Sandbox
+
+The inspector panel shows detailed information for the selected body:
+
+- **All bodies**: type, mass, radius, temperature, velocity, position
+- **Stars**: spectral class (e.g., "Spectral Class: G"), stellar stage
+- **Black holes**: classification (e.g., "Class: Supermassive")
+- **Planets/Moons**: full procedural properties &mdash; surface type, atmosphere composition
+  (N2, O2, CO2, H2, He, CH4, NH3 fractions and pressure), ocean type and coverage, terrain
+  features (mountains, valleys, continents), weather type and cloud coverage, vegetation
+  percentage
 
 ## Experiment Presets
 

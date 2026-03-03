@@ -68,13 +68,14 @@ EmergentEvolution/
 │   │   └── cutscenes.h/.cpp           # Animated cutscene sequences
 │   └── main.cpp                       # Physics entry point
 ├── src/cosmos/                        # Cosmic Sandbox application
-│   ├── cosmos_app.h/.cpp              # CosmosApp: init, tick, UI, splash, pause, spawn
-│   ├── cosmos_types.h                 # CosmosConfig, CosmosState, CelestialBody, OrbitCamera
-│   ├── cosmos_raytracer.h/.cpp        # GPU fullscreen sphere raytracer (Vulkan pipeline)
+│   ├── cosmos_app.h/.cpp              # CosmosApp: init, tick, UI, bottom bar, spawn, timestep
+│   ├── cosmos_types.h                 # 22 celestial types, star/BH subtypes, PlanetProperties
+│   ├── cosmos_raytracer.h/.cpp        # GPU sphere raytracer (64-byte SphereGPU w/ planet data)
 │   └── main.cpp                       # Cosmos entry point
 ├── src/biochem/                       # Biochemical Simulator application
-│   ├── biochem_app.h/.cpp             # BiochemApp: init, tick, UI, splash, pause, spawn
+│   ├── biochem_app.h/.cpp             # BiochemApp: init, tick, UI, bottom bar, AI movement
 │   ├── biochem_types.h                # BiochemConfig, BiochemState, BioEntity types
+│   ├── biochem_raytracer.h/.cpp       # GPU sphere raytracer for bio entities
 │   └── main.cpp                       # Biochem entry point
 ├── src/third_party/                   # Vendored headers
 │   ├── miniaudio.h                    # Single-header audio (MP3 decode + playback)
@@ -85,7 +86,8 @@ EmergentEvolution/
 │   ├── physics.comp                   # GPU: forces, collisions, bonds, fields, bloom
 │   ├── fullscreen.vert/.frag          # Physics render pipeline
 │   ├── overlay.vert/.frag             # Physics overlay pipeline
-│   ├── cosmos_rt.vert/.frag           # Cosmos GPU sphere raytracer
+│   ├── cosmos_rt.vert/.frag           # Cosmos GPU sphere raytracer (procedural planet textures)
+│   ├── biochem_rt.vert/.frag         # Biochem GPU sphere raytracer
 ├── assets/                            # Icons, music, Windows resources
 │   ├── particles/                     # 67 custom particle texture PNGs (128x128 RGBA)
 │   └── sfx/                           # 10 procedural WAV sound effects

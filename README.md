@@ -25,17 +25,23 @@ covalent bonding, chirality detection, hadronization, carrier exchange, and more
 **100,000 particles** in real time with O(n) spatial-grid neighbor queries and OpenMP parallelization.
 
 **Cosmic Sandbox** &mdash;
-3D celestial mechanics simulator with GPU-raytraced sphere rendering. Stars, planets, black
-holes, asteroids, and comets interact via Newtonian gravity with real-time orbital trails.
-Bodies are rendered as lit 3D spheres in a fullscreen fragment shader with two lighting modes:
-star lighting (point lights with shadow rays, diffuse/specular shading) and uniform lighting.
-Orbit camera with mouse drag, scroll zoom, and body selection.
+3D celestial mechanics simulator with GPU-raytraced sphere rendering. 22 celestial body types
+including 11 star spectral classes (O through Y plus Wolf-Rayet), 4 black hole subtypes
+(stellar, intermediate, supermassive, primordial), and procedurally generated planets with
+terrain, oceans, clouds, vegetation, atmospheric rim lighting, and city lights on populated
+worlds. Bodies interact via Newtonian gravity with real-time orbital trails. Procedural GPU
+textures are driven by physical properties &mdash; changing a planet&rsquo;s temperature melts ice
+into oceans, and gas giants display Jupiter-like banding with great spots. A logarithmic
+timestep system scales from nanoseconds/s to trillions of years/s. Orbit camera with WASD
+panning, mouse drag, scroll zoom, and auto-hiding bottom taskbar.
 
 **Biochemical Simulator** &mdash;
-2D cellular biology sandbox with 8 entity types: cells, bacteria, viruses, nutrients, toxins,
-antibodies, red blood cells, and white blood cells. Features metabolism, cell division with
-mutations, viral infection, immune response, and fluid dynamics. Entities interact through
-proximity-based rules with configurable parameters.
+3D cellular biology sandbox with GPU-raytraced rendering and 8 entity types: cells, bacteria,
+viruses, nutrients, toxins, antibodies, red blood cells, and white blood cells. Features
+metabolism, cell division with mutations, viral infection, immune response, AI-driven entity
+movement (seek/flee/spacing behaviors), and fluid dynamics. Entities interact through
+proximity-based rules with configurable parameters. WASD camera panning and auto-hiding
+bottom taskbar with panel management.
 
 ---
 
