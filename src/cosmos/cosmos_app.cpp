@@ -1,5 +1,6 @@
 #include "cosmos/cosmos_app.h"
 #include "imgui.h"
+#include <GLFW/glfw3.h>
 #include <cmath>
 #include <algorithm>
 #include <random>
@@ -7,26 +8,30 @@
 // ── Body color (for trail overlay coloring) ─────────────────────────────────
 
 static ImU32 body_color(const CelestialBody& b) {
-    switch (b.type) {
-    case CTYPE_STAR: {
+    if (is_star_type(b.type)) {
         float t = std::clamp((b.temperature - 2000.0f) / 30000.0f, 0.0f, 1.0f);
         int r = (int)(255 * std::clamp(1.4f - t * 1.2f, 0.0f, 1.0f));
         int g = (int)(255 * std::clamp(0.8f + t * 0.2f - std::abs(t - 0.4f), 0.0f, 1.0f));
         int blue = (int)(255 * std::clamp(t * 1.8f - 0.3f, 0.0f, 1.0f));
         return IM_COL32(r, g, std::min(blue, 255), 255);
     }
+    if (is_black_hole_type(b.type))
+        return IM_COL32(200, 100, 255, 255);
+    switch (b.type) {
     case CTYPE_PLANET:     return IM_COL32(60, 140, 220, 255);
     case CTYPE_MOON:       return IM_COL32(180, 180, 190, 255);
     case CTYPE_ASTEROID:   return IM_COL32(140, 130, 110, 255);
     case CTYPE_COMET:      return IM_COL32(160, 220, 255, 255);
-    case CTYPE_BLACK_HOLE: return IM_COL32(200, 100, 255, 255);
     case CTYPE_NEBULA:     return IM_COL32(120, 60, 180, 255);
     default:               return IM_COL32(200, 200, 200, 255);
     }
 }
 
 static const char* const CTYPE_NAMES[] = {
-    "Star", "Planet", "Moon", "Asteroid", "Comet", "Black Hole", "Nebula"
+    "Star", "Planet", "Moon", "Asteroid", "Comet", "Black Hole", "Nebula",
+    "O Star", "B Star", "A Star", "F Star", "G Star", "K Star", "M Star",
+    "L Dwarf", "T Dwarf", "Y Dwarf", "Wolf-Rayet",
+    "Stellar BH", "Intermediate BH", "Supermassive BH", "Primordial BH",
 };
 
 static const ImU32 CTYPE_COLORS[] = {
@@ -37,6 +42,75 @@ static const ImU32 CTYPE_COLORS[] = {
     IM_COL32(160, 220, 255, 255),  // Comet - ice blue
     IM_COL32(200, 100, 255, 255),  // Black Hole - purple
     IM_COL32(120, 60, 180, 255),   // Nebula - violet
+    IM_COL32(120, 140, 255, 255),  // O - deep blue
+    IM_COL32(160, 180, 255, 255),  // B - blue-white
+    IM_COL32(220, 220, 255, 255),  // A - white
+    IM_COL32(255, 255, 200, 255),  // F - yellow-white
+    IM_COL32(255, 240, 100, 255),  // G - yellow (Sun)
+    IM_COL32(255, 180, 60, 255),   // K - orange
+    IM_COL32(255, 100, 60, 255),   // M - red
+    IM_COL32(180, 60, 40, 255),    // L - dark red-brown
+    IM_COL32(140, 40, 60, 255),    // T - magenta-brown
+    IM_COL32(100, 30, 50, 255),    // Y - very dark
+    IM_COL32(100, 180, 255, 255),  // WR - hot blue
+    IM_COL32(180, 80, 220, 255),   // Stellar BH
+    IM_COL32(160, 60, 200, 255),   // Intermediate BH
+    IM_COL32(140, 40, 180, 255),   // Supermassive BH
+    IM_COL32(200, 100, 240, 255),  // Primordial BH
+};
+
+// ── Star / BH classification helpers ────────────────────────────────────────
+
+static uint32_t classify_star_spectral(float temperature, float mass) {
+    if (temperature > 40000.0f && mass > 16.0f)  return CTYPE_STAR_WR;
+    if (temperature > 30000.0f && mass > 16.0f)  return CTYPE_STAR_O;
+    if (temperature > 10000.0f && mass > 2.1f)   return CTYPE_STAR_B;
+    if (temperature > 7500.0f  && mass > 1.4f)   return CTYPE_STAR_A;
+    if (temperature > 6000.0f  && mass > 1.04f)  return CTYPE_STAR_F;
+    if (temperature > 5200.0f  && mass > 0.8f)   return CTYPE_STAR_G;
+    if (temperature > 3700.0f  && mass > 0.45f)  return CTYPE_STAR_K;
+    if (temperature > 2400.0f  && mass > 0.08f)  return CTYPE_STAR_M;
+    if (temperature > 1300.0f)                    return CTYPE_STAR_L;
+    if (temperature > 500.0f)                     return CTYPE_STAR_T;
+    return CTYPE_STAR_Y;
+}
+
+static uint32_t classify_black_hole(float mass) {
+    if (mass < 3.0f)        return CTYPE_BH_PRIMORDIAL;
+    if (mass <= 20.0f)      return CTYPE_BH_STELLAR;
+    if (mass <= 100000.0f)  return CTYPE_BH_INTERMEDIATE;
+    return CTYPE_BH_SUPERMASSIVE;
+}
+
+// ── Timestep formatting ─────────────────────────────────────────────────────
+
+static const char* format_sim_time(double seconds, char* buf, size_t buf_size) {
+    double abs_s = std::abs(seconds);
+    if (abs_s < 1e-6)
+        snprintf(buf, buf_size, "%.1f ns", seconds * 1e9);
+    else if (abs_s < 1e-3)
+        snprintf(buf, buf_size, "%.1f us", seconds * 1e6);
+    else if (abs_s < 1.0)
+        snprintf(buf, buf_size, "%.1f ms", seconds * 1e3);
+    else if (abs_s < 60.0)
+        snprintf(buf, buf_size, "%.1f s", seconds);
+    else if (abs_s < 3600.0)
+        snprintf(buf, buf_size, "%.1f min", seconds / 60.0);
+    else if (abs_s < 86400.0)
+        snprintf(buf, buf_size, "%.1f hr", seconds / 3600.0);
+    else if (abs_s < 3.156e7)
+        snprintf(buf, buf_size, "%.1f day", seconds / 86400.0);
+    else if (abs_s < 3.156e10)
+        snprintf(buf, buf_size, "%.2f yr", seconds / 3.156e7);
+    else if (abs_s < 3.156e13)
+        snprintf(buf, buf_size, "%.2f kyr", seconds / 3.156e10);
+    else if (abs_s < 3.156e16)
+        snprintf(buf, buf_size, "%.2f Myr", seconds / 3.156e13);
+    else if (abs_s < 3.156e19)
+        snprintf(buf, buf_size, "%.2f Gyr", seconds / 3.156e16);
+    else
+        snprintf(buf, buf_size, "%.2f Tyr", seconds / 3.156e19);
+    return buf;
 };
 
 // ── Draw helpers ────────────────────────────────────────────────────────────
@@ -75,6 +149,8 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
     sun.radius = 30.0f;
     sun.temperature = 5778.0f;
     sun.type = CTYPE_STAR;
+    sun.seed = 42;
+    sun.type = classify_star_spectral(sun.temperature, sun.mass);
     state.bodies.push_back(sun);
 
     // Planets in circular orbits in the XZ plane
@@ -93,6 +169,7 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
         p.temperature = planet_temp[i];
         p.type = CTYPE_PLANET;
         p.parent = 0;
+        p.seed = (uint32_t)(i * 7919 + 12345);
         state.bodies.push_back(p);
     }
 
@@ -107,6 +184,7 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
         moon.temperature = 200.0f;
         moon.type = CTYPE_MOON;
         moon.parent = 2;
+        moon.seed = 99999;
         state.bodies.push_back(moon);
     }
 
@@ -159,10 +237,62 @@ void CosmosApp::reset_simulation() {
     cfg.body_count = static_cast<uint32_t>(state.count());
     selected_body = -1;
     sim_time_ = 0.0f;
+    cfg.sim_time_accumulated = 0.0;
     camera = OrbitCamera{};
     camera.distance = 600.0f;
     camera.elevation = 0.5f;
     paused = false;
+}
+
+void CosmosApp::spawn_at(glm::vec3 pos) {
+    CelestialBody nb;
+    nb.pos = pos;
+    nb.vel = glm::vec3(0.0f);
+    nb.mass = spawn_mass;
+    nb.radius = std::max(3.0f, std::cbrt(spawn_mass) * 5.0f);
+    nb.type = (uint32_t)spawn_type;
+    nb.seed = (uint32_t)(std::hash<float>{}(pos.x) ^ std::hash<float>{}(pos.y) ^
+              std::hash<float>{}(pos.z) ^ (uint32_t)state.bodies.size());
+
+    if (is_star_type((uint32_t)spawn_type)) {
+        nb.temperature = 5778.0f;
+        nb.radius = std::max(15.0f, std::cbrt(spawn_mass) * 6.0f);
+        if (spawn_type == CTYPE_STAR)
+            nb.type = classify_star_spectral(nb.temperature, nb.mass);
+    } else if (is_black_hole_type((uint32_t)spawn_type)) {
+        nb.temperature = 0.0f;
+        nb.radius = std::max(10.0f, std::cbrt(spawn_mass) * 4.0f);
+        if (spawn_type == CTYPE_BLACK_HOLE)
+            nb.type = classify_black_hole(nb.mass);
+    } else {
+        nb.temperature = 300.0f;
+    }
+
+    if (spawn_in_orbit_ && !state.bodies.empty()) {
+        int nearest = -1;
+        float nearest_dist = 1e9f;
+        for (size_t i = 0; i < state.bodies.size(); i++) {
+            float d = glm::length(state.bodies[i].pos - nb.pos);
+            if (d > 0.1f && d < nearest_dist && state.bodies[i].mass > nb.mass) {
+                nearest_dist = d;
+                nearest = (int)i;
+            }
+        }
+        if (nearest >= 0) {
+            nb.parent = nearest;
+            glm::vec3 diff = nb.pos - state.bodies[nearest].pos;
+            float dist = glm::length(diff);
+            if (dist > 0.1f) {
+                float v = std::sqrt(cfg.G * state.bodies[nearest].mass / dist);
+                glm::vec3 dir = glm::normalize(diff);
+                glm::vec3 perp(-dir.z, 0.0f, dir.x);
+                nb.vel = state.bodies[nearest].vel + perp * v;
+            }
+        }
+    }
+
+    state.bodies.push_back(nb);
+    state.trails.emplace_back();
 }
 
 // ── Tick ─────────────────────────────────────────────────────────────────────
@@ -170,6 +300,22 @@ void CosmosApp::reset_simulation() {
 void CosmosApp::tick(GLFWwindow* window, float dt) {
     if (!renderer.begin_frame(vk, window))
         return;
+
+    // WASD camera panning
+    if (!paused && !show_splash && !show_pause_menu && !ImGui::GetIO().WantTextInput) {
+        float move_speed = camera.distance * 0.5f * dt;
+        glm::vec3 fwd = camera.forward_direction();
+        glm::vec3 right = camera.right_direction();
+        fwd.y = 0; fwd = glm::normalize(fwd);
+        right.y = 0; right = glm::normalize(right);
+
+        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) camera.target += fwd * move_speed;
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) camera.target -= fwd * move_speed;
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) camera.target += right * move_speed;
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) camera.target -= right * move_speed;
+        if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) camera.target.y += move_speed;
+        if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) camera.target.y -= move_speed;
+    }
 
     if (!paused && !show_splash) {
         step_physics(dt);
@@ -194,14 +340,19 @@ void CosmosApp::tick(GLFWwindow* window, float dt) {
 // ── Physics (CPU N-body, 3D) ────────────────────────────────────────────────
 
 void CosmosApp::step_physics(float dt) {
+    cfg.dt_scale = (float)std::pow(10.0, cfg.time_exponent);
     float scaled_dt = dt * cfg.dt_scale;
+    cfg.sim_time_accumulated += (double)scaled_dt;
     auto& bodies = state.bodies;
     size_t n = bodies.size();
+    if (n == 0) return;
 
     // Compute gravitational acceleration
     std::vector<glm::vec3> accel(n, glm::vec3(0.0f));
     for (size_t i = 0; i < n; i++) {
+        if (bodies[i].marked_for_removal) continue;
         for (size_t j = i + 1; j < n; j++) {
+            if (bodies[j].marked_for_removal) continue;
             glm::vec3 diff = bodies[j].pos - bodies[i].pos;
             float dist2 = glm::dot(diff, diff) + cfg.softening * cfg.softening;
             float dist  = std::sqrt(dist2);
@@ -215,26 +366,107 @@ void CosmosApp::step_physics(float dt) {
 
     // Integrate (symplectic Euler)
     for (size_t i = 0; i < n; i++) {
+        if (bodies[i].marked_for_removal) continue;
         bodies[i].vel += accel[i] * scaled_dt;
         bodies[i].vel *= cfg.damping;
         bodies[i].pos += bodies[i].vel * scaled_dt;
+        bodies[i].age += scaled_dt;
     }
 
-    // Collisions
-    if (cfg.collisions) {
-        for (size_t i = 0; i < n; i++) {
-            for (size_t j = i + 1; j < n; j++) {
-                glm::vec3 diff = bodies[j].pos - bodies[i].pos;
-                float dist = glm::length(diff);
-                float touch = bodies[i].radius + bodies[j].radius;
-                if (dist < touch && dist > 0.01f) {
-                    glm::vec3 dir = diff / dist;
-                    float overlap = touch - dist;
-                    float total_mass = bodies[i].mass + bodies[j].mass;
+    // Physics subsystems
+    if (cfg.collisions)         process_collisions(scaled_dt);
+    if (cfg.roche_limit)        process_roche_limit(scaled_dt);
+    if (cfg.temperature_system) process_temperature(scaled_dt);
+    if (cfg.evaporation)        process_evaporation(scaled_dt);
+    if (cfg.stellar_evolution)  process_stellar_evolution(scaled_dt);
+    cleanup_bodies();
+
+    // Update trails
+    n = bodies.size();
+    while (state.trails.size() < n)
+        state.trails.emplace_back();
+    for (size_t i = 0; i < n; i++) {
+        state.trails[i].push_back(bodies[i].pos);
+        while (state.trails[i].size() > cfg.trail_length)
+            state.trails[i].pop_front();
+    }
+}
+
+// ── Collision Processing ────────────────────────────────────────────────────
+
+void CosmosApp::process_collisions(float dt) {
+    auto& bodies = state.bodies;
+    size_t n = bodies.size();
+
+    for (size_t i = 0; i < n; i++) {
+        if (bodies[i].marked_for_removal) continue;
+        for (size_t j = i + 1; j < n; j++) {
+            if (bodies[j].marked_for_removal) continue;
+
+            glm::vec3 diff = bodies[j].pos - bodies[i].pos;
+            float dist = glm::length(diff);
+            float touch = bodies[i].radius + bodies[j].radius;
+
+            if (dist < touch && dist > 0.01f) {
+                glm::vec3 dir = diff / dist;
+                float overlap = touch - dist;
+                float total_mass = bodies[i].mass + bodies[j].mass;
+
+                glm::vec3 rel_vel = bodies[j].vel - bodies[i].vel;
+                float rel_speed = glm::length(rel_vel);
+
+                // Collision heating
+                if (cfg.temperature_system) {
+                    float ke = 0.5f * (bodies[i].mass * bodies[j].mass / total_mass) * rel_speed * rel_speed;
+                    float heat = ke * cfg.collision_heating;
+                    bodies[i].internal_energy += heat * 0.5f;
+                    bodies[j].internal_energy += heat * 0.5f;
+                    bodies[i].temperature += heat * 100.0f / std::max(bodies[i].mass, 0.01f);
+                    bodies[j].temperature += heat * 100.0f / std::max(bodies[j].mass, 0.01f);
+                }
+
+                // Determine merge vs fragment vs bounce
+                if (cfg.collision_merging && rel_speed < cfg.merge_speed_threshold) {
+                    // Merge: larger absorbs smaller
+                    size_t big = (bodies[i].mass >= bodies[j].mass) ? i : j;
+                    size_t small = (big == i) ? j : i;
+
+                    // Conserve momentum
+                    glm::vec3 new_vel = (bodies[big].mass * bodies[big].vel +
+                                         bodies[small].mass * bodies[small].vel) / total_mass;
+                    bodies[big].vel = new_vel;
+                    bodies[big].mass += bodies[small].mass;
+                    // Conserve volume: r = cbrt(r1^3 + r2^3)
+                    float r1 = bodies[big].radius, r2 = bodies[small].radius;
+                    bodies[big].radius = std::cbrt(r1 * r1 * r1 + r2 * r2 * r2);
+                    // Weighted temperature
+                    bodies[big].temperature = (bodies[big].temperature * (total_mass - bodies[small].mass) +
+                                               bodies[small].temperature * bodies[small].mass) / total_mass;
+                    bodies[big].fuel = std::max(bodies[big].fuel, bodies[small].fuel);
+                    bodies[small].marked_for_removal = true;
+                }
+                else if (cfg.collision_fragmentation && rel_speed > cfg.fragment_speed_threshold) {
+                    // Fragment: smaller body breaks apart
+                    size_t big = (bodies[i].mass >= bodies[j].mass) ? i : j;
+                    size_t small = (big == i) ? j : i;
+
+                    int frag_count = 2 + rand() % 3; // 2-4 fragments
+                    spawn_fragments(bodies[small].pos, bodies[small].vel,
+                                    bodies[small].mass, frag_count);
+                    bodies[small].marked_for_removal = true;
+
+                    // Elastic bounce on the big body
+                    float vel_along = glm::dot(rel_vel, dir);
+                    if (vel_along < 0) {
+                        float impulse = -(1.0f + 0.5f) * vel_along / total_mass;
+                        bodies[big].vel += ((big == j) ? 1.0f : -1.0f) * dir * impulse * bodies[small].mass;
+                    }
+                }
+                else {
+                    // Normal elastic bounce
                     bodies[i].pos -= dir * overlap * (bodies[j].mass / total_mass);
                     bodies[j].pos += dir * overlap * (bodies[i].mass / total_mass);
 
-                    glm::vec3 rel_vel = bodies[j].vel - bodies[i].vel;
                     float vel_along = glm::dot(rel_vel, dir);
                     if (vel_along < 0) {
                         float restitution = 0.8f;
@@ -246,14 +478,228 @@ void CosmosApp::step_physics(float dt) {
             }
         }
     }
+}
 
-    // Update trails
-    while (state.trails.size() < n)
-        state.trails.emplace_back();
+// ── Roche Limit ─────────────────────────────────────────────────────────────
+
+void CosmosApp::process_roche_limit(float /*dt*/) {
+    auto& bodies = state.bodies;
+    size_t n = bodies.size();
+
     for (size_t i = 0; i < n; i++) {
-        state.trails[i].push_back(bodies[i].pos);
-        while (state.trails[i].size() > cfg.trail_length)
-            state.trails[i].pop_front();
+        if (bodies[i].marked_for_removal) continue;
+        for (size_t j = 0; j < n; j++) {
+            if (i == j || bodies[j].marked_for_removal) continue;
+            if (bodies[i].mass <= bodies[j].mass * 10.0f) continue; // i must be much larger
+
+            float dist = glm::length(bodies[j].pos - bodies[i].pos);
+            float mass_ratio = bodies[i].mass / std::max(bodies[j].mass, 0.001f);
+            float roche_dist = bodies[i].radius * 2.5f * std::cbrt(mass_ratio);
+
+            if (dist < roche_dist && dist > bodies[i].radius) {
+                // Tidal disruption of body j
+                int frag_count = 3 + rand() % 3;
+                spawn_fragments(bodies[j].pos, bodies[j].vel,
+                                bodies[j].mass, frag_count);
+                bodies[j].marked_for_removal = true;
+            }
+        }
+    }
+}
+
+// ── Temperature ─────────────────────────────────────────────────────────────
+
+void CosmosApp::process_temperature(float dt) {
+    auto& bodies = state.bodies;
+
+    for (auto& b : bodies) {
+        if (b.marked_for_removal) continue;
+
+        // Stars maintain temperature based on mass and fuel
+        if (is_star_type(b.type) && b.fuel > 0.05f) {
+            // Mass-luminosity relation: L ∝ M^3.5
+            b.luminosity = std::pow(b.mass, 3.5f) * 0.1f;
+            // Stars don't cool while burning
+            continue;
+        }
+
+        // Radiative cooling (exponential decay toward background 2.7K)
+        float background = 2.7f;
+        b.temperature -= cfg.radiative_cooling * (b.temperature - background) * dt;
+        if (b.temperature < background) b.temperature = background;
+
+        // Tidal heating from nearby massive bodies
+        for (const auto& other : bodies) {
+            if (&other == &b || other.marked_for_removal) continue;
+            if (other.mass < b.mass * 5.0f) continue;
+
+            float dist = glm::length(other.pos - b.pos);
+            if (dist < 1.0f) continue;
+            // Tidal heating ∝ M^2 * R^5 / d^6 (simplified)
+            float tidal = other.mass * other.mass * b.radius / (dist * dist * dist * dist);
+            b.temperature += tidal * 0.1f * dt;
+        }
+
+        // Drain internal energy into temperature
+        if (b.internal_energy > 0.0f) {
+            float transfer = std::min(b.internal_energy, 10.0f * dt);
+            b.temperature += transfer / std::max(b.mass, 0.01f);
+            b.internal_energy -= transfer;
+        }
+    }
+}
+
+// ── Evaporation ─────────────────────────────────────────────────────────────
+
+void CosmosApp::process_evaporation(float dt) {
+    auto& bodies = state.bodies;
+
+    for (auto& b : bodies) {
+        if (b.marked_for_removal) continue;
+        if (is_star_type(b.type) || is_black_hole_type(b.type)) continue;
+
+        // Hot small bodies (comets, asteroids) lose mass
+        if (b.temperature > 500.0f && b.mass < 1.0f) {
+            float loss = cfg.evaporation_rate * (b.temperature / 1000.0f) * dt;
+            b.mass -= loss;
+            b.radius *= 0.999f; // shrink slightly
+
+            if (b.mass < 0.001f) {
+                b.marked_for_removal = true;
+            }
+        }
+    }
+}
+
+// ── Stellar Evolution ───────────────────────────────────────────────────────
+
+void CosmosApp::process_stellar_evolution(float dt) {
+    auto& bodies = state.bodies;
+
+    for (auto& b : bodies) {
+        if (b.marked_for_removal) continue;
+        if (!is_star_type(b.type)) continue;
+
+        // Burn fuel: more massive stars burn faster
+        float burn_rate = dt / (cfg.stellar_timescale * std::max(b.mass * b.mass, 1.0f));
+        b.fuel -= burn_rate;
+        if (b.fuel < 0.0f) b.fuel = 0.0f;
+
+        // Reclassify spectral type as temperature changes
+        b.type = classify_star_spectral(b.temperature, b.mass);
+
+        // Main sequence → red giant
+        if (b.stellar_stage == SSTAGE_MAIN_SEQUENCE && b.fuel < 0.3f) {
+            b.stellar_stage = SSTAGE_RED_GIANT;
+            b.radius *= 5.0f;
+            b.temperature *= 0.5f;
+            b.luminosity *= 100.0f;
+        }
+
+        // Red giant → end state
+        if (b.stellar_stage == SSTAGE_RED_GIANT && b.fuel < 0.05f) {
+            if (b.mass > 8.0f) {
+                // Supernova → neutron star
+                b.stellar_stage = SSTAGE_NEUTRON_STAR;
+
+                // Spawn debris
+                float debris_mass = b.mass * 0.7f;
+                spawn_fragments(b.pos, b.vel, debris_mass, 6 + rand() % 5);
+
+                // Remnant neutron star
+                b.mass *= 0.3f;
+                b.radius = 3.0f;
+                b.temperature = 100000.0f;
+                b.luminosity = 0.01f;
+
+                // Give debris a velocity kick
+                size_t n = state.bodies.size();
+                for (size_t k = n - 10; k < n; k++) {
+                    if (k < state.bodies.size()) {
+                        glm::vec3 kick_dir = glm::normalize(state.bodies[k].pos - b.pos);
+                        state.bodies[k].vel += kick_dir * 30.0f;
+                        state.bodies[k].temperature = 5000.0f;
+                    }
+                }
+            } else {
+                // White dwarf
+                b.stellar_stage = SSTAGE_WHITE_DWARF;
+                b.radius = std::max(2.0f, b.radius * 0.02f);
+                b.temperature = 20000.0f;
+                b.luminosity = 0.001f;
+            }
+        }
+    }
+}
+
+// ── Cleanup ─────────────────────────────────────────────────────────────────
+
+void CosmosApp::cleanup_bodies() {
+    auto& bodies = state.bodies;
+    bool any_removed = false;
+    for (const auto& b : bodies) {
+        if (b.marked_for_removal) { any_removed = true; break; }
+    }
+    if (!any_removed) return;
+
+    // Build index mapping (old → new)
+    std::vector<int> remap(bodies.size(), -1);
+    int new_idx = 0;
+    for (size_t i = 0; i < bodies.size(); i++) {
+        if (!bodies[i].marked_for_removal)
+            remap[i] = new_idx++;
+    }
+
+    // Fix selected body
+    if (selected_body >= 0 && selected_body < (int)bodies.size()) {
+        selected_body = remap[selected_body];
+    }
+
+    // Fix parent indices
+    for (auto& b : bodies) {
+        if (b.parent >= 0 && b.parent < (int)remap.size())
+            b.parent = remap[b.parent];
+    }
+
+    // Remove bodies and trails
+    size_t write = 0;
+    for (size_t i = 0; i < bodies.size(); i++) {
+        if (!bodies[i].marked_for_removal) {
+            if (write != i) {
+                bodies[write] = bodies[i];
+                if (i < state.trails.size())
+                    state.trails[write] = std::move(state.trails[i]);
+            }
+            write++;
+        }
+    }
+    bodies.resize(write);
+    state.trails.resize(write);
+}
+
+// ── Fragment Spawning ───────────────────────────────────────────────────────
+
+void CosmosApp::spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, int count) {
+    float frag_mass = total_mass / (float)count;
+    float frag_radius = std::max(1.5f, std::cbrt(frag_mass) * 3.0f);
+
+    for (int i = 0; i < count; i++) {
+        CelestialBody frag;
+        // Random spread position
+        float theta = (float)rand() / RAND_MAX * 6.2832f;
+        float phi = (float)rand() / RAND_MAX * 3.1416f - 1.5708f;
+        glm::vec3 dir(cosf(phi) * cosf(theta), sinf(phi), cosf(phi) * sinf(theta));
+
+        frag.pos = pos + dir * (frag_radius * 2.0f);
+        frag.vel = vel + dir * (5.0f + (float)rand() / RAND_MAX * 10.0f);
+        frag.mass = frag_mass;
+        frag.radius = frag_radius * (0.8f + (float)rand() / RAND_MAX * 0.4f);
+        frag.temperature = 300.0f;
+        frag.type = CTYPE_ASTEROID;
+        frag.fuel = 0.0f;
+
+        state.bodies.push_back(frag);
+        state.trails.emplace_back();
     }
 }
 
@@ -564,13 +1010,6 @@ void CosmosApp::draw_pause_menu() {
     ImGuiIO& io = ImGui::GetIO();
     float W = io.DisplaySize.x, H = io.DisplaySize.y;
 
-    // Escape to resume
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-        show_pause_menu = false;
-        paused = false;
-        return;
-    }
-
     // Semi-transparent overlay
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(io.DisplaySize);
@@ -625,13 +1064,31 @@ void CosmosApp::draw_pause_menu() {
             show_pause_menu = false;
         }
 
+        // Empty Simulation
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 2));
+        if (ImGui::Button("Empty Simulation", ImVec2(btn_w, btn_h))) {
+            state.clear();
+            cfg.body_count = 0;
+            selected_body = -1;
+            sim_time_ = 0.0f;
+            show_pause_menu = false;
+            paused = false;
+        }
+
+        // Return to Launcher
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 3));
+        if (ImGui::Button("Return to Launcher", ImVec2(btn_w, btn_h))) {
+            request_launcher = true;
+            request_quit = true;
+        }
+
         // Quit — red tinted
         ImGui::PopStyleColor(3);
         ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.35f, 0.08f, 0.08f, 0.90f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,  ImVec4(0.50f, 0.12f, 0.12f, 0.95f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,   ImVec4(0.60f, 0.15f, 0.15f, 1.00f));
 
-        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 2));
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 4));
         if (ImGui::Button("Quit", ImVec2(btn_w, btn_h))) {
             request_quit = true;
         }
@@ -664,50 +1121,64 @@ void CosmosApp::draw_spawn_menu() {
         return;
     }
 
-    // Type buttons in a grid
-    if (ImGui::CollapsingHeader("Body Type", ImGuiTreeNodeFlags_DefaultOpen)) {
-        float btn_w = 80.0f;
-        for (int t = 0; t < CTYPE_COUNT; t++) {
-            ImU32 col = CTYPE_COLORS[t];
-            float r = (float)((col >> IM_COL32_R_SHIFT) & 0xFF) / 255.0f;
-            float g = (float)((col >> IM_COL32_G_SHIFT) & 0xFF) / 255.0f;
-            float b = (float)((col >> IM_COL32_B_SHIFT) & 0xFF) / 255.0f;
-
-            bool selected = (spawn_type == t);
-            if (selected) {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(r * 0.5f, g * 0.5f, b * 0.5f, 0.9f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(r * 0.6f, g * 0.6f, b * 0.6f, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(r * 0.7f, g * 0.7f, b * 0.7f, 1.0f));
-                ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
-                ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.3f, 0.9f, 1.0f, 1.0f));
-            } else {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(r * 0.25f, g * 0.25f, b * 0.25f, 0.7f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(r * 0.4f, g * 0.4f, b * 0.4f, 0.9f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(r * 0.5f, g * 0.5f, b * 0.5f, 1.0f));
-            }
-
-            if (ImGui::Button(CTYPE_NAMES[t], ImVec2(btn_w, 28))) {
-                spawn_type = t;
-                // Set sensible default mass for type
-                if (t == CTYPE_STAR) spawn_mass = 100.0f;
-                else if (t == CTYPE_PLANET) spawn_mass = 1.0f;
-                else if (t == CTYPE_MOON) spawn_mass = 0.05f;
-                else if (t == CTYPE_ASTEROID) spawn_mass = 0.02f;
-                else if (t == CTYPE_COMET) spawn_mass = 0.01f;
-                else if (t == CTYPE_BLACK_HOLE) spawn_mass = 200.0f;
-                else if (t == CTYPE_NEBULA) spawn_mass = 0.001f;
-            }
-
-            if (selected) {
-                ImGui::PopStyleColor(4);
-                ImGui::PopStyleVar();
-            } else {
-                ImGui::PopStyleColor(3);
-            }
-
-            // 3 per row
-            if (t % 3 != 2 && t < CTYPE_COUNT - 1) ImGui::SameLine();
+    // Type selection helper lambda
+    auto type_button = [&](int t, float btn_w, float default_mass) {
+        ImU32 col = CTYPE_COLORS[t];
+        float r = (float)((col >> IM_COL32_R_SHIFT) & 0xFF) / 255.0f;
+        float g = (float)((col >> IM_COL32_G_SHIFT) & 0xFF) / 255.0f;
+        float b_c = (float)((col >> IM_COL32_B_SHIFT) & 0xFF) / 255.0f;
+        bool sel = (spawn_type == t);
+        if (sel) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(r*0.5f, g*0.5f, b_c*0.5f, 0.9f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(r*0.6f, g*0.6f, b_c*0.6f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(r*0.7f, g*0.7f, b_c*0.7f, 1.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
+            ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.3f, 0.9f, 1.0f, 1.0f));
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(r*0.25f, g*0.25f, b_c*0.25f, 0.7f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(r*0.4f, g*0.4f, b_c*0.4f, 0.9f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(r*0.5f, g*0.5f, b_c*0.5f, 1.0f));
         }
+        if (ImGui::Button(CTYPE_NAMES[t], ImVec2(btn_w, 24))) {
+            spawn_type = t;
+            spawn_mass = default_mass;
+        }
+        if (sel) { ImGui::PopStyleColor(4); ImGui::PopStyleVar(); }
+        else     { ImGui::PopStyleColor(3); }
+    };
+
+    if (ImGui::CollapsingHeader("Basic", ImGuiTreeNodeFlags_DefaultOpen)) {
+        float bw = 76.0f;
+        type_button(CTYPE_PLANET, bw, 1.0f);    ImGui::SameLine();
+        type_button(CTYPE_MOON, bw, 0.05f);     ImGui::SameLine();
+        type_button(CTYPE_ASTEROID, bw, 0.02f);
+        type_button(CTYPE_COMET, bw, 0.01f);    ImGui::SameLine();
+        type_button(CTYPE_NEBULA, bw, 0.001f);
+    }
+
+    if (ImGui::CollapsingHeader("Stars")) {
+        float bw = 76.0f;
+        type_button(CTYPE_STAR, bw, 1.0f);
+        ImGui::SameLine(); type_button(CTYPE_STAR_O, bw, 30.0f);
+        ImGui::SameLine(); type_button(CTYPE_STAR_B, bw, 5.0f);
+        type_button(CTYPE_STAR_A, bw, 1.8f);
+        ImGui::SameLine(); type_button(CTYPE_STAR_F, bw, 1.2f);
+        ImGui::SameLine(); type_button(CTYPE_STAR_G, bw, 1.0f);
+        type_button(CTYPE_STAR_K, bw, 0.6f);
+        ImGui::SameLine(); type_button(CTYPE_STAR_M, bw, 0.2f);
+        ImGui::SameLine(); type_button(CTYPE_STAR_L, bw, 0.06f);
+        type_button(CTYPE_STAR_T, bw, 0.04f);
+        ImGui::SameLine(); type_button(CTYPE_STAR_Y, bw, 0.02f);
+        ImGui::SameLine(); type_button(CTYPE_STAR_WR, bw, 20.0f);
+    }
+
+    if (ImGui::CollapsingHeader("Black Holes")) {
+        float bw = 120.0f;
+        type_button(CTYPE_BLACK_HOLE, bw, 200.0f);
+        ImGui::SameLine(); type_button(CTYPE_BH_STELLAR, bw, 10.0f);
+        type_button(CTYPE_BH_INTERMEDIATE, bw, 1000.0f);
+        ImGui::SameLine(); type_button(CTYPE_BH_SUPERMASSIVE, bw, 1000000.0f);
+        type_button(CTYPE_BH_PRIMORDIAL, bw, 0.5f);
     }
 
     ImGui::Separator();
@@ -735,53 +1206,12 @@ void CosmosApp::draw_spawn_menu() {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(r * 0.6f, g * 0.6f, b * 0.6f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(r * 0.7f, g * 0.7f, b * 0.7f, 1.0f));
 
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "Middle-click in viewport to place");
+
         char label[64];
-        snprintf(label, sizeof(label), "Spawn %s at Camera", CTYPE_NAMES[spawn_type % CTYPE_COUNT]);
+        snprintf(label, sizeof(label), "Spawn %s at Origin", CTYPE_NAMES[spawn_type % CTYPE_COUNT]);
         if (ImGui::Button(label, ImVec2(-1, 36))) {
-            CelestialBody nb;
-            nb.pos = camera.target;
-            nb.vel = glm::vec3(0.0f);
-            nb.mass = spawn_mass;
-            nb.radius = std::max(3.0f, std::cbrt(spawn_mass) * 5.0f);
-            nb.type = (uint32_t)spawn_type;
-
-            // Set temperature based on type
-            if (spawn_type == CTYPE_STAR) nb.temperature = 5778.0f;
-            else if (spawn_type == CTYPE_BLACK_HOLE) nb.temperature = 0.0f;
-            else nb.temperature = 300.0f;
-
-            // Set radius based on type
-            if (spawn_type == CTYPE_STAR) nb.radius = std::max(15.0f, std::cbrt(spawn_mass) * 6.0f);
-            else if (spawn_type == CTYPE_BLACK_HOLE) nb.radius = std::max(10.0f, std::cbrt(spawn_mass) * 4.0f);
-
-            // Orbital velocity if enabled
-            if (spawn_in_orbit_ && !state.bodies.empty()) {
-                // Find nearest massive body
-                int nearest = -1;
-                float nearest_dist = 1e9f;
-                for (size_t i = 0; i < state.bodies.size(); i++) {
-                    float d = glm::length(state.bodies[i].pos - nb.pos);
-                    if (d > 0.1f && d < nearest_dist && state.bodies[i].mass > nb.mass) {
-                        nearest_dist = d;
-                        nearest = (int)i;
-                    }
-                }
-                if (nearest >= 0) {
-                    nb.parent = nearest;
-                    glm::vec3 diff = nb.pos - state.bodies[nearest].pos;
-                    float dist = glm::length(diff);
-                    if (dist > 0.1f) {
-                        float v = std::sqrt(cfg.G * state.bodies[nearest].mass / dist);
-                        // Perpendicular velocity in XZ plane
-                        glm::vec3 dir = glm::normalize(diff);
-                        glm::vec3 perp(-dir.z, 0.0f, dir.x);
-                        nb.vel = state.bodies[nearest].vel + perp * v;
-                    }
-                }
-            }
-
-            state.bodies.push_back(nb);
-            state.trails.emplace_back();
+            spawn_at(camera.target);
         }
         ImGui::PopStyleColor(3);
     }
@@ -792,7 +1222,8 @@ void CosmosApp::draw_spawn_menu() {
             glm::vec3 offset = camera.target;
             CelestialBody s;
             s.pos = offset; s.mass = 100.0f; s.radius = 30.0f;
-            s.temperature = 5778.0f; s.type = CTYPE_STAR;
+            s.temperature = 5778.0f; s.type = classify_star_spectral(5778.0f, 100.0f);
+            s.seed = 42;
             int star_idx = (int)state.bodies.size();
             state.bodies.push_back(s); state.trails.emplace_back();
 
@@ -806,6 +1237,7 @@ void CosmosApp::draw_spawn_menu() {
                 p.vel = s.vel + glm::vec3(-sinf(angle) * v, 0, cosf(angle) * v);
                 p.mass = masses[i]; p.radius = 6 + masses[i] * 3;
                 p.type = CTYPE_PLANET; p.parent = star_idx;
+                p.seed = (uint32_t)(i * 31337 + 54321);
                 state.bodies.push_back(p); state.trails.emplace_back();
             }
         }
@@ -819,14 +1251,14 @@ void CosmosApp::draw_spawn_menu() {
             s1.pos = center + glm::vec3(sep * 0.5f, 0, 0);
             s1.vel = glm::vec3(0, 0, v * 0.5f);
             s1.mass = 50.0f; s1.radius = 22.0f; s1.temperature = 8000.0f;
-            s1.type = CTYPE_STAR;
+            s1.type = classify_star_spectral(8000.0f, 50.0f); s1.seed = 111;
             state.bodies.push_back(s1); state.trails.emplace_back();
 
             CelestialBody s2;
             s2.pos = center - glm::vec3(sep * 0.5f, 0, 0);
             s2.vel = glm::vec3(0, 0, -v * 0.5f);
             s2.mass = 50.0f; s2.radius = 22.0f; s2.temperature = 3500.0f;
-            s2.type = CTYPE_STAR;
+            s2.type = classify_star_spectral(3500.0f, 50.0f); s2.seed = 222;
             state.bodies.push_back(s2); state.trails.emplace_back();
         }
 
@@ -840,7 +1272,7 @@ void CosmosApp::draw_spawn_menu() {
             glm::vec3 nearest_pos = camera.target;
             glm::vec3 nearest_vel(0);
             for (auto& b : state.bodies) {
-                if (b.type == CTYPE_STAR) {
+                if (is_star_type(b.type)) {
                     float d = glm::length(b.pos - camera.target);
                     if (d < 800.0f) {
                         nearest_mass = b.mass;
@@ -907,15 +1339,15 @@ void CosmosApp::render_ui() {
     ImGui::TextColored({0.4f, 0.4f, 0.5f, 1.0f}, "  %.0f FPS", io.Framerate);
     ImGui::SameLine();
     ImGui::TextColored({0.3f, 0.3f, 0.4f, 1.0f},
-        "  |  Drag: orbit  Scroll: zoom  Escape: menu  Right-click: select");
+        "  |  WASD: pan  Drag: orbit  Scroll: zoom  Middle: spawn  Right: select  Esc: menu");
     ImGui::End();
 
     // Settings panel
+    if (settings_visible_) {
     ImGui::SetNextWindowPos({10, 46}, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize({260, 440}, ImGuiCond_FirstUseEver);
-    ImGui::Begin("Cosmos Settings");
+    ImGui::SetNextWindowSize({260, 760}, ImGuiCond_FirstUseEver);
+    ImGui::Begin("Cosmos Settings", &settings_visible_);
     ImGui::SliderFloat("G",          &cfg.G,        0.1f, 10.0f);
-    ImGui::SliderFloat("Time Scale", &cfg.dt_scale,  0.1f, 30.0f);
     ImGui::SliderFloat("Softening",  &cfg.softening, 1.0f, 50.0f);
     ImGui::Checkbox("Collisions",    &cfg.collisions);
     ImGui::Checkbox("Tidal Forces",  &cfg.tidal_forces);
@@ -935,13 +1367,65 @@ void CosmosApp::render_ui() {
         camera = OrbitCamera{};
 
     ImGui::Separator();
+    ImGui::Text("Collision Physics");
+    ImGui::Checkbox("Merging",        &cfg.collision_merging);
+    ImGui::Checkbox("Fragmentation",  &cfg.collision_fragmentation);
+    ImGui::SliderFloat("Merge Speed",    &cfg.merge_speed_threshold,    1.0f, 20.0f);
+    ImGui::SliderFloat("Fragment Speed", &cfg.fragment_speed_threshold, 10.0f, 50.0f);
+
+    ImGui::Separator();
+    ImGui::Text("Thermal");
+    ImGui::Checkbox("Temperature", &cfg.temperature_system);
+    ImGui::Checkbox("Evaporation", &cfg.evaporation);
+    ImGui::Checkbox("Roche Limit", &cfg.roche_limit);
+    if (cfg.temperature_system)
+        ImGui::SliderFloat("Cooling", &cfg.radiative_cooling, 0.0f, 0.01f, "%.4f");
+
+    ImGui::Separator();
+    ImGui::Text("Stellar");
+    ImGui::Checkbox("Stellar Evolution", &cfg.stellar_evolution);
+    if (cfg.stellar_evolution)
+        ImGui::SliderFloat("Star Timescale", &cfg.stellar_timescale, 10.0f, 500.0f);
+
+    ImGui::Separator();
     ImGui::Text("Lighting");
     ImGui::Checkbox("Star Lighting",    &cfg.star_lighting);
     ImGui::Checkbox("Uniform Lighting", &cfg.uniform_lighting);
     if (cfg.star_lighting)
         ImGui::SliderFloat("Ambient", &cfg.ambient_strength, 0.0f, 0.5f);
 
+    ImGui::Separator();
+    ImGui::Text("Time Control");
+    {
+        float exp_f = (float)cfg.time_exponent;
+        if (ImGui::SliderFloat("Time Rate", &exp_f, -9.0f, 21.0f, "")) {
+            cfg.time_exponent = (double)exp_f;
+        }
+        char rate_buf[64], time_buf[64];
+        double rate = std::pow(10.0, cfg.time_exponent);
+        format_sim_time(rate, rate_buf, sizeof(rate_buf));
+        ImGui::SameLine();
+        ImGui::Text("%s/s", rate_buf);
+
+        format_sim_time(cfg.sim_time_accumulated, time_buf, sizeof(time_buf));
+        ImGui::Text("Sim Time: %s", time_buf);
+
+        struct Preset { const char* label; double exp; };
+        static const Preset presets[] = {
+            {"1 s/s",   0.0},   {"1 min/s", 1.778},
+            {"1 hr/s",  3.556}, {"1 day/s", 4.937},
+            {"1 yr/s",  7.499}, {"1 Myr/s", 13.499},
+            {"1 Gyr/s", 16.499},
+        };
+        for (int i = 0; i < 7; i++) {
+            if (i > 0) ImGui::SameLine();
+            if (ImGui::SmallButton(presets[i].label))
+                cfg.time_exponent = presets[i].exp;
+        }
+    }
+
     ImGui::End();
+    } // settings_visible_
 
     // Body Inspector (when selected)
     if (selected_body >= 0 && selected_body < (int)state.bodies.size()) {
@@ -949,7 +1433,7 @@ void CosmosApp::render_ui() {
         const char* tn = (b.type < CTYPE_COUNT) ? CTYPE_NAMES[b.type] : "?";
 
         ImGui::SetNextWindowPos({io.DisplaySize.x - 280.0f, 46}, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize({270, 260}, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize({270, 500}, ImGuiCond_FirstUseEver);
         ImGui::Begin("Body Inspector");
 
         ImU32 c = body_color(b);
@@ -963,10 +1447,102 @@ void CosmosApp::render_ui() {
         ImGui::Text("Temperature: %.0f K", b.temperature);
         ImGui::Text("Position:    (%.0f, %.0f, %.0f)", b.pos.x, b.pos.y, b.pos.z);
         ImGui::Text("Speed:       %.2f", glm::length(b.vel));
+        ImGui::Text("Age:         %.1f s", b.age);
+
+        if (is_star_type(b.type)) {
+            static const char* STAGE_NAMES[] = {
+                "Main Sequence", "Subgiant", "Red Giant", "Horizontal Branch",
+                "AGB", "Supergiant", "Hypergiant", "White Dwarf", "Neutron Star"
+            };
+            ImGui::Text("Fuel:        %.0f%%", b.fuel * 100.0f);
+            ImGui::Text("Luminosity:  %.2f", b.luminosity);
+            ImGui::Text("Stage:       %s", STAGE_NAMES[std::min(b.stellar_stage, (uint32_t)SSTAGE_COUNT - 1)]);
+
+            const char* spectral = "Unclassified";
+            switch (b.type) {
+                case CTYPE_STAR_O:  spectral = "O-type (Blue Supergiant)"; break;
+                case CTYPE_STAR_B:  spectral = "B-type (Blue-White)"; break;
+                case CTYPE_STAR_A:  spectral = "A-type (White)"; break;
+                case CTYPE_STAR_F:  spectral = "F-type (Yellow-White)"; break;
+                case CTYPE_STAR_G:  spectral = "G-type (Yellow, Sun-like)"; break;
+                case CTYPE_STAR_K:  spectral = "K-type (Orange)"; break;
+                case CTYPE_STAR_M:  spectral = "M-type (Red Dwarf)"; break;
+                case CTYPE_STAR_L:  spectral = "L-type (Brown Dwarf)"; break;
+                case CTYPE_STAR_T:  spectral = "T-type (Cool Brown Dwarf)"; break;
+                case CTYPE_STAR_Y:  spectral = "Y-type (Ultra-cool)"; break;
+                case CTYPE_STAR_WR: spectral = "Wolf-Rayet"; break;
+                default: break;
+            }
+            ImGui::Text("Spectral:    %s", spectral);
+        }
+
+        if (is_black_hole_type(b.type)) {
+            const char* bh_class = "Unknown";
+            switch (b.type) {
+                case CTYPE_BH_STELLAR:      bh_class = "Stellar (3-20 M_sun)"; break;
+                case CTYPE_BH_INTERMEDIATE: bh_class = "Intermediate (100-10^5 M_sun)"; break;
+                case CTYPE_BH_SUPERMASSIVE: bh_class = "Supermassive (10^6-10^10 M_sun)"; break;
+                case CTYPE_BH_PRIMORDIAL:   bh_class = "Primordial/Micro"; break;
+                default: break;
+            }
+            ImGui::Text("BH Class:    %s", bh_class);
+        }
+
+        if (b.internal_energy > 0.01f)
+            ImGui::Text("Int. Energy: %.1f", b.internal_energy);
         if (b.parent >= 0 && b.parent < (int)state.bodies.size()) {
             float orbit_r = glm::length(b.pos - state.bodies[b.parent].pos);
             ImGui::Text("Orbit radius: %.0f", orbit_r);
         }
+
+        // Planet/Moon properties
+        if (b.type == CTYPE_PLANET || b.type == CTYPE_MOON) {
+            PlanetProperties pp = generate_planet_properties(b.seed, b.mass, b.temperature);
+
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Surface Properties");
+
+            static const char* SURF_NAMES[] = {"Rocky", "Liquid", "Frozen", "Gas", "Mixed"};
+            ImGui::Text("Surface: %s", SURF_NAMES[pp.surface]);
+
+            if (pp.atmosphere.pressure > 0.01f) {
+                ImGui::Text("Atm. Pressure: %.1f atm", pp.atmosphere.pressure);
+                struct { float frac; const char* name; } comps[] = {
+                    {pp.atmosphere.n2_frac, "N2"}, {pp.atmosphere.o2_frac, "O2"},
+                    {pp.atmosphere.co2_frac, "CO2"}, {pp.atmosphere.h2_frac, "H2"},
+                    {pp.atmosphere.he_frac, "He"}, {pp.atmosphere.ch4_frac, "CH4"},
+                    {pp.atmosphere.nh3_frac, "NH3"},
+                };
+                for (int ci = 0; ci < 6; ci++)
+                    for (int cj = ci+1; cj < 7; cj++)
+                        if (comps[cj].frac > comps[ci].frac) std::swap(comps[ci], comps[cj]);
+                char atm_buf[128] = "";
+                int written = 0;
+                for (int ci = 0; ci < 3 && comps[ci].frac > 0.01f; ci++) {
+                    if (written > 0) strcat(atm_buf, ", ");
+                    char tmp[32]; snprintf(tmp, sizeof(tmp), "%s %.0f%%", comps[ci].name, comps[ci].frac * 100.0f);
+                    strcat(atm_buf, tmp);
+                    written++;
+                }
+                if (written > 0) ImGui::Text("Atmosphere: %s", atm_buf);
+            } else {
+                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1), "No atmosphere");
+            }
+
+            static const char* OCEAN_NAMES[] = {"None", "Water", "Methane", "Ammonia", "Lava"};
+            if (pp.ocean_type != OCEAN_NONE) {
+                ImGui::Text("Oceans: %s (%.0f%%, %.1f km)",
+                    OCEAN_NAMES[pp.ocean_type], pp.ocean_coverage, pp.ocean_depth);
+            }
+            if (pp.has_mountains) ImGui::Text("Mountains: %.1f km", pp.mountain_height);
+            if (pp.has_continents) ImGui::Text("Continents: %d", pp.continent_count);
+            if (pp.vegetation_coverage > 0.0f) ImGui::Text("Vegetation: %.0f%%", pp.vegetation_coverage);
+            if (pp.has_weather) {
+                static const char* WEATHER_NAMES[] = {"None", "Storms", "Rain", "Snow", "Dust"};
+                ImGui::Text("Weather: %s (%.0f%% clouds)", WEATHER_NAMES[pp.weather_type], pp.cloud_coverage);
+            }
+        }
+
         ImGui::Spacing();
         if (ImGui::Button("Focus Camera")) {
             camera.target = b.pos;
@@ -982,9 +1558,10 @@ void CosmosApp::render_ui() {
     draw_spawn_menu();
 
     // Body list
+    if (body_list_visible_) {
     ImGui::SetNextWindowPos({io.DisplaySize.x - 280.0f, 320}, ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize({270, 300}, ImGuiCond_FirstUseEver);
-    ImGui::Begin("Bodies");
+    ImGui::Begin("Bodies", &body_list_visible_);
     for (size_t i = 0; i < state.count(); i++) {
         const auto& b = state.bodies[i];
         const char* tn = (b.type < CTYPE_COUNT) ? CTYPE_NAMES[b.type] : "?";
@@ -999,4 +1576,165 @@ void CosmosApp::render_ui() {
         if (is_sel) ImGui::PopStyleColor();
     }
     ImGui::End();
+    } // body_list_visible_
+
+    // Bottom bar
+    draw_bottom_bar();
+}
+
+// ── Bottom bar ──────────────────────────────────────────────────────────────
+
+void CosmosApp::draw_bottom_bar() {
+    ImGuiIO& io = ImGui::GetIO();
+    float bar_h = 36.0f;
+    float display_w = io.DisplaySize.x;
+    float display_h = io.DisplaySize.y;
+    float dt = io.DeltaTime;
+
+    // Auto-hide animation
+    bool mouse_near_bottom = (io.MousePos.y > display_h - 8.0f);
+    float current_bar_y = display_h - bar_h + bottom_bar_offset_ * (bar_h + 4.0f);
+    bool mouse_over_bar = (io.MousePos.y > current_bar_y && bottom_bar_offset_ < 0.5f);
+    bool keep_visible = show_menu_popup_ || show_pause_menu;
+    float target = (mouse_near_bottom || mouse_over_bar || keep_visible) ? 0.0f : 1.0f;
+    bottom_bar_offset_ += (target - bottom_bar_offset_) * std::min(1.0f, 8.0f * dt);
+    if (bottom_bar_offset_ < 0.005f) bottom_bar_offset_ = 0.0f;
+    if (bottom_bar_offset_ > 0.995f) bottom_bar_offset_ = 1.0f;
+
+    float bar_y = display_h - bar_h + bottom_bar_offset_ * (bar_h + 4.0f);
+
+    ImGui::SetNextWindowPos(ImVec2(0, bar_y));
+    ImGui::SetNextWindowSize(ImVec2(display_w, bar_h));
+
+    ImGuiWindowFlags bar_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
+        | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoCollapse
+        | ImGuiWindowFlags_NoBringToFrontOnFocus;
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.04f, 0.02f, 0.80f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 6.0f));
+
+    if (ImGui::Begin("##CosmosBottomBar", nullptr, bar_flags)) {
+        // Left: Menu button
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.15f, 0.05f, 0.9f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f, 0.22f, 0.08f, 0.95f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.40f, 0.30f, 0.10f, 1.0f));
+        if (ImGui::Button("Menu", ImVec2(70, 24))) {
+            show_menu_popup_ = !show_menu_popup_;
+        }
+        ImGui::PopStyleColor(3);
+
+        ImGui::SameLine(0, 8);
+        ImGui::TextColored(ImVec4(0.4f, 0.35f, 0.2f, 0.5f), "|");
+        ImGui::SameLine(0, 8);
+
+        // Taskbar entries
+        struct TBEntry { const char* label; bool* visible; };
+        TBEntry entries[] = {
+            {"Settings",  &settings_visible_},
+            {"Spawn",     &spawn_menu_visible_},
+            {"Bodies",    &body_list_visible_},
+        };
+
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 3));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+
+        for (int i = 0; i < 3; i++) {
+            bool vis = *entries[i].visible;
+            if (vis) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.14f, 0.05f, 0.9f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.20f, 0.08f, 0.95f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.20f, 0.16f, 0.06f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.4f, 1.0f));
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.08f, 0.06f, 0.02f, 0.7f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.14f, 0.10f, 0.04f, 0.85f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.10f, 0.08f, 0.03f, 0.9f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.5f, 0.3f, 0.8f));
+            }
+
+            char btn_id[64];
+            snprintf(btn_id, sizeof(btn_id), "%s###CTB_%d", entries[i].label, i);
+            if (ImGui::Button(btn_id, ImVec2(0, 22))) {
+                *entries[i].visible = !(*entries[i].visible);
+            }
+
+            if (vis) {
+                ImVec2 rmin = ImGui::GetItemRectMin();
+                ImVec2 rmax = ImGui::GetItemRectMax();
+                ImGui::GetWindowDrawList()->AddRectFilled(
+                    ImVec2(rmin.x + 2, rmax.y - 2), ImVec2(rmax.x - 2, rmax.y),
+                    IM_COL32(255, 200, 60, 200));
+            }
+
+            ImGui::PopStyleColor(4);
+            ImGui::SameLine(0, 4);
+        }
+        ImGui::PopStyleVar(2);
+
+        // Right: sim time + rate
+        char time_buf[64], rate_buf[64];
+        format_sim_time(cfg.sim_time_accumulated, time_buf, sizeof(time_buf));
+        format_sim_time(std::pow(10.0, cfg.time_exponent), rate_buf, sizeof(rate_buf));
+
+        char right_text[256];
+        snprintf(right_text, sizeof(right_text), "T: %s  |  %s/s  |  %zu bodies",
+                 time_buf, rate_buf, state.count());
+        ImVec2 text_size = ImGui::CalcTextSize(right_text);
+        ImGui::SameLine(display_w - text_size.x - 16.0f);
+        ImGui::TextColored(ImVec4(0.8f, 0.7f, 0.3f, 0.9f), "%s", right_text);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+
+    // Menu popup
+    if (show_menu_popup_) {
+        float popup_w = 200.0f;
+        float popup_h = 280.0f;
+        float popup_x = 12.0f;
+        float popup_y = std::max(10.0f, bar_y - popup_h - 4.0f);
+        ImGui::SetNextWindowPos(ImVec2(popup_x, popup_y));
+        ImGui::SetNextWindowSize(ImVec2(popup_w, popup_h));
+
+        ImGuiWindowFlags popup_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+            | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar;
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.06f, 0.02f, 0.95f));
+
+        if (ImGui::Begin("##CosmosMenuPopup", &show_menu_popup_, popup_flags)) {
+            if (ImGui::TreeNodeEx("Simulation", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (ImGui::MenuItem(paused ? "Resume (Space)" : "Pause (Space)")) {
+                    paused = !paused; show_menu_popup_ = false;
+                }
+                if (ImGui::MenuItem("New Simulation")) {
+                    reset_simulation(); show_menu_popup_ = false;
+                }
+                if (ImGui::MenuItem("Empty Universe")) {
+                    state.clear(); cfg.body_count = 0;
+                    selected_body = -1; sim_time_ = 0.0f;
+                    cfg.sim_time_accumulated = 0.0;
+                    show_menu_popup_ = false;
+                }
+                ImGui::TreePop();
+            }
+            if (ImGui::TreeNodeEx("View", ImGuiTreeNodeFlags_DefaultOpen)) {
+                bool tmp;
+                tmp = settings_visible_;
+                if (ImGui::MenuItem("Settings", nullptr, tmp)) { settings_visible_ = !settings_visible_; show_menu_popup_ = false; }
+                tmp = spawn_menu_visible_;
+                if (ImGui::MenuItem("Spawn Menu", nullptr, tmp)) { spawn_menu_visible_ = !spawn_menu_visible_; show_menu_popup_ = false; }
+                tmp = body_list_visible_;
+                if (ImGui::MenuItem("Body List", nullptr, tmp)) { body_list_visible_ = !body_list_visible_; show_menu_popup_ = false; }
+                ImGui::TreePop();
+            }
+            if (ImGui::TreeNodeEx("Navigation")) {
+                if (ImGui::MenuItem("Return to Launcher")) { request_launcher = true; request_quit = true; }
+                if (ImGui::MenuItem("Quit")) { request_quit = true; }
+                ImGui::TreePop();
+            }
+        }
+        ImGui::End();
+        ImGui::PopStyleColor();
+    }
 }

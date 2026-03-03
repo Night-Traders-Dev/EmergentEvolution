@@ -1,60 +1,48 @@
-#include "cosmos/cosmos_raytracer.h"
+#include "biochem/biochem_raytracer.h"
 #include <cstring>
 #include <algorithm>
 #include <cmath>
 #include <glm/gtc/matrix_inverse.hpp>
 
-// ── GPU data layout (must match shader) ─────────────────────────────────────
+// ── GPU data layout (must match biochem_rt.frag) ────────────────────────────
 
-struct alignas(16) CameraUBOData {
+struct alignas(16) BioCameraUBOData {
     glm::mat4 inv_vp;           // 64 bytes
     glm::vec4 eye_pos;          // 16 bytes
     glm::vec4 screen_info;      // 16 bytes (w,h,count,time)
-    glm::vec4 lighting_params;  // 16 bytes (star,uniform,ambient,0)
+    glm::vec4 lighting_params;  // 16 bytes (unused,unused,ambient,unused)
 };                              // Total: 112 bytes
 
-struct SphereGPU {
+struct BioSphereGPU {
     glm::vec4 pos_radius;   // xyz = position, w = radius
-    glm::vec4 color_emit;   // rgb = base color (0-1), a = emissive
-    glm::vec4 planet_data;  // x = seed, y = surface_type, z = ocean_coverage(0-1), w = temperature
-    glm::vec4 atmo_data;    // x = cloud_coverage(0-1), y = atm_pressure, z = vegetation(0-1), w = body_flags
+    glm::vec4 color_emit;   // rgb = color (0-1), a = entity type
 };
 
-// body_flags bits: 0=is_planet, 1=is_moon, 2=has_atmosphere, 3=ocean_type(2 bits)
+// ── Entity type colors (0-1 range) ─────────────────────────────────────────
 
-// ── Body color helper (matches cosmos_app.cpp) ──────────────────────────────
-
-static glm::vec3 body_color_vec3(const CelestialBody& b) {
-    if (is_star_type(b.type)) {
-        float t = std::clamp((b.temperature - 2000.0f) / 30000.0f, 0.0f, 1.0f);
-        float r = std::clamp(1.4f - t * 1.2f, 0.0f, 1.0f);
-        float g = std::clamp(0.8f + t * 0.2f - std::abs(t - 0.4f), 0.0f, 1.0f);
-        float bl = std::clamp(t * 1.8f - 0.3f, 0.0f, 1.0f);
-        return {r, g, std::min(bl, 1.0f)};
-    }
-    if (is_black_hole_type(b.type))
-        return {0.078f, 0.0f, 0.157f};
-    switch (b.type) {
-    case CTYPE_PLANET:     return {0.235f, 0.549f, 0.863f};
-    case CTYPE_MOON:       return {0.706f, 0.706f, 0.745f};
-    case CTYPE_ASTEROID:   return {0.549f, 0.510f, 0.431f};
-    case CTYPE_COMET:      return {0.627f, 0.863f, 1.0f};
-    case CTYPE_NEBULA:     return {0.471f, 0.235f, 0.706f};
-    default:               return {0.784f, 0.784f, 0.784f};
+static glm::vec3 bio_type_color(uint32_t type) {
+    switch (type) {
+    case BIO_CELL:        return {0.275f, 0.627f, 1.0f};    // blue
+    case BIO_BACTERIUM:   return {0.902f, 0.588f, 0.196f};  // orange
+    case BIO_VIRUS:       return {0.863f, 0.196f, 0.196f};  // red
+    case BIO_NUTRIENT:    return {0.314f, 0.863f, 0.314f};  // green
+    case BIO_TOXIN:       return {0.784f, 0.196f, 0.784f};  // purple
+    case BIO_ANTIBODY:    return {1.0f,   1.0f,   0.275f};  // yellow
+    case BIO_RED_BLOOD:   return {0.863f, 0.275f, 0.275f};  // red
+    case BIO_WHITE_BLOOD: return {0.941f, 0.941f, 1.0f};    // white
+    default:              return {0.7f,   0.7f,   0.7f};
     }
 }
 
 // ── Init ────────────────────────────────────────────────────────────────────
 
-void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
+void BiochemRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     // ── Descriptor set layout ──────────────────────────────────────────────
     VkDescriptorSetLayoutBinding bindings[2]{};
-    // Binding 0: Camera UBO
     bindings[0].binding         = 0;
     bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
     bindings[0].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
-    // Binding 1: Sphere SSBO
     bindings[1].binding         = 1;
     bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[1].descriptorCount = 1;
@@ -72,8 +60,8 @@ void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     vkCreatePipelineLayout(vk.device, &pipe_layout_ci, nullptr, &pipe_layout_);
 
     // ── Shader modules ─────────────────────────────────────────────────────
-    VkShaderModule vert_mod = vk.create_shader_module("shaders/cosmos_rt.vert.spv");
-    VkShaderModule frag_mod = vk.create_shader_module("shaders/cosmos_rt.frag.spv");
+    VkShaderModule vert_mod = vk.create_shader_module("shaders/biochem_rt.vert.spv");
+    VkShaderModule frag_mod = vk.create_shader_module("shaders/biochem_rt.frag.spv");
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -148,12 +136,12 @@ void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
 
     // ── Buffers ────────────────────────────────────────────────────────────
     camera_ubo_ = vk.create_buffer(
-        sizeof(CameraUBOData),
+        sizeof(BioCameraUBOData),
         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
     sphere_ssbo_ = vk.create_buffer(
-        MAX_SPHERES * sizeof(SphereGPU),
+        MAX_SPHERES * sizeof(BioSphereGPU),
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
@@ -178,12 +166,12 @@ void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     VkDescriptorBufferInfo ubo_info{};
     ubo_info.buffer = camera_ubo_.handle;
     ubo_info.offset = 0;
-    ubo_info.range  = sizeof(CameraUBOData);
+    ubo_info.range  = sizeof(BioCameraUBOData);
 
     VkDescriptorBufferInfo ssbo_info{};
     ssbo_info.buffer = sphere_ssbo_.handle;
     ssbo_info.offset = 0;
-    ssbo_info.range  = MAX_SPHERES * sizeof(SphereGPU);
+    ssbo_info.range  = MAX_SPHERES * sizeof(BioSphereGPU);
 
     VkWriteDescriptorSet writes[2]{};
     writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -205,7 +193,7 @@ void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
 
 // ── Destroy ─────────────────────────────────────────────────────────────────
 
-void CosmosRaytracer::destroy(VulkanContext& vk) {
+void BiochemRaytracer::destroy(VulkanContext& vk) {
     vkDestroyPipeline(vk.device, pipeline_, nullptr);
     vkDestroyPipelineLayout(vk.device, pipe_layout_, nullptr);
     vkDestroyDescriptorPool(vk.device, desc_pool_, nullptr);
@@ -216,78 +204,55 @@ void CosmosRaytracer::destroy(VulkanContext& vk) {
 
 // ── Update + draw ───────────────────────────────────────────────────────────
 
-void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
-                                       const CosmosState& state,
-                                       const OrbitCamera& camera,
-                                       const CosmosConfig& cfg,
-                                       float screen_w, float screen_h,
-                                       float time) {
+void BiochemRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
+                                        const BiochemState& state,
+                                        const OrbitCamera& camera,
+                                        const BiochemConfig& cfg,
+                                        float screen_w, float screen_h,
+                                        float time) {
     float aspect = screen_w / screen_h;
     glm::mat4 view = camera.view_matrix();
     glm::mat4 proj = camera.proj_matrix(aspect);
     glm::mat4 vp   = proj * view;
 
+    // Count alive entities for upload
+    int alive_count = 0;
+    for (const auto& e : state.entities)
+        if (e.alive) alive_count++;
+    int n = std::min(alive_count, MAX_SPHERES);
+
     // ── Upload camera UBO ──────────────────────────────────────────────────
-    CameraUBOData cam{};
+    BioCameraUBOData cam{};
     cam.inv_vp         = glm::inverse(vp);
     cam.eye_pos        = glm::vec4(camera.eye_position(), 0.0f);
-    cam.screen_info    = glm::vec4(screen_w, screen_h,
-                                    (float)std::min((int)state.bodies.size(), MAX_SPHERES),
-                                    time);
-    cam.lighting_params = glm::vec4(
-        cfg.star_lighting    ? 1.0f : 0.0f,
-        cfg.uniform_lighting ? 1.0f : 0.0f,
-        cfg.ambient_strength,
-        0.0f);
+    cam.screen_info    = glm::vec4(screen_w, screen_h, (float)n, time);
+    cam.lighting_params = glm::vec4(0.0f, 0.0f, cfg.ambient_strength, 0.0f);
 
     void* mapped = nullptr;
-    vkMapMemory(vk.device, camera_ubo_.memory, 0, sizeof(CameraUBOData), 0, &mapped);
-    memcpy(mapped, &cam, sizeof(CameraUBOData));
+    vkMapMemory(vk.device, camera_ubo_.memory, 0, sizeof(BioCameraUBOData), 0, &mapped);
+    memcpy(mapped, &cam, sizeof(BioCameraUBOData));
     vkUnmapMemory(vk.device, camera_ubo_.memory);
 
     // ── Upload sphere SSBO ─────────────────────────────────────────────────
-    int n = std::min((int)state.bodies.size(), MAX_SPHERES);
-    std::vector<SphereGPU> spheres(n);
-    for (int i = 0; i < n; i++) {
-        const auto& b = state.bodies[i];
-        glm::vec3 col = body_color_vec3(b);
-        float emissive = 0.0f;
-        if (is_star_type(b.type))       emissive = 1.5f;
-        if (is_black_hole_type(b.type)) emissive = -1.0f;
+    std::vector<BioSphereGPU> spheres;
+    spheres.reserve(n);
+    for (const auto& e : state.entities) {
+        if (!e.alive) continue;
+        if ((int)spheres.size() >= MAX_SPHERES) break;
 
-        spheres[i].pos_radius = glm::vec4(b.pos, b.radius);
-        spheres[i].color_emit = glm::vec4(col, emissive);
-
-        // Pack planet/moon data for shader procedural textures
-        if (b.type == CTYPE_PLANET || b.type == CTYPE_MOON) {
-            PlanetProperties pp = generate_planet_properties(b.seed, b.mass, b.temperature);
-
-            float body_flags = 0.0f;
-            if (b.type == CTYPE_PLANET) body_flags += 1.0f;
-            if (b.type == CTYPE_MOON)   body_flags += 2.0f;
-            if (pp.atmosphere.pressure > 0.01f) body_flags += 4.0f;
-            body_flags += (float)pp.ocean_type * 8.0f;
-
-            spheres[i].planet_data = glm::vec4(
-                (float)b.seed,
-                (float)pp.surface,
-                pp.ocean_coverage / 100.0f,
-                b.temperature);
-            spheres[i].atmo_data = glm::vec4(
-                pp.cloud_coverage / 100.0f,
-                pp.atmosphere.pressure,
-                pp.vegetation_coverage / 100.0f,
-                body_flags);
-        } else {
-            spheres[i].planet_data = glm::vec4(0.0f);
-            spheres[i].atmo_data   = glm::vec4(0.0f);
-        }
+        glm::vec3 col = bio_type_color(e.type);
+        BioSphereGPU s;
+        s.pos_radius = glm::vec4(e.pos, e.radius);
+        s.color_emit = glm::vec4(col, (float)e.type);
+        spheres.push_back(s);
     }
 
-    vkMapMemory(vk.device, sphere_ssbo_.memory, 0,
-                n * sizeof(SphereGPU), 0, &mapped);
-    memcpy(mapped, spheres.data(), n * sizeof(SphereGPU));
-    vkUnmapMemory(vk.device, sphere_ssbo_.memory);
+    if (!spheres.empty()) {
+        vkMapMemory(vk.device, sphere_ssbo_.memory, 0,
+                    spheres.size() * sizeof(BioSphereGPU), 0, &mapped);
+        memcpy(mapped, spheres.data(), spheres.size() * sizeof(BioSphereGPU));
+        vkUnmapMemory(vk.device, sphere_ssbo_.memory);
+    }
 
     // ── Draw fullscreen triangle ───────────────────────────────────────────
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);

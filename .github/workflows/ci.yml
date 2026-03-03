@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libvulkan-dev \
+            vulkan-validationlayers \
+            glslc \
+            libglfw3-dev \
+            libglm-dev \
+            libcurl4-openssl-dev \
+            libomp-dev
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Run tests
+        run: |
+          if [ -f build/tests/run_tests ]; then
+            cd build && ctest --output-on-failure
+          else
+            echo "No test binary found — skipping"
+          fi

@@ -1,6 +1,7 @@
 #pragma once
 // ── Biochemical Simulator — Data Types ──────────────────────────────────────
 
+#include "common/orbit_camera.h"
 #include <glm/glm.hpp>
 #include <cstdint>
 #include <vector>
@@ -22,8 +23,8 @@ enum BioEntityType : uint32_t {
 // ── Single biological entity ────────────────────────────────────────────────
 
 struct BioEntity {
-    glm::vec2   pos{0.0f};
-    glm::vec2   vel{0.0f};
+    glm::vec3   pos{0.0f};
+    glm::vec3   vel{0.0f};
     float       radius    = 8.0f;
     float       energy    = 100.0f;     // health / metabolic energy
     float       age       = 0.0f;       // seconds alive
@@ -47,6 +48,19 @@ struct BiochemConfig {
     float    dt_scale         = 1.0f;
     bool     immune_system    = true;
     bool     show_energy_bars = true;
+
+    // 3D world bounds (entities wrap within this volume)
+    float    world_radius     = 200.0f;
+
+    // Lighting
+    float    ambient_strength = 0.12f;
+
+    // AI movement
+    bool     ai_movement       = true;
+    float    seek_strength      = 40.0f;
+    float    flee_strength      = 60.0f;
+    float    spacing_strength   = 20.0f;
+    float    brownian_strength  = 15.0f;
 };
 
 // ── Entity collection ───────────────────────────────────────────────────────

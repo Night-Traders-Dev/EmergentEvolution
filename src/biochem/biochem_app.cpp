@@ -1,9 +1,28 @@
 #include "biochem/biochem_app.h"
 #include "imgui.h"
+#include <GLFW/glfw3.h>
 #include <cmath>
 #include <cstdlib>
 #include <algorithm>
 #include <random>
+
+// ── Entity type colors / names ──────────────────────────────────────────────
+
+static const char* const BIO_TYPE_NAMES[] = {
+    "Cell", "Bacterium", "Virus", "Nutrient",
+    "Toxin", "Antibody", "Red Blood Cell", "White Blood Cell"
+};
+
+static const ImU32 TYPE_COLORS[] = {
+    IM_COL32(70, 160, 255, 255),   // Cell - blue
+    IM_COL32(230, 150, 50, 255),   // Bacterium - orange
+    IM_COL32(220, 50, 50, 255),    // Virus - red
+    IM_COL32(80, 220, 80, 255),    // Nutrient - green
+    IM_COL32(200, 50, 200, 255),   // Toxin - purple
+    IM_COL32(255, 255, 70, 255),   // Antibody - yellow
+    IM_COL32(220, 70, 70, 255),    // Red blood - red
+    IM_COL32(240, 240, 255, 255),  // White blood - white
+};
 
 // ── Draw helpers ────────────────────────────────────────────────────────────
 
@@ -28,47 +47,28 @@ static void draw_radial_glow(ImDrawList* dl, float cx, float cy, float radius,
     }
 }
 
-// ── Entity type colors ──────────────────────────────────────────────────────
-
-static const char* const BIO_TYPE_NAMES[] = {
-    "Cell", "Bacterium", "Virus", "Nutrient",
-    "Toxin", "Antibody", "Red Blood Cell", "White Blood Cell"
-};
-
-static const ImU32 TYPE_COLORS[] = {
-    IM_COL32(70, 160, 255, 255),   // Cell - blue
-    IM_COL32(230, 150, 50, 255),   // Bacterium - orange
-    IM_COL32(220, 50, 50, 255),    // Virus - red
-    IM_COL32(80, 220, 80, 255),    // Nutrient - green
-    IM_COL32(200, 50, 200, 255),   // Toxin - purple
-    IM_COL32(255, 255, 70, 255),   // Antibody - yellow
-    IM_COL32(220, 70, 70, 255),    // Red blood - red
-    IM_COL32(240, 240, 255, 255),  // White blood - white
-};
-
-static ImU32 type_glow(uint32_t type) {
-    ImU32 c = TYPE_COLORS[type % BIO_TYPE_COUNT];
-    int r = (c >> IM_COL32_R_SHIFT) & 0xFF;
-    int g = (c >> IM_COL32_G_SHIFT) & 0xFF;
-    int b = (c >> IM_COL32_B_SHIFT) & 0xFF;
-    return IM_COL32(r, g, b, 25);
-}
-
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 
-static void seed_default_population(BiochemState& state) {
+static void seed_default_population(BiochemState& state, float world_radius) {
     state.clear();
 
     std::mt19937 rng(42);
     auto randf = [&](float lo, float hi) {
         return std::uniform_real_distribution<float>(lo, hi)(rng);
     };
+    auto rand_pos = [&]() -> glm::vec3 {
+        float r = world_radius * 0.8f;
+        return {randf(-r, r), randf(-r, r), randf(-r, r)};
+    };
+    auto rand_vel = [&](float speed) -> glm::vec3 {
+        return {randf(-speed, speed), randf(-speed, speed), randf(-speed, speed)};
+    };
 
     // Cells
     for (int i = 0; i < 30; i++) {
         BioEntity e;
-        e.pos    = {randf(200, 1400), randf(200, 700)};
-        e.vel    = {randf(-20, 20), randf(-20, 20)};
+        e.pos    = rand_pos();
+        e.vel    = rand_vel(20.0f);
         e.radius = randf(10, 16);
         e.energy = randf(80, 120);
         e.type   = BIO_CELL;
@@ -79,8 +79,8 @@ static void seed_default_population(BiochemState& state) {
     // Bacteria
     for (int i = 0; i < 15; i++) {
         BioEntity e;
-        e.pos    = {randf(100, 1500), randf(100, 800)};
-        e.vel    = {randf(-30, 30), randf(-30, 30)};
+        e.pos    = rand_pos();
+        e.vel    = rand_vel(30.0f);
         e.radius = randf(5, 8);
         e.energy = randf(50, 80);
         e.type   = BIO_BACTERIUM;
@@ -91,8 +91,8 @@ static void seed_default_population(BiochemState& state) {
     // Viruses
     for (int i = 0; i < 5; i++) {
         BioEntity e;
-        e.pos    = {randf(400, 1200), randf(200, 700)};
-        e.vel    = {randf(-50, 50), randf(-50, 50)};
+        e.pos    = rand_pos();
+        e.vel    = rand_vel(50.0f);
         e.radius = 4.0f;
         e.energy = 30.0f;
         e.type   = BIO_VIRUS;
@@ -103,8 +103,8 @@ static void seed_default_population(BiochemState& state) {
     // White blood cells
     for (int i = 0; i < 3; i++) {
         BioEntity e;
-        e.pos    = {randf(300, 1300), randf(200, 700)};
-        e.vel    = {randf(-15, 15), randf(-15, 15)};
+        e.pos    = rand_pos();
+        e.vel    = rand_vel(15.0f);
         e.radius = 12.0f;
         e.energy = 200.0f;
         e.type   = BIO_WHITE_BLOOD;
@@ -114,7 +114,7 @@ static void seed_default_population(BiochemState& state) {
     // Nutrients
     for (int i = 0; i < 40; i++) {
         BioEntity e;
-        e.pos = {randf(50, 1600), randf(50, 880)};
+        e.pos = rand_pos();
         e.radius = 3.0f;
         e.energy = 25.0f;
         e.type = BIO_NUTRIENT;
@@ -125,22 +125,53 @@ static void seed_default_population(BiochemState& state) {
 void BiochemApp::init(GLFWwindow* window) {
     vk.init(window);
     renderer.init(vk, window);
+    raytracer_.init(vk, renderer.render_pass());
 
-    seed_default_population(state);
+    // Camera defaults for bio scale
+    camera.distance = 500.0f;
+    camera.elevation = 0.4f;
+    camera.fov = 50.0f;
+    camera.near_clip = 0.5f;
+    camera.far_clip = 5000.0f;
+
+    seed_default_population(state, cfg.world_radius);
     cfg.entity_count = static_cast<uint32_t>(state.count());
 }
 
 void BiochemApp::destroy() {
+    raytracer_.destroy(vk);
     renderer.destroy(vk);
     vk.destroy();
 }
 
 void BiochemApp::reset_simulation() {
-    seed_default_population(state);
+    seed_default_population(state, cfg.world_radius);
     cfg.entity_count = static_cast<uint32_t>(state.count());
     selected_entity = -1;
     nutrient_timer_ = 0.0f;
+    sim_time_ = 0.0f;
     paused = false;
+}
+
+void BiochemApp::spawn_at(glm::vec3 pos) {
+    int t = spawn_bio_type_ % BIO_TYPE_COUNT;
+    BioEntity e;
+    e.pos = pos;
+    e.vel = {0, 0, 0};
+    e.energy = spawn_energy_;
+    e.type = (uint32_t)t;
+    e.genome = (uint32_t)rand();
+
+    if (t == BIO_CELL) e.radius = 12.0f;
+    else if (t == BIO_BACTERIUM) e.radius = 6.0f;
+    else if (t == BIO_VIRUS) e.radius = 4.0f;
+    else if (t == BIO_NUTRIENT) e.radius = 3.0f;
+    else if (t == BIO_TOXIN) e.radius = 4.0f;
+    else if (t == BIO_ANTIBODY) e.radius = 5.0f;
+    else if (t == BIO_RED_BLOOD) e.radius = 5.0f;
+    else if (t == BIO_WHITE_BLOOD) e.radius = 12.0f;
+
+    state.entities.push_back(e);
 }
 
 // ── Tick ─────────────────────────────────────────────────────────────────────
@@ -149,10 +180,36 @@ void BiochemApp::tick(GLFWwindow* window, float dt) {
     if (!renderer.begin_frame(vk, window))
         return;
 
-    if (!paused && !show_splash)
-        step_simulation(dt);
+    // WASD camera panning
+    if (!paused && !show_splash && !show_pause_menu && !ImGui::GetIO().WantTextInput) {
+        float move_speed = camera.distance * 0.5f * dt;
+        glm::vec3 fwd = camera.forward_direction();
+        glm::vec3 right = camera.right_direction();
+        fwd.y = 0; fwd = glm::normalize(fwd);
+        right.y = 0; right = glm::normalize(right);
 
-    render_entities();
+        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) camera.target += fwd * move_speed;
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) camera.target -= fwd * move_speed;
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) camera.target += right * move_speed;
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) camera.target -= right * move_speed;
+        if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) camera.target.y += move_speed;
+        if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) camera.target.y -= move_speed;
+    }
+
+    if (!paused && !show_splash) {
+        step_simulation(dt);
+        sim_time_ += dt;
+    }
+
+    ImGuiIO& io = ImGui::GetIO();
+
+    // GPU raytraced entity rendering (before UI overlays)
+    if (!show_splash && !show_pause_menu) {
+        raytracer_.update_and_draw(vk, renderer.current_cmd(), state, camera, cfg,
+                                    io.DisplaySize.x, io.DisplaySize.y, sim_time_);
+    }
+
+    render_overlay();
     render_ui();
 
     renderer.end_frame(vk);
@@ -161,12 +218,13 @@ void BiochemApp::tick(GLFWwindow* window, float dt) {
 // ── Simulation ──────────────────────────────────────────────────────────────
 
 void BiochemApp::spawn_nutrient() {
+    float r = cfg.world_radius * 0.8f;
     auto randf = [](float lo, float hi) {
         return lo + static_cast<float>(rand()) / RAND_MAX * (hi - lo);
     };
     BioEntity e;
-    e.pos    = {randf(50, 1600), randf(50, 880)};
-    e.vel    = {0, 0};
+    e.pos    = {randf(-r, r), randf(-r, r), randf(-r, r)};
+    e.vel    = {0, 0, 0};
     e.radius = 3.0f;
     e.energy = 25.0f;
     e.type   = BIO_NUTRIENT;
@@ -176,6 +234,7 @@ void BiochemApp::spawn_nutrient() {
 void BiochemApp::step_simulation(float dt) {
     float scaled_dt = dt * cfg.dt_scale;
     auto& ents = state.entities;
+    float wr = cfg.world_radius;
 
     // Spawn nutrients over time
     nutrient_timer_ += scaled_dt;
@@ -194,13 +253,16 @@ void BiochemApp::step_simulation(float dt) {
         e.vel *= cfg.viscosity;
         e.age += scaled_dt;
 
-        // Wrap around world
-        if (e.pos.x < 0)    e.pos.x += 1648.0f;
-        if (e.pos.x > 1648) e.pos.x -= 1648.0f;
-        if (e.pos.y < 0)    e.pos.y += 928.0f;
-        if (e.pos.y > 928)  e.pos.y -= 928.0f;
+        // Bounce off spherical world boundary
+        float dist_from_center = glm::length(e.pos);
+        if (dist_from_center > wr) {
+            glm::vec3 norm = e.pos / dist_from_center;
+            e.pos = norm * wr;
+            e.vel -= 2.0f * glm::dot(e.vel, norm) * norm;
+            e.vel *= 0.8f;
+        }
 
-        // Metabolism — cells and bacteria consume energy
+        // Metabolism
         if (e.type == BIO_CELL || e.type == BIO_BACTERIUM) {
             e.energy -= cfg.metabolism_rate * scaled_dt;
             if (e.energy <= 0) {
@@ -214,6 +276,10 @@ void BiochemApp::step_simulation(float dt) {
             e.alive = false;
     }
 
+    // AI steering behaviors
+    if (cfg.ai_movement)
+        process_ai_movement(scaled_dt);
+
     // Eating nutrients
     for (size_t i = 0; i < ents.size(); i++) {
         if (!ents[i].alive) continue;
@@ -222,7 +288,7 @@ void BiochemApp::step_simulation(float dt) {
         for (size_t j = 0; j < ents.size(); j++) {
             if (i == j || !ents[j].alive) continue;
 
-            glm::vec2 diff = ents[j].pos - ents[i].pos;
+            glm::vec3 diff = ents[j].pos - ents[i].pos;
             float dist = glm::length(diff);
             float touch = ents[i].radius + ents[j].radius;
 
@@ -278,12 +344,14 @@ void BiochemApp::process_cell_division() {
         child.energy = e.energy * 0.5f;
         e.energy *= 0.5f;
 
-        float angle = static_cast<float>(rand()) / RAND_MAX * 6.2832f;
-        glm::vec2 offset(cosf(angle) * e.radius, sinf(angle) * e.radius);
+        float theta = static_cast<float>(rand()) / RAND_MAX * 6.2832f;
+        float phi = static_cast<float>(rand()) / RAND_MAX * 3.1416f - 1.5708f;
+        glm::vec3 dir(cosf(phi) * cosf(theta), sinf(phi), cosf(phi) * sinf(theta));
+        glm::vec3 offset = dir * e.radius;
+
         child.pos = e.pos + offset;
         e.pos -= offset;
-
-        child.vel = e.vel + glm::vec2(cosf(angle) * 5.0f, sinf(angle) * 5.0f);
+        child.vel = e.vel + dir * 5.0f;
         child.radius = e.radius * (0.9f + 0.2f * static_cast<float>(rand()) / RAND_MAX);
         child.genome = e.genome;
 
@@ -313,7 +381,7 @@ void BiochemApp::process_virus_infection(float dt) {
             if (i == j || !ents[j].alive) continue;
             if (ents[j].type != BIO_CELL) continue;
 
-            glm::vec2 diff = ents[j].pos - ents[i].pos;
+            glm::vec3 diff = ents[j].pos - ents[i].pos;
             float dist = glm::length(diff);
 
             if (dist < cfg.infection_radius) {
@@ -321,7 +389,7 @@ void BiochemApp::process_virus_infection(float dt) {
                 ents[j].energy -= damage;
 
                 if (dist > 1.0f) {
-                    glm::vec2 dir = diff / dist;
+                    glm::vec3 dir = diff / dist;
                     ents[i].vel += dir * 30.0f * dt;
                 }
 
@@ -331,8 +399,10 @@ void BiochemApp::process_virus_infection(float dt) {
                     for (int k = 0; k < spawn_count && ents.size() < 1200; k++) {
                         BioEntity v;
                         float a = static_cast<float>(rand()) / RAND_MAX * 6.2832f;
-                        v.pos = ents[j].pos + glm::vec2(cosf(a) * 8.0f, sinf(a) * 8.0f);
-                        v.vel = glm::vec2(cosf(a) * 40.0f, sinf(a) * 40.0f);
+                        float p = static_cast<float>(rand()) / RAND_MAX * 3.1416f - 1.5708f;
+                        glm::vec3 d(cosf(p) * cosf(a), sinf(p), cosf(p) * sinf(a));
+                        v.pos = ents[j].pos + d * 8.0f;
+                        v.vel = d * 40.0f;
                         v.radius = 4.0f;
                         v.energy = 30.0f;
                         v.type = BIO_VIRUS;
@@ -349,6 +419,7 @@ void BiochemApp::process_virus_infection(float dt) {
 
 void BiochemApp::process_antibody_response(float dt) {
     auto& ents = state.entities;
+    float wr = cfg.world_radius;
 
     size_t virus_count = 0, wbc_count = 0;
     for (auto& e : ents) {
@@ -358,10 +429,14 @@ void BiochemApp::process_antibody_response(float dt) {
     }
 
     if (virus_count > wbc_count && ents.size() < 1200) {
+        auto randf = [](float lo, float hi) {
+            return lo + static_cast<float>(rand()) / RAND_MAX * (hi - lo);
+        };
         BioEntity wbc;
-        wbc.pos = {static_cast<float>(rand() % 1600 + 24),
-                   static_cast<float>(rand() % 880 + 24)};
-        wbc.vel = {0, 0};
+        wbc.pos = {randf(-wr * 0.8f, wr * 0.8f),
+                   randf(-wr * 0.8f, wr * 0.8f),
+                   randf(-wr * 0.8f, wr * 0.8f)};
+        wbc.vel = {0, 0, 0};
         wbc.radius = 12.0f;
         wbc.energy = 200.0f;
         wbc.type = BIO_WHITE_BLOOD;
@@ -384,7 +459,7 @@ void BiochemApp::process_antibody_response(float dt) {
         }
 
         if (best_idx >= 0) {
-            glm::vec2 dir = ents[best_idx].pos - wbc.pos;
+            glm::vec3 dir = ents[best_idx].pos - wbc.pos;
             float dist = glm::length(dir);
             if (dist > 1.0f) {
                 dir /= dist;
@@ -406,6 +481,122 @@ void BiochemApp::process_antibody_response(float dt) {
     }
 }
 
+// ── AI Movement ─────────────────────────────────────────────────────────────
+
+void BiochemApp::process_ai_movement(float dt) {
+    auto& ents = state.entities;
+    size_t n = ents.size();
+
+    for (size_t i = 0; i < n; i++) {
+        auto& e = ents[i];
+        if (!e.alive) continue;
+
+        float max_speed = 0.0f;
+
+        if (e.type == BIO_CELL || e.type == BIO_BACTERIUM) {
+            max_speed = (e.type == BIO_CELL) ? 60.0f : 80.0f;
+
+            // Seek nearest nutrient
+            float best_food_dist = 150.0f;
+            int best_food = -1;
+            for (size_t j = 0; j < n; j++) {
+                if (!ents[j].alive || ents[j].type != BIO_NUTRIENT) continue;
+                float d = glm::length(ents[j].pos - e.pos);
+                if (d < best_food_dist) { best_food_dist = d; best_food = (int)j; }
+            }
+            if (best_food >= 0) {
+                glm::vec3 dir = ents[best_food].pos - e.pos;
+                float d = glm::length(dir);
+                if (d > 1.0f)
+                    e.vel += glm::normalize(dir) * cfg.seek_strength * dt;
+            }
+
+            // Flee nearest virus/toxin
+            float best_threat_dist = 100.0f;
+            int best_threat = -1;
+            for (size_t j = 0; j < n; j++) {
+                if (!ents[j].alive) continue;
+                if (ents[j].type != BIO_VIRUS && ents[j].type != BIO_TOXIN) continue;
+                float d = glm::length(ents[j].pos - e.pos);
+                if (d < best_threat_dist) { best_threat_dist = d; best_threat = (int)j; }
+            }
+            if (best_threat >= 0) {
+                glm::vec3 away = e.pos - ents[best_threat].pos;
+                float d = glm::length(away);
+                if (d > 1.0f)
+                    e.vel += glm::normalize(away) * cfg.flee_strength * dt;
+            }
+
+            // Spacing from same type
+            for (size_t j = 0; j < n; j++) {
+                if (i == j || !ents[j].alive || ents[j].type != e.type) continue;
+                glm::vec3 diff = e.pos - ents[j].pos;
+                float d = glm::length(diff);
+                float min_dist = (e.radius + ents[j].radius) * 2.0f;
+                if (d < min_dist && d > 0.1f)
+                    e.vel += glm::normalize(diff) * cfg.spacing_strength * dt;
+            }
+        }
+        else if (e.type == BIO_VIRUS) {
+            max_speed = 100.0f;
+            // Seek nearest cell
+            float best_dist = 200.0f;
+            int best = -1;
+            for (size_t j = 0; j < n; j++) {
+                if (!ents[j].alive || ents[j].type != BIO_CELL) continue;
+                float d = glm::length(ents[j].pos - e.pos);
+                if (d < best_dist) { best_dist = d; best = (int)j; }
+            }
+            if (best >= 0) {
+                glm::vec3 dir = ents[best].pos - e.pos;
+                float d = glm::length(dir);
+                if (d > 1.0f)
+                    e.vel += glm::normalize(dir) * cfg.seek_strength * 0.5f * dt;
+            }
+        }
+        else if (e.type == BIO_RED_BLOOD) {
+            max_speed = 40.0f;
+            // Brownian motion
+            float rx = (float)rand() / RAND_MAX * 2.0f - 1.0f;
+            float ry = (float)rand() / RAND_MAX * 2.0f - 1.0f;
+            float rz = (float)rand() / RAND_MAX * 2.0f - 1.0f;
+            e.vel += glm::vec3(rx, ry, rz) * cfg.brownian_strength * dt;
+        }
+        else if (e.type == BIO_NUTRIENT) {
+            max_speed = 15.0f;
+            // Gentle drift
+            float rx = (float)rand() / RAND_MAX * 2.0f - 1.0f;
+            float ry = (float)rand() / RAND_MAX * 2.0f - 1.0f;
+            float rz = (float)rand() / RAND_MAX * 2.0f - 1.0f;
+            e.vel += glm::vec3(rx, ry, rz) * cfg.brownian_strength * 0.3f * dt;
+        }
+        else if (e.type == BIO_ANTIBODY) {
+            max_speed = 70.0f;
+            // Seek nearest virus
+            float best_dist = 120.0f;
+            int best = -1;
+            for (size_t j = 0; j < n; j++) {
+                if (!ents[j].alive || ents[j].type != BIO_VIRUS) continue;
+                float d = glm::length(ents[j].pos - e.pos);
+                if (d < best_dist) { best_dist = d; best = (int)j; }
+            }
+            if (best >= 0) {
+                glm::vec3 dir = ents[best].pos - e.pos;
+                float d = glm::length(dir);
+                if (d > 1.0f)
+                    e.vel += glm::normalize(dir) * cfg.seek_strength * 0.7f * dt;
+            }
+        }
+
+        // Clamp speed
+        if (max_speed > 0.0f) {
+            float spd = glm::length(e.vel);
+            if (spd > max_speed)
+                e.vel *= max_speed / spd;
+        }
+    }
+}
+
 // ── Repulsion ───────────────────────────────────────────────────────────────
 
 void BiochemApp::process_repulsion() {
@@ -417,13 +608,13 @@ void BiochemApp::process_repulsion() {
         for (size_t j = i + 1; j < n; j++) {
             if (!ents[j].alive) continue;
 
-            glm::vec2 diff = ents[j].pos - ents[i].pos;
+            glm::vec3 diff = ents[j].pos - ents[i].pos;
             float dist = glm::length(diff);
             float touch = ents[i].radius + ents[j].radius;
 
             if (dist < touch && dist > 0.1f) {
                 float overlap = touch - dist;
-                glm::vec2 dir = diff / dist;
+                glm::vec3 dir = diff / dist;
                 float push = overlap * 0.5f;
                 ents[i].pos -= dir * push;
                 ents[j].pos += dir * push;
@@ -434,110 +625,34 @@ void BiochemApp::process_repulsion() {
     }
 }
 
-// ── Entity rendering (ImGui DrawList) ───────────────────────────────────────
+// ── Overlay rendering (selection highlight via DrawList) ────────────────────
 
-void BiochemApp::render_entities() {
+void BiochemApp::render_overlay() {
+    if (show_splash || show_pause_menu) return;
+    if (selected_entity < 0 || selected_entity >= (int)state.entities.size()) return;
+
+    const auto& e = state.entities[selected_entity];
+    if (!e.alive) { selected_entity = -1; return; }
+
     ImGuiIO& io = ImGui::GetIO();
     float W = io.DisplaySize.x, H = io.DisplaySize.y;
+    float aspect = W / H;
 
-    ImDrawList* bg = ImGui::GetBackgroundDrawList();
+    glm::mat4 vp = camera.proj_matrix(aspect) * camera.view_matrix();
+    glm::vec4 clip = vp * glm::vec4(e.pos, 1.0f);
+    if (clip.w <= 0.0f) return;
 
-    // Dark blue-green background
-    bg->AddRectFilled(ImVec2(0, 0), ImVec2(W, H), IM_COL32(4, 12, 18, 255));
+    glm::vec3 ndc = glm::vec3(clip) / clip.w;
+    float sx = (ndc.x * 0.5f + 0.5f) * W;
+    float sy = (1.0f - (ndc.y * 0.5f + 0.5f)) * H;
 
-    // Don't draw entities during overlays
-    if (show_splash || show_pause_menu) return;
+    float fov_rad = glm::radians(camera.fov);
+    float sr = (e.radius / clip.w) * (H / (2.0f * std::tan(fov_rad * 0.5f)));
+    float pick_r = std::max(sr, 8.0f);
 
-    // Subtle grid
-    for (float x = 0; x < W; x += 60.0f)
-        bg->AddLine(ImVec2(x, 0), ImVec2(x, H), IM_COL32(20, 35, 45, 60));
-    for (float y = 0; y < H; y += 60.0f)
-        bg->AddLine(ImVec2(0, y), ImVec2(W, y), IM_COL32(20, 35, 45, 60));
-
-    auto& ents = state.entities;
-
-    for (size_t i = 0; i < ents.size(); i++) {
-        const auto& e = ents[i];
-        if (!e.alive) continue;
-
-        float ex = e.pos.x, ey = e.pos.y;
-        ImU32 col = TYPE_COLORS[e.type % BIO_TYPE_COUNT];
-        int cr = (col >> IM_COL32_R_SHIFT) & 0xFF;
-        int cg = (col >> IM_COL32_G_SHIFT) & 0xFF;
-        int cb = (col >> IM_COL32_B_SHIFT) & 0xFF;
-
-        // Glow for cells and white blood cells
-        if (e.type == BIO_CELL || e.type == BIO_WHITE_BLOOD) {
-            draw_radial_glow(bg, ex, ey, e.radius * 3.0f,
-                type_glow(e.type), IM_COL32(0, 0, 0, 0));
-        }
-
-        // Body circle
-        bg->AddCircleFilled(ImVec2(ex, ey), e.radius, col, 24);
-        bg->AddCircle(ImVec2(ex, ey), e.radius,
-            IM_COL32(cr / 2, cg / 2, cb / 2, 180), 24, 1.0f);
-
-        // Virus spike decorations
-        if (e.type == BIO_VIRUS) {
-            float spike_phase = e.age * 0.5f;
-            for (int s = 0; s < 8; s++) {
-                float a = spike_phase + s * (6.2832f / 8.0f);
-                float sx1 = ex + cosf(a) * e.radius;
-                float sy1 = ey + sinf(a) * e.radius;
-                float sx2 = ex + cosf(a) * (e.radius + 4.0f);
-                float sy2 = ey + sinf(a) * (e.radius + 4.0f);
-                bg->AddLine(ImVec2(sx1, sy1), ImVec2(sx2, sy2),
-                    IM_COL32(220, 50, 50, 150), 1.5f);
-                bg->AddCircleFilled(ImVec2(sx2, sy2), 1.5f,
-                    IM_COL32(220, 50, 50, 200));
-            }
-        }
-
-        // Bacterium flagella decoration
-        if (e.type == BIO_BACTERIUM) {
-            float speed = glm::length(e.vel);
-            if (speed > 1.0f) {
-                glm::vec2 tail_dir = -glm::normalize(e.vel);
-                for (int t = 0; t < 3; t++) {
-                    float offset_a = (float)t * 0.5f - 0.5f;
-                    float wave = sinf(e.age * 8.0f + (float)t * 2.0f) * 4.0f;
-                    float tx = ex + tail_dir.x * (e.radius + 5.0f + t * 3.0f)
-                              + tail_dir.y * (wave + offset_a * 3.0f);
-                    float ty = ey + tail_dir.y * (e.radius + 5.0f + t * 3.0f)
-                              - tail_dir.x * (wave + offset_a * 3.0f);
-                    bg->AddLine(ImVec2(ex + tail_dir.x * e.radius,
-                                       ey + tail_dir.y * e.radius),
-                                ImVec2(tx, ty),
-                                IM_COL32(230, 150, 50, 100), 1.0f);
-                }
-            }
-        }
-
-        // Energy bars above cells/bacteria
-        if (cfg.show_energy_bars &&
-            (e.type == BIO_CELL || e.type == BIO_BACTERIUM || e.type == BIO_WHITE_BLOOD)) {
-            float bar_w = e.radius * 2.0f;
-            float bar_h = 3.0f;
-            float bar_x = ex - bar_w * 0.5f;
-            float bar_y = ey - e.radius - 8.0f;
-            float fill = std::clamp(e.energy / cfg.division_energy, 0.0f, 1.0f);
-
-            bg->AddRectFilled(ImVec2(bar_x, bar_y),
-                ImVec2(bar_x + bar_w, bar_y + bar_h),
-                IM_COL32(20, 20, 20, 180), 1.0f);
-            int gr = (int)(255 * (1.0f - fill));
-            int gg = (int)(255 * fill);
-            bg->AddRectFilled(ImVec2(bar_x, bar_y),
-                ImVec2(bar_x + bar_w * fill, bar_y + bar_h),
-                IM_COL32(gr, gg, 30, 200), 1.0f);
-        }
-
-        // Selection highlight
-        if ((int)i == selected_entity) {
-            bg->AddCircle(ImVec2(ex, ey), e.radius + 5.0f,
-                IM_COL32(255, 255, 100, 200), 24, 2.0f);
-        }
-    }
+    ImDrawList* fg = ImGui::GetForegroundDrawList();
+    fg->AddCircle(ImVec2(sx, sy), pick_r + 4.0f,
+        IM_COL32(255, 255, 100, 200), 24, 2.0f);
 }
 
 // ── Menu background (animated bio particles) ────────────────────────────────
@@ -547,10 +662,8 @@ void BiochemApp::draw_menu_background() {
     float W = io.DisplaySize.x, H = io.DisplaySize.y;
     ImDrawList* bg = ImGui::GetBackgroundDrawList();
 
-    // Dark biological background
     bg->AddRectFilled(ImVec2(0, 0), ImVec2(W, H), IM_COL32(3, 10, 16, 255));
 
-    // Init particles once
     if (!menu_bg_inited_) {
         menu_bg_inited_ = true;
         menu_particles_.resize(50);
@@ -564,12 +677,11 @@ void BiochemApp::draw_menu_background() {
             p.vx = randf(-10, 10);
             p.vy = randf(-10, 10);
             p.radius = randf(2.0f, 6.0f);
-            // Bio colors: greens, blues, teals, light purples
             int variant = rng() % 4;
-            if (variant == 0) { p.r = 0.2f; p.g = 0.7f; p.b = 0.3f; }       // green
-            else if (variant == 1) { p.r = 0.3f; p.g = 0.5f; p.b = 0.9f; }   // blue
-            else if (variant == 2) { p.r = 0.2f; p.g = 0.7f; p.b = 0.7f; }   // teal
-            else { p.r = 0.6f; p.g = 0.3f; p.b = 0.7f; }                     // purple
+            if (variant == 0) { p.r = 0.2f; p.g = 0.7f; p.b = 0.3f; }
+            else if (variant == 1) { p.r = 0.3f; p.g = 0.5f; p.b = 0.9f; }
+            else if (variant == 2) { p.r = 0.2f; p.g = 0.7f; p.b = 0.7f; }
+            else { p.r = 0.6f; p.g = 0.3f; p.b = 0.7f; }
             p.alpha = randf(0.3f, 0.7f);
             for (int t = 0; t < 12; t++) { p.trail_x[t] = p.x; p.trail_y[t] = p.y; }
         }
@@ -577,7 +689,6 @@ void BiochemApp::draw_menu_background() {
 
     menu_bg_time_ += io.DeltaTime;
 
-    // Animated cellular glows
     for (int i = 0; i < 3; i++) {
         float phase = menu_bg_time_ * 0.12f + (float)i * 2.1f;
         float cx = W * (0.3f + 0.4f * sinf(phase));
@@ -590,7 +701,6 @@ void BiochemApp::draw_menu_background() {
         draw_radial_glow(bg, cx, cy, glow_r, center, edge);
     }
 
-    // Update + draw particles
     float dt = io.DeltaTime;
     for (auto& p : menu_particles_) {
         for (int t = 11; t > 0; t--) { p.trail_x[t] = p.trail_x[t-1]; p.trail_y[t] = p.trail_y[t-1]; }
@@ -605,7 +715,6 @@ void BiochemApp::draw_menu_background() {
         if (p.y < -20) p.y += H + 40;
         if (p.y > H + 20) p.y -= H + 40;
 
-        // Draw trail
         for (int t = 1; t < 12; t++) {
             float frac = 1.0f - (float)t / 12.0f;
             int alpha = (int)(p.alpha * frac * 35.0f);
@@ -615,16 +724,13 @@ void BiochemApp::draw_menu_background() {
                         p.radius * frac * 0.5f);
         }
 
-        // Draw particle (cell-like)
         int alpha = (int)(p.alpha * 255.0f);
         bg->AddCircleFilled(ImVec2(p.x, p.y), p.radius,
             IM_COL32((int)(p.r*255), (int)(p.g*255), (int)(p.b*255), alpha), 16);
-        // Membrane ring
         bg->AddCircle(ImVec2(p.x, p.y), p.radius,
             IM_COL32((int)(p.r*180), (int)(p.g*180), (int)(p.b*180), alpha / 2), 16, 0.8f);
     }
 
-    // Connection lines (membrane-like)
     for (size_t i = 0; i < menu_particles_.size(); i++) {
         for (size_t j = i + 1; j < menu_particles_.size(); j++) {
             float dx = menu_particles_[j].x - menu_particles_[i].x;
@@ -639,11 +745,9 @@ void BiochemApp::draw_menu_background() {
         }
     }
 
-    // Vignette
     draw_radial_glow(bg, W * 0.5f, H * 0.5f, std::max(W, H) * 0.8f,
                      IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 120));
 
-    // Scanlines
     for (float y = 0; y < H; y += 3.0f)
         bg->AddLine(ImVec2(0, y), ImVec2(W, y), IM_COL32(0, 0, 0, 6));
 }
@@ -655,7 +759,6 @@ void BiochemApp::draw_splash_screen() {
     float W = io.DisplaySize.x, H = io.DisplaySize.y;
     splash_time_ += io.DeltaTime;
 
-    // Dismiss after 0.3s on any input
     if (splash_time_ > 0.3f) {
         bool dismiss = ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
                        ImGui::IsMouseClicked(ImGuiMouseButton_Right);
@@ -679,7 +782,6 @@ void BiochemApp::draw_splash_screen() {
         }
     }
 
-    // Text overlay
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(io.DisplaySize);
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
@@ -693,21 +795,18 @@ void BiochemApp::draw_splash_screen() {
     if (ImGui::Begin("##BiochemSplash", nullptr, flags)) {
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
-        // Central cell glow
         float pulse = 0.7f + 0.3f * sinf(splash_time_ * 1.8f);
         draw_radial_glow(dl, W * 0.5f, H * 0.4f, 140.0f * pulse,
                          IM_COL32(40, 180, 80, 35), IM_COL32(20, 100, 40, 0));
         draw_radial_glow(dl, W * 0.5f, H * 0.4f, 70.0f * pulse,
                          IM_COL32(80, 220, 120, 50), IM_COL32(40, 160, 60, 0));
 
-        // Cell membrane + nucleus visualization
         float cell_r = 50.0f * pulse;
         dl->AddCircle(ImVec2(W * 0.5f, H * 0.4f), cell_r,
             IM_COL32(60, 200, 100, 120), 32, 2.0f);
         dl->AddCircleFilled(ImVec2(W * 0.5f, H * 0.4f), cell_r * 0.3f,
             IM_COL32(40, 120, 180, 80), 16);
 
-        // Orbiting organelles
         for (int i = 0; i < 5; i++) {
             float orbit_r = 25.0f + (float)i * 12.0f;
             float speed = 0.6f - (float)i * 0.08f;
@@ -723,7 +822,6 @@ void BiochemApp::draw_splash_screen() {
             dl->AddCircleFilled(ImVec2(px, py), 3.0f + (float)i * 0.3f, orga_col, 8);
         }
 
-        // Title — bottom-left
         float title_scale = 2.4f;
         ImGui::SetWindowFontScale(title_scale);
 
@@ -733,21 +831,18 @@ void BiochemApp::draw_splash_screen() {
         float title_x = 60.0f;
         float title_y = H - 120.0f;
 
-        // Glow layers
         for (int layer = 3; layer >= 0; layer--) {
             float offset = (float)layer * 1.5f;
-            int alpha = 12 + layer * 6;
+            int lpha = 12 + layer * 6;
             dl->AddText(ImVec2(title_x - offset, title_y - offset),
-                IM_COL32(40, 200, 80, alpha), title1);
+                IM_COL32(40, 200, 80, lpha), title1);
             dl->AddText(ImVec2(title_x + t1_size.x - offset, title_y - offset),
-                IM_COL32(20, 160, 60, alpha), title2);
+                IM_COL32(20, 160, 60, lpha), title2);
         }
 
-        // Solid title
         dl->AddText(ImVec2(title_x, title_y), IM_COL32(100, 240, 140, 255), title1);
         dl->AddText(ImVec2(title_x + t1_size.x, title_y), IM_COL32(60, 200, 100, 255), title2);
 
-        // Badge — top right
         ImGui::SetWindowFontScale(1.0f);
         const char* badge = "CELLULAR BIOLOGY SANDBOX";
         ImVec2 badge_size = ImGui::CalcTextSize(badge);
@@ -759,7 +854,6 @@ void BiochemApp::draw_splash_screen() {
                     IM_COL32(60, 200, 100, 200), 4.0f, 0, 1.5f);
         dl->AddText(ImVec2(badge_x, badge_y), IM_COL32(80, 220, 120, 230), badge);
 
-        // Hint — bottom center, pulsing
         const char* hint = "Click or press any key to continue";
         ImVec2 hint_size = ImGui::CalcTextSize(hint);
         float hint_alpha = 120.0f + 80.0f * sinf(splash_time_ * 3.0f);
@@ -778,14 +872,6 @@ void BiochemApp::draw_pause_menu() {
     ImGuiIO& io = ImGui::GetIO();
     float W = io.DisplaySize.x, H = io.DisplaySize.y;
 
-    // Escape to resume
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-        show_pause_menu = false;
-        paused = false;
-        return;
-    }
-
-    // Semi-transparent overlay
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(io.DisplaySize);
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
@@ -798,7 +884,6 @@ void BiochemApp::draw_pause_menu() {
     if (ImGui::Begin("##BiochemPause", nullptr, flags)) {
         float cx = W * 0.5f, cy = H * 0.5f;
 
-        // Title
         ImGui::SetWindowFontScale(2.0f);
         const char* title = "PAUSED";
         ImVec2 title_size = ImGui::CalcTextSize(title);
@@ -814,7 +899,6 @@ void BiochemApp::draw_pause_menu() {
             IM_COL32(80, 230, 120, 255), title);
         ImGui::SetWindowFontScale(1.0f);
 
-        // Buttons
         float btn_w = 200.0f, btn_h = 40.0f, btn_spacing = 52.0f;
         float btn_x = cx - btn_w * 0.5f;
         float btn_y = cy - 60.0f;
@@ -836,21 +920,39 @@ void BiochemApp::draw_pause_menu() {
             show_pause_menu = false;
         }
 
-        // Quit
+        // Empty Simulation
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 2));
+        if (ImGui::Button("Empty Simulation", ImVec2(btn_w, btn_h))) {
+            state.clear();
+            cfg.entity_count = 0;
+            selected_entity = -1;
+            nutrient_timer_ = 0.0f;
+            sim_time_ = 0.0f;
+            show_pause_menu = false;
+            paused = false;
+        }
+
+        // Return to Launcher
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 3));
+        if (ImGui::Button("Return to Launcher", ImVec2(btn_w, btn_h))) {
+            request_launcher = true;
+            request_quit = true;
+        }
+
+        // Quit — red tinted
         ImGui::PopStyleColor(3);
         ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.35f, 0.08f, 0.08f, 0.90f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,  ImVec4(0.50f, 0.12f, 0.12f, 0.95f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,   ImVec4(0.60f, 0.15f, 0.15f, 1.00f));
 
-        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 2));
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 4));
         if (ImGui::Button("Quit", ImVec2(btn_w, btn_h))) {
             request_quit = true;
         }
 
         ImGui::PopStyleColor(3);
-        ImGui::PopStyleVar(); // FrameRounding
+        ImGui::PopStyleVar();
 
-        // Hint
         const char* hint = "Press Escape to resume";
         ImVec2 hint_size = ImGui::CalcTextSize(hint);
         dl->AddText(ImVec2(cx - hint_size.x * 0.5f, H - 60.0f),
@@ -875,7 +977,6 @@ void BiochemApp::draw_spawn_menu() {
         return;
     }
 
-    // Type buttons
     if (ImGui::CollapsingHeader("Entity Type", ImGuiTreeNodeFlags_DefaultOpen)) {
         float btn_w = 110.0f;
         for (int t = 0; t < BIO_TYPE_COUNT; t++) {
@@ -899,7 +1000,6 @@ void BiochemApp::draw_spawn_menu() {
 
             if (ImGui::Button(BIO_TYPE_NAMES[t], ImVec2(btn_w, 26))) {
                 spawn_bio_type_ = t;
-                // Default energy by type
                 if (t == BIO_CELL) spawn_energy_ = 100.0f;
                 else if (t == BIO_BACTERIUM) spawn_energy_ = 60.0f;
                 else if (t == BIO_VIRUS) spawn_energy_ = 30.0f;
@@ -917,14 +1017,12 @@ void BiochemApp::draw_spawn_menu() {
                 ImGui::PopStyleColor(3);
             }
 
-            // 2 per row
             if (t % 2 == 0 && t < BIO_TYPE_COUNT - 1) ImGui::SameLine();
         }
     }
 
     ImGui::Separator();
 
-    // Properties
     if (ImGui::CollapsingHeader("Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::SliderFloat("Energy", &spawn_energy_, 5.0f, 500.0f, "%.0f",
                             ImGuiSliderFlags_Logarithmic);
@@ -932,7 +1030,6 @@ void BiochemApp::draw_spawn_menu() {
 
     ImGui::Separator();
 
-    // Spawn button
     {
         int t = spawn_bio_type_ % BIO_TYPE_COUNT;
         ImU32 col = TYPE_COLORS[t];
@@ -944,45 +1041,28 @@ void BiochemApp::draw_spawn_menu() {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(r * 0.5f, g * 0.5f, b * 0.5f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(r * 0.65f, g * 0.65f, b * 0.65f, 1.0f));
 
+        ImGui::TextColored(ImVec4(0.4f, 0.5f, 0.4f, 1.0f), "Middle-click in viewport to place");
+
         char label[64];
-        snprintf(label, sizeof(label), "Spawn %s", BIO_TYPE_NAMES[t]);
+        snprintf(label, sizeof(label), "Spawn %s at Center", BIO_TYPE_NAMES[t]);
         if (ImGui::Button(label, ImVec2(-1, 34))) {
-            ImGuiIO& io = ImGui::GetIO();
-            BioEntity e;
-            // Spawn at random position
-            e.pos = {static_cast<float>(rand() % (int)io.DisplaySize.x),
-                     static_cast<float>(rand() % (int)io.DisplaySize.y)};
-            e.vel = {0, 0};
-            e.energy = spawn_energy_;
-            e.type = (uint32_t)spawn_bio_type_;
-            e.genome = (uint32_t)rand();
-
-            // Set radius by type
-            if (t == BIO_CELL) e.radius = 12.0f;
-            else if (t == BIO_BACTERIUM) e.radius = 6.0f;
-            else if (t == BIO_VIRUS) e.radius = 4.0f;
-            else if (t == BIO_NUTRIENT) e.radius = 3.0f;
-            else if (t == BIO_TOXIN) e.radius = 4.0f;
-            else if (t == BIO_ANTIBODY) e.radius = 5.0f;
-            else if (t == BIO_RED_BLOOD) e.radius = 5.0f;
-            else if (t == BIO_WHITE_BLOOD) e.radius = 12.0f;
-
-            state.entities.push_back(e);
+            spawn_at(camera.target);
         }
         ImGui::PopStyleColor(3);
     }
 
-    // Quick spawn presets
     if (ImGui::CollapsingHeader("Quick Presets")) {
+        float wr = cfg.world_radius * 0.5f;
+        auto randf = [](float lo, float hi) {
+            return lo + static_cast<float>(rand()) / RAND_MAX * (hi - lo);
+        };
+
         if (ImGui::Button("Add Cell Colony (10)", ImVec2(-1, 0))) {
-            ImGuiIO& io = ImGui::GetIO();
             for (int i = 0; i < 10; i++) {
                 BioEntity e;
-                float cx = io.DisplaySize.x * 0.5f;
-                float cy = io.DisplaySize.y * 0.5f;
                 float angle = (float)i / 10.0f * 6.2832f;
-                e.pos = {cx + cosf(angle) * 40.0f, cy + sinf(angle) * 40.0f};
-                e.vel = {cosf(angle) * 5.0f, sinf(angle) * 5.0f};
+                e.pos = {cosf(angle) * 40.0f, sinf(angle) * 40.0f, randf(-20, 20)};
+                e.vel = {cosf(angle) * 5.0f, sinf(angle) * 5.0f, 0};
                 e.radius = 12.0f;
                 e.energy = 100.0f;
                 e.type = BIO_CELL;
@@ -995,8 +1075,9 @@ void BiochemApp::draw_spawn_menu() {
             for (int i = 0; i < 8; i++) {
                 BioEntity e;
                 float angle = (float)i / 8.0f * 6.2832f;
-                e.pos = {800 + cosf(angle) * 60.0f, 450 + sinf(angle) * 60.0f};
-                e.vel = {cosf(angle) * 30.0f, sinf(angle) * 30.0f};
+                float phi = randf(-0.5f, 0.5f);
+                e.pos = {cosf(angle) * 60.0f, sinf(angle) * 60.0f, sinf(phi) * 40.0f};
+                e.vel = {cosf(angle) * 30.0f, sinf(angle) * 30.0f, 0};
                 e.radius = 4.0f;
                 e.energy = 30.0f;
                 e.type = BIO_VIRUS;
@@ -1013,8 +1094,7 @@ void BiochemApp::draw_spawn_menu() {
         if (ImGui::Button("Immune Response (5 WBC)", ImVec2(-1, 0))) {
             for (int i = 0; i < 5; i++) {
                 BioEntity e;
-                e.pos = {static_cast<float>(rand() % 1600 + 24),
-                         static_cast<float>(rand() % 880 + 24)};
+                e.pos = {randf(-wr, wr), randf(-wr, wr), randf(-wr, wr)};
                 e.radius = 12.0f;
                 e.energy = 200.0f;
                 e.type = BIO_WHITE_BLOOD;
@@ -1033,17 +1113,14 @@ void BiochemApp::render_ui() {
 
     bool any_overlay = show_splash || show_pause_menu;
 
-    // Animated background for fullscreen overlays
     if (any_overlay)
         draw_menu_background();
 
-    // Splash screen blocks all other UI
     if (show_splash) {
         draw_splash_screen();
         return;
     }
 
-    // Pause menu blocks all other UI
     if (show_pause_menu) {
         draw_pause_menu();
         return;
@@ -1068,12 +1145,13 @@ void BiochemApp::render_ui() {
     ImGui::TextColored({0.4f, 0.4f, 0.5f, 1.0f}, "  %.0f FPS", io.Framerate);
     ImGui::SameLine();
     ImGui::TextColored({0.3f, 0.3f, 0.4f, 1.0f},
-        "  |  Left-click: select   Escape: menu");
+        "  |  WASD: pan  Drag: orbit  Scroll: zoom  Middle: spawn  Right: select  Esc: menu");
     ImGui::End();
 
     // Settings panel
+    if (settings_visible_) {
     ImGui::SetNextWindowPos({10, 46}, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize({260, 340}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize({260, 380}, ImGuiCond_FirstUseEver);
     ImGui::Begin("Biochem Settings");
     ImGui::SliderFloat("Nutrient Rate",   &cfg.nutrient_rate,   0.1f, 10.0f);
     ImGui::SliderFloat("Metabolism",       &cfg.metabolism_rate,  0.1f, 5.0f);
@@ -1086,12 +1164,31 @@ void BiochemApp::render_ui() {
     ImGui::SliderFloat("Time Scale",       &cfg.dt_scale,         0.1f, 5.0f);
     ImGui::Checkbox("Immune System",       &cfg.immune_system);
     ImGui::Checkbox("Energy Bars",         &cfg.show_energy_bars);
+    ImGui::Separator();
+    ImGui::Text("AI Movement");
+    ImGui::Checkbox("Enable AI", &cfg.ai_movement);
+    if (cfg.ai_movement) {
+        ImGui::SliderFloat("Seek",     &cfg.seek_strength,     0.0f, 100.0f);
+        ImGui::SliderFloat("Flee",     &cfg.flee_strength,     0.0f, 100.0f);
+        ImGui::SliderFloat("Spacing",  &cfg.spacing_strength,  0.0f, 50.0f);
+        ImGui::SliderFloat("Brownian", &cfg.brownian_strength, 0.0f, 50.0f);
+    }
+    ImGui::Separator();
+    ImGui::Text("World");
+    ImGui::SliderFloat("World Radius",     &cfg.world_radius,     50.0f, 500.0f);
+    ImGui::SliderFloat("Ambient",          &cfg.ambient_strength,  0.0f, 0.5f);
+    if (ImGui::Button("Reset Camera")) {
+        camera = OrbitCamera{};
+        camera.distance = 500.0f;
+        camera.elevation = 0.4f;
+        camera.fov = 50.0f;
+        camera.near_clip = 0.5f;
+        camera.far_clip = 5000.0f;
+    }
     ImGui::End();
+    } // settings_visible_
 
-    // Population stats
-    ImGui::SetNextWindowPos({io.DisplaySize.x - 220.0f, 46}, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize({210, 220}, ImGuiCond_FirstUseEver);
-    ImGui::Begin("Population");
+    // Shared arrays for population + inspector
     static const char* pop_type_names[] = {
         "Cells", "Bacteria", "Viruses", "Nutrients",
         "Toxins", "Antibodies", "Red Blood", "White Blood"
@@ -1100,6 +1197,12 @@ void BiochemApp::render_ui() {
         {0.3f,0.7f,1.0f,1}, {0.9f,0.6f,0.2f,1}, {0.9f,0.2f,0.2f,1}, {0.3f,0.9f,0.3f,1},
         {0.8f,0.2f,0.8f,1}, {1.0f,1.0f,0.3f,1}, {0.9f,0.3f,0.3f,1}, {1.0f,1.0f,1.0f,1}
     };
+
+    // Population stats
+    if (population_visible_) {
+    ImGui::SetNextWindowPos({io.DisplaySize.x - 220.0f, 46}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize({210, 220}, ImGuiCond_FirstUseEver);
+    ImGui::Begin("Population");
     size_t total_alive = 0;
     for (int t = 0; t < BIO_TYPE_COUNT; t++) {
         size_t n = state.count_type(static_cast<BioEntityType>(t));
@@ -1110,13 +1213,14 @@ void BiochemApp::render_ui() {
     ImGui::Separator();
     ImGui::Text("Total: %zu", total_alive);
     ImGui::End();
+    } // population_visible_
 
-    // Entity inspector (when selected)
+    // Entity inspector
     if (selected_entity >= 0 && selected_entity < (int)state.entities.size()) {
         const auto& e = state.entities[selected_entity];
         if (e.alive) {
             ImGui::SetNextWindowPos({io.DisplaySize.x - 220.0f, 280}, ImGuiCond_FirstUseEver);
-            ImGui::SetNextWindowSize({210, 220}, ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize({210, 240}, ImGuiCond_FirstUseEver);
             ImGui::Begin("Entity Inspector");
 
             ImGui::TextColored(type_colors_v[e.type % BIO_TYPE_COUNT],
@@ -1126,7 +1230,7 @@ void BiochemApp::render_ui() {
             ImGui::Text("Age:     %.1f s", e.age);
             ImGui::Text("Radius:  %.1f", e.radius);
             ImGui::Text("Speed:   %.1f", glm::length(e.vel));
-            ImGui::Text("Pos:     (%.0f, %.0f)", e.pos.x, e.pos.y);
+            ImGui::Text("Pos:     (%.0f, %.0f, %.0f)", e.pos.x, e.pos.y, e.pos.z);
             ImGui::Text("Genome:  %08X", e.genome);
             ImGui::Spacing();
             if (ImGui::Button("Kill")) {
@@ -1143,6 +1247,152 @@ void BiochemApp::render_ui() {
         }
     }
 
-    // Spawn menu
-    draw_spawn_menu();
+    if (spawn_menu_visible_)
+        draw_spawn_menu();
+
+    draw_bottom_bar();
+}
+
+// ── Bottom bar (auto-hiding, green/bio theme) ───────────────────────────────
+
+void BiochemApp::draw_bottom_bar() {
+    ImGuiIO& io = ImGui::GetIO();
+    float W = io.DisplaySize.x, H = io.DisplaySize.y;
+    float bar_h = 36.0f;
+
+    // Auto-hide: show when mouse near bottom
+    float mouse_y = io.MousePos.y;
+    bool want_show = (mouse_y > H - 50.0f) && (mouse_y <= H);
+    float target = want_show ? 0.0f : 1.0f;
+    bottom_bar_offset_ += (target - bottom_bar_offset_) * std::min(1.0f, 8.0f * io.DeltaTime);
+    if (bottom_bar_offset_ > 0.99f && !want_show) return;
+
+    float bar_y = H - bar_h * (1.0f - bottom_bar_offset_);
+
+    ImGui::SetNextWindowPos(ImVec2(0, bar_y));
+    ImGui::SetNextWindowSize(ImVec2(W, bar_h));
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.08f, 0.04f, 0.92f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.15f, 0.50f, 0.25f, 0.6f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 4));
+
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                             ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoFocusOnAppearing;
+
+    if (ImGui::Begin("##BioBottomBar", nullptr, flags)) {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        // Subtle top border glow
+        dl->AddLine(ImVec2(0, bar_y), ImVec2(W, bar_y),
+                    IM_COL32(40, 180, 80, 100), 1.0f);
+
+        // ── Left: Menu button ──
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.08f, 0.20f, 0.12f, 0.9f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.12f, 0.30f, 0.18f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.18f, 0.40f, 0.25f, 1.0f));
+
+        if (ImGui::Button("Menu", ImVec2(60, 28)))
+            show_menu_popup_ = !show_menu_popup_;
+
+        ImGui::PopStyleColor(3);
+
+        // Menu popup
+        if (show_menu_popup_) {
+            ImGui::SetNextWindowPos(ImVec2(4, bar_y - 200));
+            ImGui::SetNextWindowSize(ImVec2(220, 196));
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.12f, 0.06f, 0.96f));
+            ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.20f, 0.55f, 0.30f, 0.7f));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+
+            if (ImGui::Begin("##BioMenuPopup", &show_menu_popup_,
+                             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                             ImGuiWindowFlags_NoMove)) {
+
+                ImGui::TextColored(ImVec4(0.35f, 0.80f, 0.45f, 0.7f), "SIMULATION");
+                ImGui::Separator();
+                if (ImGui::MenuItem(paused ? "Resume" : "Pause"))
+                    paused = !paused;
+                if (ImGui::MenuItem("New Simulation")) {
+                    reset_simulation();
+                    show_menu_popup_ = false;
+                }
+                if (ImGui::MenuItem("Empty Simulation")) {
+                    state.clear();
+                    cfg.entity_count = 0;
+                    selected_entity = -1;
+                    nutrient_timer_ = 0.0f;
+                    sim_time_ = 0.0f;
+                    show_menu_popup_ = false;
+                }
+
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.35f, 0.80f, 0.45f, 0.7f), "VIEW");
+                ImGui::Separator();
+                ImGui::MenuItem("Settings Panel", nullptr, &settings_visible_);
+                ImGui::MenuItem("Population Panel", nullptr, &population_visible_);
+                ImGui::MenuItem("Spawn Menu", nullptr, &spawn_menu_visible_);
+
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.35f, 0.80f, 0.45f, 0.7f), "NAVIGATION");
+                ImGui::Separator();
+                if (ImGui::MenuItem("Return to Launcher")) {
+                    request_launcher = true;
+                    request_quit = true;
+                }
+                if (ImGui::MenuItem("Quit"))
+                    request_quit = true;
+            }
+            ImGui::End();
+            ImGui::PopStyleVar();
+            ImGui::PopStyleColor(2);
+        }
+
+        // ── Center: Taskbar buttons ──
+        float center_start = W * 0.5f - 150.0f;
+        ImGui::SameLine(center_start);
+
+        struct TaskBtn { const char* label; bool* vis; };
+        TaskBtn btns[] = {
+            {"Settings",   &settings_visible_},
+            {"Spawn",      &spawn_menu_visible_},
+            {"Population", &population_visible_},
+        };
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.10f, 0.25f, 0.14f, 0.6f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.35f, 0.20f, 0.8f));
+
+        for (auto& btn : btns) {
+            ImVec2 before = ImGui::GetCursorScreenPos();
+            if (ImGui::Button(btn.label, ImVec2(90, 28)))
+                *btn.vis = !*btn.vis;
+
+            // Green underline when active
+            if (*btn.vis) {
+                ImVec2 after = ImGui::GetCursorScreenPos();
+                dl->AddLine(ImVec2(before.x + 4, before.y + 27),
+                            ImVec2(before.x + 86, before.y + 27),
+                            IM_COL32(60, 220, 100, 200), 2.0f);
+            }
+            ImGui::SameLine();
+        }
+
+        ImGui::PopStyleColor(3);
+
+        // ── Right: Alive count ──
+        size_t alive = state.count_alive();
+        size_t total = state.entities.size();
+        char info[64];
+        snprintf(info, sizeof(info), "Alive: %zu / %zu", alive, total);
+        ImVec2 info_size = ImGui::CalcTextSize(info);
+        ImGui::SameLine(W - info_size.x - 16.0f);
+        ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.50f, 0.9f), "%s", info);
+    }
+    ImGui::End();
+
+    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor(2);
 }

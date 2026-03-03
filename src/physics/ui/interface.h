@@ -185,6 +185,7 @@ public:
     bool show_repository = false;
     int  settings_tab = 0;  // 0=Display, 1=Perf, 2=Theme, 3=Access, 4=Audio, 5=Controls
     bool request_quit = false;
+    bool request_launcher = false;
     UserPrefs prefs;
     KeyBindings keybindings;
     int rebinding_action = -1;  // -1=not rebinding, else KeyAction index

@@ -2,6 +2,7 @@
 // ── Biochemical Simulator — Application ─────────────────────────────────────
 
 #include "biochem/biochem_types.h"
+#include "biochem/biochem_raytracer.h"
 #include "common/simple_renderer.h"
 #include <vector>
 
@@ -13,24 +14,29 @@ public:
     void tick(GLFWwindow* window, float dt);
     void destroy();
     void reset_simulation();
+    void spawn_at(glm::vec3 pos);
 
-    VulkanContext   vk;
-    SimpleRenderer  renderer;
-    BiochemConfig   cfg;
-    BiochemState    state;
-    bool            paused = false;
+    VulkanContext    vk;
+    SimpleRenderer   renderer;
+    BiochemConfig    cfg;
+    BiochemState     state;
+    OrbitCamera      camera;
+    bool             paused = false;
 
     // Fullscreen overlay state
     bool  show_splash     = true;
     bool  show_pause_menu = false;
-    bool  request_quit    = false;
+    bool  request_quit     = false;
+    bool  request_launcher = false;
 
     // Input state (public for GLFW callbacks)
-    int selected_entity = -1;
+    int    selected_entity = -1;
+    bool   mouse_dragging  = false;
+    double last_mouse_x = 0, last_mouse_y = 0;
 
 private:
     void render_ui();
-    void render_entities();
+    void render_overlay();
     void step_simulation(float dt);
     void spawn_nutrient();
 
@@ -45,6 +51,7 @@ private:
     void process_virus_infection(float dt);
     void process_antibody_response(float dt);
     void process_repulsion();
+    void process_ai_movement(float dt);
 
     float nutrient_timer_ = 0.0f;
 
@@ -63,4 +70,15 @@ private:
     bool spawn_menu_visible_ = true;
     int  spawn_bio_type_ = BIO_CELL;
     float spawn_energy_ = 100.0f;
+
+    // 3D rendering
+    BiochemRaytracer raytracer_;
+    float sim_time_ = 0.0f;
+
+    // Bottom bar
+    float bottom_bar_offset_ = 1.0f;  // 0=visible, 1=hidden (start hidden)
+    bool  show_menu_popup_   = false;
+    bool  settings_visible_  = true;
+    bool  population_visible_ = true;
+    void  draw_bottom_bar();
 };

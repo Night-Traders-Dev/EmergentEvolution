@@ -1,0 +1,43 @@
+# Enforce consistent line endings
+* text=auto eol=lf
+
+# Explicitly text files
+*.cpp text eol=lf
+*.h text eol=lf
+*.hpp text eol=lf
+*.c text eol=lf
+*.glsl text eol=lf
+*.comp text eol=lf
+*.vert text eol=lf
+*.frag text eol=lf
+*.cmake text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.sh text eol=lf
+CMakeLists.txt text eol=lf
+
+# Binary files
+*.spv binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.mp3 binary
+*.wav binary
+*.ttf binary
+*.otf binary
+*.docx binary
+*.ppsg binary
+*.ppel binary
+*.ppmol binary
+*.ppach binary
+*.ppstats binary
+*.ppcfg binary
+*.exe binary
+*.dll binary
+*.so binary
+*.a binary
+*.lib binary
+*.o binary

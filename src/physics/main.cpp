@@ -1,5 +1,6 @@
 #include "physics/core/simulation.h"
 #include "common/error_dialog.h"
+#include "common/launch_utils.h"
 #include "physics/features/steam_integration.h"
 #include "third_party/stb_image.h"
 #include <GLFW/glfw3.h>
@@ -256,6 +257,7 @@ int main() {
         }
     }
 
+    bool launch = sim.iface.request_launcher;
     try {
         sim.destroy();
     } catch (const std::exception& e) {
@@ -265,5 +267,9 @@ int main() {
     glfwDestroyWindow(window);
     glfwTerminate();
     steam::shutdown();
+
+    if (launch)
+        launch_sibling_exe("pp_launcher");
+
     return 0;
 }

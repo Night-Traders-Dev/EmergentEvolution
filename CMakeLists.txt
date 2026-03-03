@@ -266,6 +266,7 @@ target_link_libraries(particle_cosmos PRIVATE pp_common)
 add_executable(particle_biochem
     src/biochem/main.cpp
     src/biochem/biochem_app.cpp
+    src/biochem/biochem_raytracer.cpp
 )
 target_link_libraries(particle_biochem PRIVATE pp_common)
 
@@ -307,6 +308,8 @@ compile_shader(overlay.vert      overlay.vert.spv)
 compile_shader(overlay.frag      overlay.frag.spv)
 compile_shader(cosmos_rt.vert    cosmos_rt.vert.spv)
 compile_shader(cosmos_rt.frag    cosmos_rt.frag.spv)
+compile_shader(biochem_rt.vert   biochem_rt.vert.spv)
+compile_shader(biochem_rt.frag   biochem_rt.frag.spv)
 
 add_custom_target(shaders ALL DEPENDS
     ${SHADER_BIN_DIR}/physics.spv
@@ -316,9 +319,12 @@ add_custom_target(shaders ALL DEPENDS
     ${SHADER_BIN_DIR}/overlay.frag.spv
     ${SHADER_BIN_DIR}/cosmos_rt.vert.spv
     ${SHADER_BIN_DIR}/cosmos_rt.frag.spv
+    ${SHADER_BIN_DIR}/biochem_rt.vert.spv
+    ${SHADER_BIN_DIR}/biochem_rt.frag.spv
 )
 add_dependencies(particle_physics shaders)
 add_dependencies(particle_cosmos shaders)
+add_dependencies(particle_biochem shaders)
 
 # ── Portable build: embed shaders + icons into the binary ─────────────────────
 
@@ -355,6 +361,8 @@ if(PORTABLE_BUILD)
     embed_resource(${SHADER_BIN_DIR}/overlay.frag.spv         overlay_frag_spv)
     embed_resource(${SHADER_BIN_DIR}/cosmos_rt.vert.spv       cosmos_rt_vert_spv)
     embed_resource(${SHADER_BIN_DIR}/cosmos_rt.frag.spv       cosmos_rt_frag_spv)
+    embed_resource(${SHADER_BIN_DIR}/biochem_rt.vert.spv      biochem_rt_vert_spv)
+    embed_resource(${SHADER_BIN_DIR}/biochem_rt.frag.spv      biochem_rt_frag_spv)
 
     # Icons
     embed_resource(${CMAKE_SOURCE_DIR}/assets/icon_32.png     icon_32_png)
@@ -369,6 +377,8 @@ if(PORTABLE_BUILD)
         ${EMBED_DIR}/overlay_frag_spv.cpp
         ${EMBED_DIR}/cosmos_rt_vert_spv.cpp
         ${EMBED_DIR}/cosmos_rt_frag_spv.cpp
+        ${EMBED_DIR}/biochem_rt_vert_spv.cpp
+        ${EMBED_DIR}/biochem_rt_frag_spv.cpp
         ${EMBED_DIR}/icon_32_png.cpp
         ${EMBED_DIR}/icon_64_png.cpp
         ${EMBED_DIR}/icon_256_png.cpp

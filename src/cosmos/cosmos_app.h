@@ -15,6 +15,7 @@ public:
     void tick(GLFWwindow* window, float dt);
     void destroy();
     void reset_simulation();
+    void spawn_at(glm::vec3 pos);
 
     VulkanContext   vk;
     SimpleRenderer  renderer;
@@ -26,7 +27,8 @@ public:
     // Fullscreen overlay state
     bool  show_splash     = true;
     bool  show_pause_menu = false;
-    bool  request_quit    = false;
+    bool  request_quit     = false;
+    bool  request_launcher = false;
 
     // Input state (public for GLFW callbacks)
     bool   mouse_dragging = false;
@@ -39,6 +41,15 @@ private:
     void render_ui();
     void render_overlay();
     void step_physics(float dt);
+
+    // Physics subsystems
+    void process_collisions(float dt);
+    void process_roche_limit(float dt);
+    void process_temperature(float dt);
+    void process_evaporation(float dt);
+    void process_stellar_evolution(float dt);
+    void cleanup_bodies();
+    void spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, int count);
 
     // Fullscreen overlay screens
     void draw_splash_screen();
@@ -70,4 +81,11 @@ private:
     // Spawn menu
     bool spawn_menu_visible_ = true;
     bool spawn_in_orbit_ = false;
+
+    // Bottom bar
+    float bottom_bar_offset_ = 1.0f;  // 0=visible, 1=hidden (start hidden)
+    bool  show_menu_popup_   = false;
+    bool  settings_visible_  = true;
+    bool  body_list_visible_ = true;
+    void  draw_bottom_bar();
 };

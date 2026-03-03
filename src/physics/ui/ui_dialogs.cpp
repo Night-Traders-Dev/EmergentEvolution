@@ -1684,8 +1684,16 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
             show_pause_menu = false;
         }
 
-        // Quit
+        // Return to Launcher
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 11));
+        if (ImGui::Button("Return to Launcher", ImVec2(btn_w, btn_h))) {
+            menu_click();
+            request_launcher = true;
+            request_quit = true;
+        }
+
+        // Quit
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 12));
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.4f, 0.08f, 0.08f, 0.90f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.6f, 0.15f, 0.15f, 0.95f));
         if (ImGui::Button("Quit", ImVec2(btn_w, btn_h))) {
@@ -1698,7 +1706,7 @@ void PhysicsInterface::draw_pause_menu(SimConfig& /*cfg*/, bool& request_reset) 
         ImGui::PopStyleVar();
 
         // Hint text
-        float hint_y = btn_y + btn_spacing * 12 + 10.0f;
+        float hint_y = btn_y + btn_spacing * 13 + 10.0f;
         const char* hint = "Press Escape to resume";
         ImVec2 hint_size = ImGui::CalcTextSize(hint);
         ImGui::SetCursorPos(ImVec2(cx - hint_size.x * 0.5f, hint_y));

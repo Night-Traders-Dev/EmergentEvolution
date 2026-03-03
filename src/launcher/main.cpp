@@ -419,7 +419,7 @@ int main() {
     glfwWindowHint(GLFW_RESIZABLE,  GLFW_TRUE);
 
     GLFWwindow* window = glfwCreateWindow(
-        1100, 700, "Particle Playground v" APP_VERSION, nullptr, nullptr);
+        1100, 700, "Emergent Evolution v" APP_VERSION, nullptr, nullptr);
     if (!window) {
         glfwTerminate();
         show_error_dialog("Startup Error", "Failed to create window.");
@@ -484,7 +484,7 @@ int main() {
         // ── Title with glow ────────────────────────────────────────────────
         {
             float title_y = 40.0f;
-            draw_title_glow(bg, "Particle Playground", win_w * 0.5f, title_y, 2.0f);
+            draw_title_glow(bg, "Emergent Evolution", win_w * 0.5f, title_y, 2.0f);
 
             ImGui::SetNextWindowPos({win_w * 0.5f, title_y}, ImGuiCond_Always, {0.5f, 0.0f});
             ImGui::SetNextWindowSize({0, 0});
@@ -494,10 +494,10 @@ int main() {
                 ImGuiWindowFlags_NoInputs);
             ImGui::PushFont(nullptr);
             ImGui::SetWindowFontScale(2.0f);
-            ImGui::TextColored({0.8f, 0.85f, 1.0f, 1.0f}, "Particle Playground");
+            ImGui::TextColored({0.8f, 0.85f, 1.0f, 1.0f}, "Emergent Evolution");
             ImGui::SetWindowFontScale(1.0f);
             ImGui::TextColored({0.5f, 0.55f, 0.65f, 1.0f},
-                "              Select an expansion to launch");
+                "Select an expansion to launch");
             ImGui::PopFont();
             ImGui::End();
         }
