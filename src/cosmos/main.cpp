@@ -18,9 +18,19 @@
 // ── GLFW input callbacks ───────────────────────────────────────────────────
 
 static void mouse_button_callback(GLFWwindow* window, int button, int action, int /*mods*/) {
-    if (ImGui::GetIO().WantCaptureMouse) return;
     auto* app = static_cast<CosmosApp*>(glfwGetWindowUserPointer(window));
     if (!app) return;
+
+    // Splash: any click dismisses (before ImGui capture check)
+    if (app->show_splash && action == GLFW_PRESS) {
+        app->show_splash = false;
+        return;
+    }
+
+    if (ImGui::GetIO().WantCaptureMouse) return;
+
+    // No interaction during pause menu (ImGui handles its own buttons)
+    if (app->show_pause_menu) return;
 
     if (button == GLFW_MOUSE_BUTTON_LEFT) {
         if (action == GLFW_PRESS) {
@@ -101,17 +111,35 @@ static void scroll_callback(GLFWwindow* window, double /*xoffset*/, double yoffs
 }
 
 static void key_callback(GLFWwindow* window, int key, int /*scancode*/, int action, int /*mods*/) {
-    if (ImGui::GetIO().WantCaptureKeyboard) return;
     if (action != GLFW_PRESS) return;
     auto* app = static_cast<CosmosApp*>(glfwGetWindowUserPointer(window));
     if (!app) return;
 
-    if (key == GLFW_KEY_ESCAPE)
-        glfwSetWindowShouldClose(window, GLFW_TRUE);
-    if (key == GLFW_KEY_SPACE)
+    // Splash: any key dismisses (before ImGui capture check)
+    if (app->show_splash) {
+        app->show_splash = false;
+        return;
+    }
+
+    // Escape always works (even when ImGui has focus)
+    if (key == GLFW_KEY_ESCAPE) {
+        if (app->show_pause_menu) {
+            app->show_pause_menu = false;
+            app->paused = false;
+        } else {
+            app->show_pause_menu = true;
+            app->paused = true;
+        }
+        return;
+    }
+
+    // Remaining keys respect ImGui capture
+    if (ImGui::GetIO().WantCaptureKeyboard) return;
+
+    if (key == GLFW_KEY_SPACE && !app->show_pause_menu)
         app->paused = !app->paused;
-    if (key == GLFW_KEY_R) {
-        app->camera = OrbitCamera{}; // reset to defaults
+    if (key == GLFW_KEY_R && !app->show_pause_menu) {
+        app->camera = OrbitCamera{};
     }
     if (key == GLFW_KEY_DELETE && app->selected_body >= 0 &&
         app->selected_body < (int)app->state.bodies.size()) {
@@ -200,8 +228,11 @@ int main() {
             break;
         }
 
-        // ~60 FPS cap when paused
-        if (app.paused)
+        if (app.request_quit)
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+
+        // ~60 FPS cap when paused or showing overlays
+        if (app.paused || app.show_splash || app.show_pause_menu)
             std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 

@@ -18,9 +18,19 @@
 // ── GLFW input callbacks ───────────────────────────────────────────────────
 
 static void mouse_button_callback(GLFWwindow* window, int button, int action, int /*mods*/) {
-    if (ImGui::GetIO().WantCaptureMouse) return;
     auto* app = static_cast<BiochemApp*>(glfwGetWindowUserPointer(window));
     if (!app) return;
+
+    // Splash: any click dismisses (before ImGui capture check)
+    if (app->show_splash && action == GLFW_PRESS) {
+        app->show_splash = false;
+        return;
+    }
+
+    if (ImGui::GetIO().WantCaptureMouse) return;
+
+    // No interaction during pause menu
+    if (app->show_pause_menu) return;
 
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
         double mx, my;
@@ -46,14 +56,32 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
 }
 
 static void key_callback(GLFWwindow* window, int key, int /*scancode*/, int action, int /*mods*/) {
-    if (ImGui::GetIO().WantCaptureKeyboard) return;
     if (action != GLFW_PRESS) return;
     auto* app = static_cast<BiochemApp*>(glfwGetWindowUserPointer(window));
     if (!app) return;
 
-    if (key == GLFW_KEY_ESCAPE)
-        glfwSetWindowShouldClose(window, GLFW_TRUE);
-    if (key == GLFW_KEY_SPACE)
+    // Splash: any key dismisses (before ImGui capture check)
+    if (app->show_splash) {
+        app->show_splash = false;
+        return;
+    }
+
+    // Escape always works (even when ImGui has focus)
+    if (key == GLFW_KEY_ESCAPE) {
+        if (app->show_pause_menu) {
+            app->show_pause_menu = false;
+            app->paused = false;
+        } else {
+            app->show_pause_menu = true;
+            app->paused = true;
+        }
+        return;
+    }
+
+    // Remaining keys respect ImGui capture
+    if (ImGui::GetIO().WantCaptureKeyboard) return;
+
+    if (key == GLFW_KEY_SPACE && !app->show_pause_menu)
         app->paused = !app->paused;
 }
 
@@ -134,7 +162,11 @@ int main() {
             break;
         }
 
-        if (app.paused)
+        if (app.request_quit)
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+
+        // ~60 FPS cap when paused or showing overlays
+        if (app.paused || app.show_splash || app.show_pause_menu)
             std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 
