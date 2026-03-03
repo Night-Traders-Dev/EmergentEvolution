@@ -55,6 +55,9 @@ if(NOT CMAKE_CROSSCOMPILING)
     find_package(CURL QUIET)
 endif()
 
+# Threads (required by miniaudio audio engine)
+find_package(Threads REQUIRED)
+
 # ImGui via FetchContent (no install needed)
 FetchContent_Declare(imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
@@ -62,7 +65,101 @@ FetchContent_Declare(imgui
 )
 FetchContent_MakeAvailable(imgui)
 
-# ── Physics Simulation ───────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# pp_common — shared infrastructure library
+# ═══════════════════════════════════════════════════════════════════════════════
+
+add_library(pp_common STATIC
+    # Vulkan abstraction
+    src/vulkan_context.cpp
+
+    # Minimal ImGui renderer (swap-chain + ImGui, no compute)
+    src/common/simple_renderer.cpp
+
+    # Image I/O
+    src/stb_image_impl.cpp
+    src/stb_image_write_impl.cpp
+
+    # Audio engine (miniaudio implementation unit)
+    src/physics/audio.cpp
+
+    # Error dialogs
+    src/physics/error_dialog.cpp
+
+    # HTTP client (libcurl or WinHTTP backend)
+    src/physics/http_client.cpp
+
+    # ImGui core
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+
+    # ImGui platform/renderer backends
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+)
+
+# PUBLIC: propagated to all targets that link pp_common
+target_include_directories(pp_common PUBLIC
+    src/
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
+)
+
+target_link_libraries(pp_common PUBLIC
+    Vulkan::Vulkan
+    glfw
+    glm::glm
+    ${CMAKE_DL_LIBS}       # dlopen for miniaudio backend loading
+    Threads::Threads        # pthreads for miniaudio
+)
+
+# libm — needed on Linux/MinGW, not MSVC
+if(NOT MSVC)
+    target_link_libraries(pp_common PUBLIC m)
+endif()
+
+# Windows system libs (WASAPI audio, windowing)
+if(WIN32)
+    target_link_libraries(pp_common PUBLIC ole32 winmm shell32)
+endif()
+
+# HTTP backend — libcurl on Linux, WinHTTP on Windows
+if(CURL_FOUND)
+    target_link_libraries(pp_common PRIVATE CURL::libcurl)
+    target_compile_definitions(pp_common PRIVATE HAS_CURL)
+    target_compile_definitions(pp_common PUBLIC  HAS_HTTP)
+elseif(WIN32)
+    target_link_libraries(pp_common PRIVATE winhttp)
+    target_compile_definitions(pp_common PRIVATE HAS_WINHTTP)
+    target_compile_definitions(pp_common PUBLIC  HAS_HTTP)
+endif()
+
+# Version info (propagated to all expansion targets)
+target_compile_definitions(pp_common PUBLIC
+    APP_VERSION="${CMAKE_PROJECT_VERSION}"
+    APP_VERSION_MAJOR=${CMAKE_PROJECT_VERSION_MAJOR}
+    APP_VERSION_MINOR=${CMAKE_PROJECT_VERSION_MINOR}
+    APP_VERSION_PATCH=${CMAKE_PROJECT_VERSION_PATCH}
+)
+
+# Windows: prevent <windows.h> macro pollution
+target_compile_definitions(pp_common PUBLIC
+    $<$<PLATFORM_ID:Windows>:NOMINMAX WIN32_LEAN_AND_MEAN>
+)
+
+# Compiler warnings
+target_compile_options(pp_common PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
+    $<$<CXX_COMPILER_ID:MSVC>:/W4 /utf-8>
+    $<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:GNU,Clang>>:-O3>
+    $<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:MSVC>>:/O2>
+)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Particle Physics — subatomic particle simulation (existing)
+# ═══════════════════════════════════════════════════════════════════════════════
 
 add_executable(particle_physics
     src/physics/main.cpp
@@ -71,11 +168,9 @@ add_executable(particle_physics
     src/physics/interface.cpp
     src/physics/save_load.cpp
     src/physics/achievements.cpp
-    src/physics/audio.cpp
-    src/physics/error_dialog.cpp
     src/physics/steam_integration.cpp
 
-    # Physics process modules (split from simulation.cpp)
+    # Physics process modules
     src/physics/nuclear.cpp
     src/physics/orbital.cpp
     src/physics/decay.cpp
@@ -89,7 +184,7 @@ add_executable(particle_physics
     src/physics/scenarios.cpp
     src/physics/cutscenes.cpp
 
-    # UI component modules (split from interface.cpp)
+    # UI component modules
     src/physics/ui_panels.cpp
     src/physics/ui_cards.cpp
     src/physics/ui_lists.cpp
@@ -98,83 +193,42 @@ add_executable(particle_physics
     src/physics/ui_overlays.cpp
     src/physics/ui_repository.cpp
 
-    # Online repository + HTTP client
+    # Online repository (uses http_client from pp_common)
     src/physics/repository.cpp
-    src/physics/http_client.cpp
-    src/stb_image_impl.cpp
-    src/stb_image_write_impl.cpp
 
-    # Shared infrastructure
-    src/vulkan_context.cpp
+    # Physics-specific infrastructure (tightly coupled to types.h/SimConfig)
     src/compute_pipeline.cpp
     src/renderer.cpp
     src/particles.cpp
     src/particle_textures.cpp
-
-    # ImGui core
-    ${imgui_SOURCE_DIR}/imgui.cpp
-    ${imgui_SOURCE_DIR}/imgui_draw.cpp
-    ${imgui_SOURCE_DIR}/imgui_tables.cpp
-    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-
-    # ImGui platform/renderer backends
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
 )
 
-target_include_directories(particle_physics PRIVATE
-    src/
-    ${imgui_SOURCE_DIR}
-    ${imgui_SOURCE_DIR}/backends
-)
+target_link_libraries(particle_physics PRIVATE pp_common)
 
-# Threads (required by miniaudio audio engine)
-find_package(Threads REQUIRED)
-
-target_link_libraries(particle_physics PRIVATE
-    Vulkan::Vulkan
-    glfw
-    glm::glm
-    ${CMAKE_DL_LIBS}     # dlopen for miniaudio backend loading
-    Threads::Threads      # pthreads for miniaudio
-)
-# libm — needed on Linux/MinGW, not MSVC (math is built-in)
-if(NOT MSVC)
-    target_link_libraries(particle_physics PRIVATE m)
+# cJSON — needed for repository JSON parsing (when HTTP is available)
+if(CURL_FOUND OR WIN32)
+    target_sources(particle_physics PRIVATE src/cjson/cJSON.c)
 endif()
-# Windows: link system libs for audio (WASAPI), windowing, etc.
+
+# Windows .exe icon + version info
 if(WIN32)
-    target_link_libraries(particle_physics PRIVATE ole32 winmm shell32)
-    # .exe icon + version info resource
-    # windres resolves paths relative to CWD (the build dir), so add source root as include path
     set(CMAKE_RC_FLAGS "${CMAKE_RC_FLAGS} -I ${CMAKE_SOURCE_DIR}")
     target_sources(particle_physics PRIVATE assets/particle_playground.rc)
 endif()
 
-# OpenMP — link if available, define HAS_OPENMP so source can guard omp calls
+# OpenMP — link if available
 if(OpenMP_FOUND)
     target_link_libraries(particle_physics PRIVATE OpenMP::OpenMP_CXX)
     target_compile_definitions(particle_physics PRIVATE HAS_OPENMP)
 endif()
 
-# Steamworks — link if available, define HAS_STEAM so source can guard Steam API calls
+# Steamworks — link if available
 if(Steamworks_FOUND)
     target_link_libraries(particle_physics PRIVATE Steamworks::Steamworks)
     target_compile_definitions(particle_physics PRIVATE HAS_STEAM)
 endif()
 
-# HTTP backend + cJSON — libcurl on Linux, WinHTTP on Windows
-if(CURL_FOUND)
-    target_sources(particle_physics PRIVATE src/cjson/cJSON.c)
-    target_link_libraries(particle_physics PRIVATE CURL::libcurl)
-    target_compile_definitions(particle_physics PRIVATE HAS_CURL HAS_HTTP)
-elseif(WIN32)
-    target_sources(particle_physics PRIVATE src/cjson/cJSON.c)
-    target_link_libraries(particle_physics PRIVATE winhttp)
-    target_compile_definitions(particle_physics PRIVATE HAS_WINHTTP HAS_HTTP)
-endif()
-
-# Platform-specific compiler flags
+# Compiler warnings for physics target
 target_compile_options(particle_physics PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
     $<$<CXX_COMPILER_ID:MSVC>:/W4 /utf-8>
@@ -182,18 +236,34 @@ target_compile_options(particle_physics PRIVATE
     $<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:MSVC>>:/O2>
 )
 
-# Version info — available in source as APP_VERSION string and component ints
-target_compile_definitions(particle_physics PRIVATE
-    APP_VERSION="${CMAKE_PROJECT_VERSION}"
-    APP_VERSION_MAJOR=${CMAKE_PROJECT_VERSION_MAJOR}
-    APP_VERSION_MINOR=${CMAKE_PROJECT_VERSION_MINOR}
-    APP_VERSION_PATCH=${CMAKE_PROJECT_VERSION_PATCH}
-)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Launcher — expansion picker
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# Windows: prevent <windows.h> macro pollution (min/max, etc.)
-target_compile_definitions(particle_physics PRIVATE
-    $<$<PLATFORM_ID:Windows>:NOMINMAX WIN32_LEAN_AND_MEAN>
+add_executable(pp_launcher
+    src/launcher/main.cpp
 )
+target_link_libraries(pp_launcher PRIVATE pp_common)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Cosmic Sandbox — celestial body / universe simulation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+add_executable(particle_cosmos
+    src/cosmos/main.cpp
+    src/cosmos/cosmos_app.cpp
+)
+target_link_libraries(particle_cosmos PRIVATE pp_common)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Biochemical Simulator — cells, bacteria, viruses
+# ═══════════════════════════════════════════════════════════════════════════════
+
+add_executable(particle_biochem
+    src/biochem/main.cpp
+    src/biochem/biochem_app.cpp
+)
+target_link_libraries(particle_biochem PRIVATE pp_common)
 
 # ── Shader compilation ────────────────────────────────────────────────────────
 
@@ -298,6 +368,7 @@ endif()
 
 # ── Install ───────────────────────────────────────────────────────────────────
 
-install(TARGETS particle_physics DESTINATION bin)
+install(TARGETS particle_physics pp_launcher particle_cosmos particle_biochem
+        DESTINATION bin)
 install(DIRECTORY ${SHADER_BIN_DIR}/ DESTINATION bin/shaders)
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets/ DESTINATION bin/assets)
