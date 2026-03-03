@@ -31,14 +31,39 @@ source ~/vulkan/1.4.341.1/setup-env.sh
 
 Build flags: `--steam`, `--debug`, `--release`, `--reldbg`, `--o2`, `--o3`, `--lto`, `--native`, `--sanitize`, `--no-steam`.
 
+## Build Targets
+
+The project produces five executables and one static library:
+
+| Target | Description |
+| --- | --- |
+| `pp_common` | Static library (Vulkan context, renderer, audio, error dialogs) |
+| `pp_launcher` | Expansion picker — choose which simulation to launch |
+| `particle_physics` | Full particle physics sandbox |
+| `particle_cosmos` | 3D celestial mechanics with GPU raytracing |
+| `particle_biochem` | 2D cellular biology sandbox |
+
+All application targets link against `pp_common`. Shader compilation (`physics.comp`,
+`fullscreen.vert/frag`, `overlay.vert/frag`, `cosmos_rt.vert/frag`) is handled by the
+`shaders` custom target, which all binaries depend on.
+
 ## Run
 
 ```bash
-./build/particle_physics              # Linux
-./build-win64/particle_physics.exe    # Windows (or from dist-win64/)
+# Linux
+./build/pp_launcher                   # Launch the expansion picker
+./build/particle_physics              # Particle physics directly
+./build/particle_cosmos               # Cosmic sandbox directly
+./build/particle_biochem              # Biochemical simulator directly
+
+# Windows (or from dist-win64/)
+./build-win64/pp_launcher.exe
+./build-win64/particle_physics.exe
+./build-win64/particle_cosmos.exe
+./build-win64/particle_biochem.exe
 ```
 
-The Windows portable exe bundles SPIR-V shaders and icons via `PORTABLE_BUILD`.
+The Windows portable exes bundle SPIR-V shaders and icons via `PORTABLE_BUILD`.
 Users need Vulkan GPU drivers installed. Place `assets/sound.mp3` next to the exe for
 background music.
 

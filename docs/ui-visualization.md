@@ -144,19 +144,52 @@ g++ -O2 -std=c++17 -o build/gen_textures tools/gen_particle_textures.cpp -lm
 ./build/gen_textures   # outputs to assets/particles/
 ```
 
-## Splash Screen
+## Splash Screens
 
-Four random splash screen variants are selected at startup: **atom**, **blue orb**, **nebula**,
-and **collider**. Each plays a short animated sequence before fading into the simulation. Any
-key or mouse click dismisses the splash immediately.
+Each application has a themed animated splash screen that displays on startup and is dismissed
+by any key or mouse click (after a 0.3-second delay to prevent accidental dismissal).
 
-## Spawn Picker (F3)
+| App | Theme | Visual |
+| --- | --- | --- |
+| **Particle Physics** | Four random variants: atom, blue orb, nebula, collider | Animated sequence with fade transition |
+| **Cosmic Sandbox** | Golden cosmic theme | Central star glow with orbiting planet dots, "Cosmic Sandbox" title |
+| **Biochemical Simulator** | Green biological theme | Central cell glow with membrane ring and orbiting organelles |
+
+All splash screens share a common pattern: animated particle background, glowing title text with
+shadow layers, subtitle badge, and pulsing "Press any key" hint.
+
+## Pause Menus
+
+Pressing `Escape` opens a fullscreen pause menu overlay in each application. All pause menus
+share a consistent layout: semi-transparent background, centered button column (Resume, New
+Simulation, Quit), and a "Press Escape to resume" hint. The Quit button is tinted red.
+
+| App | Theme Color |
+| --- | --- |
+| **Particle Physics** | Blue / cyan |
+| **Cosmic Sandbox** | Gold / orange |
+| **Biochemical Simulator** | Green |
+
+## Spawn Picker (F3) — Particle Physics
 
 Categorized spawning: leptons, quarks, bosons, hypothetical particles, composite atoms
 (H through Fe as complete atoms with force-relaxed nuclei and Bohr-model electron shells), and
 molecules by formula. Downloaded repository molecules appear with a `[repo]` tag. Nucleon
 positions are computed via iterative force relaxation matching GPU shader constants. Configurable
 count, energy, and scatter radius.
+
+## Spawn Menu — Cosmic Sandbox
+
+Collapsible panel with 7 celestial body types (Star, Planet, Gas Giant, Moon, Asteroid, Comet,
+Black Hole) displayed as color-coded buttons. Features a logarithmic mass slider, orbital
+velocity checkbox (spawns with circular orbit velocity), and quick presets (Solar System, Binary
+Stars, Asteroid Belt).
+
+## Spawn Menu — Biochemical Simulator
+
+Collapsible panel with 8 biological entity types (Cell, Bacterium, Virus, Nutrient, Toxin,
+Antibody, Red Blood Cell, White Blood Cell) displayed as color-coded buttons. Features an
+energy slider and quick presets (Cell Colony, Virus Outbreak, Nutrient Burst, Immune Response).
 
 ## Experiment Presets
 
