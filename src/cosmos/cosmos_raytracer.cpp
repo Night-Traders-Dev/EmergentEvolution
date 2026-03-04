@@ -234,9 +234,19 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     cam.screen_info    = glm::vec4(screen_w, screen_h,
                                     (float)std::min((int)state.bodies.size(), MAX_SPHERES),
                                     time);
+    // Auto-enable uniform lighting if star_lighting is on but no stars exist,
+    // otherwise planets are nearly invisible (only 8% ambient).
+    bool has_stars = false;
+    if (cfg.star_lighting) {
+        for (auto& b : state.bodies) {
+            if (is_star_type(b.type)) { has_stars = true; break; }
+        }
+    }
+    bool effective_uniform = cfg.uniform_lighting || (cfg.star_lighting && !has_stars);
+
     cam.lighting_params = glm::vec4(
-        cfg.star_lighting    ? 1.0f : 0.0f,
-        cfg.uniform_lighting ? 1.0f : 0.0f,
+        (cfg.star_lighting && has_stars) ? 1.0f : 0.0f,
+        effective_uniform ? 1.0f : 0.0f,
         cfg.ambient_strength,
         0.0f);
 
@@ -260,7 +270,7 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
 
         // Pack planet/moon data for shader procedural textures
         if (b.type == CTYPE_PLANET || b.type == CTYPE_MOON) {
-            PlanetProperties pp = generate_planet_properties(b.seed, b.mass, b.temperature);
+            const PlanetProperties& pp = b.cached_props;
 
             float body_flags = 0.0f;
             if (b.type == CTYPE_PLANET) body_flags += 1.0f;
@@ -268,8 +278,13 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
             if (pp.atmosphere.pressure > 0.01f) body_flags += 4.0f;
             body_flags += (float)pp.ocean_type * 8.0f;
 
+            // Normalize seed to shader-friendly range: raw uint32 can be ~4 billion,
+            // far beyond float32 precision for noise functions using fract().
+            // Pack into [0, 10000) so seed*0.01 stays in [0, 100).
+            float shader_seed = (float)(b.seed % 10000u) + (float)((b.seed >> 16) & 0xFFu) * 0.001f;
+
             spheres[i].planet_data = glm::vec4(
-                (float)b.seed,
+                shader_seed,
                 (float)pp.surface,
                 pp.ocean_coverage / 100.0f,
                 b.temperature);

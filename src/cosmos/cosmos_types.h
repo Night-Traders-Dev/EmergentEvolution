@@ -8,6 +8,7 @@
 #include <cmath>
 #include <vector>
 #include <deque>
+#include <string>
 
 // ── Celestial body types ────────────────────────────────────────────────────
 
@@ -147,106 +148,272 @@ inline uint32_t float_bits(float f) {
     return bits;
 }
 
+// ── Temperature band for hysteresis (prevents per-frame property flashing) ──
+
+inline int temp_band(float t) {
+    if (t <  60.0f) return 0;
+    if (t <  90.0f) return 1;   // methane ocean zone
+    if (t < 130.0f) return 2;
+    if (t < 180.0f) return 3;   // ammonia zone
+    if (t < 230.0f) return 4;   // frozen
+    if (t < 285.0f) return 5;   // cold temperate
+    if (t < 350.0f) return 6;   // liquid water habitable
+    if (t < 420.0f) return 7;   // hot
+    if (t < 600.0f) return 8;   // very hot rocky
+    if (t < 800.0f) return 9;   // scorching
+    if (t < 1100.0f) return 10; // lava
+    return 11;                   // molten
+}
+
 // ── Generate planet properties deterministically ────────────────────────────
 
 inline PlanetProperties generate_planet_properties(uint32_t seed, float mass, float temperature) {
     PlanetProperties pp;
 
+    // Hash only seed + mass (stable inputs). Temperature drives threshold
+    // decisions but is NOT hashed — prevents per-frame flashing.
     uint32_t h = hash_combine(seed, float_bits(mass));
-    h = hash_combine(h, float_bits(temperature));
+    // Secondary hashes for independent random streams
+    float h0 = hash_float(hash_combine(h, 0));
+    float h1 = hash_float(hash_combine(h, 1));
+    float h2 = hash_float(hash_combine(h, 2));
 
-    // ── Surface composition ──
-    if (mass > 10.0f) {
+    // ── Surface composition (broader ranges, more variety) ──
+    if (mass > 8.0f) {
         pp.surface = SURF_GAS;
-    } else if (temperature < 200.0f) {
-        pp.surface = SURF_FROZEN;
-    } else if (temperature >= 273.0f && temperature <= 373.0f && mass >= 0.5f && mass <= 3.0f) {
-        pp.surface = (hash_float(hash_combine(h, 1)) > 0.3f) ? SURF_MIXED : SURF_LIQUID;
-    } else if (temperature >= 200.0f && temperature <= 700.0f && mass >= 0.1f && mass <= 5.0f) {
-        pp.surface = SURF_ROCKY;
+    } else if (mass > 5.0f) {
+        // Mini-neptune zone: 70% gas, 30% mixed
+        pp.surface = (h0 > 0.3f) ? SURF_GAS : SURF_MIXED;
+    } else if (temperature < 180.0f) {
+        // Cold: mostly frozen, small chance mixed/rocky
+        if (h0 < 0.15f && mass > 0.3f)
+            pp.surface = SURF_MIXED;  // subsurface ocean world
+        else if (h0 < 0.25f)
+            pp.surface = SURF_ROCKY;  // barren cold rock
+        else
+            pp.surface = SURF_FROZEN;
+    } else if (temperature >= 250.0f && temperature <= 380.0f && mass >= 0.3f && mass <= 5.0f) {
+        // Habitable zone: diverse
+        if (h0 < 0.15f)
+            pp.surface = SURF_LIQUID;  // water world
+        else if (h0 < 0.55f)
+            pp.surface = SURF_MIXED;   // earth-like continents
+        else if (h0 < 0.80f)
+            pp.surface = SURF_ROCKY;   // arid/desert
+        else
+            pp.surface = SURF_FROZEN;  // tidally locked cold side
+    } else if (temperature > 700.0f) {
+        // Very hot: rocky/mixed
+        pp.surface = (h0 > 0.4f) ? SURF_ROCKY : SURF_MIXED;
     } else {
-        pp.surface = SURF_MIXED;
+        // Default: rocky or mixed based on seed
+        pp.surface = (h0 > 0.5f) ? SURF_ROCKY : SURF_MIXED;
     }
 
     // ── Atmosphere ──
     uint32_t ha = hash_combine(h, 100);
-    if (mass > 10.0f) {
-        pp.atmosphere.h2_frac  = 0.80f + hash_float(hash_combine(ha, 1)) * 0.10f;
-        pp.atmosphere.he_frac  = 1.0f - pp.atmosphere.h2_frac - 0.02f;
-        pp.atmosphere.ch4_frac = hash_float(hash_combine(ha, 2)) * 0.02f;
-        pp.atmosphere.pressure = 10.0f + hash_float(hash_combine(ha, 3)) * 90.0f;
-    } else if (mass > 0.3f && temperature > 150.0f) {
-        pp.atmosphere.n2_frac  = hash_float(hash_combine(ha, 4)) * 0.80f;
-        pp.atmosphere.co2_frac = hash_float(hash_combine(ha, 5)) * 0.50f;
-        if (temperature >= 250.0f && temperature <= 350.0f) {
-            pp.atmosphere.o2_frac = hash_float(hash_combine(ha, 6)) * 0.25f;
+    float ha0 = hash_float(hash_combine(ha, 0));
+    if (pp.surface == SURF_GAS) {
+        pp.atmosphere.h2_frac  = 0.70f + hash_float(hash_combine(ha, 1)) * 0.20f;
+        pp.atmosphere.he_frac  = 1.0f - pp.atmosphere.h2_frac - 0.03f;
+        pp.atmosphere.ch4_frac = hash_float(hash_combine(ha, 2)) * 0.03f;
+        pp.atmosphere.pressure = 10.0f + hash_float(hash_combine(ha, 3)) * 200.0f;
+    } else if (mass > 0.2f && temperature > 120.0f) {
+        // Terrestrial atmosphere — wide variety
+        float atm_chance = std::min(1.0f, mass * 0.8f); // bigger = more likely
+        if (ha0 < atm_chance) {
+            pp.atmosphere.n2_frac  = 0.1f + hash_float(hash_combine(ha, 4)) * 0.85f;
+            pp.atmosphere.co2_frac = hash_float(hash_combine(ha, 5)) * 0.60f;
+            if (temperature >= 230.0f && temperature <= 370.0f && h1 > 0.4f) {
+                pp.atmosphere.o2_frac = hash_float(hash_combine(ha, 6)) * 0.30f;
+            }
+            // Some worlds: thick CO2 (Venus-like)
+            if (temperature > 400.0f && hash_float(hash_combine(ha, 10)) > 0.5f) {
+                pp.atmosphere.co2_frac = 0.90f + hash_float(hash_combine(ha, 11)) * 0.08f;
+                pp.atmosphere.n2_frac  = 0.02f;
+                pp.atmosphere.o2_frac  = 0.0f;
+            }
+            // Methane atmosphere for cold worlds
+            if (temperature < 200.0f) {
+                pp.atmosphere.ch4_frac = hash_float(hash_combine(ha, 12)) * 0.15f;
+                pp.atmosphere.nh3_frac = hash_float(hash_combine(ha, 13)) * 0.05f;
+            }
+            float total = pp.atmosphere.n2_frac + pp.atmosphere.o2_frac +
+                          pp.atmosphere.co2_frac + pp.atmosphere.ch4_frac + pp.atmosphere.nh3_frac;
+            if (total > 0.01f) {
+                pp.atmosphere.n2_frac  /= total;
+                pp.atmosphere.o2_frac  /= total;
+                pp.atmosphere.co2_frac /= total;
+                pp.atmosphere.ch4_frac /= total;
+                pp.atmosphere.nh3_frac /= total;
+            }
+            // Pressure: thin to thick based on mass and seed
+            float base_p = 0.01f + mass * 0.5f;
+            pp.atmosphere.pressure = base_p + hash_float(hash_combine(ha, 7)) * base_p * 4.0f;
+            if (temperature > 400.0f && pp.atmosphere.co2_frac > 0.5f)
+                pp.atmosphere.pressure = 20.0f + hash_float(hash_combine(ha, 14)) * 80.0f; // Venus-like
         }
-        float total = pp.atmosphere.n2_frac + pp.atmosphere.o2_frac + pp.atmosphere.co2_frac;
-        if (total > 0.01f) {
-            pp.atmosphere.n2_frac  /= total;
-            pp.atmosphere.o2_frac  /= total;
-            pp.atmosphere.co2_frac /= total;
-        }
-        pp.atmosphere.pressure = 0.1f + hash_float(hash_combine(ha, 7)) * 5.0f;
+        // else: airless (Mercury/Moon-like) — pressure stays 0
     }
 
-    pp.atmosphere.has_clouds = (pp.atmosphere.pressure > 0.5f &&
-                                hash_float(hash_combine(ha, 8)) > 0.3f);
+    pp.atmosphere.has_clouds = (pp.atmosphere.pressure > 0.3f &&
+                                hash_float(hash_combine(ha, 8)) > 0.25f);
     pp.atmosphere.weather_intensity = pp.atmosphere.has_clouds
-        ? hash_float(hash_combine(ha, 9)) : 0.0f;
+        ? 0.2f + hash_float(hash_combine(ha, 9)) * 0.8f : 0.0f;
 
-    // ── Oceans ──
+    // ── Oceans (wider temperature ranges, more types) ──
     uint32_t ho = hash_combine(h, 200);
+    float ho0 = hash_float(hash_combine(ho, 0));
     if (pp.surface == SURF_GAS) {
         pp.ocean_type = OCEAN_NONE;
-    } else if (temperature >= 273.0f && temperature <= 373.0f && mass >= 0.5f) {
+    } else if (pp.surface == SURF_LIQUID) {
+        // Water world — very high coverage
         pp.ocean_type     = OCEAN_WATER;
-        pp.ocean_coverage = 20.0f + hash_float(hash_combine(ho, 1)) * 80.0f;
-        pp.ocean_depth    = 1.0f + hash_float(hash_combine(ho, 2)) * 10.0f;
-    } else if (temperature < 110.0f && temperature > 70.0f) {
+        pp.ocean_coverage = 80.0f + ho0 * 20.0f;
+        pp.ocean_depth    = 5.0f + hash_float(hash_combine(ho, 1)) * 50.0f;
+    } else if (temperature >= 250.0f && temperature <= 380.0f && mass >= 0.3f && ho0 > 0.3f) {
+        pp.ocean_type     = OCEAN_WATER;
+        pp.ocean_coverage = 15.0f + hash_float(hash_combine(ho, 1)) * 75.0f;
+        pp.ocean_depth    = 0.5f + hash_float(hash_combine(ho, 2)) * 12.0f;
+    } else if (temperature < 115.0f && temperature > 65.0f && ho0 > 0.4f) {
         pp.ocean_type     = OCEAN_METHANE;
-        pp.ocean_coverage = hash_float(hash_combine(ho, 3)) * 40.0f;
-        pp.ocean_depth    = 0.5f + hash_float(hash_combine(ho, 4)) * 3.0f;
-    } else if (temperature > 700.0f && pp.surface == SURF_ROCKY) {
+        pp.ocean_coverage = 5.0f + hash_float(hash_combine(ho, 3)) * 50.0f;
+        pp.ocean_depth    = 0.2f + hash_float(hash_combine(ho, 4)) * 5.0f;
+    } else if (temperature > 600.0f && (pp.surface == SURF_ROCKY || pp.surface == SURF_MIXED) && ho0 > 0.35f) {
         pp.ocean_type     = OCEAN_LAVA;
-        pp.ocean_coverage = hash_float(hash_combine(ho, 5)) * 30.0f;
-        pp.ocean_depth    = 0.1f + hash_float(hash_combine(ho, 6)) * 1.0f;
-    } else if (temperature < 200.0f && temperature > 150.0f) {
+        pp.ocean_coverage = 5.0f + hash_float(hash_combine(ho, 5)) * 50.0f;
+        pp.ocean_depth    = 0.1f + hash_float(hash_combine(ho, 6)) * 2.0f;
+    } else if (temperature < 210.0f && temperature > 140.0f && ho0 > 0.5f) {
         pp.ocean_type     = OCEAN_AMMONIA;
-        pp.ocean_coverage = hash_float(hash_combine(ho, 7)) * 25.0f;
-        pp.ocean_depth    = 0.3f + hash_float(hash_combine(ho, 8)) * 2.0f;
+        pp.ocean_coverage = 5.0f + hash_float(hash_combine(ho, 7)) * 35.0f;
+        pp.ocean_depth    = 0.2f + hash_float(hash_combine(ho, 8)) * 3.0f;
     }
 
     // ── Terrain (not gas giants) ──
     uint32_t ht = hash_combine(h, 300);
     if (pp.surface != SURF_GAS) {
-        pp.has_mountains   = hash_float(hash_combine(ht, 1)) > 0.3f;
-        pp.has_valleys     = hash_float(hash_combine(ht, 2)) > 0.4f;
-        pp.has_continents  = (pp.ocean_coverage > 20.0f && hash_float(hash_combine(ht, 3)) > 0.3f);
-        pp.mountain_height = pp.has_mountains ? (1.0f + hash_float(hash_combine(ht, 4)) * 20.0f) : 0.0f;
-        pp.valley_depth    = pp.has_valleys   ? (0.5f + hash_float(hash_combine(ht, 5)) * 10.0f) : 0.0f;
-        pp.continent_count = pp.has_continents ? (1 + (int)(hash_float(hash_combine(ht, 6)) * 7.0f)) : 0;
+        pp.has_mountains   = hash_float(hash_combine(ht, 1)) > 0.25f;
+        pp.has_valleys     = hash_float(hash_combine(ht, 2)) > 0.30f;
+        pp.has_continents  = (pp.ocean_coverage > 15.0f && hash_float(hash_combine(ht, 3)) > 0.2f);
+        pp.mountain_height = pp.has_mountains ? (0.5f + hash_float(hash_combine(ht, 4)) * 25.0f) : 0.0f;
+        pp.valley_depth    = pp.has_valleys   ? (0.2f + hash_float(hash_combine(ht, 5)) * 12.0f) : 0.0f;
+        pp.continent_count = pp.has_continents ? (1 + (int)(hash_float(hash_combine(ht, 6)) * 8.0f)) : 0;
     }
 
     // ── Climate ──
     uint32_t hc = hash_combine(h, 400);
-    pp.has_weather = pp.atmosphere.pressure > 0.3f;
+    pp.has_weather = pp.atmosphere.pressure > 0.2f;
     if (pp.has_weather) {
         float wh = hash_float(hash_combine(hc, 1));
-        if (temperature < 200.0f)               pp.weather_type = WEATHER_SNOW;
+        if (temperature < 180.0f)               pp.weather_type = WEATHER_SNOW;
         else if (temperature > 500.0f)           pp.weather_type = WEATHER_DUST;
-        else if (pp.ocean_coverage > 30.0f)      pp.weather_type = (wh > 0.5f) ? WEATHER_STORMS : WEATHER_RAIN;
+        else if (pp.ocean_coverage > 40.0f)      pp.weather_type = (wh > 0.4f) ? WEATHER_STORMS : WEATHER_RAIN;
+        else if (pp.ocean_coverage > 10.0f)      pp.weather_type = (wh > 0.6f) ? WEATHER_RAIN : WEATHER_DUST;
         else                                     pp.weather_type = (wh > 0.7f) ? WEATHER_STORMS : WEATHER_DUST;
-        pp.cloud_coverage = 10.0f + hash_float(hash_combine(hc, 2)) * 80.0f;
+        pp.cloud_coverage = 5.0f + hash_float(hash_combine(hc, 2)) * 85.0f;
+        // Dry worlds: less clouds
+        if (pp.ocean_coverage < 10.0f) pp.cloud_coverage *= 0.3f;
     }
 
     // ── Vegetation (requires water, O2, right temperature) ──
-    if (pp.ocean_type == OCEAN_WATER && pp.atmosphere.o2_frac > 0.05f &&
-        temperature >= 260.0f && temperature <= 320.0f) {
-        pp.vegetation_coverage = hash_float(hash_combine(hc, 3)) * 60.0f;
+    if (pp.ocean_type == OCEAN_WATER && pp.atmosphere.o2_frac > 0.03f &&
+        temperature >= 240.0f && temperature <= 340.0f) {
+        float veg_potential = std::min(pp.atmosphere.o2_frac * 4.0f, 1.0f) *
+                              std::min(pp.ocean_coverage / 50.0f, 1.0f);
+        pp.vegetation_coverage = hash_float(hash_combine(hc, 3)) * 70.0f * veg_potential;
     }
 
     return pp;
+}
+
+// ── Procedural name generation ──────────────────────────────────────────────
+
+inline std::string generate_body_name(uint32_t seed, uint32_t type) {
+    // Syllable pools for planet/moon/asteroid names
+    static const char* const ONSETS[]  = {
+        "", "b", "c", "d", "f", "g", "h", "j", "k", "l", "m", "n",
+        "p", "r", "s", "t", "v", "z", "th", "sh", "ch", "kr", "tr",
+        "pr", "br", "gr", "dr", "st", "fr", "gl", "pl", "cl", "qu",
+    };
+    static const char* const NUCLEI[] = {
+        "a", "e", "i", "o", "u", "ae", "ei", "ou", "ai", "au",
+        "ia", "io", "ea", "eo", "ua",
+    };
+    static const char* const CODAS[]  = {
+        "", "n", "s", "r", "l", "th", "x", "m", "d", "k", "p",
+        "nd", "ns", "rs", "nt", "rn",
+    };
+
+    // Star prefix letters (like real catalog designations)
+    static const char* const STAR_PREFIXES[] = {
+        "HD", "HR", "HIP", "TYC", "Gliese", "Ross", "Wolf", "Luyten",
+        "BD", "CD", "Kepler", "TRAPPIST", "Proxima", "Barnard",
+    };
+    static const char* const GREEK[]  = {
+        "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta",
+        "Eta", "Theta", "Iota", "Kappa", "Lambda", "Mu",
+        "Nu", "Xi", "Omicron", "Pi", "Rho", "Sigma",
+        "Tau", "Upsilon", "Phi", "Chi", "Psi", "Omega",
+    };
+    static const char* const CONSTELLATIONS[] = {
+        "Centauri", "Cygni", "Orionis", "Lyrae", "Eridani", "Draconis",
+        "Pegasi", "Aquilae", "Ursae", "Leonis", "Tauri", "Scorpii",
+        "Sagittarii", "Hydrae", "Andromedae", "Cassiopeiae", "Virginis",
+        "Crucis", "Carinae", "Velorum", "Puppis", "Pavonis",
+    };
+
+    uint32_t h = seed;
+    auto next = [&]() -> uint32_t {
+        h = hash_combine(h, 0x12345678);
+        return h;
+    };
+
+    std::string name;
+
+    if (is_star_type(type)) {
+        // 50% chance catalog style, 50% Greek+Constellation
+        if ((next() & 1) == 0) {
+            const char* prefix = STAR_PREFIXES[next() % 14];
+            uint32_t num = (next() % 9000) + 1000;
+            name = std::string(prefix) + " " + std::to_string(num);
+        } else {
+            const char* greek = GREEK[next() % 24];
+            const char* constellation = CONSTELLATIONS[next() % 22];
+            name = std::string(greek) + " " + constellation;
+        }
+    } else if (is_black_hole_type(type)) {
+        // Black holes get catalog-like names
+        static const char* const BH_PREFIXES[] = {
+            "Sgr", "Cyg", "M", "NGC", "TON", "PG", "GRS", "XTE",
+        };
+        const char* prefix = BH_PREFIXES[next() % 8];
+        uint32_t num = (next() % 9000) + 100;
+        name = std::string(prefix) + " " + std::to_string(num);
+    } else {
+        // Planets, moons, asteroids, comets, nebulae — syllable-based
+        int syllable_count = 2 + (int)(next() % 2); // 2-3 syllables
+        for (int s = 0; s < syllable_count; s++) {
+            name += ONSETS[next() % 33];
+            name += NUCLEI[next() % 15];
+            if (s < syllable_count - 1)
+                name += CODAS[next() % 16];
+            else
+                name += CODAS[next() % 11]; // shorter ending
+        }
+        // Capitalize first letter
+        if (!name.empty() && name[0] >= 'a' && name[0] <= 'z')
+            name[0] -= 32;
+
+        // Moons get parent reference suffix
+        if (type == CTYPE_MOON) {
+            int moon_idx = (int)(next() % 20) + 1;
+            char suffix[8];
+            snprintf(suffix, sizeof(suffix), " %c", 'a' + (char)(moon_idx % 26));
+            name += suffix;
+        }
+    }
+
+    return name;
 }
 
 // ── Single celestial body ───────────────────────────────────────────────────
@@ -267,7 +434,25 @@ struct CelestialBody {
     uint32_t    stellar_stage  = 0;         // StellarStage enum
     bool        marked_for_removal = false;
     uint32_t    seed           = 0;         // procedural generation seed
+    uint32_t    frag_generation = 0;        // how many times this body has been fragmented (0 = original)
+    std::string name;                       // procedural or user-given name
+
+    // Cached planet properties (computed once, refreshed only on major temp band changes)
+    PlanetProperties cached_props;
+    bool             props_valid = false;
+    int              cached_temp_band = -1;  // transient, not serialized
 };
+
+// ── Refresh cached planet properties (call after physics, not in renderer) ──
+
+inline void refresh_planet_props(CelestialBody& b) {
+    if (b.type != CTYPE_PLANET && b.type != CTYPE_MOON) return;
+    int band = temp_band(b.temperature);
+    if (b.props_valid && band == b.cached_temp_band) return; // same band, no change
+    b.cached_props = generate_planet_properties(b.seed, b.mass, b.temperature);
+    b.cached_temp_band = band;
+    b.props_valid = true;
+}
 
 // ── Simulation config ───────────────────────────────────────────────────────
 
@@ -292,6 +477,9 @@ struct CosmosConfig {
     bool     collision_fragmentation = true;
     float    merge_speed_threshold   = 5.0f;     // relative speed below which bodies merge
     float    fragment_speed_threshold = 20.0f;   // relative speed above which bodies fragment
+    int      fragment_count          = 4;        // number of fragments from collision/tidal breakup (1-12)
+    float    min_fragment_mass       = 0.05f;    // bodies below this mass cannot fragment (just bounce)
+    int      max_frag_generation     = 2;        // max times a body can be re-fragmented (0=originals only)
 
     // Roche limit
     bool     roche_limit        = true;
@@ -313,6 +501,13 @@ struct CosmosConfig {
     bool     star_lighting    = true;   // stars act as point light sources
     bool     uniform_lighting = false;  // everything uniformly illuminated
     float    ambient_strength = 0.08f;  // ambient light level in star mode
+
+    // General Relativity corrections
+    bool     gr_enabled           = true;    // enable GR corrections
+    float    gr_precession_scale  = 1.0f;    // perihelion precession strength (1 = physical)
+    float    gr_time_dilation     = 1.0f;    // gravitational time dilation factor
+    float    gr_frame_dragging    = 1.0f;    // Lense-Thirring frame dragging
+    float    speed_of_light       = 300.0f;  // c in simulation units (orbital speeds ~1-30)
 };
 
 // ── Body collection ─────────────────────────────────────────────────────────

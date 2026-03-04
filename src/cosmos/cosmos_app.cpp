@@ -1,9 +1,13 @@
 #include "cosmos/cosmos_app.h"
+#include "common/paths.h"
 #include "imgui.h"
 #include <GLFW/glfw3.h>
 #include <cmath>
 #include <algorithm>
 #include <random>
+#include <fstream>
+#include <cstring>
+#include <filesystem>
 
 // ── Body color (for trail overlay coloring) ─────────────────────────────────
 
@@ -151,6 +155,7 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
     sun.type = CTYPE_STAR;
     sun.seed = 42;
     sun.type = classify_star_spectral(sun.temperature, sun.mass);
+    sun.name = generate_body_name(sun.seed, sun.type);
     state.bodies.push_back(sun);
 
     // Planets in circular orbits in the XZ plane
@@ -170,6 +175,7 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
         p.type = CTYPE_PLANET;
         p.parent = 0;
         p.seed = (uint32_t)(i * 7919 + 12345);
+        p.name = generate_body_name(p.seed, p.type);
         state.bodies.push_back(p);
     }
 
@@ -185,6 +191,7 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
         moon.type = CTYPE_MOON;
         moon.parent = 2;
         moon.seed = 99999;
+        moon.name = generate_body_name(moon.seed, moon.type);
         state.bodies.push_back(moon);
     }
 
@@ -205,10 +212,15 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
         a.radius = randf(2.0f, 4.0f);
         a.temperature = 100.0f;
         a.type = CTYPE_ASTEROID;
+        a.seed = (uint32_t)(rng());
+        a.name = generate_body_name(a.seed, a.type);
         state.bodies.push_back(a);
     }
 
     state.trails.resize(state.bodies.size());
+
+    // Initialize cached planet properties for all bodies
+    for (auto& b : state.bodies) refresh_planet_props(b);
 }
 
 void CosmosApp::init(GLFWwindow* window) {
@@ -216,13 +228,44 @@ void CosmosApp::init(GLFWwindow* window) {
     renderer.init(vk, window);
     raytracer_.init(vk, renderer.render_pass());
 
-    seed_default_system(state, cfg);
-    cfg.body_count = static_cast<uint32_t>(state.count());
+    state.clear();
+    cfg.body_count = 0;
 
     camera.target = {0, 0, 0};
     camera.distance = 600.0f;
+    camera.target_distance = 600.0f;
     camera.elevation = 0.5f;
     camera.azimuth = 0.0f;
+}
+
+// ── Body picking (screen-space hit test) ─────────────────────────────────────
+
+int CosmosApp::pick_body(float mx, float my, float W, float H) const {
+    float aspect = W / H;
+    glm::mat4 vp = camera.proj_matrix(aspect) * camera.view_matrix();
+    float fov_rad = glm::radians(camera.fov);
+
+    int best = -1;
+    float best_dist = 30.0f;
+    for (size_t i = 0; i < state.bodies.size(); i++) {
+        const auto& b = state.bodies[i];
+        glm::vec4 clip = vp * glm::vec4(b.pos, 1.0f);
+        if (clip.w <= 0.0f) continue;
+        glm::vec3 ndc = glm::vec3(clip) / clip.w;
+        float sx = (ndc.x * 0.5f + 0.5f) * W;
+        float sy = (1.0f - (ndc.y * 0.5f + 0.5f)) * H;
+
+        float dx = sx - mx;
+        float dy = sy - my;
+        float d = std::sqrt(dx * dx + dy * dy);
+        float sr = (b.radius / clip.w) * (H / (2.0f * std::tan(fov_rad * 0.5f)));
+        float pick_r = std::max(sr, 12.0f);
+        if (d < pick_r && d < best_dist) {
+            best_dist = d;
+            best = (int)i;
+        }
+    }
+    return best;
 }
 
 void CosmosApp::destroy() {
@@ -236,10 +279,12 @@ void CosmosApp::reset_simulation() {
     seed_default_system(state, cfg);
     cfg.body_count = static_cast<uint32_t>(state.count());
     selected_body = -1;
+    inspector_visible_ = false;
     sim_time_ = 0.0f;
     cfg.sim_time_accumulated = 0.0;
     camera = OrbitCamera{};
     camera.distance = 600.0f;
+    camera.target_distance = 600.0f;
     camera.elevation = 0.5f;
     paused = false;
 }
@@ -291,6 +336,8 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
         }
     }
 
+    nb.name = generate_body_name(nb.seed, nb.type);
+    refresh_planet_props(nb);
     state.bodies.push_back(nb);
     state.trails.emplace_back();
 }
@@ -301,21 +348,35 @@ void CosmosApp::tick(GLFWwindow* window, float dt) {
     if (!renderer.begin_frame(vk, window))
         return;
 
-    // WASD camera panning
-    if (!paused && !show_splash && !show_pause_menu && !ImGui::GetIO().WantTextInput) {
+    // WASD camera panning (breaks focus tracking)
+    if (!show_splash && !show_pause_menu && !ImGui::GetIO().WantTextInput) {
         float move_speed = camera.distance * 0.5f * dt;
         glm::vec3 fwd = camera.forward_direction();
         glm::vec3 right = camera.right_direction();
         fwd.y = 0; fwd = glm::normalize(fwd);
         right.y = 0; right = glm::normalize(right);
 
-        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) camera.target += fwd * move_speed;
-        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) camera.target -= fwd * move_speed;
-        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) camera.target += right * move_speed;
-        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) camera.target -= right * move_speed;
-        if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) camera.target.y += move_speed;
-        if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) camera.target.y -= move_speed;
+        bool moved = false;
+        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) { camera.target += fwd * move_speed; moved = true; }
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) { camera.target -= fwd * move_speed; moved = true; }
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) { camera.target += right * move_speed; moved = true; }
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) { camera.target -= right * move_speed; moved = true; }
+        if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) { camera.target.y += move_speed; moved = true; }
+        if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) { camera.target.y -= move_speed; moved = true; }
+        if (moved) camera.release_focus();
     }
+
+    // Track focused body (update position each frame so camera follows)
+    if (camera.focus_active && camera.focus_body >= 0 &&
+        camera.focus_body < (int)state.bodies.size()) {
+        camera.track_body(state.bodies[camera.focus_body].pos);
+    } else if (camera.focus_active && camera.focus_body >= 0) {
+        // Body was removed
+        camera.release_focus();
+    }
+
+    // Smooth camera animation (zoom + focus lerp)
+    camera.update(dt);
 
     if (!paused && !show_splash) {
         step_physics(dt);
@@ -327,7 +388,7 @@ void CosmosApp::tick(GLFWwindow* window, float dt) {
     raytracer_.update_and_draw(vk, renderer.current_cmd(), state, camera, cfg,
                                 io.DisplaySize.x, io.DisplaySize.y, sim_time_);
 
-    // DrawList overlays (trails, selection)
+    // DrawList overlays (trails, selection, focus indicator)
     if (!show_splash && !show_pause_menu)
         render_overlay();
 
@@ -347,8 +408,10 @@ void CosmosApp::step_physics(float dt) {
     size_t n = bodies.size();
     if (n == 0) return;
 
-    // Compute gravitational acceleration
+    // Compute gravitational acceleration (Newtonian + GR corrections)
     std::vector<glm::vec3> accel(n, glm::vec3(0.0f));
+    float c2 = cfg.speed_of_light * cfg.speed_of_light;
+
     for (size_t i = 0; i < n; i++) {
         if (bodies[i].marked_for_removal) continue;
         for (size_t j = i + 1; j < n; j++) {
@@ -359,8 +422,78 @@ void CosmosApp::step_physics(float dt) {
             float force = cfg.G * bodies[i].mass * bodies[j].mass / dist2;
             glm::vec3 dir = diff / dist;
 
-            accel[i] += dir * (force / bodies[i].mass);
-            accel[j] -= dir * (force / bodies[j].mass);
+            // Newtonian gravity
+            glm::vec3 acc_i = dir * (force / bodies[i].mass);
+            glm::vec3 acc_j = -dir * (force / bodies[j].mass);
+
+            // ── General Relativity corrections ──
+            if (cfg.gr_enabled && c2 > 0.0f) {
+                // 1. Post-Newtonian perihelion precession (1PN correction)
+                //    a_GR = (GM/r²c²) * [ (4GM/r - v²)r̂ + 4(v·r̂)v ]
+                //    This produces the correct perihelion advance rate.
+                {
+                    float GM_j = cfg.G * bodies[j].mass;
+                    float GM_i = cfg.G * bodies[i].mass;
+
+                    // Correction on body i from body j
+                    glm::vec3 rvel_i = bodies[i].vel;
+                    float vi2 = glm::dot(rvel_i, rvel_i);
+                    float vr_i = glm::dot(rvel_i, dir);
+                    float pn_scale_i = GM_j / (dist * c2) * cfg.gr_precession_scale;
+                    glm::vec3 gr_i = pn_scale_i * ((4.0f * GM_j / dist - vi2) * dir + 4.0f * vr_i * rvel_i);
+                    acc_i += gr_i;
+
+                    // Correction on body j from body i
+                    glm::vec3 rvel_j = bodies[j].vel;
+                    float vj2 = glm::dot(rvel_j, rvel_j);
+                    float vr_j = glm::dot(rvel_j, -dir);
+                    float pn_scale_j = GM_i / (dist * c2) * cfg.gr_precession_scale;
+                    glm::vec3 gr_j = pn_scale_j * ((4.0f * GM_i / dist - vj2) * (-dir) + 4.0f * vr_j * rvel_j);
+                    acc_j += gr_j;
+                }
+
+                // 2. Gravitational time dilation effect on effective acceleration
+                //    Objects deeper in a gravitational well experience time more slowly.
+                //    Effective boost: a *= 1 + Φ/c² where Φ = -GM/r
+                if (cfg.gr_time_dilation > 0.0f) {
+                    float phi_j = -cfg.G * bodies[j].mass / dist;  // potential at i from j
+                    float phi_i = -cfg.G * bodies[i].mass / dist;  // potential at j from i
+                    float td_i = 1.0f + cfg.gr_time_dilation * phi_j / c2;
+                    float td_j = 1.0f + cfg.gr_time_dilation * phi_i / c2;
+                    acc_i *= td_i;
+                    acc_j *= td_j;
+                }
+
+                // 3. Frame dragging (Lense-Thirring) for spinning bodies
+                //    a_LT ∝ (GJ/(c²r³)) × [(v×Ĵ) - 3(r̂·Ĵ)(v×r̂)]
+                //    Angular velocity serves as spin proxy
+                if (cfg.gr_frame_dragging > 0.0f) {
+                    for (int pair = 0; pair < 2; pair++) {
+                        size_t src = (pair == 0) ? j : i;
+                        size_t dst = (pair == 0) ? i : j;
+                        if (std::abs(bodies[src].angular_vel) < 1e-6f) continue;
+
+                        // Angular momentum J ∝ mass * radius² * angular_vel
+                        float J = bodies[src].mass * bodies[src].radius * bodies[src].radius *
+                                  bodies[src].angular_vel;
+                        glm::vec3 J_hat(0, 1, 0); // spin axis assumed Y-up
+                        float coeff = cfg.gr_frame_dragging * cfg.G * J / (c2 * dist * dist * dist);
+
+                        glm::vec3 r_hat = (pair == 0) ? dir : -dir;
+                        glm::vec3 v_dst = bodies[dst].vel;
+                        glm::vec3 vxJ = glm::cross(v_dst, J_hat);
+                        float rdotJ = glm::dot(r_hat, J_hat);
+                        glm::vec3 vxr = glm::cross(v_dst, r_hat);
+                        glm::vec3 a_lt = coeff * (vxJ - 3.0f * rdotJ * vxr);
+
+                        if (pair == 0) acc_i += a_lt;
+                        else           acc_j += a_lt;
+                    }
+                }
+            }
+
+            accel[i] += acc_i;
+            accel[j] += acc_j;
         }
     }
 
@@ -380,6 +513,10 @@ void CosmosApp::step_physics(float dt) {
     if (cfg.evaporation)        process_evaporation(scaled_dt);
     if (cfg.stellar_evolution)  process_stellar_evolution(scaled_dt);
     cleanup_bodies();
+
+    // Refresh cached planet properties (only recomputes on temperature band changes)
+    for (auto& b : state.bodies)
+        refresh_planet_props(b);
 
     // Update trails
     n = bodies.size();
@@ -446,16 +583,21 @@ void CosmosApp::process_collisions(float dt) {
                     bodies[small].marked_for_removal = true;
                 }
                 else if (cfg.collision_fragmentation && rel_speed > cfg.fragment_speed_threshold) {
-                    // Fragment: smaller body breaks apart
                     size_t big = (bodies[i].mass >= bodies[j].mass) ? i : j;
                     size_t small = (big == i) ? j : i;
 
-                    int frag_count = 2 + rand() % 3; // 2-4 fragments
-                    spawn_fragments(bodies[small].pos, bodies[small].vel,
-                                    bodies[small].mass, frag_count);
-                    bodies[small].marked_for_removal = true;
+                    // Only fragment if body is large enough and hasn't been fragmented too many times
+                    bool can_fragment = bodies[small].mass >= cfg.min_fragment_mass
+                                     && (int)bodies[small].frag_generation < cfg.max_frag_generation;
 
-                    // Elastic bounce on the big body
+                    if (can_fragment) {
+                        spawn_fragments(bodies[small].pos, bodies[small].vel,
+                                        bodies[small].mass, cfg.fragment_count,
+                                        bodies[small].frag_generation);
+                        bodies[small].marked_for_removal = true;
+                    }
+
+                    // Elastic bounce on the big body (always, even if no fragmentation)
                     float vel_along = glm::dot(rel_vel, dir);
                     if (vel_along < 0) {
                         float impulse = -(1.0f + 0.5f) * vel_along / total_mass;
@@ -497,11 +639,14 @@ void CosmosApp::process_roche_limit(float /*dt*/) {
             float roche_dist = bodies[i].radius * 2.5f * std::cbrt(mass_ratio);
 
             if (dist < roche_dist && dist > bodies[i].radius) {
-                // Tidal disruption of body j
-                int frag_count = 3 + rand() % 3;
-                spawn_fragments(bodies[j].pos, bodies[j].vel,
-                                bodies[j].mass, frag_count);
-                bodies[j].marked_for_removal = true;
+                // Only tidally disrupt if body is large enough and not at generation limit
+                if (bodies[j].mass >= cfg.min_fragment_mass
+                    && (int)bodies[j].frag_generation < cfg.max_frag_generation) {
+                    spawn_fragments(bodies[j].pos, bodies[j].vel,
+                                    bodies[j].mass, cfg.fragment_count,
+                                    bodies[j].frag_generation);
+                    bodies[j].marked_for_removal = true;
+                }
             }
         }
     }
@@ -604,7 +749,7 @@ void CosmosApp::process_stellar_evolution(float dt) {
 
                 // Spawn debris
                 float debris_mass = b.mass * 0.7f;
-                spawn_fragments(b.pos, b.vel, debris_mass, 6 + rand() % 5);
+                spawn_fragments(b.pos, b.vel, debris_mass, cfg.fragment_count);
 
                 // Remnant neutron star
                 b.mass *= 0.3f;
@@ -614,12 +759,11 @@ void CosmosApp::process_stellar_evolution(float dt) {
 
                 // Give debris a velocity kick
                 size_t n = state.bodies.size();
-                for (size_t k = n - 10; k < n; k++) {
-                    if (k < state.bodies.size()) {
-                        glm::vec3 kick_dir = glm::normalize(state.bodies[k].pos - b.pos);
-                        state.bodies[k].vel += kick_dir * 30.0f;
-                        state.bodies[k].temperature = 5000.0f;
-                    }
+                size_t frag_start = (n > (size_t)cfg.fragment_count) ? (n - (size_t)cfg.fragment_count) : 0;
+                for (size_t k = frag_start; k < n; k++) {
+                    glm::vec3 kick_dir = glm::normalize(state.bodies[k].pos - b.pos);
+                    state.bodies[k].vel += kick_dir * 30.0f;
+                    state.bodies[k].temperature = 5000.0f;
                 }
             } else {
                 // White dwarf
@@ -679,24 +823,52 @@ void CosmosApp::cleanup_bodies() {
 
 // ── Fragment Spawning ───────────────────────────────────────────────────────
 
-void CosmosApp::spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, int count) {
-    float frag_mass = total_mass / (float)count;
-    float frag_radius = std::max(1.5f, std::cbrt(frag_mass) * 3.0f);
+void CosmosApp::spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, int count, uint32_t parent_generation) {
+    if (count < 1) return;
 
+    // Generate random proportions using stick-breaking:
+    // draw (count-1) random break points in [0,1], sort, then differences give proportions.
+    // This produces naturally varied sizes that always sum to total_mass.
+    float breaks[13]; // max count=12 → 11 breaks + 0.0 + 1.0
+    breaks[0] = 0.0f;
+    for (int i = 1; i < count; i++)
+        breaks[i] = (float)rand() / RAND_MAX;
+    breaks[count] = 1.0f;
+    // Simple insertion sort (count is small, max 12)
+    for (int i = 1; i < count; i++) {
+        float key = breaks[i];
+        int j = i - 1;
+        while (j >= 0 && breaks[j] > key) { breaks[j + 1] = breaks[j]; j--; }
+        breaks[j + 1] = key;
+    }
+
+    float mass_remaining = total_mass;
     for (int i = 0; i < count; i++) {
+        float proportion = breaks[i + 1] - breaks[i];
+        float frag_mass = total_mass * proportion;
+        // Ensure no fragment has zero mass
+        if (frag_mass < 0.001f) frag_mass = 0.001f;
+        mass_remaining -= frag_mass;
+
+        // Radius from mass (volume-preserving: r proportional to cbrt(m))
+        float frag_radius = std::max(1.5f, std::cbrt(frag_mass) * 3.0f);
+
         CelestialBody frag;
-        // Random spread position
         float theta = (float)rand() / RAND_MAX * 6.2832f;
         float phi = (float)rand() / RAND_MAX * 3.1416f - 1.5708f;
         glm::vec3 dir(cosf(phi) * cosf(theta), sinf(phi), cosf(phi) * sinf(theta));
 
-        frag.pos = pos + dir * (frag_radius * 2.0f);
+        frag.pos = pos + dir * (frag_radius * 2.0f + 2.0f);
         frag.vel = vel + dir * (5.0f + (float)rand() / RAND_MAX * 10.0f);
         frag.mass = frag_mass;
-        frag.radius = frag_radius * (0.8f + (float)rand() / RAND_MAX * 0.4f);
+        frag.radius = frag_radius;
         frag.temperature = 300.0f;
         frag.type = CTYPE_ASTEROID;
         frag.fuel = 0.0f;
+        frag.seed = (uint32_t)rand();
+        frag.frag_generation = parent_generation + 1;
+        frag.name = generate_body_name(frag.seed, frag.type);
+        refresh_planet_props(frag);
 
         state.bodies.push_back(frag);
         state.trails.emplace_back();
@@ -767,16 +939,64 @@ void CosmosApp::render_overlay() {
         }
     }
 
-    // Selection highlight
+    // Selection highlight — animated ring
     if (selected_body >= 0 && selected_body < (int)state.bodies.size()) {
         const auto& b = state.bodies[selected_body];
         auto p = project(b.pos, vp, W, H);
         if (p.visible) {
             float sr = screen_radius(b.radius, p.depth, fov_rad, H);
-            sr = std::max(sr, 4.0f);
-            fg->AddCircle(ImVec2(p.sx, p.sy), sr + 4.0f,
-                IM_COL32(255, 255, 100, 180), 32, 2.0f);
+            sr = std::max(sr, 6.0f);
+
+            // Animated selection ring
+            float pulse = 0.85f + 0.15f * std::sin(sim_time_ * 4.0f);
+            float ring_r = (sr + 6.0f) * pulse;
+
+            // Outer glow
+            fg->AddCircle(ImVec2(p.sx, p.sy), ring_r + 2.0f,
+                IM_COL32(255, 200, 60, 40), 48, 3.0f);
+            // Main ring
+            fg->AddCircle(ImVec2(p.sx, p.sy), ring_r,
+                IM_COL32(255, 220, 100, 200), 48, 2.0f);
+
+            // Corner brackets (like a targeting reticle)
+            float bk = ring_r + 8.0f;
+            float bl = 8.0f;
+            ImU32 bk_col = IM_COL32(255, 255, 255, 120);
+            fg->AddLine(ImVec2(p.sx - bk, p.sy - bk), ImVec2(p.sx - bk + bl, p.sy - bk), bk_col, 1.5f);
+            fg->AddLine(ImVec2(p.sx - bk, p.sy - bk), ImVec2(p.sx - bk, p.sy - bk + bl), bk_col, 1.5f);
+            fg->AddLine(ImVec2(p.sx + bk, p.sy - bk), ImVec2(p.sx + bk - bl, p.sy - bk), bk_col, 1.5f);
+            fg->AddLine(ImVec2(p.sx + bk, p.sy - bk), ImVec2(p.sx + bk, p.sy - bk + bl), bk_col, 1.5f);
+            fg->AddLine(ImVec2(p.sx - bk, p.sy + bk), ImVec2(p.sx - bk + bl, p.sy + bk), bk_col, 1.5f);
+            fg->AddLine(ImVec2(p.sx - bk, p.sy + bk), ImVec2(p.sx - bk, p.sy + bk - bl), bk_col, 1.5f);
+            fg->AddLine(ImVec2(p.sx + bk, p.sy + bk), ImVec2(p.sx + bk - bl, p.sy + bk), bk_col, 1.5f);
+            fg->AddLine(ImVec2(p.sx + bk, p.sy + bk), ImVec2(p.sx + bk, p.sy + bk - bl), bk_col, 1.5f);
+
+            // Body name label above
+            const char* name = b.name.empty() ? CTYPE_NAMES[std::min(b.type, (uint32_t)CTYPE_COUNT - 1)] : b.name.c_str();
+            ImVec2 name_size = ImGui::CalcTextSize(name);
+            float label_x = p.sx - name_size.x * 0.5f;
+            float label_y = p.sy - ring_r - 20.0f;
+            fg->AddRectFilled(ImVec2(label_x - 4, label_y - 2),
+                              ImVec2(label_x + name_size.x + 4, label_y + name_size.y + 2),
+                              IM_COL32(10, 10, 20, 180), 3.0f);
+            fg->AddText(ImVec2(label_x, label_y), IM_COL32(255, 220, 100, 240), name);
         }
+    }
+
+    // Focus indicator (when camera is tracking a body)
+    if (camera.focus_active && camera.focus_body >= 0 &&
+        camera.focus_body < (int)state.bodies.size()) {
+        // Small "TRACKING" label in top-right
+        const char* track_label = "TRACKING";
+        ImVec2 tl_size = ImGui::CalcTextSize(track_label);
+        float tx = W - tl_size.x - 16.0f;
+        float ty = 44.0f;
+        fg->AddRectFilled(ImVec2(tx - 6, ty - 2), ImVec2(tx + tl_size.x + 6, ty + tl_size.y + 2),
+                          IM_COL32(255, 180, 40, 30), 3.0f);
+        fg->AddRect(ImVec2(tx - 6, ty - 2), ImVec2(tx + tl_size.x + 6, ty + tl_size.y + 2),
+                    IM_COL32(255, 180, 40, 120), 3.0f, 0, 1.0f);
+        float alpha = 160.0f + 60.0f * std::sin(sim_time_ * 3.0f);
+        fg->AddText(ImVec2(tx, ty), IM_COL32(255, 200, 80, (int)alpha), track_label);
     }
 }
 
@@ -1064,8 +1284,22 @@ void CosmosApp::draw_pause_menu() {
             show_pause_menu = false;
         }
 
-        // Empty Simulation
+        // Save
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 2));
+        if (ImGui::Button("Save Simulation", ImVec2(btn_w, btn_h))) {
+            show_save_dialog_ = true;
+            show_pause_menu = false;
+        }
+
+        // Load
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 3));
+        if (ImGui::Button("Load Simulation", ImVec2(btn_w, btn_h))) {
+            show_load_dialog_ = true;
+            show_pause_menu = false;
+        }
+
+        // Empty Simulation
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 4));
         if (ImGui::Button("Empty Simulation", ImVec2(btn_w, btn_h))) {
             state.clear();
             cfg.body_count = 0;
@@ -1076,7 +1310,7 @@ void CosmosApp::draw_pause_menu() {
         }
 
         // Return to Launcher
-        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 3));
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 5));
         if (ImGui::Button("Return to Launcher", ImVec2(btn_w, btn_h))) {
             request_launcher = true;
             request_quit = true;
@@ -1088,7 +1322,7 @@ void CosmosApp::draw_pause_menu() {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,  ImVec4(0.50f, 0.12f, 0.12f, 0.95f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,   ImVec4(0.60f, 0.15f, 0.15f, 1.00f));
 
-        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 4));
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 6));
         if (ImGui::Button("Quit", ImVec2(btn_w, btn_h))) {
             request_quit = true;
         }
@@ -1224,11 +1458,13 @@ void CosmosApp::draw_spawn_menu() {
             s.pos = offset; s.mass = 100.0f; s.radius = 30.0f;
             s.temperature = 5778.0f; s.type = classify_star_spectral(5778.0f, 100.0f);
             s.seed = 42;
+            s.name = generate_body_name(s.seed, s.type);
             int star_idx = (int)state.bodies.size();
             state.bodies.push_back(s); state.trails.emplace_back();
 
             float radii[] = {80, 140, 210, 300};
             float masses[] = {0.3f, 0.8f, 0.5f, 1.5f};
+            float temps[] = {600.0f, 300.0f, 180.0f, 90.0f};
             for (int i = 0; i < 4; i++) {
                 CelestialBody p;
                 float angle = (float)i * 1.57f;
@@ -1236,8 +1472,11 @@ void CosmosApp::draw_spawn_menu() {
                 float v = std::sqrt(cfg.G * s.mass / radii[i]);
                 p.vel = s.vel + glm::vec3(-sinf(angle) * v, 0, cosf(angle) * v);
                 p.mass = masses[i]; p.radius = 6 + masses[i] * 3;
+                p.temperature = temps[i];
                 p.type = CTYPE_PLANET; p.parent = star_idx;
                 p.seed = (uint32_t)(i * 31337 + 54321);
+                p.name = generate_body_name(p.seed, p.type);
+                refresh_planet_props(p);
                 state.bodies.push_back(p); state.trails.emplace_back();
             }
         }
@@ -1252,6 +1491,7 @@ void CosmosApp::draw_spawn_menu() {
             s1.vel = glm::vec3(0, 0, v * 0.5f);
             s1.mass = 50.0f; s1.radius = 22.0f; s1.temperature = 8000.0f;
             s1.type = classify_star_spectral(8000.0f, 50.0f); s1.seed = 111;
+            s1.name = generate_body_name(s1.seed, s1.type);
             state.bodies.push_back(s1); state.trails.emplace_back();
 
             CelestialBody s2;
@@ -1259,6 +1499,7 @@ void CosmosApp::draw_spawn_menu() {
             s2.vel = glm::vec3(0, 0, -v * 0.5f);
             s2.mass = 50.0f; s2.radius = 22.0f; s2.temperature = 3500.0f;
             s2.type = classify_star_spectral(3500.0f, 50.0f); s2.seed = 222;
+            s2.name = generate_body_name(s2.seed, s2.type);
             state.bodies.push_back(s2); state.trails.emplace_back();
         }
 
@@ -1290,6 +1531,8 @@ void CosmosApp::draw_spawn_menu() {
                 a.vel = nearest_vel + glm::vec3(-sinf(angle) * v, 0, cosf(angle) * v);
                 a.mass = randf(0.01f, 0.05f); a.radius = randf(2, 4);
                 a.type = CTYPE_ASTEROID;
+                a.seed = (uint32_t)(rng());
+                a.name = generate_body_name(a.seed, a.type);
                 state.bodies.push_back(a); state.trails.emplace_back();
             }
         }
@@ -1321,26 +1564,38 @@ void CosmosApp::render_ui() {
         return;
     }
 
+    // ── Global modern styling ────────────────────────────────────────────────
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_GrabRounding, 4.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarRounding, 6.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 4));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.06f, 0.06f, 0.10f, 0.88f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.08f, 0.08f, 0.14f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.12f, 0.10f, 0.20f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.10f, 0.10f, 0.16f, 0.80f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.18f, 0.16f, 0.26f, 0.90f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.24f, 0.20f, 0.34f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.80f, 0.60f, 0.20f, 0.90f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ImVec4(1.00f, 0.75f, 0.25f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.14f, 0.12f, 0.22f, 0.80f));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.22f, 0.18f, 0.32f, 0.90f));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.28f, 0.24f, 0.40f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.14f, 0.12f, 0.22f, 0.80f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.18f, 0.34f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.30f, 0.24f, 0.42f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.25f, 0.20f, 0.35f, 0.40f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.30f, 0.25f, 0.40f, 0.30f));
+    ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(1.0f, 0.8f, 0.3f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.90f, 0.88f, 0.94f, 1.0f));
+
     // ── Normal UI ────────────────────────────────────────────────────────────
 
-    // Top bar
-    ImGui::SetNextWindowPos({0, 0});
-    ImGui::SetNextWindowSize({io.DisplaySize.x, 36});
-    ImGui::Begin("##TopBar", nullptr,
-        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBringToFrontOnFocus);
-    ImGui::TextColored({1.0f, 0.7f, 0.2f, 1.0f}, "Cosmic Sandbox");
-    ImGui::SameLine();
-    ImGui::TextColored({0.5f, 0.5f, 0.6f, 1.0f}, "  |  Bodies: %zu", state.count());
-    ImGui::SameLine();
-    if (ImGui::SmallButton(paused ? "Resume" : "Pause"))
-        paused = !paused;
-    ImGui::SameLine();
-    ImGui::TextColored({0.4f, 0.4f, 0.5f, 1.0f}, "  %.0f FPS", io.Framerate);
-    ImGui::SameLine();
-    ImGui::TextColored({0.3f, 0.3f, 0.4f, 1.0f},
-        "  |  WASD: pan  Drag: orbit  Scroll: zoom  Middle: spawn  Right: select  Esc: menu");
-    ImGui::End();
+    // Show inspector when a body is selected
+    if (selected_body >= 0 && selected_body < (int)state.bodies.size()) {
+        inspector_visible_ = true;
+    }
 
     // Settings panel
     if (settings_visible_) {
@@ -1372,6 +1627,9 @@ void CosmosApp::render_ui() {
     ImGui::Checkbox("Fragmentation",  &cfg.collision_fragmentation);
     ImGui::SliderFloat("Merge Speed",    &cfg.merge_speed_threshold,    1.0f, 20.0f);
     ImGui::SliderFloat("Fragment Speed", &cfg.fragment_speed_threshold, 10.0f, 50.0f);
+    ImGui::SliderInt("Fragment Count",   &cfg.fragment_count,           1, 12);
+    ImGui::SliderFloat("Min Frag Mass",  &cfg.min_fragment_mass,        0.01f, 1.0f, "%.2f");
+    ImGui::SliderInt("Max Frag Depth",   &cfg.max_frag_generation,      0, 5);
 
     ImGui::Separator();
     ImGui::Text("Thermal");
@@ -1424,138 +1682,53 @@ void CosmosApp::render_ui() {
         }
     }
 
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "General Relativity");
+    ImGui::Checkbox("GR Corrections", &cfg.gr_enabled);
+    if (cfg.gr_enabled) {
+        ImGui::SliderFloat("Precession", &cfg.gr_precession_scale, 0.0f, 10.0f);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Perihelion precession (1PN correction)\n1.0 = physical value");
+        ImGui::SliderFloat("Time Dilation", &cfg.gr_time_dilation, 0.0f, 5.0f);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Gravitational time dilation effect");
+        ImGui::SliderFloat("Frame Drag", &cfg.gr_frame_dragging, 0.0f, 5.0f);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Lense-Thirring frame dragging\nfrom spinning bodies");
+        ImGui::SliderFloat("Speed of Light", &cfg.speed_of_light, 50.0f, 1000.0f);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("c in simulation units\n(lower = stronger GR effects)");
+    }
+
     ImGui::End();
     } // settings_visible_
 
-    // Body Inspector (when selected)
-    if (selected_body >= 0 && selected_body < (int)state.bodies.size()) {
-        const auto& b = state.bodies[selected_body];
-        const char* tn = (b.type < CTYPE_COUNT) ? CTYPE_NAMES[b.type] : "?";
-
-        ImGui::SetNextWindowPos({io.DisplaySize.x - 280.0f, 46}, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize({270, 500}, ImGuiCond_FirstUseEver);
-        ImGui::Begin("Body Inspector");
-
-        ImU32 c = body_color(b);
-        ImVec4 cv((float)((c >> IM_COL32_R_SHIFT) & 0xFF) / 255.0f,
-                  (float)((c >> IM_COL32_G_SHIFT) & 0xFF) / 255.0f,
-                  (float)((c >> IM_COL32_B_SHIFT) & 0xFF) / 255.0f, 1.0f);
-        ImGui::TextColored(cv, "%s #%d", tn, selected_body);
-        ImGui::Separator();
-        ImGui::Text("Mass:        %.2f", b.mass);
-        ImGui::Text("Radius:      %.1f", b.radius);
-        ImGui::Text("Temperature: %.0f K", b.temperature);
-        ImGui::Text("Position:    (%.0f, %.0f, %.0f)", b.pos.x, b.pos.y, b.pos.z);
-        ImGui::Text("Speed:       %.2f", glm::length(b.vel));
-        ImGui::Text("Age:         %.1f s", b.age);
-
-        if (is_star_type(b.type)) {
-            static const char* STAGE_NAMES[] = {
-                "Main Sequence", "Subgiant", "Red Giant", "Horizontal Branch",
-                "AGB", "Supergiant", "Hypergiant", "White Dwarf", "Neutron Star"
-            };
-            ImGui::Text("Fuel:        %.0f%%", b.fuel * 100.0f);
-            ImGui::Text("Luminosity:  %.2f", b.luminosity);
-            ImGui::Text("Stage:       %s", STAGE_NAMES[std::min(b.stellar_stage, (uint32_t)SSTAGE_COUNT - 1)]);
-
-            const char* spectral = "Unclassified";
-            switch (b.type) {
-                case CTYPE_STAR_O:  spectral = "O-type (Blue Supergiant)"; break;
-                case CTYPE_STAR_B:  spectral = "B-type (Blue-White)"; break;
-                case CTYPE_STAR_A:  spectral = "A-type (White)"; break;
-                case CTYPE_STAR_F:  spectral = "F-type (Yellow-White)"; break;
-                case CTYPE_STAR_G:  spectral = "G-type (Yellow, Sun-like)"; break;
-                case CTYPE_STAR_K:  spectral = "K-type (Orange)"; break;
-                case CTYPE_STAR_M:  spectral = "M-type (Red Dwarf)"; break;
-                case CTYPE_STAR_L:  spectral = "L-type (Brown Dwarf)"; break;
-                case CTYPE_STAR_T:  spectral = "T-type (Cool Brown Dwarf)"; break;
-                case CTYPE_STAR_Y:  spectral = "Y-type (Ultra-cool)"; break;
-                case CTYPE_STAR_WR: spectral = "Wolf-Rayet"; break;
-                default: break;
-            }
-            ImGui::Text("Spectral:    %s", spectral);
-        }
-
-        if (is_black_hole_type(b.type)) {
-            const char* bh_class = "Unknown";
-            switch (b.type) {
-                case CTYPE_BH_STELLAR:      bh_class = "Stellar (3-20 M_sun)"; break;
-                case CTYPE_BH_INTERMEDIATE: bh_class = "Intermediate (100-10^5 M_sun)"; break;
-                case CTYPE_BH_SUPERMASSIVE: bh_class = "Supermassive (10^6-10^10 M_sun)"; break;
-                case CTYPE_BH_PRIMORDIAL:   bh_class = "Primordial/Micro"; break;
-                default: break;
-            }
-            ImGui::Text("BH Class:    %s", bh_class);
-        }
-
-        if (b.internal_energy > 0.01f)
-            ImGui::Text("Int. Energy: %.1f", b.internal_energy);
-        if (b.parent >= 0 && b.parent < (int)state.bodies.size()) {
-            float orbit_r = glm::length(b.pos - state.bodies[b.parent].pos);
-            ImGui::Text("Orbit radius: %.0f", orbit_r);
-        }
-
-        // Planet/Moon properties
-        if (b.type == CTYPE_PLANET || b.type == CTYPE_MOON) {
-            PlanetProperties pp = generate_planet_properties(b.seed, b.mass, b.temperature);
-
-            ImGui::Separator();
-            ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Surface Properties");
-
-            static const char* SURF_NAMES[] = {"Rocky", "Liquid", "Frozen", "Gas", "Mixed"};
-            ImGui::Text("Surface: %s", SURF_NAMES[pp.surface]);
-
-            if (pp.atmosphere.pressure > 0.01f) {
-                ImGui::Text("Atm. Pressure: %.1f atm", pp.atmosphere.pressure);
-                struct { float frac; const char* name; } comps[] = {
-                    {pp.atmosphere.n2_frac, "N2"}, {pp.atmosphere.o2_frac, "O2"},
-                    {pp.atmosphere.co2_frac, "CO2"}, {pp.atmosphere.h2_frac, "H2"},
-                    {pp.atmosphere.he_frac, "He"}, {pp.atmosphere.ch4_frac, "CH4"},
-                    {pp.atmosphere.nh3_frac, "NH3"},
-                };
-                for (int ci = 0; ci < 6; ci++)
-                    for (int cj = ci+1; cj < 7; cj++)
-                        if (comps[cj].frac > comps[ci].frac) std::swap(comps[ci], comps[cj]);
-                char atm_buf[128] = "";
-                int written = 0;
-                for (int ci = 0; ci < 3 && comps[ci].frac > 0.01f; ci++) {
-                    if (written > 0) strcat(atm_buf, ", ");
-                    char tmp[32]; snprintf(tmp, sizeof(tmp), "%s %.0f%%", comps[ci].name, comps[ci].frac * 100.0f);
-                    strcat(atm_buf, tmp);
-                    written++;
-                }
-                if (written > 0) ImGui::Text("Atmosphere: %s", atm_buf);
-            } else {
-                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1), "No atmosphere");
-            }
-
-            static const char* OCEAN_NAMES[] = {"None", "Water", "Methane", "Ammonia", "Lava"};
-            if (pp.ocean_type != OCEAN_NONE) {
-                ImGui::Text("Oceans: %s (%.0f%%, %.1f km)",
-                    OCEAN_NAMES[pp.ocean_type], pp.ocean_coverage, pp.ocean_depth);
-            }
-            if (pp.has_mountains) ImGui::Text("Mountains: %.1f km", pp.mountain_height);
-            if (pp.has_continents) ImGui::Text("Continents: %d", pp.continent_count);
-            if (pp.vegetation_coverage > 0.0f) ImGui::Text("Vegetation: %.0f%%", pp.vegetation_coverage);
-            if (pp.has_weather) {
-                static const char* WEATHER_NAMES[] = {"None", "Storms", "Rain", "Snow", "Dust"};
-                ImGui::Text("Weather: %s (%.0f%% clouds)", WEATHER_NAMES[pp.weather_type], pp.cloud_coverage);
-            }
-        }
-
-        ImGui::Spacing();
-        if (ImGui::Button("Focus Camera")) {
-            camera.target = b.pos;
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Deselect")) {
-            selected_body = -1;
-        }
-        ImGui::End();
-    }
+    // Body Inspector
+    draw_inspector();
 
     // Spawn menu
     draw_spawn_menu();
+
+    // File dialog
+    draw_file_dialog();
+
+    // Save status toast
+    if (save_status_timer_ > 0.0f) {
+        save_status_timer_ -= io.DeltaTime;
+        float alpha = std::min(save_status_timer_, 1.0f);
+        ImVec2 text_size = ImGui::CalcTextSize(last_save_status_.c_str());
+        float tx = io.DisplaySize.x * 0.5f - text_size.x * 0.5f - 12;
+        float ty = io.DisplaySize.y * 0.5f - 20;
+        ImGui::GetForegroundDrawList()->AddRectFilled(
+            ImVec2(tx - 8, ty - 4), ImVec2(tx + text_size.x + 20, ty + text_size.y + 8),
+            IM_COL32(20, 20, 30, (int)(200 * alpha)), 6.0f);
+        ImGui::GetForegroundDrawList()->AddText(ImVec2(tx, ty),
+            IM_COL32(255, 220, 80, (int)(255 * alpha)), last_save_status_.c_str());
+    }
+
+    // Ctrl+S / Ctrl+L hotkeys
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S) && !show_save_dialog_) {
+        show_save_dialog_ = true;
+    }
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_L) && !show_load_dialog_) {
+        show_load_dialog_ = true;
+    }
 
     // Body list
     if (body_list_visible_) {
@@ -1568,8 +1741,9 @@ void CosmosApp::render_ui() {
         bool is_sel = ((int)i == selected_body);
         if (is_sel) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 0.3f, 1));
 
-        char buf[64];
-        snprintf(buf, sizeof(buf), "%zu. %s m=%.1f", i, tn, b.mass);
+        char buf[128];
+        const char* display_name = b.name.empty() ? tn : b.name.c_str();
+        snprintf(buf, sizeof(buf), "%zu. %s (%.1f M)", i, display_name, b.mass);
         if (ImGui::Selectable(buf, is_sel))
             selected_body = (int)i;
 
@@ -1580,6 +1754,327 @@ void CosmosApp::render_ui() {
 
     // Bottom bar
     draw_bottom_bar();
+
+    ImGui::PopStyleColor(18);
+    ImGui::PopStyleVar(6);
+}
+
+// ── Inspector panel ─────────────────────────────────────────────────────────
+
+void CosmosApp::draw_inspector() {
+    if (!inspector_visible_) return;
+    if (selected_body < 0 || selected_body >= (int)state.bodies.size()) {
+        inspector_visible_ = false;
+        return;
+    }
+
+    auto& b = state.bodies[selected_body];
+    ImGuiIO& io = ImGui::GetIO();
+
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 320.0f, 46.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(310.0f, 520.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(260, 200), ImVec2(400, 800));
+
+    if (!ImGui::Begin("Inspector", &inspector_visible_)) {
+        ImGui::End();
+        return;
+    }
+
+    // ── Header: name + type ──
+    const char* type_name = (b.type < CTYPE_COUNT) ? CTYPE_NAMES[b.type] : "Unknown";
+    const char* display_name = b.name.empty() ? type_name : b.name.c_str();
+
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.3f, 1.0f));
+    ImGui::TextWrapped("%s", display_name);
+    ImGui::PopStyleColor();
+
+    if (!b.name.empty()) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "(%s)", type_name);
+    }
+
+    // Focus / Track button
+    ImGui::SameLine(ImGui::GetWindowWidth() - 72);
+    bool is_tracked = camera.focus_active && camera.focus_body == selected_body;
+    if (is_tracked) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.4f, 0.1f, 0.9f));
+        if (ImGui::SmallButton("Untrack")) camera.release_focus();
+        ImGui::PopStyleColor();
+    } else {
+        if (ImGui::SmallButton("Track")) {
+            camera.focus_on(b.pos, selected_body);
+            camera.target_distance = b.radius * 8.0f;
+        }
+    }
+
+    ImGui::Separator();
+
+    // ── Core properties ──
+    ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "Properties");
+
+    ImGui::Columns(2, "##props", false);
+    ImGui::SetColumnWidth(0, 110);
+
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Mass");
+    ImGui::NextColumn();
+    if (b.mass >= 1000.0f)
+        ImGui::Text("%.1fk M", b.mass / 1000.0f);
+    else
+        ImGui::Text("%.3f M", b.mass);
+    ImGui::NextColumn();
+
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Radius");
+    ImGui::NextColumn();
+    ImGui::Text("%.1f", b.radius);
+    ImGui::NextColumn();
+
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Temperature");
+    ImGui::NextColumn();
+    ImGui::Text("%.0f K", b.temperature);
+    ImGui::NextColumn();
+
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Speed");
+    ImGui::NextColumn();
+    ImGui::Text("%.2f", glm::length(b.vel));
+    ImGui::NextColumn();
+
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Position");
+    ImGui::NextColumn();
+    ImGui::Text("%.0f, %.0f, %.0f", b.pos.x, b.pos.y, b.pos.z);
+    ImGui::NextColumn();
+
+    if (std::abs(b.angular_vel) > 1e-6f) {
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Spin");
+        ImGui::NextColumn();
+        ImGui::Text("%.3f rad/s", b.angular_vel);
+        ImGui::NextColumn();
+    }
+
+    char age_buf[64];
+    format_sim_time((double)b.age, age_buf, sizeof(age_buf));
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Age");
+    ImGui::NextColumn();
+    ImGui::Text("%s", age_buf);
+    ImGui::NextColumn();
+
+    ImGui::Columns(1);
+
+    // ── Orbital info ──
+    if (b.parent >= 0 && b.parent < (int)state.bodies.size()) {
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "Orbit");
+
+        const auto& par = state.bodies[b.parent];
+        const char* par_name = par.name.empty()
+            ? CTYPE_NAMES[std::min(par.type, (uint32_t)CTYPE_COUNT - 1)]
+            : par.name.c_str();
+
+        ImGui::Columns(2, "##orbit", false);
+        ImGui::SetColumnWidth(0, 110);
+
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Parent");
+        ImGui::NextColumn();
+        if (ImGui::SmallButton(par_name)) {
+            selected_body = b.parent;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Click to select parent");
+        ImGui::NextColumn();
+
+        float orb_dist = glm::length(b.pos - par.pos);
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Distance");
+        ImGui::NextColumn();
+        ImGui::Text("%.1f", orb_dist);
+        ImGui::NextColumn();
+
+        if (orb_dist > 0.1f) {
+            float orb_v = std::sqrt(cfg.G * par.mass / orb_dist);
+            float period = 2.0f * 3.14159f * orb_dist / std::max(orb_v, 0.01f);
+            char period_buf[64];
+            format_sim_time((double)period, period_buf, sizeof(period_buf));
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Period");
+            ImGui::NextColumn();
+            ImGui::Text("%s", period_buf);
+            ImGui::NextColumn();
+        }
+
+        ImGui::Columns(1);
+    }
+
+    // ── Star info ──
+    if (is_star_type(b.type)) {
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.5f, 1.0f), "Stellar");
+
+        static const char* STAGE_NAMES[] = {
+            "Main Sequence", "Subgiant", "Red Giant", "Horizontal Branch",
+            "AGB", "Supergiant", "Hypergiant", "White Dwarf", "Neutron Star"
+        };
+
+        ImGui::Columns(2, "##star", false);
+        ImGui::SetColumnWidth(0, 110);
+
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Stage");
+        ImGui::NextColumn();
+        const char* stage = (b.stellar_stage < SSTAGE_COUNT) ? STAGE_NAMES[b.stellar_stage] : "?";
+        ImGui::Text("%s", stage);
+        ImGui::NextColumn();
+
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Fuel");
+        ImGui::NextColumn();
+        ImGui::ProgressBar(b.fuel, ImVec2(-1, 14));
+        ImGui::NextColumn();
+
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Luminosity");
+        ImGui::NextColumn();
+        ImGui::Text("%.2f L", b.luminosity);
+        ImGui::NextColumn();
+
+        ImGui::Columns(1);
+    }
+
+    // ── Black hole info ──
+    if (is_black_hole_type(b.type)) {
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.7f, 0.5f, 1.0f, 1.0f), "Black Hole");
+
+        float rs = 2.0f * cfg.G * b.mass / (cfg.speed_of_light * cfg.speed_of_light);
+
+        ImGui::Columns(2, "##bh", false);
+        ImGui::SetColumnWidth(0, 110);
+
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Schwarzschild r");
+        ImGui::NextColumn();
+        ImGui::Text("%.4f", rs);
+        ImGui::NextColumn();
+
+        ImGui::Columns(1);
+    }
+
+    // ── Planet / Moon properties ──
+    if ((b.type == CTYPE_PLANET || b.type == CTYPE_MOON) && b.props_valid) {
+        const auto& pp = b.cached_props;
+
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Surface & Atmosphere");
+
+        static const char* SURF_NAMES[] = {"Rocky", "Liquid", "Frozen", "Gas Giant", "Mixed"};
+        static const char* OCEAN_NAMES[] = {"None", "Water", "Methane", "Ammonia", "Lava"};
+        static const char* WEATHER_NAMES[] = {"None", "Storms", "Rain", "Snow", "Dust"};
+
+        ImGui::Columns(2, "##planet", false);
+        ImGui::SetColumnWidth(0, 110);
+
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Surface");
+        ImGui::NextColumn();
+        ImGui::Text("%s", SURF_NAMES[pp.surface]);
+        ImGui::NextColumn();
+
+        // Atmosphere
+        if (pp.atmosphere.pressure > 0.01f) {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Atm Pressure");
+            ImGui::NextColumn();
+            ImGui::Text("%.2f atm", pp.atmosphere.pressure);
+            ImGui::NextColumn();
+
+            // Show dominant gas
+            float max_frac = 0;
+            const char* dom_gas = "N2";
+            struct GasEntry { float frac; const char* name; };
+            GasEntry gases[] = {
+                {pp.atmosphere.n2_frac, "N2"},   {pp.atmosphere.o2_frac, "O2"},
+                {pp.atmosphere.co2_frac, "CO2"}, {pp.atmosphere.h2_frac, "H2"},
+                {pp.atmosphere.he_frac, "He"},   {pp.atmosphere.ch4_frac, "CH4"},
+                {pp.atmosphere.nh3_frac, "NH3"},
+            };
+            for (auto& g : gases) {
+                if (g.frac > max_frac) { max_frac = g.frac; dom_gas = g.name; }
+            }
+
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Composition");
+            ImGui::NextColumn();
+            ImGui::Text("%s %.0f%%", dom_gas, max_frac * 100.0f);
+            // Show secondary gas if significant
+            float second_max = 0;
+            const char* second_gas = "";
+            for (auto& g : gases) {
+                if (g.frac > second_max && g.name != dom_gas) {
+                    second_max = g.frac; second_gas = g.name;
+                }
+            }
+            if (second_max > 0.05f) {
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 0.8f), "%s %.0f%%",
+                                   second_gas, second_max * 100.0f);
+            }
+            ImGui::NextColumn();
+
+            if (pp.atmosphere.has_clouds) {
+                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Clouds");
+                ImGui::NextColumn();
+                ImGui::Text("%.0f%%", pp.cloud_coverage);
+                ImGui::NextColumn();
+            }
+        }
+
+        // Ocean
+        if (pp.ocean_type != OCEAN_NONE) {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Ocean");
+            ImGui::NextColumn();
+            ImGui::Text("%s %.0f%%", OCEAN_NAMES[pp.ocean_type], pp.ocean_coverage);
+            ImGui::NextColumn();
+
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Ocean Depth");
+            ImGui::NextColumn();
+            ImGui::Text("%.1f km", pp.ocean_depth);
+            ImGui::NextColumn();
+        }
+
+        // Terrain
+        if (pp.has_mountains) {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Mountains");
+            ImGui::NextColumn();
+            ImGui::Text("%.1f km", pp.mountain_height);
+            ImGui::NextColumn();
+        }
+        if (pp.has_continents) {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Continents");
+            ImGui::NextColumn();
+            ImGui::Text("%d", pp.continent_count);
+            ImGui::NextColumn();
+        }
+
+        // Weather
+        if (pp.has_weather) {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Weather");
+            ImGui::NextColumn();
+            ImGui::Text("%s", WEATHER_NAMES[pp.weather_type]);
+            ImGui::NextColumn();
+        }
+
+        // Vegetation
+        if (pp.vegetation_coverage > 1.0f) {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Vegetation");
+            ImGui::NextColumn();
+            ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "%.0f%%",
+                               pp.vegetation_coverage);
+            ImGui::NextColumn();
+        }
+
+        ImGui::Columns(1);
+    }
+
+    // ── Actions ──
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    if (ImGui::Button("Delete Body", ImVec2(-1, 0))) {
+        b.marked_for_removal = true;
+        if (camera.focus_body == selected_body) camera.release_focus();
+        selected_body = -1;
+        inspector_visible_ = false;
+    }
+
+    ImGui::End();
 }
 
 // ── Bottom bar ──────────────────────────────────────────────────────────────
@@ -1635,12 +2130,13 @@ void CosmosApp::draw_bottom_bar() {
             {"Settings",  &settings_visible_},
             {"Spawn",     &spawn_menu_visible_},
             {"Bodies",    &body_list_visible_},
+            {"Inspector", &inspector_visible_},
         };
 
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 3));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
 
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 4; i++) {
             bool vis = *entries[i].visible;
             if (vis) {
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.14f, 0.05f, 0.9f));
@@ -1692,7 +2188,7 @@ void CosmosApp::draw_bottom_bar() {
     // Menu popup
     if (show_menu_popup_) {
         float popup_w = 200.0f;
-        float popup_h = 280.0f;
+        float popup_h = 380.0f;
         float popup_x = 12.0f;
         float popup_y = std::max(10.0f, bar_y - popup_h - 4.0f);
         ImGui::SetNextWindowPos(ImVec2(popup_x, popup_y));
@@ -1716,6 +2212,20 @@ void CosmosApp::draw_bottom_bar() {
                     cfg.sim_time_accumulated = 0.0;
                     show_menu_popup_ = false;
                 }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Save (Ctrl+S)")) {
+                    show_save_dialog_ = true; show_menu_popup_ = false;
+                }
+                if (ImGui::MenuItem("Load (Ctrl+L)")) {
+                    show_load_dialog_ = true; show_menu_popup_ = false;
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Import Body...")) {
+                    show_import_dialog_ = true; show_menu_popup_ = false;
+                }
+                if (selected_body >= 0 && ImGui::MenuItem("Export Selected Body...")) {
+                    show_export_dialog_ = true; show_menu_popup_ = false;
+                }
                 ImGui::TreePop();
             }
             if (ImGui::TreeNodeEx("View", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1726,6 +2236,8 @@ void CosmosApp::draw_bottom_bar() {
                 if (ImGui::MenuItem("Spawn Menu", nullptr, tmp)) { spawn_menu_visible_ = !spawn_menu_visible_; show_menu_popup_ = false; }
                 tmp = body_list_visible_;
                 if (ImGui::MenuItem("Body List", nullptr, tmp)) { body_list_visible_ = !body_list_visible_; show_menu_popup_ = false; }
+                tmp = inspector_visible_;
+                if (ImGui::MenuItem("Inspector", nullptr, tmp)) { inspector_visible_ = !inspector_visible_; show_menu_popup_ = false; }
                 ImGui::TreePop();
             }
             if (ImGui::TreeNodeEx("Navigation")) {
@@ -1736,5 +2248,365 @@ void CosmosApp::draw_bottom_bar() {
         }
         ImGui::End();
         ImGui::PopStyleColor();
+    }
+}
+
+// ── Save / Load ─────────────────────────────────────────────────────────────
+
+static constexpr uint32_t COSMOS_MAGIC   = 0x534D4F43; // "COSM"
+static constexpr uint32_t COSMOS_VERSION = 1;
+
+// POD struct for binary serialization of one body (fixed-size fields only)
+#pragma pack(push, 1)
+struct BodyPOD {
+    float pos[3];
+    float vel[3];
+    float mass;
+    float radius;
+    float temperature;
+    uint32_t type;
+    int32_t parent;
+    float age;
+    float internal_energy;
+    float luminosity;
+    float fuel;
+    float angular_vel;
+    uint32_t stellar_stage;
+    uint32_t seed;
+    uint32_t frag_generation;
+    uint32_t name_len; // followed by name_len bytes of name
+};
+#pragma pack(pop)
+
+bool CosmosApp::save_simulation(const std::string& path) {
+    std::ofstream f(path, std::ios::binary);
+    if (!f) return false;
+
+    // Header
+    f.write(reinterpret_cast<const char*>(&COSMOS_MAGIC), 4);
+    f.write(reinterpret_cast<const char*>(&COSMOS_VERSION), 4);
+
+    // Config (selected POD fields)
+    f.write(reinterpret_cast<const char*>(&cfg.G), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.time_exponent), sizeof(double));
+    f.write(reinterpret_cast<const char*>(&cfg.sim_time_accumulated), sizeof(double));
+    f.write(reinterpret_cast<const char*>(&cfg.softening), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.damping), sizeof(float));
+
+    uint32_t flags = 0;
+    if (cfg.collisions) flags |= 1;
+    if (cfg.tidal_forces) flags |= 2;
+    if (cfg.collision_merging) flags |= 4;
+    if (cfg.collision_fragmentation) flags |= 8;
+    if (cfg.roche_limit) flags |= 16;
+    if (cfg.temperature_system) flags |= 32;
+    if (cfg.evaporation) flags |= 64;
+    if (cfg.stellar_evolution) flags |= 128;
+    if (cfg.star_lighting) flags |= 256;
+    if (cfg.uniform_lighting) flags |= 512;
+    f.write(reinterpret_cast<const char*>(&flags), sizeof(uint32_t));
+
+    f.write(reinterpret_cast<const char*>(&cfg.merge_speed_threshold), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.fragment_speed_threshold), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.fragment_count), sizeof(int));
+    f.write(reinterpret_cast<const char*>(&cfg.radiative_cooling), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.collision_heating), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.evaporation_rate), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.stellar_timescale), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.ambient_strength), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.min_fragment_mass), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.max_frag_generation), sizeof(int));
+
+    // Body count
+    uint32_t body_count = (uint32_t)state.bodies.size();
+    f.write(reinterpret_cast<const char*>(&body_count), 4);
+
+    // Bodies
+    for (const auto& b : state.bodies) {
+        BodyPOD pod{};
+        pod.pos[0] = b.pos.x; pod.pos[1] = b.pos.y; pod.pos[2] = b.pos.z;
+        pod.vel[0] = b.vel.x; pod.vel[1] = b.vel.y; pod.vel[2] = b.vel.z;
+        pod.mass = b.mass;
+        pod.radius = b.radius;
+        pod.temperature = b.temperature;
+        pod.type = b.type;
+        pod.parent = b.parent;
+        pod.age = b.age;
+        pod.internal_energy = b.internal_energy;
+        pod.luminosity = b.luminosity;
+        pod.fuel = b.fuel;
+        pod.angular_vel = b.angular_vel;
+        pod.stellar_stage = b.stellar_stage;
+        pod.seed = b.seed;
+        pod.frag_generation = b.frag_generation;
+        pod.name_len = (uint32_t)b.name.size();
+        f.write(reinterpret_cast<const char*>(&pod), sizeof(BodyPOD));
+        if (pod.name_len > 0)
+            f.write(b.name.data(), pod.name_len);
+    }
+
+    // Camera state
+    f.write(reinterpret_cast<const char*>(&camera.azimuth), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&camera.elevation), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&camera.distance), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&camera.fov), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&camera.target), sizeof(glm::vec3));
+
+    return f.good();
+}
+
+bool CosmosApp::load_simulation(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return false;
+
+    uint32_t magic = 0, version = 0;
+    f.read(reinterpret_cast<char*>(&magic), 4);
+    f.read(reinterpret_cast<char*>(&version), 4);
+    if (magic != COSMOS_MAGIC || version > COSMOS_VERSION) return false;
+
+    // Config
+    f.read(reinterpret_cast<char*>(&cfg.G), sizeof(float));
+    f.read(reinterpret_cast<char*>(&cfg.time_exponent), sizeof(double));
+    f.read(reinterpret_cast<char*>(&cfg.sim_time_accumulated), sizeof(double));
+    f.read(reinterpret_cast<char*>(&cfg.softening), sizeof(float));
+    f.read(reinterpret_cast<char*>(&cfg.damping), sizeof(float));
+
+    uint32_t flags = 0;
+    f.read(reinterpret_cast<char*>(&flags), sizeof(uint32_t));
+    cfg.collisions              = (flags & 1) != 0;
+    cfg.tidal_forces            = (flags & 2) != 0;
+    cfg.collision_merging       = (flags & 4) != 0;
+    cfg.collision_fragmentation = (flags & 8) != 0;
+    cfg.roche_limit             = (flags & 16) != 0;
+    cfg.temperature_system      = (flags & 32) != 0;
+    cfg.evaporation             = (flags & 64) != 0;
+    cfg.stellar_evolution       = (flags & 128) != 0;
+    cfg.star_lighting           = (flags & 256) != 0;
+    cfg.uniform_lighting        = (flags & 512) != 0;
+
+    f.read(reinterpret_cast<char*>(&cfg.merge_speed_threshold), sizeof(float));
+    f.read(reinterpret_cast<char*>(&cfg.fragment_speed_threshold), sizeof(float));
+    f.read(reinterpret_cast<char*>(&cfg.fragment_count), sizeof(int));
+    f.read(reinterpret_cast<char*>(&cfg.radiative_cooling), sizeof(float));
+    f.read(reinterpret_cast<char*>(&cfg.collision_heating), sizeof(float));
+    f.read(reinterpret_cast<char*>(&cfg.evaporation_rate), sizeof(float));
+    f.read(reinterpret_cast<char*>(&cfg.stellar_timescale), sizeof(float));
+    f.read(reinterpret_cast<char*>(&cfg.ambient_strength), sizeof(float));
+    f.read(reinterpret_cast<char*>(&cfg.min_fragment_mass), sizeof(float));
+    f.read(reinterpret_cast<char*>(&cfg.max_frag_generation), sizeof(int));
+
+    // Body count
+    uint32_t body_count = 0;
+    f.read(reinterpret_cast<char*>(&body_count), 4);
+    if (body_count > 10000) return false; // sanity check
+
+    state.clear();
+    state.bodies.reserve(body_count);
+
+    for (uint32_t i = 0; i < body_count; i++) {
+        BodyPOD pod{};
+        f.read(reinterpret_cast<char*>(&pod), sizeof(BodyPOD));
+
+        CelestialBody b;
+        b.pos = {pod.pos[0], pod.pos[1], pod.pos[2]};
+        b.vel = {pod.vel[0], pod.vel[1], pod.vel[2]};
+        b.mass = pod.mass;
+        b.radius = pod.radius;
+        b.temperature = pod.temperature;
+        b.type = pod.type;
+        b.parent = pod.parent;
+        b.age = pod.age;
+        b.internal_energy = pod.internal_energy;
+        b.luminosity = pod.luminosity;
+        b.fuel = pod.fuel;
+        b.angular_vel = pod.angular_vel;
+        b.stellar_stage = pod.stellar_stage;
+        b.seed = pod.seed;
+        b.frag_generation = pod.frag_generation;
+        if (pod.name_len > 0 && pod.name_len < 256) {
+            b.name.resize(pod.name_len);
+            f.read(b.name.data(), pod.name_len);
+        }
+        state.bodies.push_back(std::move(b));
+        state.trails.emplace_back();
+    }
+
+    // Camera state
+    f.read(reinterpret_cast<char*>(&camera.azimuth), sizeof(float));
+    f.read(reinterpret_cast<char*>(&camera.elevation), sizeof(float));
+    f.read(reinterpret_cast<char*>(&camera.distance), sizeof(float));
+    f.read(reinterpret_cast<char*>(&camera.fov), sizeof(float));
+    f.read(reinterpret_cast<char*>(&camera.target), sizeof(glm::vec3));
+
+    cfg.body_count = (uint32_t)state.bodies.size();
+    selected_body = -1;
+    sim_time_ = 0.0f;
+
+    // Refresh cached planet properties for all loaded bodies
+    for (auto& b : state.bodies) refresh_planet_props(b);
+
+    return f.good();
+}
+
+// ── Import / Export individual bodies ────────────────────────────────────────
+// Uses a simple text format (.csbody) for portability:
+//   name, type, mass, radius, temperature, seed, pos(x,y,z), vel(x,y,z), fuel, etc.
+
+bool CosmosApp::export_body(int index, const std::string& path) {
+    if (index < 0 || index >= (int)state.bodies.size()) return false;
+    const auto& b = state.bodies[index];
+
+    std::ofstream f(path);
+    if (!f) return false;
+
+    f << "CSBODY 1\n";
+    f << "name " << (b.name.empty() ? "Unnamed" : b.name) << "\n";
+    f << "type " << b.type << "\n";
+    f << "mass " << b.mass << "\n";
+    f << "radius " << b.radius << "\n";
+    f << "temperature " << b.temperature << "\n";
+    f << "seed " << b.seed << "\n";
+    f << "pos " << b.pos.x << " " << b.pos.y << " " << b.pos.z << "\n";
+    f << "vel " << b.vel.x << " " << b.vel.y << " " << b.vel.z << "\n";
+    f << "fuel " << b.fuel << "\n";
+    f << "age " << b.age << "\n";
+    f << "luminosity " << b.luminosity << "\n";
+    f << "internal_energy " << b.internal_energy << "\n";
+    f << "angular_vel " << b.angular_vel << "\n";
+    f << "stellar_stage " << b.stellar_stage << "\n";
+    f << "parent " << b.parent << "\n";
+    f << "frag_generation " << b.frag_generation << "\n";
+
+    return f.good();
+}
+
+bool CosmosApp::import_body(const std::string& path) {
+    std::ifstream f(path);
+    if (!f) return false;
+
+    std::string header;
+    int version = 0;
+    f >> header >> version;
+    if (header != "CSBODY" || version < 1) return false;
+
+    CelestialBody b;
+    std::string key;
+    while (f >> key) {
+        if (key == "name") {
+            std::getline(f >> std::ws, b.name);
+        } else if (key == "type") { f >> b.type; }
+        else if (key == "mass") { f >> b.mass; }
+        else if (key == "radius") { f >> b.radius; }
+        else if (key == "temperature") { f >> b.temperature; }
+        else if (key == "seed") { f >> b.seed; }
+        else if (key == "pos") { f >> b.pos.x >> b.pos.y >> b.pos.z; }
+        else if (key == "vel") { f >> b.vel.x >> b.vel.y >> b.vel.z; }
+        else if (key == "fuel") { f >> b.fuel; }
+        else if (key == "age") { f >> b.age; }
+        else if (key == "luminosity") { f >> b.luminosity; }
+        else if (key == "internal_energy") { f >> b.internal_energy; }
+        else if (key == "angular_vel") { f >> b.angular_vel; }
+        else if (key == "stellar_stage") { f >> b.stellar_stage; }
+        else if (key == "parent") { f >> b.parent; }
+        else if (key == "frag_generation") { f >> b.frag_generation; }
+    }
+
+    if (b.name == "Unnamed") b.name.clear();
+    refresh_planet_props(b);
+    state.bodies.push_back(std::move(b));
+    state.trails.emplace_back();
+    return true;
+}
+
+// ── File dialog ─────────────────────────────────────────────────────────────
+
+void CosmosApp::draw_file_dialog() {
+    bool any_dialog = show_save_dialog_ || show_load_dialog_ ||
+                      show_export_dialog_ || show_import_dialog_;
+    if (!any_dialog) return;
+
+    const char* title = show_save_dialog_   ? "Save Simulation" :
+                        show_load_dialog_   ? "Load Simulation" :
+                        show_export_dialog_ ? "Export Body" :
+                                              "Import Body";
+
+    const char* extension = (show_save_dialog_ || show_load_dialog_) ? ".cssim" : ".csbody";
+
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - 200, io.DisplaySize.y * 0.5f - 100),
+                            ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(400, 200), ImGuiCond_Appearing);
+
+    bool open = true;
+    if (ImGui::Begin(title, &open, ImGuiWindowFlags_NoCollapse)) {
+        ImGui::Text("File path (%s):", extension);
+        ImGui::InputText("##FilePath", file_path_buf_, sizeof(file_path_buf_));
+
+        // Default path suggestion
+        if (file_path_buf_[0] == '\0') {
+            std::string def = get_data_dir();
+            if (show_save_dialog_ || show_load_dialog_)
+                def += "cosmos_save" + std::string(extension);
+            else if (show_export_dialog_ && selected_body >= 0 &&
+                     selected_body < (int)state.bodies.size())
+                def += state.bodies[selected_body].name + extension;
+            else
+                def += "body" + std::string(extension);
+            strncpy(file_path_buf_, def.c_str(), sizeof(file_path_buf_) - 1);
+        }
+
+        // List existing files in data dir
+        if (show_load_dialog_ || show_import_dialog_) {
+            ImGui::Separator();
+            ImGui::Text("Existing files:");
+            std::error_code ec;
+            std::string dir = get_data_dir();
+            if (std::filesystem::exists(dir, ec)) {
+                for (auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+                    std::string fn = entry.path().filename().string();
+                    std::string ext = entry.path().extension().string();
+                    if (ext == extension) {
+                        if (ImGui::Selectable(fn.c_str())) {
+                            strncpy(file_path_buf_, entry.path().string().c_str(),
+                                    sizeof(file_path_buf_) - 1);
+                        }
+                    }
+                }
+            }
+        }
+
+        ImGui::Separator();
+
+        const char* action_label = (show_save_dialog_ || show_export_dialog_) ? "Save" : "Load";
+        if (ImGui::Button(action_label, ImVec2(120, 30))) {
+            bool ok = false;
+            if (show_save_dialog_) {
+                ok = save_simulation(file_path_buf_);
+                last_save_status_ = ok ? "Saved successfully" : "Save failed";
+            } else if (show_load_dialog_) {
+                ok = load_simulation(file_path_buf_);
+                last_save_status_ = ok ? "Loaded successfully" : "Load failed";
+            } else if (show_export_dialog_) {
+                ok = export_body(selected_body, file_path_buf_);
+                last_save_status_ = ok ? "Exported successfully" : "Export failed";
+            } else if (show_import_dialog_) {
+                ok = import_body(file_path_buf_);
+                last_save_status_ = ok ? "Imported successfully" : "Import failed";
+            }
+            save_status_timer_ = 3.0f;
+            show_save_dialog_ = show_load_dialog_ = show_export_dialog_ = show_import_dialog_ = false;
+            file_path_buf_[0] = '\0';
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 30))) {
+            show_save_dialog_ = show_load_dialog_ = show_export_dialog_ = show_import_dialog_ = false;
+            file_path_buf_[0] = '\0';
+        }
+    }
+    ImGui::End();
+
+    if (!open) {
+        show_save_dialog_ = show_load_dialog_ = show_export_dialog_ = show_import_dialog_ = false;
+        file_path_buf_[0] = '\0';
     }
 }
