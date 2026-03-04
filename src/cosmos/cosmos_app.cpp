@@ -1,100 +1,15 @@
-#include "cosmos/cosmos_app.h"
-#include "common/paths.h"
+#include "cosmos/cosmos_app_internal.h"
 #include "imgui.h"
 #include <GLFW/glfw3.h>
-#include <cmath>
 #include <algorithm>
-#include <random>
-#include <fstream>
-#include <cstring>
-#include <filesystem>
+#include <cmath>
 #include <numeric>
+#include <random>
 #include <thread>
-
-// ── Body color (for trail overlay coloring) ─────────────────────────────────
-
-static ImVec4 star_tint_ui(const CelestialBody& b) {
-    float t = std::clamp((b.temperature - 1200.0f) / 32000.0f, 0.0f, 1.0f);
-    glm::vec3 tint(
-        std::clamp(1.25f - t * 0.95f, 0.0f, 1.0f),
-        std::clamp(0.45f + t * 0.6f, 0.0f, 1.0f),
-        std::clamp(-0.1f + t * 1.25f, 0.0f, 1.0f));
-    float giant = (b.stellar_stage == SSTAGE_RED_GIANT) ? 1.0f
-        : std::clamp((b.radius - 40.0f) / 120.0f, 0.0f, 1.0f);
-    float white_dwarf = (b.stellar_stage == SSTAGE_WHITE_DWARF) ? 1.0f : 0.0f;
-    float neutron_star = (b.stellar_stage == SSTAGE_NEUTRON_STAR) ? 1.0f : 0.0f;
-    float massive_hot = std::clamp((b.mass - 8.0f) / 32.0f, 0.0f, 1.0f) *
-        std::clamp((b.temperature - 9000.0f) / 26000.0f, 0.0f, 1.0f);
-    float cool = std::clamp((6000.0f - b.temperature) / 3600.0f, 0.0f, 1.0f);
-    tint = glm::mix(tint, glm::vec3(1.00f, 0.62f, 0.34f), giant * std::max(cool, 0.35f) * 0.75f);
-    tint = glm::mix(tint, glm::vec3(0.76f, 0.86f, 1.00f), massive_hot * 0.70f);
-    tint = glm::mix(tint, glm::vec3(0.92f, 0.96f, 1.00f), white_dwarf * 0.90f);
-    tint = glm::mix(tint, glm::vec3(0.72f, 0.84f, 1.00f), neutron_star * 0.96f);
-    tint = glm::clamp(tint, glm::vec3(0.0f), glm::vec3(1.0f));
-    return ImVec4(tint.r, tint.g, tint.b, 1.0f);
-}
-
-static ImU32 body_color(const CelestialBody& b) {
-    if (is_star_type(b.type)) {
-        ImVec4 tint = star_tint_ui(b);
-        return IM_COL32((int)(tint.x * 255.0f), (int)(tint.y * 255.0f),
-                        (int)(tint.z * 255.0f), 255);
-    }
-    if (is_black_hole_type(b.type))
-        return IM_COL32(18, 18, 22, 255);
-    switch (b.type) {
-    case CTYPE_PLANET:     return IM_COL32(60, 140, 220, 255);
-    case CTYPE_MOON:       return IM_COL32(180, 180, 190, 255);
-    case CTYPE_ASTEROID:   return IM_COL32(140, 130, 110, 255);
-    case CTYPE_COMET:      return IM_COL32(160, 220, 255, 255);
-    case CTYPE_NEBULA:     return IM_COL32(120, 60, 180, 255);
-    default:               return IM_COL32(200, 200, 200, 255);
-    }
-}
-
-static const char* const CTYPE_NAMES[] = {
-    "Star", "Planet", "Moon", "Asteroid", "Comet", "Black Hole", "Nebula",
-    "O Star", "B Star", "A Star", "F Star", "G Star", "K Star", "M Star",
-    "L Dwarf", "T Dwarf", "Y Dwarf", "Wolf-Rayet",
-    "Stellar BH", "Intermediate BH", "Supermassive BH", "Primordial BH",
-};
-
-static const char* const PLANET_CLASS_NAMES[] = {
-    "Dwarf Planet", "Terrestrial", "Ocean World", "Super-Earth", "Ice Giant", "Gas Giant",
-};
-
-static const char* const MATERIAL_PHASE_NAMES[] = {
-    "Solid", "Liquid", "Ice", "Gas", "Molten", "Plasma", "Collapsing Cloud",
-};
-
-static const ImU32 CTYPE_COLORS[] = {
-    IM_COL32(255, 200, 60, 255),   // Star - gold
-    IM_COL32(60, 140, 220, 255),   // Planet - blue
-    IM_COL32(180, 180, 190, 255),  // Moon - silver
-    IM_COL32(140, 130, 110, 255),  // Asteroid - brown
-    IM_COL32(160, 220, 255, 255),  // Comet - ice blue
-    IM_COL32(18, 18, 22, 255),     // Black Hole - black
-    IM_COL32(120, 60, 180, 255),   // Nebula - violet
-    IM_COL32(120, 140, 255, 255),  // O - deep blue
-    IM_COL32(160, 180, 255, 255),  // B - blue-white
-    IM_COL32(220, 220, 255, 255),  // A - white
-    IM_COL32(255, 255, 200, 255),  // F - yellow-white
-    IM_COL32(255, 240, 100, 255),  // G - yellow (Sun)
-    IM_COL32(255, 180, 60, 255),   // K - orange
-    IM_COL32(255, 100, 60, 255),   // M - red
-    IM_COL32(180, 60, 40, 255),    // L - dark red-brown
-    IM_COL32(140, 40, 60, 255),    // T - magenta-brown
-    IM_COL32(100, 30, 50, 255),    // Y - very dark
-    IM_COL32(100, 180, 255, 255),  // WR - hot blue
-    IM_COL32(24, 24, 30, 255),     // Stellar BH
-    IM_COL32(18, 18, 24, 255),     // Intermediate BH
-    IM_COL32(12, 12, 18, 255),     // Supermassive BH
-    IM_COL32(32, 32, 40, 255),     // Primordial BH
-};
 
 // ── Star / BH classification helpers ────────────────────────────────────────
 
-static uint32_t classify_star_spectral(float temperature, float mass) {
+uint32_t classify_star_spectral(float temperature, float mass) {
     if (temperature > 40000.0f && mass > 16.0f)  return CTYPE_STAR_WR;
     if (temperature > 30000.0f && mass > 16.0f)  return CTYPE_STAR_O;
     if (temperature > 10000.0f && mass > 2.1f)   return CTYPE_STAR_B;
@@ -108,18 +23,7 @@ static uint32_t classify_star_spectral(float temperature, float mass) {
     return CTYPE_STAR_Y;
 }
 
-static constexpr float EARTH_RADIUS_KM_REAL = 6371.0f;
-static constexpr float EARTH_RADIUS_SIM_UNITS = 8.0f;
-static constexpr float SIM_UNIT_TO_KM = EARTH_RADIUS_KM_REAL / EARTH_RADIUS_SIM_UNITS;
-static constexpr float EARTH_MASS_SOLAR = 3.003e-6f;
-static constexpr float JUPITER_MASS_SOLAR = 9.5458e-4f;
-static constexpr float HYDROGEN_BURNING_MASS_SOLAR = 0.075f;
-static constexpr float MAX_MAIN_SEQUENCE_MASS_SOLAR = 150.0f;
-static constexpr float CORE_COLLAPSE_MIN_MASS_SOLAR = 8.0f;
-static constexpr float BLACK_HOLE_MIN_REMNANT_MASS_SOLAR = 20.0f;
-static constexpr float CHANDRASEKHAR_LIMIT_SOLAR = 1.38f;
-
-static void clear_ring_system(CelestialBody& body) {
+void clear_ring_system(CelestialBody& body) {
     body.ring_inner_radius = 0.0f;
     body.ring_outer_radius = 0.0f;
     body.ring_density = 0.0f;
@@ -127,7 +31,7 @@ static void clear_ring_system(CelestialBody& body) {
     body.ring_tilt = 0.0f;
 }
 
-static void clear_impact_signature(CelestialBody& body) {
+void clear_impact_signature(CelestialBody& body) {
     body.impact_normal = glm::vec3(0.0f, 1.0f, 0.0f);
     body.impact_crater_strength = 0.0f;
     body.impact_heat = 0.0f;
@@ -150,30 +54,7 @@ static void set_ring_system(CelestialBody& body, float inner_radius, float outer
     body.ring_tilt = std::clamp(tilt, 0.0f, 1.30f);
 }
 
-struct MaterialComposition {
-    float iron = 0.0f;
-    float silicate = 0.0f;
-    float water = 0.0f;
-    float hydrogen = 0.0f;
-};
-
-struct ComparisonMetrics {
-    float earth_similarity = 0.0f;
-    float life_likelihood = 0.0f;
-};
-
-struct MagneticMetrics {
-    bool  show_magnetosphere = false;
-    float magnetosphere_size = 0.0f;
-    float magnetic_field = 0.0f;
-    bool  show_magnetic_axis = false;
-    float magnetic_pole_angle = 0.0f;
-    bool  particle_jets = false;
-    bool  make_pulsar = false;
-};
-
-
-static uint32_t classify_black_hole(float mass) {
+uint32_t classify_black_hole(float mass) {
     if (mass < 3.0f)        return CTYPE_BH_PRIMORDIAL;
     if (mass <= 20.0f)      return CTYPE_BH_STELLAR;
     if (mass <= 100000.0f)  return CTYPE_BH_INTERMEDIATE;
@@ -219,7 +100,7 @@ static float stellar_rotation_period_hours(float mass, uint32_t type, std::mt199
     return std::uniform_real_distribution<float>(240.0f, 1800.0f)(rng);
 }
 
-static float expected_star_radius(const CelestialBody& b);
+float expected_star_radius(const CelestialBody& b);
 
 static void randomize_small_body_properties(CelestialBody& body, std::mt19937& rng,
                                             bool is_comet) {
@@ -603,18 +484,18 @@ static void randomize_moon_properties(CelestialBody& body, const CosmosState& st
 
 static void enforce_body_physical_limits(CelestialBody& b);
 
-static void refresh_body_render_state(CelestialBody& body, const CosmosState* state = nullptr) {
+void refresh_body_render_state(CelestialBody& body, const CosmosState* state) {
     enforce_body_physical_limits(body);
     refresh_planet_props(body);
     refresh_body_visuals(body, state);
 }
 
-static float body_density(const CelestialBody& b) {
+float body_density(const CelestialBody& b) {
     float volume = (4.0f / 3.0f) * 3.14159265359f * b.radius * b.radius * b.radius;
     return b.mass / std::max(volume, 1.0e-5f);
 }
 
-static float body_volume(const CelestialBody& b) {
+float body_volume(const CelestialBody& b) {
     return (4.0f / 3.0f) * 3.14159265359f * b.radius * b.radius * b.radius;
 }
 
@@ -622,11 +503,11 @@ static float body_gravitational_binding_energy(const CelestialBody& b, float G) 
     return 0.6f * G * b.mass * b.mass / std::max(b.radius, 0.1f);
 }
 
-static float body_surface_gravity(const CelestialBody& b, float G) {
+float body_surface_gravity(const CelestialBody& b, float G) {
     return G * b.mass / std::max(b.radius * b.radius, 1.0e-6f);
 }
 
-static float body_escape_velocity(const CelestialBody& b, float G) {
+float body_escape_velocity(const CelestialBody& b, float G) {
     return std::sqrt(std::max(2.0f * G * b.mass / std::max(b.radius, 1.0e-6f), 0.0f));
 }
 
@@ -664,7 +545,7 @@ static void apply_impact_signature(CelestialBody& target, glm::vec3 impact_norma
     target.visuals_valid = false;
 }
 
-static float expected_planet_radius(float mass_solar) {
+float expected_planet_radius(float mass_solar) {
     float mass_earth = std::max(mass_solar / EARTH_MASS_SOLAR, 0.01f);
     float radius_earth;
     if (mass_earth < 2.0f) {
@@ -678,7 +559,7 @@ static float expected_planet_radius(float mass_solar) {
     return radius_earth * EARTH_RADIUS_SIM_UNITS;
 }
 
-static float expected_star_radius(const CelestialBody& b) {
+float expected_star_radius(const CelestialBody& b) {
     float mass = std::clamp(b.mass, 0.02f, MAX_MAIN_SEQUENCE_MASS_SOLAR);
     if (b.stellar_stage == SSTAGE_WHITE_DWARF)
         return std::clamp(1.6f + 1.8f / std::pow(std::max(mass, 0.2f), 0.33f), 1.5f, 4.0f);
@@ -695,7 +576,7 @@ static float expected_star_radius(const CelestialBody& b) {
 
 static float stellar_luminosity_units(const CelestialBody& b);
 
-static MaterialComposition derive_materials(const CelestialBody& b) {
+MaterialComposition derive_materials(const CelestialBody& b) {
     MaterialComposition m{};
     if (is_star_type(b.type)) {
         m.hydrogen = 1.0f;
@@ -838,7 +719,7 @@ static void add_ring_material(CelestialBody& primary, const CelestialBody& sourc
     set_ring_system(primary, inner, outer, density_boost, ice_fraction, tilt);
 }
 
-static ComparisonMetrics derive_comparisons(const CelestialBody& b) {
+ComparisonMetrics derive_comparisons(const CelestialBody& b) {
     ComparisonMetrics cm{};
     if (b.type != CTYPE_PLANET && b.type != CTYPE_MOON)
         return cm;
@@ -861,7 +742,7 @@ static ComparisonMetrics derive_comparisons(const CelestialBody& b) {
     return cm;
 }
 
-static MagneticMetrics derive_magnetic_metrics(const CelestialBody& b, float G) {
+MagneticMetrics derive_magnetic_metrics(const CelestialBody& b, float G) {
     MagneticMetrics mm{};
     MagneticSignature sig = estimate_magnetic_signature(b, G);
     mm.show_magnetosphere = sig.has_magnetosphere;
@@ -938,8 +819,8 @@ static float stellar_luminosity_units(const CelestialBody& b) {
     return std::max(b.luminosity, 0.0f) + mass_lum * 0.1f + thermal_lum;
 }
 
-static float equilibrium_temperature_from_star(const CelestialBody& body,
-                                               const CelestialBody& star) {
+float equilibrium_temperature_from_star(const CelestialBody& body,
+                                        const CelestialBody& star) {
     float dist = glm::length(star.pos - body.pos);
     if (dist <= 1.0e-3f) return body.temperature;
 
@@ -948,60 +829,6 @@ static float equilibrium_temperature_from_star(const CelestialBody& body,
     float lum_boost = std::clamp(1.0f + 0.08f * std::log10(std::max(stellar_luminosity_units(star), 1.0f)), 1.0f, 1.6f);
     return std::max(star.temperature, 50.0f) * ratio *
            std::pow(std::max(1.0f - albedo, 0.05f), 0.25f) * lum_boost;
-}
-
-// ── Timestep formatting ─────────────────────────────────────────────────────
-
-static const char* format_sim_time(double seconds, char* buf, size_t buf_size) {
-    double abs_s = std::abs(seconds);
-    if (abs_s < 1e-6)
-        snprintf(buf, buf_size, "%.1f ns", seconds * 1e9);
-    else if (abs_s < 1e-3)
-        snprintf(buf, buf_size, "%.1f us", seconds * 1e6);
-    else if (abs_s < 1.0)
-        snprintf(buf, buf_size, "%.1f ms", seconds * 1e3);
-    else if (abs_s < 60.0)
-        snprintf(buf, buf_size, "%.1f s", seconds);
-    else if (abs_s < 3600.0)
-        snprintf(buf, buf_size, "%.1f min", seconds / 60.0);
-    else if (abs_s < 86400.0)
-        snprintf(buf, buf_size, "%.1f hr", seconds / 3600.0);
-    else if (abs_s < 3.156e7)
-        snprintf(buf, buf_size, "%.1f day", seconds / 86400.0);
-    else if (abs_s < 3.156e10)
-        snprintf(buf, buf_size, "%.2f yr", seconds / 3.156e7);
-    else if (abs_s < 3.156e13)
-        snprintf(buf, buf_size, "%.2f kyr", seconds / 3.156e10);
-    else if (abs_s < 3.156e16)
-        snprintf(buf, buf_size, "%.2f Myr", seconds / 3.156e13);
-    else if (abs_s < 3.156e19)
-        snprintf(buf, buf_size, "%.2f Gyr", seconds / 3.156e16);
-    else
-        snprintf(buf, buf_size, "%.2f Tyr", seconds / 3.156e19);
-    return buf;
-};
-
-// ── Draw helpers ────────────────────────────────────────────────────────────
-
-static void draw_radial_glow(ImDrawList* dl, float cx, float cy, float radius,
-                              ImU32 center_col, ImU32 edge_col) {
-    constexpr int STEPS = 16;
-    for (int s = STEPS; s >= 0; --s) {
-        float t = (float)s / STEPS;
-        float r = radius * t;
-        if (r < 1.0f) continue;
-        float blend = 1.0f - t;
-        int a_c = (center_col >> IM_COL32_A_SHIFT) & 0xFF;
-        int a_e = (edge_col   >> IM_COL32_A_SHIFT) & 0xFF;
-        int a = a_c + (int)((a_e - a_c) * blend);
-        int r_c = (center_col >> IM_COL32_R_SHIFT) & 0xFF, r_e = (edge_col >> IM_COL32_R_SHIFT) & 0xFF;
-        int g_c = (center_col >> IM_COL32_G_SHIFT) & 0xFF, g_e = (edge_col >> IM_COL32_G_SHIFT) & 0xFF;
-        int b_c = (center_col >> IM_COL32_B_SHIFT) & 0xFF, b_e = (edge_col >> IM_COL32_B_SHIFT) & 0xFF;
-        int rr = r_c + (int)((r_e - r_c) * blend);
-        int gg = g_c + (int)((g_e - g_c) * blend);
-        int bb = b_c + (int)((b_e - b_c) * blend);
-        dl->AddCircleFilled(ImVec2(cx, cy), r, IM_COL32(rr, gg, bb, a), 32);
-    }
 }
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
@@ -2534,6 +2361,8 @@ float CosmosApp::screen_radius(float world_radius, float depth,
     if (depth <= 0.0f) return 0.0f;
     return (world_radius / depth) * (screen_h / (2.0f * std::tan(fov_rad * 0.5f)));
 }
+
+#if 0
 
 // ── Overlay rendering (trails + selection on DrawList) ──────────────────────
 
@@ -4845,3 +4674,5 @@ void CosmosApp::draw_file_dialog() {
         file_path_buf_[0] = '\0';
     }
 }
+
+#endif
