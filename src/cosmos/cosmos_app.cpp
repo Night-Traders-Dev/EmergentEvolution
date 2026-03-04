@@ -92,6 +92,43 @@ static uint32_t classify_black_hole(float mass) {
     return CTYPE_BH_SUPERMASSIVE;
 }
 
+static void randomize_small_body_properties(CelestialBody& body, std::mt19937& rng,
+                                            bool is_comet) {
+    // Radii are in simulation units (Earth radius ~= 8 units).
+    // Asteroids: mostly rocky, Comets: icy and lower density.
+    float radius_km;
+    float density_kg_m3;
+
+    if (is_comet) {
+        radius_km = std::uniform_real_distribution<float>(1.0f, 35.0f)(rng);
+        density_kg_m3 = std::uniform_real_distribution<float>(300.0f, 900.0f)(rng);
+        body.temperature = std::uniform_real_distribution<float>(40.0f, 260.0f)(rng);
+    } else {
+        radius_km = std::uniform_real_distribution<float>(2.0f, 500.0f)(rng);
+        density_kg_m3 = std::uniform_real_distribution<float>(1200.0f, 3500.0f)(rng);
+        body.temperature = std::uniform_real_distribution<float>(120.0f, 420.0f)(rng);
+    }
+
+    // Convert radius to simulation units.
+    body.radius = radius_km / SIM_UNIT_TO_KM;
+
+    // Physical mass estimate from volume + density, then convert kg -> solar masses.
+    constexpr double SOLAR_MASS_KG = 1.98847e30;
+    double radius_m = (double)radius_km * 1000.0;
+    double volume_m3 = (4.0 / 3.0) * 3.141592653589793 * radius_m * radius_m * radius_m;
+    double mass_kg = volume_m3 * (double)density_kg_m3;
+    body.mass = (float)(mass_kg / SOLAR_MASS_KG);
+
+    // Spin periods: small bodies can spin rapidly but avoid breakup extremes.
+    float period_h = is_comet
+        ? std::uniform_real_distribution<float>(4.0f, 80.0f)(rng)
+        : std::uniform_real_distribution<float>(2.5f, 30.0f)(rng);
+    body.angular_vel = (2.0f * 3.14159265359f) / (period_h * 3600.0f);
+    if (std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) < 0.2f)
+        body.angular_vel *= -1.0f;
+}
+
+
 static void randomize_planet_properties(CelestialBody& body, const CosmosState& state,
                                         std::mt19937& rng) {
     // Sample from broad observed exoplanet-like ranges.
@@ -384,10 +421,15 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
             nb.type = classify_black_hole(nb.mass);
     } else {
         nb.temperature = 300.0f;
-        if (spawn_type == CTYPE_PLANET)
+        if (spawn_type == CTYPE_PLANET) {
             randomize_planet_properties(nb, state, rng);
-
+        } else if (spawn_type == CTYPE_ASTEROID) {
+            randomize_small_body_properties(nb, rng, false);
+        } else if (spawn_type == CTYPE_COMET) {
+            randomize_small_body_properties(nb, rng, true);
+        }
     }
+
 
     if (spawn_in_orbit_ && !state.bodies.empty()) {
         int nearest = -1;
@@ -2439,7 +2481,6 @@ bool CosmosApp::save_simulation(const std::string& path) {
     if (cfg.star_lighting) flags |= 256;
     if (cfg.uniform_lighting) flags |= 512;
     if (cfg.parallel_gravity) flags |= 1024;
-    if (cfg.fast_star_lighting) flags |= 2048;
     f.write(reinterpret_cast<const char*>(&flags), sizeof(uint32_t));
 
     f.write(reinterpret_cast<const char*>(&cfg.merge_speed_threshold), sizeof(float));
@@ -2520,7 +2561,6 @@ bool CosmosApp::load_simulation(const std::string& path) {
     cfg.star_lighting           = (flags & 256) != 0;
     cfg.uniform_lighting        = (flags & 512) != 0;
     cfg.parallel_gravity        = (flags & 1024) != 0;
-    cfg.fast_star_lighting      = (flags & 2048) != 0;
 
     f.read(reinterpret_cast<char*>(&cfg.merge_speed_threshold), sizeof(float));
     f.read(reinterpret_cast<char*>(&cfg.fragment_speed_threshold), sizeof(float));
