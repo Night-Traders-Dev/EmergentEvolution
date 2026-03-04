@@ -3,41 +3,48 @@
 layout(location = 0) in vec2 fragUV;
 layout(location = 0) out vec4 outColor;
 
-// ── Camera / scene uniforms ────────────────────────────────────────────────
-
 layout(std140, set = 0, binding = 0) uniform CameraUBO {
-    mat4 inv_vp;            // inverse view-projection matrix
-    vec4 eye_pos;           // xyz = camera position
-    vec4 screen_info;       // x = width, y = height, z = body_count, w = time
-    vec4 lighting_params;   // x = star_lighting, y = uniform_lighting, z = ambient, w = fast_star_lighting
+    mat4 inv_vp;
+    vec4 eye_pos;
+    vec4 screen_info;
+    vec4 lighting_params; // x=star, y=uniform, z=ambient, w=fastStar
+    vec4 quality_params;  // x=quality, y=hq
+    vec4 render_flags;    // x=background, y=corona, z=comet tails, w=bh lensing
 };
 
-// ── Sphere data ────────────────────────────────────────────────────────────
-
 struct Sphere {
-    vec4 pos_radius;    // xyz = world position, w = radius
-    vec4 color_emit;    // rgb = base color (0-1), a = emissive intensity
-    vec4 planet_data;   // x = seed, y = surface_type, z = ocean_coverage, w = temperature
-    vec4 atmo_data;     // x = cloud_coverage, y = atm_pressure, z = vegetation, w = body_flags
+    vec4 pos_radius;
+    vec4 base_emit;
+    vec4 class_seed_temp;
+    vec4 terrain_params;
+    vec4 material_params;
+    vec4 composition_params;
+    vec4 atmosphere_params;
+    vec4 activity_params;
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer SphereBuffer {
     Sphere spheres[];
 };
 
-// ── Noise functions (quintic interpolation, gradient-quality) ──────────────
+const int RENDER_STAR = 0;
+const int RENDER_PLANET = 1;
+const int RENDER_MOON = 2;
+const int RENDER_ASTEROID = 3;
+const int RENDER_COMET = 4;
+const int RENDER_BLACK_HOLE = 5;
+
+const int SURF_ROCKY = 0;
+const int SURF_LIQUID = 1;
+const int SURF_FROZEN = 2;
+const int SURF_GAS = 3;
+const int SURF_MIXED = 4;
 
 float hash11(float p) {
     p = fract(p * 0.1031);
     p *= p + 33.33;
     p *= p + p;
     return fract(p);
-}
-
-float hash(vec2 p) {
-    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
 }
 
 vec3 hash31(float p) {
@@ -50,14 +57,12 @@ vec3 hash33(vec3 p) {
     p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
              dot(p, vec3(269.5, 183.3, 246.1)),
              dot(p, vec3(113.5, 271.9, 124.6)));
-    return -1.0 + 2.0 * fract(sin(p) * 43758.5453);
+    return -1.0 + 2.0 * fract(sin(p) * 43758.5453123);
 }
 
-// Gradient noise with quintic interpolation (C2 continuous — no grid artifacts)
 float noise3D(vec3 p) {
     vec3 i = floor(p);
     vec3 f = fract(p);
-    // Quintic interpolation: f(t) = 6t^5 - 15t^4 + 10t^3 (C2 continuous)
     vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
 
     return mix(mix(mix(dot(hash33(i + vec3(0,0,0)), f - vec3(0,0,0)),
@@ -70,16 +75,24 @@ float noise3D(vec3 p) {
                        dot(hash33(i + vec3(1,1,1)), f - vec3(1,1,1)), u.x), u.y), u.z);
 }
 
+int adjusted_octaves(int base_octaves) {
+    int quality = int(quality_params.x + 0.5);
+    if (quality <= 0) return max(1, base_octaves - 2);
+    if (quality == 1) return max(1, base_octaves - 1);
+    return base_octaves;
+}
+
 float fbm(vec3 p, int octaves) {
     float val = 0.0;
     float amp = 0.5;
     float freq = 1.0;
-    for (int i = 0; i < octaves; i++) {
+    int octs = adjusted_octaves(octaves);
+    for (int i = 0; i < octs; i++) {
         val += amp * noise3D(p * freq);
-        freq *= 2.03;   // slight frequency jitter prevents axis-aligned patterns
+        freq *= 2.03;
         amp *= 0.49;
     }
-    return val * 0.5 + 0.5; // remap [-1,1] gradient noise to [0,1]
+    return val * 0.5 + 0.5;
 }
 
 float ridged_noise(vec3 p) {
@@ -92,7 +105,8 @@ float ridged_fbm(vec3 p, int octaves) {
     float val = 0.0;
     float amp = 0.5;
     float freq = 1.0;
-    for (int i = 0; i < octaves; i++) {
+    int octs = adjusted_octaves(octaves);
+    for (int i = 0; i < octs; i++) {
         val += amp * ridged_noise(p * freq);
         freq *= 2.1;
         amp *= 0.45;
@@ -100,7 +114,25 @@ float ridged_fbm(vec3 p, int octaves) {
     return val;
 }
 
-// ── Ray-sphere intersection ────────────────────────────────────────────────
+vec3 blackbody_tint(float temperature) {
+    float t = clamp((temperature - 1200.0) / 32000.0, 0.0, 1.0);
+    return vec3(
+        clamp(1.25 - t * 0.95, 0.0, 1.0),
+        clamp(0.45 + t * 0.60, 0.0, 1.0),
+        clamp(-0.10 + t * 1.25, 0.0, 1.0)
+    );
+}
+
+float phase_hg(float g, float cos_theta) {
+    float g2 = g * g;
+    return (1.0 - g2) / (12.5663706 * pow(max(1.0 + g2 - 2.0 * g * cos_theta, 1.0e-3), 1.5));
+}
+
+void build_basis(vec3 n, out vec3 t, out vec3 b) {
+    vec3 up = abs(n.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    t = normalize(cross(up, n));
+    b = normalize(cross(n, t));
+}
 
 float intersect_sphere(vec3 ro, vec3 rd, vec3 center, float radius) {
     vec3 oc = ro - center;
@@ -116,12 +148,9 @@ float intersect_sphere(vec3 ro, vec3 rd, vec3 center, float radius) {
     return -1.0;
 }
 
-
-
 float irregular_radius_scale(vec3 dir, float seed, float roughness) {
     float n = noise3D(dir * 6.0 + vec3(seed * 0.021, seed * 0.017, seed * 0.013));
-    float r = 1.0 + n * roughness;
-    return clamp(r, 0.65, 1.45);
+    return clamp(1.0 + n * roughness, 0.65, 1.45);
 }
 
 float irregular_sdf(vec3 p, vec3 center, float base_radius, float seed, float roughness) {
@@ -159,491 +188,398 @@ vec3 irregular_normal(vec3 p, vec3 center, float base_radius, float seed, float 
     return normalize(vec3(dx, dy, dz));
 }
 
-
-
-
-// ── Procedural starfield background ────────────────────────────────────────
-
-vec3 background() {
-    return vec3(0.0);
+float crater_mask(vec3 normal, float seed, float density) {
+    vec3 p = normal * (6.0 + density * 14.0) + hash31(seed) * 9.0;
+    float base = fbm(p, 4);
+    float pits = smoothstep(0.62, 0.88, base);
+    float rims = smoothstep(0.48, 0.60, base) - smoothstep(0.60, 0.72, base);
+    return clamp(pits * density + rims * density * 0.5, 0.0, 1.0);
 }
 
-// ── Procedural planet surface ──────────────────────────────────────────────
+float starfield_layer(vec3 rd, float scale, float threshold) {
+    vec3 p = normalize(rd) * scale;
+    float n = fbm(p + vec3(17.0, 31.0, 47.0), 3);
+    float s = smoothstep(threshold, 1.0, n);
+    return s * s;
+}
 
-vec3 planet_surface(vec3 normal, Sphere hit, float time, vec3 primary_light_dir,
-                     out float surface_roughness, out float surface_elevation) {
-    float seed = hit.planet_data.x;
-    float surface_type = hit.planet_data.y;   // 0=rocky, 1=liquid, 2=frozen, 3=gas, 4=mixed
-    float ocean_cov = hit.planet_data.z;       // 0-1
-    float temperature = hit.planet_data.w;
+vec3 sample_starfield(vec3 rd) {
+    float stars1 = starfield_layer(rd, 48.0, 0.86);
+    float stars2 = starfield_layer(rd * 1.7 + 0.3, 110.0, 0.90);
+    float twinkle = 0.9 + 0.1 * sin(screen_info.w * 0.2 + rd.x * 100.0);
+    vec3 tint = mix(vec3(0.7, 0.75, 0.85), vec3(1.0, 0.95, 0.8), hash11(rd.x * 71.0 + rd.y * 39.0 + rd.z * 113.0));
+    return tint * (stars1 * 1.1 + stars2 * 0.8) * twinkle;
+}
 
-    float cloud_cov = hit.atmo_data.x;        // 0-1
-    float atm_press = hit.atmo_data.y;
-    float vegetation = hit.atmo_data.z;        // 0-1
-    float body_flags = hit.atmo_data.w;
+vec3 background(vec3 rd) {
+    if (render_flags.x < 0.5) return vec3(0.0);
 
-    // Decode ocean type from body_flags
-    float ocean_type = floor(mod(body_flags / 8.0, 8.0));
+    float galactic = pow(clamp(1.0 - abs(rd.y + noise3D(rd * 2.0) * 0.18), 0.0, 1.0), 4.0);
+    float nebula = fbm(rd * 7.0 + vec3(1.3, -2.1, 0.7), 4);
+    vec3 bg = vec3(0.0008, 0.0011, 0.0018);
+    bg += vec3(0.035, 0.030, 0.045) * galactic * (0.25 + nebula * 0.75);
+    bg += vec3(0.020, 0.022, 0.028) * pow(galactic, 2.0);
+    bg += sample_starfield(rd);
+    return bg;
+}
 
-    // ── Per-planet unique properties derived from seed ──
-    // Each planet gets a unique position in noise space + unique color palette
-    vec3 seed_offset = hash31(seed) * 200.0;
-    float hue_var  = hash11(seed * 1.37) * 0.4 - 0.2;   // color hue shift -0.2 to +0.2
-    float sat_var  = 0.6 + hash11(seed * 2.71) * 0.4;    // saturation 0.6-1.0
-    float freq_var = 5.0 + hash11(seed * 3.14) * 6.0;    // terrain frequency 5-11
-    float rough_var = 0.2 + hash11(seed * 4.56) * 0.8;   // terrain roughness 0.2-1.0
+float ocean_type_from_temp(float temperature) {
+    if (temperature < 115.0) return 2.0;
+    if (temperature < 210.0) return 3.0;
+    if (temperature > 650.0) return 4.0;
+    return 1.0;
+}
 
-    // Noise sampling point — unique per planet, no grid artifacts
-    vec3 np = normal * freq_var + seed_offset;
+vec3 atmosphere_scatter(vec3 normal, vec3 view_dir, vec3 light_dir, vec3 base_col,
+                        float pressure, float haze_density, float rayleigh_strength, float mie_strength,
+                        float temperature) {
+    if (pressure < 0.01) return vec3(0.0);
+    float fresnel = pow(clamp(1.0 - max(dot(normal, -view_dir), 0.0), 0.0, 1.0), 2.5);
+    float forward = phase_hg(clamp(0.25 + mie_strength * 0.45, 0.0, 0.85), dot(-view_dir, light_dir));
+    vec3 ray_col = mix(vec3(0.55, 0.70, 1.0), vec3(0.90, 0.55, 0.35), clamp((temperature - 240.0) / 600.0, 0.0, 1.0));
+    ray_col *= 0.25 + rayleigh_strength * 0.9;
+    vec3 mie_col = mix(vec3(1.0), base_col * 1.1, 0.35);
+    float density = clamp(pressure * 0.05 + haze_density * 0.9, 0.0, 1.2);
+    return ray_col * fresnel * density + mie_col * forward * mie_strength * density * 0.8;
+}
 
-    surface_roughness = 0.8;
-    surface_elevation = 0.5;
+vec3 shade_star(vec3 normal, vec3 rd, Sphere hit) {
+    float seed = hit.class_seed_temp.x;
+    float temperature = hit.class_seed_temp.w;
+    float gran_amp = hit.terrain_params.x;
+    float gran_freq = hit.terrain_params.y;
+    float spot_strength = hit.activity_params.w;
+    float flare_activity = hit.activity_params.x;
+    float corona_strength = hit.activity_params.y;
 
-    // ── Gas giant path ──────────────────────────────────────────────────
-    if (surface_type > 2.5 && surface_type < 3.5) {
-        float lat = asin(normal.y);
-        float band_count = 7.0 + hash11(seed * 5.0) * 8.0; // 7-15 bands
+    vec3 tint = blackbody_tint(temperature);
+    vec3 nwarp = normal * gran_freq + hash31(seed) * 15.0;
+    float granulation = fbm(nwarp, 4);
+    float cells = smoothstep(0.44, 0.64, granulation);
+    vec3 gran_col = mix(tint * 0.85, tint * 1.22, cells);
 
-        // Domain-warped bands for more organic look
-        float warp = noise3D(normal * 3.0 + seed_offset * 0.1) * 0.8;
-        float band = sin(lat * band_count + warp + fbm(normal * 2.5 + seed_offset * 0.05, 3) * 1.2);
+    float cool_star = clamp((6500.0 - temperature) / 4000.0, 0.0, 1.0);
+    float spots = smoothstep(0.58, 0.78, fbm(normal * (gran_freq * 0.55) + hash31(seed * 1.9) * 11.0, 3));
+    float facula = smoothstep(0.42, 0.58, fbm(normal * (gran_freq * 0.7) + hash31(seed * 2.7) * 9.0, 3));
+    gran_col = mix(gran_col, gran_col * (0.42 + 0.2 * cool_star), spots * spot_strength * cool_star);
+    gran_col += tint * facula * spot_strength * cool_star * 0.14;
 
-        // Per-planet gas giant colors from seed
-        vec3 col_warm, col_cool;
-        float color_sel = hash11(seed * 6.78);
-        if (temperature < 150.0) {
-            // Ice giant (Uranus/Neptune) — blues and greens
-            col_warm = vec3(0.25 + color_sel * 0.15, 0.45 + color_sel * 0.15, 0.65);
-            col_cool = vec3(0.10, 0.25 + color_sel * 0.10, 0.50 + color_sel * 0.10);
-        } else if (temperature > 1000.0) {
-            // Hot jupiter — reds and oranges
-            col_warm = vec3(0.85 + color_sel * 0.1, 0.40 + color_sel * 0.15, 0.15);
-            col_cool = vec3(0.65, 0.15 + color_sel * 0.1, 0.05);
-        } else {
-            // Warm gas giant — varied palettes from seed
-            if (color_sel < 0.33) {
-                // Jupiter-like (orange/cream/brown)
-                col_warm = vec3(0.80, 0.65, 0.40);
-                col_cool = vec3(0.55, 0.40, 0.25);
-            } else if (color_sel < 0.66) {
-                // Saturn-like (gold/tan)
-                col_warm = vec3(0.85, 0.75, 0.50);
-                col_cool = vec3(0.65, 0.55, 0.35);
-            } else {
-                // Exotic (purple/rose tints)
-                col_warm = vec3(0.70, 0.55, 0.60);
-                col_cool = vec3(0.45, 0.35, 0.50);
-            }
-        }
+    float mu = max(dot(normal, -rd), 0.0);
+    float limb_dark = mix(0.45, 0.75, clamp(temperature / 18000.0, 0.0, 1.0));
+    vec3 col = gran_col * mix(limb_dark, 1.0, pow(mu, 0.65));
 
-        vec3 col = mix(col_warm, col_cool, band * 0.5 + 0.5);
+    float flare = 0.92 + flare_activity * 0.08 * sin(screen_info.w * (1.2 + flare_activity * 1.8) + seed * 0.13);
+    col *= flare;
 
-        // Great spot feature
-        float spot_lat = hash11(seed * 1.23) * 0.8 - 0.4;
-        float spot_lon = hash11(seed * 2.34) * 6.28;
-        vec3 spot_dir = vec3(cos(spot_lat)*cos(spot_lon), sin(spot_lat), cos(spot_lat)*sin(spot_lon));
-        float spot_size = 0.88 + hash11(seed * 3.45) * 0.08; // 0.88-0.96
-        float spot = smoothstep(spot_size, spot_size + 0.04, dot(normal, spot_dir));
-        vec3 spot_col = mix(col * 0.7, col * 1.8, hash11(seed * 4.56));
-        col = mix(col, spot_col, spot);
-
-        // Swirling detail with domain warping
-        vec3 swirl_offset = vec3(time * 0.015, time * 0.008, time * -0.01);
-        float swirl = fbm(normal * 8.0 + swirl_offset + seed_offset * 0.05, 5);
-        col += (swirl - 0.5) * 0.18;
-
-        // Turbulent eddies
-        float eddy = fbm(normal * 18.0 + vec3(time * 0.01, time * -0.012, 0) + seed_offset * 0.03, 3);
-        col += (eddy - 0.5) * 0.06;
-
-        surface_roughness = 1.0;
-        return col;
+    if (render_flags.y > 0.5) {
+        float edge = pow(clamp(1.0 - mu, 0.0, 1.0), 2.0);
+        col += tint * corona_strength * edge * 0.65;
     }
 
-    // ── Solid body path ─────────────────────────────────────────────────
+    return col * (1.1 + hit.base_emit.a * 0.35);
+}
 
-    // Domain warping for organic terrain shapes
+vec3 shade_gas_giant(vec3 normal, Sphere hit, vec3 light_dir) {
+    float seed = hit.class_seed_temp.x;
+    float temperature = hit.class_seed_temp.w;
+    float band_freq = 6.0 + hit.terrain_params.y;
+    vec3 seed_offset = hash31(seed) * 80.0;
+    float lat = asin(clamp(normal.y, -1.0, 1.0));
+    float warp = noise3D(normal * 3.0 + seed_offset * 0.13) * 0.8;
+    float band = sin(lat * band_freq + warp + fbm(normal * 2.2 + seed_offset * 0.05, 4) * 1.4);
+
+    vec3 warm;
+    vec3 cool;
+    if (temperature < 170.0) {
+        warm = vec3(0.35, 0.58, 0.72);
+        cool = vec3(0.10, 0.22, 0.45);
+    } else if (temperature > 900.0) {
+        warm = vec3(0.95, 0.48, 0.20);
+        cool = vec3(0.56, 0.15, 0.08);
+    } else {
+        warm = vec3(0.82, 0.68, 0.45);
+        cool = vec3(0.54, 0.40, 0.25);
+    }
+
+    vec3 col = mix(warm, cool, band * 0.5 + 0.5);
+    float storm = fbm(normal * 8.0 + vec3(screen_info.w * 0.02, screen_info.w * -0.014, 0.0) + seed_offset * 0.04, 5);
+    col += (storm - 0.5) * 0.15;
+
+    vec3 spot_dir = normalize(vec3(cos(seed * 0.01), sin(seed * 0.003) * 0.35, sin(seed * 0.01)));
+    float spot = smoothstep(0.91, 0.97, dot(normal, spot_dir));
+    col = mix(col, col * vec3(1.3, 0.7, 0.6), spot * 0.9);
+
+    float ndl = max(dot(normal, light_dir), 0.0);
+    return col * (0.28 + 0.72 * ndl);
+}
+
+vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
+                          out float roughness_out, out vec3 surf_normal) {
+    float seed = hit.class_seed_temp.x;
+    float surface_type = hit.class_seed_temp.z;
+    float temperature = hit.class_seed_temp.w;
+    float terrain_amp = hit.terrain_params.x;
+    float terrain_freq = hit.terrain_params.y;
+    float ridge_amp = hit.terrain_params.z;
+    float rock_frac = hit.composition_params.x;
+    float ice_frac = hit.composition_params.y;
+    float metal_frac = hit.composition_params.z;
+    float ocean_cov = hit.composition_params.w;
+    float cloud_cov = hit.atmosphere_params.x;
+    float volcanic = hit.activity_params.z;
+
+    vec3 seed_offset = hash31(seed) * 120.0;
+    vec3 np = normal * max(terrain_freq, 1.0) + seed_offset;
     vec3 warp = vec3(
         noise3D(np + vec3(0.0, 5.2, 1.3)),
         noise3D(np + vec3(5.2, 1.3, 0.0)),
         noise3D(np + vec3(1.3, 0.0, 5.2))
     );
-    vec3 warped_np = np + warp * 0.7 * rough_var;
+    vec3 warped_np = np + warp * terrain_amp * 0.85;
+    float elev = clamp(fbm(warped_np, 6) * (1.0 - ridge_amp * 0.35) + ridged_fbm(warped_np * 0.8, 4) * ridge_amp * 0.55, 0.0, 1.0);
 
-    // Multi-octave terrain with domain warping
-    float base_elev = fbm(warped_np, 6);
-
-    // Ridged noise for mountain ranges (intensity varies per planet)
-    float ridged = ridged_fbm(warped_np * 0.8, 4) * rough_var;
-
-    // Combine base terrain with ridged mountains
-    float elevation = base_elev * (1.0 - rough_var * 0.4) + ridged * rough_var * 0.5;
-
-    // Add fine detail at multiple scales
-    float fine = noise3D(warped_np * 3.0) * 0.06 + noise3D(warped_np * 6.0) * 0.03;
-    elevation += fine;
-    elevation = clamp(elevation, 0.0, 1.0);
-
-    surface_elevation = elevation;
-    float sea_level = 1.0 - ocean_cov;
-
-    // Normal perturbation for terrain lighting
+    vec3 tangent;
+    vec3 bitangent;
+    build_basis(normal, tangent, bitangent);
     float eps = 0.004;
-    vec3 tangent_u = normalize(cross(normal, vec3(0.0, 1.0, 0.1)));
-    vec3 tangent_v = normalize(cross(normal, tangent_u));
-    float elev_du = fbm((normal + tangent_u * eps) * freq_var + seed_offset, 6) - base_elev;
-    float elev_dv = fbm((normal + tangent_v * eps) * freq_var + seed_offset, 6) - base_elev;
-    vec3 perturbed_normal = normalize(normal + (tangent_u * elev_du + tangent_v * elev_dv) * 10.0);
+    float e_du = fbm((normal + tangent * eps) * terrain_freq + seed_offset, 4) - elev;
+    float e_dv = fbm((normal + bitangent * eps) * terrain_freq + seed_offset, 4) - elev;
+    surf_normal = normalize(normal + (tangent * e_du + bitangent * e_dv) * hit.material_params.w * 10.0);
 
-    // Terrain self-shadowing
-    float terrain_ndl = max(dot(perturbed_normal, primary_light_dir), 0.0);
-    float terrain_shadow = 0.25 + 0.75 * terrain_ndl;
+    if (surface_type > 2.5 && surface_type < 3.5)
+        return shade_gas_giant(normal, hit, light_dir);
 
-    // ── Base terrain color (seed-derived palettes for variety) ──
-    vec3 terrain_col;
+    float sea_level = 1.0 - clamp(ocean_cov, 0.0, 1.0);
+    vec3 rock_dark = mix(vec3(0.20, 0.17, 0.15), vec3(0.38, 0.29, 0.20), rock_frac);
+    vec3 rock_mid = mix(vec3(0.42, 0.35, 0.28), vec3(0.58, 0.46, 0.32), rock_frac);
+    vec3 rock_bright = mix(vec3(0.72, 0.68, 0.60), vec3(0.82, 0.74, 0.55), metal_frac + 0.2);
+    vec3 ice_col = vec3(0.72, 0.82, 0.95);
+    vec3 col = mix(rock_dark, rock_mid, smoothstep(0.15, 0.5, elev));
+    col = mix(col, rock_bright, smoothstep(0.60, 0.85, elev));
 
-    if (surface_type < 0.5) {
-        // ROCKY — many visual subtypes from seed
-        float rocky_style = hash11(seed * 7.89);
-        vec3 valley_col, mid_col, peak_col;
-        if (rocky_style < 0.25) {
-            // Mars-like (rust red/orange)
-            valley_col = vec3(0.35 + hue_var, 0.18, 0.10);
-            mid_col    = vec3(0.55 + hue_var, 0.30, 0.18);
-            peak_col   = vec3(0.70, 0.55, 0.42);
-        } else if (rocky_style < 0.5) {
-            // Slate/Moon-like (gray)
-            valley_col = vec3(0.18, 0.18, 0.20 + hue_var * 0.3);
-            mid_col    = vec3(0.38, 0.37, 0.40 + hue_var * 0.2);
-            peak_col   = vec3(0.62, 0.60, 0.65);
-        } else if (rocky_style < 0.75) {
-            // Sandy/desert (tan/gold)
-            valley_col = vec3(0.40 + hue_var, 0.32, 0.15);
-            mid_col    = vec3(0.60 + hue_var, 0.50, 0.28);
-            peak_col   = vec3(0.78, 0.72, 0.55);
-        } else {
-            // Dark volcanic (charcoal with hints)
-            valley_col = vec3(0.12, 0.10, 0.10 + hue_var * 0.3);
-            mid_col    = vec3(0.22, 0.20, 0.22 + hue_var * 0.2);
-            peak_col   = vec3(0.40, 0.38, 0.42);
-        }
+    if (surface_type > 1.5 && surface_type < 2.5)
+        col = mix(col, ice_col, 0.68 + ice_frac * 0.22);
+    else if (surface_type > 3.5)
+        col = mix(col, vec3(0.16, 0.32, 0.12), 0.22);
 
-        terrain_col = mix(valley_col, mid_col, smoothstep(0.15, 0.45, elevation));
-        terrain_col = mix(terrain_col, peak_col, smoothstep(0.55, 0.78, elevation));
+    if (temperature < 240.0)
+        col = mix(col, ice_col, smoothstep(0.55, 0.92, abs(normal.y)) * clamp(ice_frac + 0.25, 0.0, 1.0));
 
-        // Snow on highest peaks (if cold enough)
-        if (temperature < 450.0) {
-            vec3 snow_col = vec3(0.90, 0.92, 0.95);
-            float snow_line = 0.70 + (temperature - 200.0) / 600.0 * 0.2;
-            terrain_col = mix(terrain_col, snow_col, smoothstep(snow_line, snow_line + 0.12, elevation));
-        }
-
-        // Cliff striations (subtle)
-        float strata = sin(elevation * 30.0 + noise3D(warped_np * 2.0) * 4.0) * 0.5 + 0.5;
-        terrain_col *= 0.92 + strata * 0.08;
-
-    } else if (surface_type > 0.5 && surface_type < 1.5) {
-        // LIQUID WORLD — deep ocean everywhere
-        float water_style = hash11(seed * 8.12);
-        if (water_style < 0.5) {
-            terrain_col = vec3(0.04 + hue_var * 0.1, 0.12, 0.35); // deep blue
-        } else {
-            terrain_col = vec3(0.06, 0.18 + hue_var * 0.1, 0.28);  // teal
-        }
-        surface_roughness = 0.1;
-
-    } else if (surface_type > 1.5 && surface_type < 2.5) {
-        // FROZEN — varied ice types from seed
-        float ice_style = hash11(seed * 9.34);
-        vec3 ice_deep, ice_mid, ice_bright;
-        if (ice_style < 0.33) {
-            // Europa-like (smooth cream/tan ice)
-            ice_deep   = vec3(0.50 + hue_var * 0.2, 0.45, 0.35);
-            ice_mid    = vec3(0.70, 0.65, 0.55);
-            ice_bright = vec3(0.85, 0.82, 0.75);
-        } else if (ice_style < 0.66) {
-            // Classic blue-white ice
-            ice_deep   = vec3(0.35, 0.45 + hue_var * 0.2, 0.65);
-            ice_mid    = vec3(0.70, 0.78, 0.90);
-            ice_bright = vec3(0.90, 0.93, 0.97);
-        } else {
-            // Enceladus-like (bright white with blue hints)
-            ice_deep   = vec3(0.55, 0.58, 0.68 + hue_var * 0.2);
-            ice_mid    = vec3(0.80, 0.83, 0.90);
-            ice_bright = vec3(0.95, 0.96, 0.98);
-        }
-
-        terrain_col = mix(ice_deep, ice_mid, smoothstep(0.15, 0.5, elevation));
-        terrain_col = mix(terrain_col, ice_bright, smoothstep(0.65, 0.88, elevation));
-
-        // Crevasses and fracture lines
-        float crack_n = noise3D(warped_np * 2.5);
-        float crevasse = smoothstep(0.52, 0.48, crack_n);
-        vec3 crack_col = ice_deep * 0.5;
-        terrain_col = mix(terrain_col, crack_col, crevasse * 0.5 * (1.0 - elevation));
-
-        surface_roughness = 0.3;
-
-    } else {
-        // MIXED — earth-like with varied palettes
-        float mix_style = hash11(seed * 10.56);
-        vec3 lowland, highland, peak;
-        if (mix_style < 0.33) {
-            // Green temperate
-            lowland  = vec3(0.22 + hue_var * 0.1, 0.28, 0.12);
-            highland = vec3(0.42, 0.38 + hue_var * 0.1, 0.28);
-            peak     = vec3(0.60, 0.58, 0.52);
-        } else if (mix_style < 0.66) {
-            // Arid brown/tan
-            lowland  = vec3(0.38 + hue_var * 0.15, 0.30, 0.18);
-            highland = vec3(0.55, 0.45 + hue_var * 0.1, 0.30);
-            peak     = vec3(0.72, 0.66, 0.55);
-        } else {
-            // Cool/gray with green valleys
-            lowland  = vec3(0.20, 0.24 + hue_var * 0.1, 0.18);
-            highland = vec3(0.38, 0.36, 0.35 + hue_var * 0.15);
-            peak     = vec3(0.58, 0.56, 0.60);
-        }
-
-        terrain_col = mix(lowland, highland, smoothstep(0.25, 0.55, elevation));
-        terrain_col = mix(terrain_col, peak, smoothstep(0.70, 0.88, elevation));
-    }
-
-    // Apply terrain lighting
-    vec3 col = terrain_col * terrain_shadow;
-
-    // ── Ocean layer ──
-    bool is_ocean = (elevation < sea_level && ocean_cov > 0.01);
+    bool is_ocean = ocean_cov > 0.01 && elev < sea_level;
+    roughness_out = hit.material_params.x;
     if (is_ocean) {
-        float depth_factor = smoothstep(sea_level, sea_level - 0.25, elevation);
+        float ocean_type = ocean_type_from_temp(temperature);
+        float depth = smoothstep(sea_level, sea_level - 0.25, elev);
         vec3 ocean_col;
-        float wave_spec = 0.0;
-
         if (ocean_type < 1.5) {
-            // Water — dynamic waves with specular
-            float water_hue = hash11(seed * 11.1);
-            vec3 deep_water    = mix(vec3(0.01, 0.06, 0.22), vec3(0.02, 0.10, 0.18), water_hue);
-            vec3 shallow_water = mix(vec3(0.04, 0.22, 0.50), vec3(0.06, 0.28, 0.42), water_hue);
-            vec3 shore_water   = vec3(0.12 + water_hue * 0.08, 0.38, 0.58);
-
-            ocean_col = mix(shallow_water, deep_water, depth_factor);
-
-            // Shore foam — narrow band near coastline
-            float shore_dist = smoothstep(sea_level - 0.015, sea_level, elevation);
-            float foam_noise = noise3D(normal * 25.0 + vec3(time * 0.3, 0, time * 0.2)) * 0.5 + 0.5;
-            ocean_col = mix(ocean_col, shore_water + vec3(0.2) * foam_noise, shore_dist);
-
-            // Animated waves (multi-scale)
-            float wave1 = noise3D(normal * 18.0 + vec3(time * 0.35, time * 0.12, time * -0.18));
-            float wave2 = noise3D(normal * 35.0 + vec3(time * -0.25, time * 0.4, time * 0.08));
-            float wave3 = noise3D(normal * 70.0 + vec3(time * 0.5, time * -0.35, 0));
-            float waves = wave1 * 0.05 + wave2 * 0.025 + wave3 * 0.012;
-            ocean_col += waves;
-
-            // Specular highlight on water
-            vec3 wave_normal = normalize(perturbed_normal +
-                tangent_u * (wave1 * 0.12) + tangent_v * (wave2 * 0.12));
-            vec3 R = reflect(-primary_light_dir, wave_normal);
-            vec3 V = normalize(eye_pos.xyz - (hit.pos_radius.xyz + normal * hit.pos_radius.w));
-            float spec = pow(max(dot(R, V), 0.0), 80.0);
-            wave_spec = spec * 0.6 * (1.0 - depth_factor * 0.4);
-
+            ocean_col = mix(vec3(0.03, 0.12, 0.34), vec3(0.06, 0.30, 0.55), 1.0 - depth);
+            roughness_out = 0.10;
         } else if (ocean_type < 2.5) {
-            // Methane — dark teal with slow ripples
-            float meth_var = hash11(seed * 12.2);
-            vec3 deep_meth = vec3(0.02, 0.08 + meth_var * 0.04, 0.12);
-            vec3 shal_meth = vec3(0.06, 0.16 + meth_var * 0.06, 0.22);
-            ocean_col = mix(shal_meth, deep_meth, depth_factor);
-            float ripple = noise3D(normal * 14.0 + vec3(time * 0.08, 0, time * 0.06)) * 0.035;
-            ocean_col += ripple;
-
+            ocean_col = mix(vec3(0.02, 0.08, 0.12), vec3(0.08, 0.20, 0.24), 1.0 - depth);
+            roughness_out = 0.12;
         } else if (ocean_type < 3.5) {
-            // Ammonia — pale yellow-green
-            float amm_var = hash11(seed * 13.3);
-            ocean_col = mix(vec3(0.22, 0.20 + amm_var * 0.05, 0.08),
-                            vec3(0.30, 0.26, 0.10 + amm_var * 0.04), 1.0 - depth_factor);
-            float ripple = noise3D(normal * 10.0 + vec3(time * 0.05, time * 0.03, 0)) * 0.025;
-            ocean_col += ripple;
-
+            ocean_col = mix(vec3(0.18, 0.18, 0.10), vec3(0.30, 0.26, 0.15), 1.0 - depth);
+            roughness_out = 0.14;
         } else {
-            // Lava — animated glow with fissures
-            float lava_flow = fbm(normal * 5.0 + vec3(time * 0.06, time * 0.04, 0) + seed_offset * 0.02, 4);
-            float lava_pulse = 0.7 + 0.3 * sin(time * 1.8 + lava_flow * 7.0);
-            vec3 lava_cool = vec3(0.50, 0.08, 0.0);
-            vec3 lava_hot  = vec3(1.00, 0.50, 0.05);
-            ocean_col = mix(lava_cool, lava_hot, lava_flow) * lava_pulse;
-
-            // Bright fissure lines
-            float fissure = smoothstep(0.47, 0.53, fbm(normal * 10.0 + seed_offset * 0.03, 3));
-            ocean_col = mix(ocean_col, vec3(1.0, 0.80, 0.25) * 1.5, fissure * 0.45);
+            float glow = 0.7 + 0.3 * sin(screen_info.w * 1.7 + fbm(warped_np * 1.2, 3) * 6.0);
+            ocean_col = mix(vec3(0.45, 0.08, 0.02), vec3(1.00, 0.55, 0.08), fbm(warped_np * 1.8, 4)) * glow;
+            roughness_out = 0.22;
         }
-
-        col = mix(col, ocean_col, depth_factor);
-        col += vec3(1.0, 0.95, 0.9) * wave_spec;
-        surface_roughness = 0.15;
+        col = mix(col, ocean_col, depth);
     }
 
-    // ── Temperature-reactive effects ──
-    if (temperature < 260.0 && (surface_type > 3.5 || surface_type < 0.5)) {
-        // Ice caps at poles
-        float polar = abs(normal.y);
-        float ice_line = mix(0.25, 0.80, clamp((temperature - 80.0) / 180.0, 0.0, 1.0));
-        float ice = smoothstep(ice_line, ice_line + 0.12, polar);
-        vec3 ice_col = vec3(0.86, 0.90, 0.95);
-        float ice_detail = noise3D(normal * 22.0 + seed_offset * 0.1) * 0.08;
-        col = mix(col, ice_col + ice_detail, ice * 0.85);
-    }
-    if (temperature > 700.0 && surface_type < 0.5) {
-        // Lava fissures on hot rocky worlds
-        float crack_noise = fbm(warped_np * 0.7, 4);
-        float cracks = smoothstep(0.45, 0.53, crack_noise);
-        float glow = 0.7 + 0.3 * sin(time * 1.5 + crack_noise * 5.0);
-        col = mix(col, vec3(1.0, 0.40, 0.05) * glow, cracks * 0.65);
-        col += vec3(0.25, 0.04, 0.0) * cracks * 0.35;
+    if (volcanic > 0.01 && temperature > 650.0 && surface_type < 0.5) {
+        float cracks = smoothstep(0.46, 0.54, fbm(warped_np * 0.7 + 4.0, 4));
+        float lava_glow = 0.65 + 0.35 * sin(screen_info.w * 1.3 + seed * 0.1 + cracks * 5.0);
+        col = mix(col, vec3(1.0, 0.42, 0.08) * lava_glow, cracks * volcanic * 0.7);
     }
 
-    // ── Vegetation ──
-    if (vegetation > 0.01 && elevation >= sea_level && !is_ocean) {
-        float veg_noise = fbm(warped_np * 0.7 + vec3(3.7), 4);
-        float veg_detail = noise3D(warped_np * 2.5 + vec3(7.1));
-        float veg_mask = smoothstep(0.20, 0.55, veg_noise) * vegetation;
-
-        // Less vegetation at poles and on peaks
-        veg_mask *= smoothstep(0.78, 0.30, abs(normal.y));
-        veg_mask *= smoothstep(0.82, 0.50, elevation);
-        // More vegetation in lowlands near water
-        float near_water = 1.0 - smoothstep(sea_level, sea_level + 0.12, elevation);
-        veg_mask *= 0.6 + near_water * 0.6;
-
-        // Varied greens from seed
-        float green_var = hash11(seed * 14.4);
-        vec3 forest_dark  = vec3(0.06 + green_var * 0.04, 0.22 + green_var * 0.08, 0.04);
-        vec3 forest_light = vec3(0.15, 0.42 + green_var * 0.1, 0.08 + green_var * 0.04);
-        vec3 veg_col = mix(forest_dark, forest_light, veg_detail * 0.5 + 0.5);
-        col = mix(col, veg_col, clamp(veg_mask, 0.0, 1.0));
-        surface_roughness = 0.9;
+    if (cloud_cov > 0.01 && surface_type < 3.5) {
+        float shadow = smoothstep(0.55, 0.85, fbm(normal * 4.0 + seed_offset * 0.03 + vec3(screen_info.w * 0.02), 5));
+        col *= 1.0 - shadow * cloud_cov * 0.18;
     }
 
-    // ── Cloud layer ──
-    if (cloud_cov > 0.01) {
-        // Domain-warped cloud patterns
-        vec3 cloud_warp = vec3(
-            noise3D(normal * 2.0 + vec3(time * 0.02) + seed_offset * 0.03),
-            noise3D(normal * 2.0 + vec3(0, time * 0.015, 0) + seed_offset * 0.04),
-            0.0
-        );
-        vec3 cloud_np = normal * 4.0 + cloud_warp * 0.5 + seed_offset * 0.02;
+    float ndl = max(dot(surf_normal, light_dir), 0.0);
+    return col * (0.25 + 0.75 * ndl);
+}
 
-        float cloud_base = fbm(cloud_np + vec3(time * 0.025, time * 0.012, 0), 5);
-        float cloud_mid  = fbm(cloud_np * 2.0 + vec3(time * 0.05, time * -0.025, time * 0.015), 4);
-        float cloud_fine = noise3D(cloud_np * 5.0 + vec3(time * 0.08, time * 0.04, 0));
-
-        float cloud_density = cloud_base * 0.50 + cloud_mid * 0.35 + (cloud_fine * 0.5 + 0.5) * 0.15;
-        float threshold = 1.0 - cloud_cov;
-        float cloud_mask = smoothstep(threshold - 0.08, threshold + 0.18, cloud_density);
-
-        // Cloud shading
-        float cloud_ndl = max(dot(normal, primary_light_dir), 0.0);
-        vec3 cloud_lit   = vec3(0.95, 0.96, 0.98);
-        vec3 cloud_shade = vec3(0.50, 0.53, 0.60);
-        vec3 cloud_col = mix(cloud_shade, cloud_lit, cloud_ndl * 0.7 + 0.3);
-        cloud_col *= 1.0 - cloud_mask * 0.12; // self-shadowing
-
-        // Cloud shadow on surface
-        col *= 1.0 - cloud_mask * 0.25 * max(cloud_ndl, 0.0);
-
-        col = mix(col, cloud_col, cloud_mask * 0.88);
+vec3 shade_moon_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
+                        out float roughness_out, out vec3 surf_normal) {
+    vec3 col = shade_planet_surface(normal, hit, rd, light_dir, roughness_out, surf_normal);
+    float seed = hit.class_seed_temp.x;
+    float crater = crater_mask(normal, seed, hit.terrain_params.w);
+    vec3 regolith = mix(vec3(0.18, 0.18, 0.20), vec3(0.70, 0.72, 0.78), hit.composition_params.y);
+    col = mix(col, regolith, crater * 0.55);
+    col *= 0.92 - crater * 0.12;
+    if (hit.composition_params.y > 0.35) {
+        float fractures = ridged_fbm(normal * 18.0 + hash31(seed) * 8.0, 4);
+        col += vec3(0.10, 0.14, 0.18) * smoothstep(0.35, 0.65, fractures) * 0.35;
+        roughness_out = max(0.22, roughness_out - 0.08);
     }
-
-    // ── City lights on dark side ──
-    bool has_planet_flag = mod(body_flags, 2.0) > 0.5;
-    if (has_planet_flag && vegetation > 0.05) {
-        float ndl = dot(normal, primary_light_dir);
-        if (ndl < -0.1) {
-            float darkness = smoothstep(0.0, -0.3, ndl);
-            float city_n1 = noise3D(normal * 45.0 + seed_offset * 0.04);
-            float city_n2 = noise3D(normal * 90.0 + seed_offset * 0.06);
-            float cities = step(0.45, city_n1) * darkness;     // gradient noise is [-1,1] remapped
-            float city_clusters = step(0.38, city_n2) * step(0.35, city_n1) * darkness * 0.5;
-            if (elevation >= sea_level) {
-                col += vec3(1.0, 0.90, 0.50) * cities * 0.4;
-                col += vec3(1.0, 0.80, 0.40) * city_clusters * 0.25;
-            }
-        }
-    }
-
     return col;
 }
 
-// ── Atmospheric rim glow ───────────────────────────────────────────────────
+vec3 shade_asteroid_surface(vec3 normal, Sphere hit, vec3 light_dir, bool is_comet_body, out float roughness_out) {
+    float seed = hit.class_seed_temp.x;
+    float subtype = hit.class_seed_temp.z;
+    float crater = crater_mask(normal, seed, hit.terrain_params.w);
+    float chip = fbm(normal * 9.0 + hash31(seed) * 6.0, 4);
+    vec3 col;
 
-vec3 atmosphere_glow(vec3 normal, vec3 view_dir, float atm_pressure, float temperature) {
-    if (atm_pressure < 0.01) return vec3(0.0);
+    if (is_comet_body) {
+        col = mix(vec3(0.10, 0.09, 0.08), vec3(0.72, 0.78, 0.86), smoothstep(0.55, 0.9, chip) * hit.composition_params.y);
+        col = mix(col, vec3(0.20, 0.18, 0.16), crater * 0.35);
+        roughness_out = 0.75;
+    } else if (subtype < 0.5) {
+        col = vec3(0.14, 0.12, 0.11);
+        roughness_out = 0.92;
+    } else if (subtype < 1.5) {
+        col = vec3(0.46, 0.39, 0.31);
+        roughness_out = 0.82;
+    } else if (subtype < 2.5) {
+        col = vec3(0.56, 0.58, 0.60);
+        roughness_out = 0.42;
+    } else {
+        col = vec3(0.68, 0.74, 0.82);
+        roughness_out = 0.62;
+    }
 
-    float fresnel = 1.0 - abs(dot(normal, -view_dir));
-    fresnel = pow(fresnel, 3.0);
-    float intensity = min(atm_pressure * 0.3, 1.0) * fresnel;
-
-    vec3 atm_col;
-    if (temperature < 200.0)
-        atm_col = vec3(0.4, 0.5, 0.7);   // cold haze
-    else if (temperature > 500.0)
-        atm_col = vec3(0.7, 0.4, 0.2);   // hot CO2-heavy
-    else
-        atm_col = vec3(0.3, 0.5, 0.9);   // earthlike blue
-
-    return atm_col * intensity;
+    col *= mix(0.7, 1.15, chip);
+    col = mix(col, col * 0.55, crater * 0.5);
+    float weathering = 0.5 + 0.5 * dot(normal, normalize(vec3(0.7, 0.2, -0.4)));
+    col *= mix(0.88, 1.06, weathering);
+    float ndl = max(dot(normal, light_dir), 0.0);
+    return col * (0.22 + 0.78 * ndl);
 }
 
-// ── Main raytracing ────────────────────────────────────────────────────────
+vec3 specular_term(vec3 n, vec3 l, vec3 v, float roughness, float specular, float metallic, vec3 light_color) {
+    vec3 h = normalize(l + v);
+    float shininess = mix(96.0, 10.0, clamp(roughness, 0.0, 1.0));
+    float spec = pow(max(dot(n, h), 0.0), shininess);
+    return light_color * spec * (specular + metallic * 0.35);
+}
+
+bool compute_primary_light(vec3 hit_pos, int body_count, int skip_idx,
+                           out int primary_idx, out vec3 light_dir, out vec3 light_color) {
+    float best_power = 0.0;
+    primary_idx = -1;
+    light_dir = normalize(vec3(0.5, 0.8, 0.3));
+    light_color = vec3(1.0);
+
+    for (int i = 0; i < body_count && i < 512; i++) {
+        if (i == skip_idx) continue;
+        if (spheres[i].base_emit.a <= 0.0) continue;
+        vec3 to_light = spheres[i].pos_radius.xyz - hit_pos;
+        float dist2 = max(dot(to_light, to_light), 1.0);
+        float power = spheres[i].base_emit.a * spheres[i].pos_radius.w / dist2;
+        if (power > best_power) {
+            best_power = power;
+            primary_idx = i;
+            light_dir = normalize(to_light);
+            light_color = spheres[i].base_emit.rgb * spheres[i].base_emit.a;
+        }
+    }
+    return primary_idx >= 0;
+}
+
+bool in_shadow(vec3 origin, vec3 light_dir, float light_dist, int body_count, int self_idx, int light_idx) {
+    for (int j = 0; j < body_count && j < 512; j++) {
+        if (j == self_idx || j == light_idx) continue;
+        float st = intersect_sphere(origin, light_dir, spheres[j].pos_radius.xyz, spheres[j].pos_radius.w);
+        if (st > 0.0 && st < light_dist) return true;
+    }
+    return false;
+}
+
+vec3 black_hole_effect(vec3 ro, vec3 rd, Sphere bh, bool hit_horizon, out float alpha_out) {
+    vec3 center = bh.pos_radius.xyz;
+    float radius = bh.pos_radius.w;
+    vec3 to_center = center - ro;
+    float t_closest = max(dot(to_center, rd), 0.0);
+    vec3 closest = ro + rd * t_closest;
+    vec3 rel = closest - center;
+    float influence = length(rel);
+    float influence_radius = radius * 6.0;
+
+    alpha_out = 0.0;
+    if (!hit_horizon && influence > influence_radius) return vec3(0.0);
+
+    float lens = (render_flags.w > 0.5) ? bh.activity_params.w : 0.0;
+    vec3 center_dir = normalize(to_center);
+    float bend = clamp((influence_radius - influence) / max(influence_radius, 0.001), 0.0, 1.0) * lens * 0.55;
+    int warp_steps = int(3 + max(0.0, quality_params.x - 1.0) * 2.0);
+    vec3 lensed_dir = rd;
+    for (int i = 0; i < 5; i++) {
+        if (i >= warp_steps) break;
+        lensed_dir = normalize(mix(lensed_dir, center_dir, bend * 0.35));
+    }
+
+    vec3 col = background(lensed_dir);
+    float disk_plane = abs(rel.y);
+    float disk_rad = length(rel.xz);
+    float inner = smoothstep(radius * 1.15, radius * 1.7, disk_rad);
+    float outer = 1.0 - smoothstep(radius * 3.9, radius * 4.8, disk_rad);
+    float plane = 1.0 - smoothstep(radius * 0.04, radius * 0.34, disk_plane);
+    float disk_mask = inner * outer * plane;
+    vec3 disk_tangent = normalize(vec3(-rel.z, 0.0, rel.x) + vec3(1.0e-4));
+    float doppler = 0.65 + 0.55 * clamp(dot(disk_tangent, -rd), -1.0, 1.0);
+    vec3 disk_col = mix(vec3(1.00, 0.30, 0.04), vec3(1.00, 0.95, 0.82), smoothstep(radius * 1.5, radius * 3.8, disk_rad));
+    disk_col *= bh.activity_params.y * doppler;
+    col += disk_col * disk_mask * 1.8;
+
+    float ring = exp(-pow((influence - radius * 1.18) / max(radius * 0.14, 0.001), 2.0));
+    col += vec3(1.0, 0.92, 0.82) * ring * (0.8 + bh.activity_params.y);
+
+    float jet_axis = 1.0 - smoothstep(radius * 0.10, radius * 0.7, length(rel.xz));
+    float jet_height = smoothstep(radius * 1.2, radius * 4.0, abs(rel.y));
+    col += vec3(0.42, 0.72, 1.0) * jet_axis * jet_height * bh.activity_params.z * 0.55;
+
+    if (hit_horizon) {
+        float edge = 1.0 - max(dot(normalize(closest - center), -rd), 0.0);
+        col = mix(col, vec3(0.0), 0.92);
+        col += vec3(0.3, 0.18, 0.5) * pow(edge, 4.0) * 0.25;
+        alpha_out = 1.0;
+    } else {
+        alpha_out = clamp((influence_radius - influence) / max(influence_radius - radius, 0.001), 0.0, 1.0);
+    }
+    return col;
+}
 
 void main() {
     float W = screen_info.x;
     float H = screen_info.y;
     int body_count = int(screen_info.z);
-    float time = screen_info.w;
 
-    bool use_star_lighting    = lighting_params.x > 0.5;
+    bool use_star_lighting = lighting_params.x > 0.5;
     bool use_uniform_lighting = lighting_params.y > 0.5;
     float ambient = lighting_params.z;
     bool use_fast_star_lighting = lighting_params.w > 0.5;
 
-    // ── Reconstruct ray from pixel ─────────────────────────────────────────
     vec2 ndc = fragUV * 2.0 - 1.0;
     ndc.y = -ndc.y;
 
     vec4 near_clip = vec4(ndc, 0.0, 1.0);
-    vec4 far_clip  = vec4(ndc, 1.0, 1.0);
-
+    vec4 far_clip = vec4(ndc, 1.0, 1.0);
     vec4 near_world = inv_vp * near_clip;
-    vec4 far_world  = inv_vp * far_clip;
+    vec4 far_world = inv_vp * far_clip;
     near_world /= near_world.w;
-    far_world  /= far_world.w;
+    far_world /= far_world.w;
 
     vec3 ro = eye_pos.xyz;
     vec3 rd = normalize(far_world.xyz - near_world.xyz);
 
-    // ── Trace all bodies ──────────────────────────────────────────────────
-    float closest_t = 1e30;
+    float closest_t = 1.0e30;
     int closest_idx = -1;
 
     for (int i = 0; i < body_count && i < 512; i++) {
-        float body_flags = spheres[i].atmo_data.w;
-        bool is_asteroid = mod(floor(body_flags / 64.0), 2.0) > 0.5;
-        bool is_comet = mod(floor(body_flags / 128.0), 2.0) > 0.5;
-
-        float t;
-        if (is_asteroid || is_comet) {
-            float roughness = is_comet ? 0.34 : 0.22;
-            t = intersect_irregular_body(ro, rd,
-                spheres[i].pos_radius.xyz,
-                spheres[i].pos_radius.w,
-                spheres[i].planet_data.x,
-                roughness);
+        int render_class = int(spheres[i].class_seed_temp.y + 0.5);
+        float t = -1.0;
+        if (render_class == RENDER_ASTEROID || render_class == RENDER_COMET) {
+            float roughness = (render_class == RENDER_COMET) ? 0.34 : 0.22;
+            t = intersect_irregular_body(ro, rd, spheres[i].pos_radius.xyz, spheres[i].pos_radius.w,
+                                         spheres[i].class_seed_temp.x, roughness);
         } else {
-            t = intersect_sphere(ro, rd,
-                spheres[i].pos_radius.xyz,
-                spheres[i].pos_radius.w);
+            t = intersect_sphere(ro, rd, spheres[i].pos_radius.xyz, spheres[i].pos_radius.w);
         }
         if (t > 0.0 && t < closest_t) {
             closest_t = t;
@@ -651,181 +587,127 @@ void main() {
         }
     }
 
-    // ── No hit — background ────────────────────────────────────────────────
     if (closest_idx < 0) {
-        outColor = vec4(background(), 1.0);
+        vec3 miss_col = background(rd);
+        for (int i = 0; i < body_count && i < 512; i++) {
+            if (int(spheres[i].class_seed_temp.y + 0.5) != RENDER_BLACK_HOLE) continue;
+            float effect_alpha = 0.0;
+            vec3 effect = black_hole_effect(ro, rd, spheres[i], false, effect_alpha);
+            miss_col = mix(miss_col, effect, effect_alpha);
+        }
+        outColor = vec4(pow(max(miss_col, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
         return;
     }
 
-    // ── Hit — compute shading ──────────────────────────────────────────────
     Sphere hit = spheres[closest_idx];
-    float hit_flags = hit.atmo_data.w;
-    bool is_asteroid_body = mod(floor(hit_flags / 64.0), 2.0) > 0.5;
-    bool is_comet_body = mod(floor(hit_flags / 128.0), 2.0) > 0.5;
-    float irregularity = is_comet_body ? 0.34 : 0.22;
+    int render_class = int(hit.class_seed_temp.y + 0.5);
     vec3 hit_pos = ro + rd * closest_t;
     vec3 normal = normalize(hit_pos - hit.pos_radius.xyz);
-    if (is_asteroid_body || is_comet_body) {
-        normal = irregular_normal(hit_pos, hit.pos_radius.xyz, hit.pos_radius.w,
-                                  hit.planet_data.x, irregularity);
-    }
-    vec3 base_color = hit.color_emit.rgb;
-    if (is_asteroid_body || is_comet_body) {
-        float chip = fbm(normal * 9.0 + vec3(hit.planet_data.x * 0.05), 4);
-        base_color *= mix(0.65, 1.15, chip);
-        if (is_comet_body)
-            base_color = mix(base_color, vec3(0.82, 0.88, 0.95), 0.25);
-    }
-    float emissive = hit.color_emit.a;
-
-    // Find primary light direction (nearest/brightest star)
-    vec3 primary_light_dir = normalize(vec3(0.5, 0.8, 0.3));
-    float best_light_power = 0.0;
-    int primary_light_idx = -1;
-    for (int i = 0; i < body_count && i < 512; i++) {
-        if (spheres[i].color_emit.a <= 0.0) continue;
-        vec3 to_light = spheres[i].pos_radius.xyz - hit_pos;
-        float dist2 = dot(to_light, to_light);
-        float power = spheres[i].color_emit.a * spheres[i].pos_radius.w / max(dist2, 1.0);
-        if (power > best_light_power) {
-            best_light_power = power;
-            primary_light_dir = normalize(to_light);
-            primary_light_idx = i;
-        }
+    if (render_class == RENDER_ASTEROID || render_class == RENDER_COMET) {
+        float irregularity = (render_class == RENDER_COMET) ? 0.34 : 0.22;
+        normal = irregular_normal(hit_pos, hit.pos_radius.xyz, hit.pos_radius.w, hit.class_seed_temp.x, irregularity);
     }
 
-    // Stars and other emissive bodies — render self-lit with corona
-    if (emissive > 0.0) {
-        vec3 col = base_color * emissive;
-        float ndv = max(dot(normal, -rd), 0.0);
-        col *= 0.6 + 0.4 * ndv;
-        col += base_color * 0.3 * pow(ndv, 0.5);
-        outColor = vec4(pow(col, vec3(1.0 / 2.2)), 1.0);
+    if (render_class == RENDER_BLACK_HOLE || hit.base_emit.a < -0.5) {
+        float alpha = 1.0;
+        vec3 bh = black_hole_effect(ro, rd, hit, true, alpha);
+        outColor = vec4(pow(max(bh, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
         return;
     }
 
-    // ── Check if this is a planet/moon with procedural texturing ──────────
-    bool is_planet_body = hit.atmo_data.w > 0.5 && !is_asteroid_body && !is_comet_body;
-    float planet_roughness = 0.8;
-    float planet_elev = 0.5;
-    if (is_planet_body) {
-        base_color = planet_surface(normal, hit, time, primary_light_dir,
-                                     planet_roughness, planet_elev);
+    vec3 primary_light_dir = normalize(vec3(0.5, 0.8, 0.3));
+    vec3 primary_light_color = vec3(1.0);
+    int primary_light_idx = -1;
+    bool has_primary_light = compute_primary_light(hit_pos, body_count, closest_idx,
+                                                   primary_light_idx, primary_light_dir, primary_light_color);
+
+    if (render_class == RENDER_STAR || hit.base_emit.a > 0.0) {
+        vec3 star_col = shade_star(normal, rd, hit);
+        outColor = vec4(pow(max(star_col, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
+        return;
+    }
+
+    vec3 base_color = hit.base_emit.rgb;
+    float roughness = hit.material_params.x;
+    vec3 surf_normal = normal;
+
+    if (render_class == RENDER_PLANET) {
+        base_color = shade_planet_surface(normal, hit, rd, primary_light_dir, roughness, surf_normal);
+    } else if (render_class == RENDER_MOON) {
+        base_color = shade_moon_surface(normal, hit, rd, primary_light_dir, roughness, surf_normal);
+    } else if (render_class == RENDER_ASTEROID || render_class == RENDER_COMET) {
+        base_color = shade_asteroid_surface(normal, hit, primary_light_dir, render_class == RENDER_COMET, roughness);
     }
 
     vec3 final_color = vec3(0.0);
+    vec3 view_dir = normalize(eye_pos.xyz - hit_pos);
 
-    // ── Uniform lighting mode ──────────────────────────────────────────────
     if (use_uniform_lighting) {
-        float hemi = 0.5 + 0.5 * normal.y;
-        vec3 sky_color = vec3(0.6, 0.65, 0.75);
-        vec3 ground_color = vec3(0.15, 0.12, 0.1);
-        vec3 light = mix(ground_color, sky_color, hemi);
-        final_color = base_color * light;
-
-        vec3 fill_dir = normalize(vec3(0.5, 0.8, 0.3));
-        float fill_ndl = max(dot(normal, fill_dir), 0.0);
-        final_color += base_color * fill_ndl * 0.3;
+        float hemi = 0.5 + 0.5 * surf_normal.y;
+        vec3 sky_color = vec3(0.62, 0.68, 0.78);
+        vec3 ground_color = vec3(0.14, 0.12, 0.10);
+        final_color = base_color * mix(ground_color, sky_color, hemi);
+        final_color += specular_term(surf_normal, normalize(vec3(0.4, 0.8, 0.2)), view_dir,
+                                     roughness, hit.material_params.z, hit.material_params.y, vec3(0.45));
     }
 
-    // ── Star lighting mode ─────────────────────────────────────────────────
     if (use_star_lighting) {
         final_color += base_color * ambient;
-
-        // Performance mode: shade from strongest star only (instead of all stars).
-        // This avoids O(star_count * body_count) shadow tracing per pixel.
-        if (primary_light_idx >= 0 && primary_light_idx != closest_idx) {
-            vec3 light_pos = spheres[primary_light_idx].pos_radius.xyz;
-            float light_radius = spheres[primary_light_idx].pos_radius.w;
-            vec3 light_color = spheres[primary_light_idx].color_emit.rgb *
-                               spheres[primary_light_idx].color_emit.a;
-
-            vec3 to_light = light_pos - hit_pos;
+        if (has_primary_light && primary_light_idx != closest_idx) {
+            vec3 to_light = spheres[primary_light_idx].pos_radius.xyz - hit_pos;
             float light_dist = length(to_light);
-            vec3 L = to_light / light_dist;
-
-            vec3 shadow_origin = hit_pos + normal * 0.1;
-            bool in_shadow = false;
-            for (int j = 0; j < body_count && j < 512; j++) {
-                if (j == closest_idx || j == primary_light_idx) continue;
-                float st = intersect_sphere(shadow_origin, L,
-                    spheres[j].pos_radius.xyz,
-                    spheres[j].pos_radius.w);
-                if (st > 0.0 && st < light_dist) {
-                    in_shadow = true;
-                    break;
-                }
-            }
-
-            if (!in_shadow) {
+            vec3 L = to_light / max(light_dist, 0.001);
+            vec3 shadow_origin = hit_pos + surf_normal * 0.1;
+            bool shadowed = in_shadow(shadow_origin, L, light_dist, body_count, closest_idx, primary_light_idx);
+            if (!shadowed) {
                 float atten = 1.0 / (1.0 + (light_dist * light_dist) /
-                    (light_radius * light_radius * 400.0));
-
-                float ndl = max(dot(normal, L), 0.0);
-                final_color += base_color * light_color * ndl * atten;
-
-                vec3 V = normalize(eye_pos.xyz - hit_pos);
-                vec3 H = normalize(L + V);
-                float spec = pow(max(dot(normal, H), 0.0), 32.0);
-                final_color += light_color * spec * atten * 0.3;
+                    (spheres[primary_light_idx].pos_radius.w * spheres[primary_light_idx].pos_radius.w * 400.0));
+                float ndl = max(dot(surf_normal, L), 0.0);
+                final_color += base_color * primary_light_color * ndl * atten;
+                final_color += specular_term(surf_normal, L, view_dir, roughness,
+                                             hit.material_params.z, hit.material_params.y,
+                                             primary_light_color) * atten;
             }
-        } else if (!use_fast_star_lighting) {
+        } else if (!use_fast_star_lighting && quality_params.x >= 2.0) {
             for (int i = 0; i < body_count && i < 512; i++) {
-                if (spheres[i].color_emit.a <= 0.0) continue;
-                if (i == closest_idx) continue;
-
-                vec3 light_pos = spheres[i].pos_radius.xyz;
-                float light_radius = spheres[i].pos_radius.w;
-                vec3 light_color = spheres[i].color_emit.rgb * spheres[i].color_emit.a;
-
-                vec3 to_light = light_pos - hit_pos;
+                if (spheres[i].base_emit.a <= 0.0 || i == closest_idx) continue;
+                vec3 to_light = spheres[i].pos_radius.xyz - hit_pos;
                 float light_dist = length(to_light);
-                vec3 L = to_light / light_dist;
-
-                vec3 shadow_origin = hit_pos + normal * 0.1;
-                bool in_shadow = false;
-                for (int j = 0; j < body_count && j < 512; j++) {
-                    if (j == closest_idx || j == i) continue;
-                    float st = intersect_sphere(shadow_origin, L,
-                        spheres[j].pos_radius.xyz,
-                        spheres[j].pos_radius.w);
-                    if (st > 0.0 && st < light_dist) {
-                        in_shadow = true;
-                        break;
-                    }
-                }
-
-                if (!in_shadow) {
-                    float atten = 1.0 / (1.0 + (light_dist * light_dist) /
-                        (light_radius * light_radius * 400.0));
-
-                    float ndl = max(dot(normal, L), 0.0);
-                    final_color += base_color * light_color * ndl * atten;
-
-                    vec3 V = normalize(eye_pos.xyz - hit_pos);
-                    vec3 H = normalize(L + V);
-                    float spec = pow(max(dot(normal, H), 0.0), 32.0);
-                    final_color += light_color * spec * atten * 0.3;
-                }
+                vec3 L = to_light / max(light_dist, 0.001);
+                vec3 shadow_origin = hit_pos + surf_normal * 0.1;
+                if (in_shadow(shadow_origin, L, light_dist, body_count, closest_idx, i)) continue;
+                float atten = 1.0 / (1.0 + (light_dist * light_dist) /
+                    (spheres[i].pos_radius.w * spheres[i].pos_radius.w * 400.0));
+                vec3 light_col = spheres[i].base_emit.rgb * spheres[i].base_emit.a;
+                float ndl = max(dot(surf_normal, L), 0.0);
+                final_color += base_color * light_col * ndl * atten;
             }
         }
     }
 
-    if (!use_star_lighting && !use_uniform_lighting) {
-        final_color = base_color * 0.1;
+    if (!use_star_lighting && !use_uniform_lighting)
+        final_color = base_color * 0.12;
+
+    if (render_class == RENDER_PLANET || render_class == RENDER_MOON) {
+        final_color += atmosphere_scatter(normal, rd, primary_light_dir, base_color,
+                                          hit.atmosphere_params.y, hit.atmosphere_params.z,
+                                          hit.atmosphere_params.w, hit.activity_params.w,
+                                          hit.class_seed_temp.w);
+        final_color += vec3(0.18, 0.6, 0.42) * hit.activity_params.y *
+                       pow(clamp(1.0 - abs(normal.y), 0.0, 1.0), 6.0);
     }
 
-    // Black hole special
-    if (emissive < -0.5) {
-        float edge = 1.0 - abs(dot(normal, -rd));
-        final_color = vec3(0.01, 0.0, 0.02) + vec3(0.4, 0.1, 0.6) * pow(edge, 4.0) * 0.5;
+    if (render_class == RENDER_COMET) {
+        float edge = pow(clamp(1.0 - max(dot(normal, -rd), 0.0), 0.0, 1.0), 2.0);
+        float phase = phase_hg(0.55, dot(-rd, primary_light_dir));
+        final_color += vec3(0.65, 0.78, 0.95) * hit.activity_params.y * edge * phase * 6.0;
+        if (render_flags.z > 0.5 && has_primary_light) {
+            vec3 anti_sun = -primary_light_dir;
+            float align = pow(max(dot(normalize(hit_pos - hit.pos_radius.xyz), anti_sun), 0.0), 2.0);
+            float tail = pow(clamp(1.0 - max(dot(-rd, anti_sun), 0.0), 0.0, 1.0), 1.5);
+            final_color += vec3(0.55, 0.72, 0.95) * hit.activity_params.z * align * tail * 0.9;
+        }
     }
 
-    // Atmospheric rim glow for planets/moons
-    if (is_planet_body) {
-        final_color += atmosphere_glow(normal, rd, hit.atmo_data.y, hit.planet_data.w);
-    }
-
-    // Gamma correction
     outColor = vec4(pow(max(final_color, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
 }

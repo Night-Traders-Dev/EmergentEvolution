@@ -218,35 +218,51 @@ Collapsible panel with 8 biological entity types (Cell, Bacterium, Virus, Nutrie
 Antibody, Red Blood Cell, White Blood Cell) displayed as color-coded buttons. Features an
 energy slider and quick presets (Cell Colony, Virus Outbreak, Nutrient Burst, Immune Response).
 
-## Procedural Planet Textures — Cosmic Sandbox
+## Procedural Celestial Rendering — Cosmic Sandbox
 
-Planets and moons are rendered with GPU-generated procedural textures driven by physical
-properties. All texturing happens in the fragment shader (`shaders/cosmos_rt.frag`) using
-value noise and fractal Brownian motion (5-octave FBM). Each body&rsquo;s seed ensures
-deterministic, unique surface features.
+The cosmos renderer now uses a shared full-screen raytracing fragment shader
+(`shaders/cosmos_rt.frag`) plus deterministic CPU-side visual metadata to render every
+major body class with a dedicated appearance model. Visual state remains derived from each
+body&rsquo;s persisted seed, mass, temperature, type, atmosphere, and cached planet properties.
 
-**Layered surface system:**
+**Body shading paths:**
 
-| Layer | Description |
+| Body | Rendering features |
 |---|---|
-| **Terrain elevation** | FBM noise mapped to altitude, drives land/ocean separation |
-| **Surface coloring** | Rocky (brown/gray), Frozen (white/blue), Liquid (uniform ocean), Gas (horizontal banding), Mixed (terrain-dependent) |
-| **Ocean layer** | Water (blue with animated waves), methane (dark teal), ammonia (pale yellow), lava (orange-red with pulsing glow) |
-| **Vegetation** | Green tinting on land areas, noise-modulated, requires water + O2 + temperate climate |
-| **Cloud layer** | Animated noise at higher frequency, alpha-blended over surface, coverage controlled by atmosphere |
-| **City lights** | High-frequency noise dots on the dark hemisphere, yellow-white, only on populated bodies |
-| **Atmospheric rim** | Fresnel-based edge glow, color varies with temperature (blue for cool, orange for hot) |
+| **Stars** | Blackbody tinting, limb darkening, granulation, cool-star spot masks, corona response |
+| **Planets** | Procedural terrain, oceans/lava seas, gas giant bands, cloud shadowing, shallow atmosphere scattering |
+| **Moons** | Crater-heavy regolith, icy fracture detail, muted reflectance, thin-atmosphere bias |
+| **Asteroids** | Irregular silhouettes, carbonaceous/silicate/metallic/icy subclasses, crater/boulder breakup |
+| **Comets** | Dust-dark nuclei with exposed ice, coma glow, analytic tail aligned away from the dominant star |
+| **Black Holes** | Background lensing, photon-ring approximation, accretion disk, optional polar jets |
 
-**Physical data mapping** &mdash; textures change automatically based on physical state:
+**Background and lighting:**
 
-- Increasing temperature melts polar ice caps and reveals brown/blue terrain
-- Very high temperatures produce lava fissures and molten surface features
-- Gas giants display latitude-based banding with noise distortion and great spot features
-- Ocean coverage, cloud density, and vegetation respond to atmosphere composition
+- A procedural HDR starfield and faint galactic haze provide context for corona and lensing.
+- Balanced quality keeps the current strongest-star lighting model for interactive camera work.
+- High quality can spend more work on multi-light contribution and stronger black-hole warping.
 
-**Per-body GPU data** &mdash; the `SphereGPU` struct (64 bytes, 4&times;vec4) passes to the
-shader: position/radius, base color/emissive, seed/surface_type/ocean_coverage/temperature,
-and cloud_coverage/atm_pressure/vegetation/body_flags.
+**Per-body GPU data** &mdash; the `SphereGPU` struct now uses 8&times;`vec4` (128 bytes):
+
+| Field | Contents |
+|---|---|
+| `pos_radius` | world position and radius |
+| `base_emit` | base tint and emissive mode |
+| `class_seed_temp` | normalized seed, render class, subtype, temperature |
+| `terrain_params` | terrain amplitude/frequency, ridge strength, crater density |
+| `material_params` | roughness, metallic, specular, normal strength |
+| `composition_params` | rock, ice, metal, and class-specific fourth channel |
+| `atmosphere_params` | cloud coverage, pressure, haze density, Rayleigh strength |
+| `activity_params` | class-specific activity terms such as weather, corona, tail, accretion, or lensing |
+
+**Cosmos rendering controls** in the settings panel:
+
+- `HQ Shading`
+- `Background Starfield`
+- `Star Corona`
+- `Comet Tails`
+- `Black Hole Lensing`
+- `Cosmos Quality` (`Low`, `Balanced`, `High`)
 
 ## Timestep System — Cosmic Sandbox
 

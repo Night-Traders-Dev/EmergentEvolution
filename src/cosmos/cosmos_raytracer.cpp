@@ -11,27 +11,34 @@ struct alignas(16) CameraUBOData {
     glm::vec4 eye_pos;          // 16 bytes
     glm::vec4 screen_info;      // 16 bytes (w,h,count,time)
     glm::vec4 lighting_params;  // 16 bytes (star,uniform,ambient,fastStar)
-};                              // Total: 112 bytes
+    glm::vec4 quality_params;   // 16 bytes (quality,hq,reserved,reserved)
+    glm::vec4 render_flags;     // 16 bytes (bg,corona,cometTails,bhLensing)
+};                              // Total: 144 bytes
 
 struct SphereGPU {
-    glm::vec4 pos_radius;   // xyz = position, w = radius
-    glm::vec4 color_emit;   // rgb = base color (0-1), a = emissive
-    glm::vec4 planet_data;  // x = seed, y = surface_type, z = ocean_coverage(0-1), w = temperature
-    glm::vec4 atmo_data;    // x = cloud_coverage(0-1), y = atm_pressure, z = vegetation(0-1), w = body_flags
+    glm::vec4 pos_radius;         // xyz = position, w = radius
+    glm::vec4 base_emit;          // rgb = base tint, a = emissive mode
+    glm::vec4 class_seed_temp;    // x = seed, y = render_class, z = subtype, w = temperature
+    glm::vec4 terrain_params;     // x = terrain_amp, y = terrain_freq, z = ridge_amp, w = crater_density
+    glm::vec4 material_params;    // x = roughness, y = metallic, z = specular, w = normal_strength
+    glm::vec4 composition_params; // x = rock_frac, y = ice_frac, z = metal_frac, w = dust_frac
+    glm::vec4 atmosphere_params;  // x = cloud_cov, y = pressure, z = haze_density, w = rayleigh_strength
+    glm::vec4 activity_params;    // x = weather/flaring, y = corona/coma, z = tail/accretion, w = lensing/jet
 };
-
-// body_flags bits: 0=is_planet, 1=is_moon, 2=has_atmosphere, 3=ocean_type(2 bits)
 
 // ── Body color helper (matches cosmos_app.cpp) ──────────────────────────────
 
+static glm::vec3 blackbody_tint_cpu(float temperature) {
+    float t = std::clamp((temperature - 1200.0f) / 32000.0f, 0.0f, 1.0f);
+    float r = std::clamp(1.25f - t * 0.95f, 0.0f, 1.0f);
+    float g = std::clamp(0.45f + t * 0.6f, 0.0f, 1.0f);
+    float b = std::clamp(-0.1f + t * 1.25f, 0.0f, 1.0f);
+    return {r, g, b};
+}
+
 static glm::vec3 body_color_vec3(const CelestialBody& b) {
-    if (is_star_type(b.type)) {
-        float t = std::clamp((b.temperature - 2000.0f) / 30000.0f, 0.0f, 1.0f);
-        float r = std::clamp(1.4f - t * 1.2f, 0.0f, 1.0f);
-        float g = std::clamp(0.8f + t * 0.2f - std::abs(t - 0.4f), 0.0f, 1.0f);
-        float bl = std::clamp(t * 1.8f - 0.3f, 0.0f, 1.0f);
-        return {r, g, std::min(bl, 1.0f)};
-    }
+    if (is_star_type(b.type))
+        return blackbody_tint_cpu(b.temperature);
     if (is_black_hole_type(b.type))
         return {0.078f, 0.0f, 0.157f};
     switch (b.type) {
@@ -249,6 +256,16 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
         effective_uniform ? 1.0f : 0.0f,
         cfg.ambient_strength,
         cfg.fast_star_lighting ? 1.0f : 0.0f);
+    cam.quality_params = glm::vec4(
+        (float)cfg.cosmos_quality,
+        cfg.cosmos_hq_shading ? 1.0f : 0.0f,
+        0.0f,
+        0.0f);
+    cam.render_flags = glm::vec4(
+        cfg.cosmos_background_starfield ? 1.0f : 0.0f,
+        cfg.cosmos_star_corona ? 1.0f : 0.0f,
+        cfg.cosmos_comet_tails ? 1.0f : 0.0f,
+        cfg.cosmos_blackhole_lensing ? 1.0f : 0.0f);
 
     void* mapped = nullptr;
     vkMapMemory(vk.device, camera_ubo_.memory, 0, sizeof(CameraUBOData), 0, &mapped);
@@ -263,50 +280,85 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
         const auto& b = state.bodies[i];
         glm::vec3 col = body_color_vec3(b);
         float emissive = 0.0f;
-        if (is_star_type(b.type))       emissive = 1.5f;
-        if (is_black_hole_type(b.type)) emissive = -1.0f;
+        if (is_star_type(b.type))
+            emissive = 1.4f + b.cached_visuals.corona_strength * 0.45f;
+        if (is_black_hole_type(b.type))
+            emissive = -1.0f;
 
         spheres[i].pos_radius = glm::vec4(b.pos, b.radius);
-        spheres[i].color_emit = glm::vec4(col, emissive);
+        spheres[i].base_emit = glm::vec4(col, emissive);
 
         // Normalize seed to shader-friendly range: raw uint32 can be ~4 billion,
         // far beyond float32 precision for noise functions using fract().
         // Pack into [0, 10000) so seed*0.01 stays in [0, 100).
         float shader_seed = (float)(b.seed % 10000u) + (float)((b.seed >> 16) & 0xFFu) * 0.001f;
 
-        // Pack body data for shader texturing / shape hints.        
-        if (b.type == CTYPE_PLANET || b.type == CTYPE_MOON) {
-            const PlanetProperties& pp = b.cached_props;
+        const PlanetProperties& pp = b.cached_props;
+        const BodyVisualProperties& vp = b.cached_visuals;
 
-            float body_flags = 0.0f;
-            if (b.type == CTYPE_PLANET) body_flags += 1.0f;
-            if (b.type == CTYPE_MOON)   body_flags += 2.0f;
-            if (pp.atmosphere.pressure > 0.01f) body_flags += 4.0f;
-            body_flags += (float)pp.ocean_type * 8.0f;
+        float cloud_cov = (b.type == CTYPE_PLANET || b.type == CTYPE_MOON)
+            ? pp.cloud_coverage / 100.0f : 0.0f;
+        float pressure = (b.type == CTYPE_PLANET || b.type == CTYPE_MOON)
+            ? pp.atmosphere.pressure : 0.0f;
 
-            // Normalize seed to shader-friendly range: raw uint32 can be ~4 billion,
-            // far beyond float32 precision for noise functions using fract().
-            // Pack into [0, 10000) so seed*0.01 stays in [0, 100).
-            float shader_seed = (float)(b.seed % 10000u) + (float)((b.seed >> 16) & 0xFFu) * 0.001f;
-
-            spheres[i].planet_data = glm::vec4(
-                shader_seed,
-                (float)pp.surface,
-                pp.ocean_coverage / 100.0f,
-                b.temperature);
-            spheres[i].atmo_data = glm::vec4(
-                pp.cloud_coverage / 100.0f,
-                pp.atmosphere.pressure,
-                pp.vegetation_coverage / 100.0f,
-                body_flags);
+        spheres[i].class_seed_temp = glm::vec4(
+            shader_seed,
+            (float)vp.render_class,
+            (float)vp.subtype,
+            b.temperature);
+        spheres[i].terrain_params = glm::vec4(
+            vp.terrain_amp,
+            vp.terrain_freq,
+            vp.ridge_amp,
+            vp.crater_density);
+        spheres[i].material_params = glm::vec4(
+            vp.roughness,
+            vp.metallic,
+            vp.specular,
+            vp.normal_strength);
+        float comp_w = vp.dust_frac;
+        if (vp.render_class == RENDER_PLANET || vp.render_class == RENDER_MOON)
+            comp_w = pp.ocean_coverage / 100.0f;
+        spheres[i].composition_params = glm::vec4(
+            vp.rock_frac,
+            vp.ice_frac,
+            vp.metal_frac,
+            comp_w);
+        spheres[i].atmosphere_params = glm::vec4(
+            cloud_cov,
+            pressure,
+            vp.haze_density,
+            vp.rayleigh_strength);
+        if (vp.render_class == RENDER_PLANET || vp.render_class == RENDER_MOON) {
+            spheres[i].activity_params = glm::vec4(
+                vp.weather_strength,
+                vp.aurora_strength,
+                vp.volcanic_activity,
+                vp.mie_strength);
+        } else if (vp.render_class == RENDER_STAR) {
+            spheres[i].activity_params = glm::vec4(
+                vp.flare_activity,
+                vp.corona_strength,
+                vp.spin_visual,
+                vp.ridge_amp);
+        } else if (vp.render_class == RENDER_COMET) {
+            spheres[i].activity_params = glm::vec4(
+                0.0f,
+                vp.coma_strength,
+                vp.tail_strength,
+                0.0f);
+        } else if (vp.render_class == RENDER_BLACK_HOLE) {
+            spheres[i].activity_params = glm::vec4(
+                vp.spin_visual,
+                vp.accretion_strength,
+                vp.jet_strength,
+                vp.lensing_strength);
         } else {
-            float body_flags = 0.0f;
-            if (b.type == CTYPE_ASTEROID) body_flags += 64.0f;
-            if (b.type == CTYPE_COMET)    body_flags += 128.0f;
-
-            spheres[i].planet_data = glm::vec4(shader_seed, 0.0f, 0.0f, b.temperature);
-            spheres[i].atmo_data   = glm::vec4(0.0f, 0.0f, 0.0f, body_flags);
-
+            spheres[i].activity_params = glm::vec4(
+                0.0f,
+                0.0f,
+                0.0f,
+                0.0f);
         }
     }
 

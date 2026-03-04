@@ -94,6 +94,22 @@ enum WeatherType : uint8_t {
     WEATHER_DUST   = 4,
 };
 
+enum BodyRenderClass : uint8_t {
+    RENDER_STAR = 0,
+    RENDER_PLANET = 1,
+    RENDER_MOON = 2,
+    RENDER_ASTEROID = 3,
+    RENDER_COMET = 4,
+    RENDER_BLACK_HOLE = 5,
+};
+
+enum SmallBodyClass : uint8_t {
+    SMALLBODY_C = 0,
+    SMALLBODY_S = 1,
+    SMALLBODY_M = 2,
+    SMALLBODY_ICY = 3,
+};
+
 // ── Procedurally generated planet properties ────────────────────────────────
 
 struct Atmosphere {
@@ -129,6 +145,43 @@ struct PlanetProperties {
     WeatherType weather_type = WEATHER_NONE;
     float       cloud_coverage     = 0.0f;  // 0-100 %
     float       vegetation_coverage = 0.0f; // 0-100 %
+};
+
+struct BodyVisualProperties {
+    BodyRenderClass render_class = RENDER_PLANET;
+    uint8_t subtype = 0;
+
+    float roughness = 0.8f;
+    float metallic = 0.0f;
+    float specular = 0.04f;
+    float normal_strength = 1.0f;
+
+    float terrain_amp = 0.0f;
+    float terrain_freq = 1.0f;
+    float ridge_amp = 0.0f;
+    float crater_density = 0.0f;
+
+    float rock_frac = 0.0f;
+    float ice_frac = 0.0f;
+    float metal_frac = 0.0f;
+    float dust_frac = 0.0f;
+
+    float haze_density = 0.0f;
+    float rayleigh_strength = 0.0f;
+    float mie_strength = 0.0f;
+    float cloud_detail = 0.0f;
+
+    float weather_strength = 0.0f;
+    float volcanic_activity = 0.0f;
+    float aurora_strength = 0.0f;
+    float flare_activity = 0.0f;
+    float corona_strength = 0.0f;
+    float coma_strength = 0.0f;
+    float tail_strength = 0.0f;
+    float accretion_strength = 0.0f;
+    float jet_strength = 0.0f;
+    float lensing_strength = 0.0f;
+    float spin_visual = 0.0f;
 };
 
 // ── Hash helpers for procedural generation ──────────────────────────────────
@@ -441,6 +494,10 @@ struct CelestialBody {
     PlanetProperties cached_props;
     bool             props_valid = false;
     int              cached_temp_band = -1;  // transient, not serialized
+
+    BodyVisualProperties cached_visuals;
+    bool                 visuals_valid = false;
+    int                  cached_visual_temp_band = -1;  // transient, not serialized
 };
 
 // ── Refresh cached planet properties (call after physics, not in renderer) ──
@@ -502,6 +559,12 @@ struct CosmosConfig {
     bool     uniform_lighting = false;  // everything uniformly illuminated
     bool     fast_star_lighting = true; // use strongest-star direct lighting path
     float    ambient_strength = 0.08f;  // ambient light level in star mode
+    bool     cosmos_hq_shading = true;
+    bool     cosmos_background_starfield = true;
+    bool     cosmos_star_corona = true;
+    bool     cosmos_comet_tails = true;
+    bool     cosmos_blackhole_lensing = true;
+    int      cosmos_quality = 1;        // 0=low, 1=balanced, 2=high
 
     // General Relativity corrections
     bool     gr_enabled           = true;    // enable GR corrections
@@ -523,3 +586,176 @@ struct CosmosState {
     void clear() { bodies.clear(); trails.clear(); }
     size_t count() const { return bodies.size(); }
 };
+
+inline float nearest_star_distance(const CelestialBody& b, const CosmosState* state) {
+    if (!state) return 1.0e9f;
+    float best = 1.0e9f;
+    for (const auto& other : state->bodies) {
+        if (&other == &b || !is_star_type(other.type)) continue;
+        float d = glm::length(other.pos - b.pos);
+        if (d > 1.0e-3f && d < best) best = d;
+    }
+    return best;
+}
+
+inline BodyVisualProperties generate_body_visual_properties(const CelestialBody& b,
+                                                            const CosmosState* state = nullptr) {
+    BodyVisualProperties vp;
+    uint32_t h = hash_combine(b.seed, float_bits(b.mass));
+    float h0 = hash_float(hash_combine(h, 0));
+    float h1 = hash_float(hash_combine(h, 1));
+    float h2 = hash_float(hash_combine(h, 2));
+    float spin_mag = std::min(std::abs(b.angular_vel) * 50000.0f, 1.0f);
+    float temp_n = std::clamp((b.temperature - 60.0f) / 6000.0f, 0.0f, 1.0f);
+
+    if (is_star_type(b.type)) {
+        vp.render_class = RENDER_STAR;
+        vp.subtype = (uint8_t)std::min<int>(b.type, 255);
+        vp.roughness = 0.92f;
+        vp.specular = 0.0f;
+        vp.normal_strength = 0.35f + h0 * 0.4f;
+        vp.terrain_amp = 0.12f + (1.0f - temp_n) * 0.12f;
+        vp.terrain_freq = 6.0f + h1 * 18.0f;
+        vp.ridge_amp = (b.type == CTYPE_STAR_G || b.type == CTYPE_STAR_K || b.type == CTYPE_STAR_M)
+            ? (0.25f + h2 * 0.55f) : (0.03f + h2 * 0.12f);
+        vp.rock_frac = 0.02f + h0 * 0.18f;
+        vp.flare_activity = std::clamp(0.15f + b.mass * 0.03f + spin_mag * 0.45f, 0.0f, 1.0f);
+        vp.corona_strength = std::clamp(0.25f + temp_n * 0.85f +
+            (b.stellar_stage == SSTAGE_RED_GIANT ? 0.15f : 0.0f) +
+            (b.stellar_stage == SSTAGE_WHITE_DWARF || b.stellar_stage == SSTAGE_NEUTRON_STAR ? 0.25f : 0.0f),
+            0.0f, 1.2f);
+        vp.spin_visual = spin_mag;
+        return vp;
+    }
+
+    if (is_black_hole_type(b.type)) {
+        vp.render_class = RENDER_BLACK_HOLE;
+        vp.subtype = (uint8_t)std::min<int>(b.type, 255);
+        vp.roughness = 0.02f;
+        vp.specular = 0.0f;
+        vp.normal_strength = 0.0f;
+        vp.accretion_strength = std::clamp(0.25f + h0 * 0.45f +
+            (b.type == CTYPE_BH_INTERMEDIATE ? 0.15f : 0.0f) +
+            (b.type == CTYPE_BH_SUPERMASSIVE ? 0.30f : 0.0f), 0.0f, 1.2f);
+        vp.jet_strength = std::clamp(spin_mag * (0.4f + h1 * 0.6f), 0.0f, 1.0f);
+        vp.lensing_strength = std::clamp(0.4f + h2 * 0.35f +
+            (b.type == CTYPE_BH_SUPERMASSIVE ? 0.25f : 0.0f), 0.0f, 1.2f);
+        vp.spin_visual = spin_mag;
+        vp.metal_frac = 0.75f;
+        vp.dust_frac = 0.25f;
+        return vp;
+    }
+
+    if (b.type == CTYPE_ASTEROID || b.type == CTYPE_COMET) {
+        bool is_comet = b.type == CTYPE_COMET;
+        vp.render_class = is_comet ? RENDER_COMET : RENDER_ASTEROID;
+        vp.subtype = is_comet ? (uint8_t)SMALLBODY_ICY : (uint8_t)(hash_combine(h, 9) % 4u);
+        vp.terrain_amp = is_comet ? 0.32f + h0 * 0.18f : 0.22f + h0 * 0.22f;
+        vp.terrain_freq = 2.5f + h1 * 5.5f;
+        vp.ridge_amp = 0.2f + h2 * 0.45f;
+        vp.crater_density = is_comet ? 0.25f + h1 * 0.25f : 0.55f + h1 * 0.35f;
+        vp.normal_strength = is_comet ? 1.2f : 1.0f;
+        vp.roughness = 0.78f;
+        vp.specular = 0.05f;
+        vp.rock_frac = 0.4f;
+        vp.ice_frac = 0.0f;
+        vp.metal_frac = 0.05f;
+        vp.dust_frac = 0.55f;
+
+        if (!is_comet) {
+            switch ((SmallBodyClass)vp.subtype) {
+            case SMALLBODY_C:
+                vp.rock_frac = 0.35f; vp.metal_frac = 0.05f; vp.dust_frac = 0.60f; vp.roughness = 0.92f; break;
+            case SMALLBODY_S:
+                vp.rock_frac = 0.70f; vp.metal_frac = 0.10f; vp.dust_frac = 0.20f; vp.roughness = 0.82f; break;
+            case SMALLBODY_M:
+                vp.rock_frac = 0.20f; vp.metal_frac = 0.70f; vp.dust_frac = 0.10f; vp.roughness = 0.45f; vp.specular = 0.18f; break;
+            case SMALLBODY_ICY:
+                vp.rock_frac = 0.20f; vp.ice_frac = 0.65f; vp.metal_frac = 0.05f; vp.dust_frac = 0.10f; vp.roughness = 0.62f; break;
+            }
+        } else {
+            float star_dist = nearest_star_distance(b, state);
+            float heat = std::clamp((320.0f - star_dist) / 320.0f, 0.0f, 1.0f) * 0.7f +
+                         std::clamp((b.temperature - 120.0f) / 500.0f, 0.0f, 1.0f) * 0.6f;
+            vp.rock_frac = 0.15f;
+            vp.ice_frac = 0.70f;
+            vp.metal_frac = 0.02f;
+            vp.dust_frac = 0.55f;
+            vp.coma_strength = std::clamp(heat * (0.55f + h1 * 0.45f), 0.0f, 1.0f);
+            vp.tail_strength = std::clamp(heat * (0.65f + h2 * 0.5f), 0.0f, 1.2f);
+        }
+        return vp;
+    }
+
+    if (b.type == CTYPE_MOON || b.type == CTYPE_PLANET) {
+        const PlanetProperties& pp = b.cached_props;
+        vp.render_class = (b.type == CTYPE_MOON) ? RENDER_MOON : RENDER_PLANET;
+        vp.subtype = (uint8_t)pp.surface;
+        vp.terrain_amp = std::clamp(pp.mountain_height / 18.0f + pp.valley_depth / 24.0f, 0.08f, 1.0f);
+        vp.terrain_freq = 2.0f + pp.continent_count * 0.7f + h0 * 3.0f;
+        vp.ridge_amp = pp.has_mountains ? (0.25f + h1 * 0.45f) : (0.08f + h1 * 0.15f);
+        vp.crater_density = (pp.atmosphere.pressure > 0.05f) ? 0.08f : 0.35f;
+        vp.roughness = 0.82f;
+        vp.specular = 0.05f;
+        vp.normal_strength = 1.0f;
+        vp.rock_frac = 0.65f;
+        vp.ice_frac = 0.0f;
+        vp.metal_frac = 0.05f;
+        vp.dust_frac = 0.18f;
+        vp.haze_density = std::clamp(pp.atmosphere.pressure * 0.08f, 0.0f, 1.0f);
+        vp.rayleigh_strength = std::clamp(
+            pp.atmosphere.n2_frac * 0.8f + pp.atmosphere.o2_frac * 1.0f + pp.atmosphere.h2_frac * 0.25f, 0.0f, 1.0f);
+        vp.mie_strength = std::clamp(
+            pp.atmosphere.co2_frac * 0.7f + pp.atmosphere.ch4_frac * 0.8f + pp.atmosphere.nh3_frac * 0.65f +
+            pp.atmosphere.pressure * 0.02f, 0.0f, 1.2f);
+        vp.cloud_detail = std::clamp(pp.cloud_coverage / 100.0f, 0.0f, 1.0f);
+        vp.weather_strength = std::clamp(pp.atmosphere.weather_intensity, 0.0f, 1.0f);
+        vp.aurora_strength = (pp.atmosphere.pressure > 0.15f && b.temperature > 120.0f && b.temperature < 320.0f)
+            ? (0.08f + h2 * 0.25f) : 0.0f;
+        vp.volcanic_activity = (pp.ocean_type == OCEAN_LAVA || (b.temperature > 700.0f && pp.surface == SURF_ROCKY))
+            ? std::clamp(0.35f + h0 * 0.55f, 0.0f, 1.0f) : 0.0f;
+        vp.spin_visual = spin_mag;
+
+        switch (pp.surface) {
+        case SURF_ROCKY:
+            vp.rock_frac = 0.75f; vp.dust_frac = 0.18f; vp.roughness = 0.88f; break;
+        case SURF_LIQUID:
+            vp.rock_frac = 0.20f; vp.dust_frac = 0.08f; vp.specular = 0.12f; vp.roughness = 0.22f; break;
+        case SURF_FROZEN:
+            vp.rock_frac = 0.25f; vp.ice_frac = 0.65f; vp.roughness = 0.45f; vp.specular = 0.10f; break;
+        case SURF_GAS:
+            vp.rock_frac = 0.0f; vp.ice_frac = 0.0f; vp.dust_frac = 0.55f; vp.roughness = 1.0f; vp.normal_strength = 0.3f; break;
+        case SURF_MIXED:
+            vp.rock_frac = 0.55f; vp.dust_frac = 0.15f; vp.roughness = 0.75f; break;
+        }
+
+        switch (pp.ocean_type) {
+        case OCEAN_WATER:   vp.ice_frac += 0.10f; vp.specular = std::max(vp.specular, 0.14f); break;
+        case OCEAN_METHANE: vp.dust_frac += 0.06f; vp.specular = std::max(vp.specular, 0.11f); break;
+        case OCEAN_AMMONIA: vp.ice_frac += 0.18f; break;
+        case OCEAN_LAVA:    vp.metal_frac += 0.12f; vp.volcanic_activity = std::max(vp.volcanic_activity, 0.55f); break;
+        default: break;
+        }
+
+        if (b.type == CTYPE_MOON) {
+            vp.crater_density = std::clamp(vp.crater_density + 0.35f, 0.0f, 1.0f);
+            vp.haze_density *= 0.45f;
+            vp.cloud_detail *= 0.35f;
+            vp.weather_strength *= 0.25f;
+            vp.specular *= (pp.surface == SURF_FROZEN) ? 1.15f : 0.65f;
+            vp.roughness = std::clamp(vp.roughness + (pp.surface == SURF_FROZEN ? -0.10f : 0.06f), 0.15f, 1.0f);
+        }
+        return vp;
+    }
+
+    vp.render_class = RENDER_PLANET;
+    return vp;
+}
+
+inline void refresh_body_visuals(CelestialBody& b, const CosmosState* state = nullptr) {
+    int band = temp_band(b.temperature);
+    if (b.visuals_valid && band == b.cached_visual_temp_band) return;
+    b.cached_visuals = generate_body_visual_properties(b, state);
+    b.cached_visual_temp_band = band;
+    b.visuals_valid = true;
+}

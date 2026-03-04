@@ -195,6 +195,11 @@ static void randomize_planet_properties(CelestialBody& body, const CosmosState& 
     if (u01(rng) < 0.15f) body.angular_vel *= -1.0f; // occasional retrograde spin
 }
 
+static void refresh_body_render_state(CelestialBody& body, const CosmosState* state = nullptr) {
+    refresh_planet_props(body);
+    refresh_body_visuals(body, state);
+}
+
 // ── Timestep formatting ─────────────────────────────────────────────────────
 
 static const char* format_sim_time(double seconds, char* buf, size_t buf_size) {
@@ -329,7 +334,7 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
     state.trails.resize(state.bodies.size());
 
     // Initialize cached planet properties for all bodies
-    for (auto& b : state.bodies) refresh_planet_props(b);
+    for (auto& b : state.bodies) refresh_body_render_state(b, &state);
 }
 
 void CosmosApp::init(GLFWwindow* window) {
@@ -455,7 +460,7 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
     }
 
     nb.name = generate_body_name(nb.seed, nb.type);
-    refresh_planet_props(nb);
+    refresh_body_render_state(nb, &state);
     state.bodies.push_back(nb);
     state.trails.emplace_back();
 }
@@ -677,8 +682,10 @@ void CosmosApp::step_physics(float dt) {
     cleanup_bodies();
 
     // Refresh cached planet properties (only recomputes on temperature band changes)
-    for (auto& b : state.bodies)
+    for (auto& b : state.bodies) {
         refresh_planet_props(b);
+        refresh_body_visuals(b, &state);
+    }
 
     // Update trails
     n = bodies.size();
@@ -1030,7 +1037,7 @@ void CosmosApp::spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, 
         frag.seed = (uint32_t)rand();
         frag.frag_generation = parent_generation + 1;
         frag.name = generate_body_name(frag.seed, frag.type);
-        refresh_planet_props(frag);
+        refresh_body_render_state(frag, &state);
 
         state.bodies.push_back(frag);
         state.trails.emplace_back();
@@ -1638,7 +1645,7 @@ void CosmosApp::draw_spawn_menu() {
                 p.type = CTYPE_PLANET; p.parent = star_idx;
                 p.seed = (uint32_t)(i * 31337 + 54321);
                 p.name = generate_body_name(p.seed, p.type);
-                refresh_planet_props(p);
+                refresh_body_render_state(p, &state);
                 state.bodies.push_back(p); state.trails.emplace_back();
             }
         }
@@ -1817,6 +1824,17 @@ void CosmosApp::render_ui() {
     }
 
     ImGui::Separator();
+    ImGui::Text("Cosmos Rendering");
+    ImGui::Checkbox("HQ Shading", &cfg.cosmos_hq_shading);
+    ImGui::Checkbox("Background Starfield", &cfg.cosmos_background_starfield);
+    ImGui::Checkbox("Star Corona", &cfg.cosmos_star_corona);
+    ImGui::Checkbox("Comet Tails", &cfg.cosmos_comet_tails);
+    ImGui::Checkbox("Black Hole Lensing", &cfg.cosmos_blackhole_lensing);
+    ImGui::SliderInt("Cosmos Quality", &cfg.cosmos_quality, 0, 2,
+                     cfg.cosmos_quality == 0 ? "Low" :
+                     (cfg.cosmos_quality == 1 ? "Balanced" : "High"));
+
+    ImGui::Separator();
     ImGui::Text("Time Control");
     {
         float exp_f = (float)cfg.time_exponent;
@@ -1934,6 +1952,7 @@ void CosmosApp::draw_inspector() {
     }
 
     auto& b = state.bodies[selected_body];
+    const auto& vp = b.cached_visuals;
     ImGuiIO& io = ImGui::GetIO();
 
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 320.0f, 46.0f), ImGuiCond_FirstUseEver);
@@ -2105,6 +2124,23 @@ void CosmosApp::draw_inspector() {
         ImGui::Text("%.2f L", b.luminosity);
         ImGui::NextColumn();
 
+        if (b.visuals_valid) {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Corona");
+            ImGui::NextColumn();
+            ImGui::Text("%.2f", vp.corona_strength);
+            ImGui::NextColumn();
+
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Flares");
+            ImGui::NextColumn();
+            ImGui::Text("%.2f", vp.flare_activity);
+            ImGui::NextColumn();
+
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Granulation");
+            ImGui::NextColumn();
+            ImGui::Text("%.2f @ %.1f", vp.terrain_amp, vp.terrain_freq);
+            ImGui::NextColumn();
+        }
+
         ImGui::Columns(1);
     }
 
@@ -2122,6 +2158,23 @@ void CosmosApp::draw_inspector() {
         ImGui::NextColumn();
         ImGui::Text("%.4f", rs);
         ImGui::NextColumn();
+
+        if (b.visuals_valid) {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Lensing");
+            ImGui::NextColumn();
+            ImGui::Text("%.2f", vp.lensing_strength);
+            ImGui::NextColumn();
+
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Accretion");
+            ImGui::NextColumn();
+            ImGui::Text("%.2f", vp.accretion_strength);
+            ImGui::NextColumn();
+
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Jet Strength");
+            ImGui::NextColumn();
+            ImGui::Text("%.2f", vp.jet_strength);
+            ImGui::NextColumn();
+        }
 
         ImGui::Columns(1);
     }
@@ -2233,6 +2286,77 @@ void CosmosApp::draw_inspector() {
             ImGui::NextColumn();
             ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "%.0f%%",
                                pp.vegetation_coverage);
+            ImGui::NextColumn();
+        }
+
+        if (b.visuals_valid) {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Roughness");
+            ImGui::NextColumn();
+            ImGui::Text("%.2f", vp.roughness);
+            ImGui::NextColumn();
+
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Haze");
+            ImGui::NextColumn();
+            ImGui::Text("%.2f", vp.haze_density);
+            ImGui::NextColumn();
+
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Cratering");
+            ImGui::NextColumn();
+            ImGui::Text("%.2f", vp.crater_density);
+            ImGui::NextColumn();
+
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Weather FX");
+            ImGui::NextColumn();
+            ImGui::Text("%.2f", vp.weather_strength);
+            ImGui::NextColumn();
+
+            if (vp.volcanic_activity > 0.01f) {
+                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Volcanism");
+                ImGui::NextColumn();
+                ImGui::Text("%.2f", vp.volcanic_activity);
+                ImGui::NextColumn();
+            }
+        }
+
+        ImGui::Columns(1);
+    }
+
+    if ((b.type == CTYPE_ASTEROID || b.type == CTYPE_COMET) && b.visuals_valid) {
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.85f, 0.80f, 0.72f, 1.0f), "Small Body Visuals");
+
+        ImGui::Columns(2, "##smallbody", false);
+        ImGui::SetColumnWidth(0, 110);
+
+        const char* small_body_class = "Icy";
+        if (b.type == CTYPE_ASTEROID) {
+            switch ((SmallBodyClass)vp.subtype) {
+            case SMALLBODY_C: small_body_class = "Carbonaceous"; break;
+            case SMALLBODY_S: small_body_class = "Silicate"; break;
+            case SMALLBODY_M: small_body_class = "Metallic"; break;
+            case SMALLBODY_ICY: small_body_class = "Icy"; break;
+            }
+        }
+
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Class");
+        ImGui::NextColumn();
+        ImGui::Text("%s", b.type == CTYPE_COMET ? "Cometary Ice" : small_body_class);
+        ImGui::NextColumn();
+
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Ice / Metal");
+        ImGui::NextColumn();
+        ImGui::Text("%.0f%% / %.0f%%", vp.ice_frac * 100.0f, vp.metal_frac * 100.0f);
+        ImGui::NextColumn();
+
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Cratering");
+        ImGui::NextColumn();
+        ImGui::Text("%.2f", vp.crater_density);
+        ImGui::NextColumn();
+
+        if (b.type == CTYPE_COMET) {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Coma / Tail");
+            ImGui::NextColumn();
+            ImGui::Text("%.2f / %.2f", vp.coma_strength, vp.tail_strength);
             ImGui::NextColumn();
         }
 
@@ -2621,7 +2745,7 @@ bool CosmosApp::load_simulation(const std::string& path) {
     sim_time_ = 0.0f;
 
     // Refresh cached planet properties for all loaded bodies
-    for (auto& b : state.bodies) refresh_planet_props(b);
+    for (auto& b : state.bodies) refresh_body_render_state(b, &state);
 
     return f.good();
 }
@@ -2690,7 +2814,7 @@ bool CosmosApp::import_body(const std::string& path) {
     }
 
     if (b.name == "Unnamed") b.name.clear();
-    refresh_planet_props(b);
+    refresh_body_render_state(b, &state);
     state.bodies.push_back(std::move(b));
     state.trails.emplace_back();
     return true;
