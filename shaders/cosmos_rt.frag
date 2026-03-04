@@ -30,6 +30,8 @@ struct Sphere {
     vec4 gravity_params;
     vec4 ring_params;
     vec4 phase_params;
+    vec4 impact_axis;
+    vec4 impact_params;
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer SphereBuffer {
@@ -243,6 +245,30 @@ float crater_mask(vec3 normal, float seed, float density) {
     float pits = smoothstep(0.62, 0.88, base);
     float rims = smoothstep(0.48, 0.60, base) - smoothstep(0.60, 0.72, base);
     return clamp(pits * density + rims * density * 0.5, 0.0, 1.0);
+}
+
+vec3 safe_normalize(vec3 v, vec3 fallback) {
+    float len2 = dot(v, v);
+    return (len2 > 1.0e-6) ? (v * inversesqrt(len2)) : fallback;
+}
+
+void impact_masks(vec3 normal, Sphere hit, out float basin, out float rim, out float ejecta) {
+    vec3 axis = safe_normalize(hit.impact_axis.xyz, vec3(0.0, 1.0, 0.0));
+    float scar = hit.impact_params.x;
+    float radius = max(hit.impact_params.z, 0.02);
+    float ejecta_strength = hit.impact_params.w;
+    float angular = 1.0 - clamp(dot(normal, axis), -1.0, 1.0);
+    float basin_inner = radius * (0.22 + scar * 0.12);
+    float basin_outer = radius * (0.95 + scar * 0.55);
+    basin = (1.0 - smoothstep(basin_inner, basin_outer, angular)) * scar;
+    float rim_inner = radius * (0.70 + scar * 0.18);
+    float rim_outer = radius * (1.18 + scar * 0.45);
+    rim = (smoothstep(rim_inner, rim_outer, angular) - smoothstep(rim_outer, rim_outer + radius * 0.42, angular)) * scar;
+    float ejecta_noise = fbm(normal * (10.0 + scar * 22.0) + axis * 6.0 + vec3(hit.class_seed_temp.x * 0.03), 4);
+    float ejecta_band = smoothstep(radius * 0.85, radius * 1.85 + ejecta_strength * 0.55, angular);
+    ejecta_band *= 1.0 - smoothstep(radius * 1.85 + ejecta_strength * 0.55,
+                                    radius * 3.10 + ejecta_strength * 0.95, angular);
+    ejecta = ejecta_band * ejecta_strength * smoothstep(0.42, 0.88, ejecta_noise);
 }
 
 float starfield_layer(vec3 rd, float scale, float threshold) {
@@ -749,6 +775,7 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     float phase_kind = hit.phase_params.x;
     float phase_intensity = hit.phase_params.y;
     float collapse_phase = hit.phase_params.z;
+    float impact_heat = hit.impact_params.y;
 
     vec3 seed_offset = hash31(seed) * 120.0;
     float lon = atan(normal.z, normal.x);
@@ -915,6 +942,20 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
         col = mix(col, col * 0.70 + vec3(0.30, 0.14, 0.06), collapse_phase * 0.28);
     }
 
+    if (hit.impact_params.x > 0.001) {
+        float basin;
+        float rim;
+        float ejecta;
+        impact_masks(normal, hit, basin, rim, ejecta);
+        vec3 ejecta_col = mix(vec3(0.58, 0.54, 0.50), vec3(0.90, 0.84, 0.74), clamp(ice_frac + 0.2, 0.0, 1.0));
+        vec3 melt_col = mix(vec3(0.44, 0.10, 0.03), vec3(1.00, 0.62, 0.14), clamp((temperature - 850.0) / 1800.0 + impact_heat * 0.8, 0.0, 1.0));
+        col = mix(col, col * 0.42, basin * (0.55 + hit.impact_params.x * 0.25));
+        col = mix(col, ejecta_col, ejecta * (0.18 + hit.impact_params.w * 0.38));
+        col = mix(col, vec3(0.94, 0.86, 0.72), rim * 0.28);
+        col += melt_col * basin * impact_heat * (0.25 + 0.45 * (1.0 - ocean_cov));
+        roughness_out = mix(roughness_out, 0.92, ejecta * 0.35 + basin * 0.18);
+    }
+
     float ndl = max(dot(surf_normal, light_dir), 0.0);
     return col * (0.25 + 0.75 * ndl);
 }
@@ -931,6 +972,14 @@ vec3 shade_moon_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
         float fractures = ridged_fbm(normal * 18.0 + hash31(seed) * 8.0, 4);
         col += vec3(0.10, 0.14, 0.18) * smoothstep(0.35, 0.65, fractures) * 0.35;
         roughness_out = max(0.22, roughness_out - 0.08);
+    }
+    if (hit.impact_params.x > 0.001) {
+        float basin;
+        float rim;
+        float ejecta;
+        impact_masks(normal, hit, basin, rim, ejecta);
+        col = mix(col, col * 0.32, basin * 0.42);
+        col = mix(col, vec3(0.84, 0.82, 0.78), ejecta * 0.22 + rim * 0.16);
     }
     return col;
 }
@@ -964,6 +1013,16 @@ vec3 shade_asteroid_surface(vec3 normal, Sphere hit, vec3 light_dir, bool is_com
     col = mix(col, col * 0.55, crater * 0.5);
     float weathering = 0.5 + 0.5 * dot(normal, normalize(vec3(0.7, 0.2, -0.4)));
     col *= mix(0.88, 1.06, weathering);
+    if (hit.impact_params.x > 0.001) {
+        float basin;
+        float rim;
+        float ejecta;
+        impact_masks(normal, hit, basin, rim, ejecta);
+        vec3 hot = mix(vec3(0.40, 0.10, 0.03), vec3(1.00, 0.62, 0.18), clamp(hit.impact_params.y * 1.2, 0.0, 1.0));
+        col = mix(col, col * 0.34, basin * 0.55);
+        col += hot * basin * hit.impact_params.y * 0.35;
+        col = mix(col, vec3(0.78, 0.74, 0.68), ejecta * 0.20 + rim * 0.15);
+    }
     float ndl = max(dot(normal, light_dir), 0.0);
     return col * (0.22 + 0.78 * ndl);
 }
@@ -1260,10 +1319,20 @@ void main() {
         }
     }
 
-    if (render_class == RENDER_PLANET || render_class == RENDER_MOON) {
+    if (render_class == RENDER_PLANET || render_class == RENDER_MOON ||
+        render_class == RENDER_ASTEROID || render_class == RENDER_COMET) {
         float phase_kind = hit.phase_params.x;
         float phase_intensity = hit.phase_params.y;
         vec3 emission = phase_emission_tint(phase_kind, phase_intensity, hit.class_seed_temp.w, base_color);
+        if ((render_class == RENDER_PLANET || render_class == RENDER_MOON) && hit.impact_params.y > 0.001) {
+            float basin;
+            float rim;
+            float ejecta;
+            impact_masks(normal, hit, basin, rim, ejecta);
+            vec3 impact_emission = mix(vec3(0.95, 0.30, 0.08), vec3(1.00, 0.72, 0.24),
+                                       clamp(hit.impact_params.y * 1.2, 0.0, 1.0));
+            emission += impact_emission * basin * hit.impact_params.y * (0.35 + 0.45 * hit.impact_params.x);
+        }
         if (dot(emission, emission) > 0.0) {
             float edge_glow = 0.35 + 0.65 * pow(clamp(1.0 - max(dot(normal, -rd), 0.0), 0.0, 1.0), 1.35);
             final_color += emission * edge_glow;

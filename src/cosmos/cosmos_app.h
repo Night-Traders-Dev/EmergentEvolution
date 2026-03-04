@@ -81,7 +81,8 @@ private:
     void cleanup_bodies();
     void spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, int count,
                         uint32_t parent_generation = 0, float source_temperature = 300.0f,
-                        glm::vec3 impact_axis = glm::vec3(0.0f), float ejecta_speed = 0.0f);
+                        glm::vec3 impact_axis = glm::vec3(0.0f), float ejecta_speed = 0.0f,
+                        const CelestialBody* source_body = nullptr, float shock_ratio = 0.0f);
 
     // Fullscreen overlay screens
     void draw_splash_screen();

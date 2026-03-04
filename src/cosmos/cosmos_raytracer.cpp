@@ -33,6 +33,8 @@ struct SphereGPU {
     glm::vec4 gravity_params;     // x = mass, y = stage, z = fuel, w = luminosity
     glm::vec4 ring_params;        // x = inner radius, y = outer radius, z = density, w = tilt
     glm::vec4 phase_params;       // x = material phase, y = phase intensity, z = collapse, w = ring ice fraction
+    glm::vec4 impact_axis;        // xyz = recent impact normal
+    glm::vec4 impact_params;      // x = crater, y = heat, z = radius, w = ejecta
 };
 
 // ── Body color helper (matches cosmos_app.cpp) ──────────────────────────────
@@ -449,6 +451,15 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
             std::clamp(b.phase_intensity, 0.0f, 1.0f),
             std::clamp(b.collapse_progress, 0.0f, 1.0f),
             std::clamp(b.ring_ice_fraction, 0.0f, 1.0f));
+        glm::vec3 impact_axis = glm::length(b.impact_normal) > 1.0e-4f
+            ? glm::normalize(b.impact_normal)
+            : glm::vec3(0.0f, 1.0f, 0.0f);
+        spheres[i].impact_axis = glm::vec4(impact_axis, 0.0f);
+        spheres[i].impact_params = glm::vec4(
+            std::clamp(b.impact_crater_strength, 0.0f, 1.0f),
+            std::clamp(b.impact_heat, 0.0f, 1.0f),
+            std::clamp(b.impact_radius, 0.0f, 1.0f),
+            std::clamp(b.impact_ejecta, 0.0f, 1.0f));
     }
 
     if (n > 0) {

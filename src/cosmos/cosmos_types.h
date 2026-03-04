@@ -653,6 +653,11 @@ struct CelestialBody {
     float       ring_density = 0.0f;        // 0-1 visual density / optical depth
     float       ring_ice_fraction = 0.0f;   // 0-1 icy vs dusty ring composition
     float       ring_tilt = 0.0f;           // radians from "up" for procedural ring axis
+    glm::vec3   impact_normal{0.0f, 1.0f, 0.0f}; // dominant recent impact location on the surface
+    float       impact_crater_strength = 0.0f;   // 0-1 crater/scar visibility
+    float       impact_heat = 0.0f;              // 0-1 molten/glow strength
+    float       impact_radius = 0.0f;            // 0-1 angular size of dominant impact basin
+    float       impact_ejecta = 0.0f;            // 0-1 dust/ejecta blanket strength
     float       angular_vel    = 0.0f;
     uint32_t    stellar_stage  = 0;         // StellarStage enum
     uint32_t    material_phase = PHASE_SOLID;
@@ -1024,6 +1029,8 @@ inline BodyVisualProperties generate_body_visual_properties(const CelestialBody&
 
     if (b.type == CTYPE_ASTEROID || b.type == CTYPE_COMET) {
         bool is_comet = b.type == CTYPE_COMET;
+        float impact_damage = std::clamp(b.impact_crater_strength, 0.0f, 1.0f);
+        float impact_heat = std::clamp(b.impact_heat, 0.0f, 1.0f);
         vp.render_class = is_comet ? RENDER_COMET : RENDER_ASTEROID;
         vp.subtype = is_comet ? (uint8_t)SMALLBODY_ICY : (uint8_t)(hash_combine(h, 9) % 4u);
         vp.terrain_amp = is_comet ? 0.32f + h0 * 0.18f : 0.22f + h0 * 0.22f;
@@ -1060,11 +1067,15 @@ inline BodyVisualProperties generate_body_visual_properties(const CelestialBody&
             vp.coma_strength = std::clamp(heat * (0.55f + h1 * 0.45f), 0.0f, 1.0f);
             vp.tail_strength = std::clamp(heat * (0.65f + h2 * 0.5f), 0.0f, 1.2f);
         }
+        vp.crater_density = std::clamp(vp.crater_density + impact_damage * 0.40f, 0.0f, 1.0f);
+        vp.volcanic_activity = std::max(vp.volcanic_activity, impact_heat * 0.70f);
         return vp;
     }
 
     if (b.type == CTYPE_MOON || b.type == CTYPE_PLANET) {
         const PlanetProperties& pp = b.cached_props;
+        float impact_damage = std::clamp(b.impact_crater_strength, 0.0f, 1.0f);
+        float impact_heat = std::clamp(b.impact_heat, 0.0f, 1.0f);
         vp.render_class = (b.type == CTYPE_MOON) ? RENDER_MOON : RENDER_PLANET;
         vp.subtype = (uint8_t)pp.surface;
         vp.terrain_amp = std::clamp(pp.mountain_height / 18.0f + pp.valley_depth / 24.0f, 0.08f, 1.0f);
@@ -1189,6 +1200,9 @@ inline BodyVisualProperties generate_body_visual_properties(const CelestialBody&
             vp.specular *= (pp.surface == SURF_FROZEN) ? 1.15f : 0.65f;
             vp.roughness = std::clamp(vp.roughness + (pp.surface == SURF_FROZEN ? -0.10f : 0.06f), 0.15f, 1.0f);
         }
+        vp.crater_density = std::clamp(vp.crater_density + impact_damage * 0.45f, 0.0f, 1.0f);
+        vp.volcanic_activity = std::max(vp.volcanic_activity, impact_heat * 0.85f);
+        vp.haze_density = std::clamp(vp.haze_density + b.impact_ejecta * 0.10f, 0.0f, 1.0f);
         return vp;
     }
 

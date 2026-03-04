@@ -127,6 +127,14 @@ static void clear_ring_system(CelestialBody& body) {
     body.ring_tilt = 0.0f;
 }
 
+static void clear_impact_signature(CelestialBody& body) {
+    body.impact_normal = glm::vec3(0.0f, 1.0f, 0.0f);
+    body.impact_crater_strength = 0.0f;
+    body.impact_heat = 0.0f;
+    body.impact_radius = 0.0f;
+    body.impact_ejecta = 0.0f;
+}
+
 static bool body_can_host_rings(const CelestialBody& body) {
     if (is_star_type(body.type) || is_black_hole_type(body.type))
         return false;
@@ -260,6 +268,7 @@ static void randomize_nebula_properties(CelestialBody& body, std::mt19937& rng) 
     body.phase_intensity = 0.65f + u01(rng) * 0.30f;
     body.collapse_progress = std::clamp(body.mass / HYDROGEN_BURNING_MASS_SOLAR, 0.0f, 0.55f) * 0.35f;
     clear_ring_system(body);
+    clear_impact_signature(body);
 }
 
 static void randomize_star_properties(CelestialBody& body, std::mt19937& rng,
@@ -478,6 +487,7 @@ static void randomize_planet_properties(CelestialBody& body, const CosmosState& 
     }
 
     clear_ring_system(body);
+    clear_impact_signature(body);
     float ring_roll = u01(rng);
     bool giant = (archetype == SPAWN_ICE_GIANT || archetype == SPAWN_GAS_GIANT);
     bool dwarf_ring = (archetype == SPAWN_DWARF_ICE && ring_roll > 0.82f);
@@ -502,6 +512,7 @@ static void randomize_planet_properties(CelestialBody& body, const CosmosState& 
 
     body.phase_intensity = 0.0f;
     body.collapse_progress = 0.0f;
+    clear_impact_signature(body);
 }
 
 static void randomize_moon_properties(CelestialBody& body, const CosmosState& state,
@@ -562,6 +573,7 @@ static void randomize_moon_properties(CelestialBody& body, const CosmosState& st
     clear_ring_system(body);
     body.phase_intensity = 0.0f;
     body.collapse_progress = 0.0f;
+    clear_impact_signature(body);
 }
 
 static void enforce_body_physical_limits(CelestialBody& b);
@@ -581,6 +593,10 @@ static float body_volume(const CelestialBody& b) {
     return (4.0f / 3.0f) * 3.14159265359f * b.radius * b.radius * b.radius;
 }
 
+static float body_gravitational_binding_energy(const CelestialBody& b, float G) {
+    return 0.6f * G * b.mass * b.mass / std::max(b.radius, 0.1f);
+}
+
 static float body_surface_gravity(const CelestialBody& b, float G) {
     return G * b.mass / std::max(b.radius * b.radius, 1.0e-6f);
 }
@@ -598,6 +614,29 @@ static void register_mass_loss(CelestialBody& b, float amount, float dt) {
     if (amount <= 0.0f || dt <= 0.0f) return;
     b.mass_loss_rate += amount / dt;
     b.mass_loss_total += amount;
+}
+
+static void apply_impact_signature(CelestialBody& target, glm::vec3 impact_normal,
+                                   float energy_ratio, float mass_fraction,
+                                   float thermal_ratio, float crater_radius) {
+    if (target.marked_for_removal) return;
+    if (is_star_type(target.type) || is_black_hole_type(target.type) || target.type == CTYPE_NEBULA) return;
+
+    glm::vec3 normal = glm::length(impact_normal) > 1.0e-4f
+        ? glm::normalize(impact_normal)
+        : glm::vec3(0.0f, 1.0f, 0.0f);
+    float scar = std::clamp(0.10f + energy_ratio * 0.55f + mass_fraction * 0.40f, 0.0f, 1.0f);
+    float glow = std::clamp(0.06f + thermal_ratio * 0.70f + energy_ratio * 0.22f, 0.0f, 1.0f);
+    float radius = std::clamp(0.10f + crater_radius * 0.35f + mass_fraction * 0.30f, 0.08f, 0.95f);
+    float ejecta = std::clamp(0.08f + energy_ratio * 0.38f + thermal_ratio * 0.28f, 0.0f, 1.0f);
+
+    target.impact_normal = glm::normalize(glm::mix(target.impact_normal, normal, scar > 0.45f ? 0.85f : 0.55f));
+    target.impact_crater_strength = std::max(target.impact_crater_strength * 0.78f, scar);
+    target.impact_heat = std::max(target.impact_heat * 0.82f, glow);
+    target.impact_radius = std::max(target.impact_radius * 0.82f, radius);
+    target.impact_ejecta = std::max(target.impact_ejecta * 0.76f, ejecta);
+    target.props_valid = false;
+    target.visuals_valid = false;
 }
 
 static float expected_planet_radius(float mass_solar) {
@@ -1108,6 +1147,7 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
     nb.material_phase = PHASE_SOLID;
     nb.phase_intensity = 0.0f;
     nb.collapse_progress = 0.0f;
+    clear_impact_signature(nb);
 
     if (is_star_type((uint32_t)spawn_type)) {
         randomize_star_properties(nb, rng, (uint32_t)spawn_type);
@@ -1446,7 +1486,7 @@ void CosmosApp::trigger_stellar_supernova(size_t index, float dt, bool thermonuc
     if (ejecta_mass > 1.0e-4f) {
         spawn_fragments(b.pos, b.vel, ejecta_mass, burst_count,
                         b.frag_generation, std::max(b.temperature, 6000.0f),
-                        axis, burst_speed);
+                        axis, burst_speed, &b, thermonuclear ? 1.6f : 1.2f);
         register_mass_loss(b, ejecta_mass, std::max(dt, 1.0e-4f));
     }
 
@@ -1459,6 +1499,7 @@ void CosmosApp::trigger_stellar_supernova(size_t index, float dt, bool thermonuc
     b.fuel = 0.0f;
     b.internal_energy *= 0.1f;
     clear_ring_system(b);
+    clear_impact_signature(b);
 
     if (remnant == REMNANT_WHITE_DWARF) {
         b.stellar_stage = SSTAGE_WHITE_DWARF;
@@ -1562,9 +1603,21 @@ void CosmosApp::process_collisions(float dt) {
                 float rel_speed = glm::length(rel_vel);
                 float escape_speed = body_escape_speed(bodies[i], bodies[j], cfg.G);
                 float impact_energy = 0.5f * reduced_mass * rel_speed * rel_speed;
+                float binding_i = body_gravitational_binding_energy(bodies[i], cfg.G);
+                float binding_j = body_gravitational_binding_energy(bodies[j], cfg.G);
+                float combined_binding = binding_i + binding_j;
+                float disruption_i = impact_energy / std::max(binding_i, 1.0e-6f);
+                float disruption_j = impact_energy / std::max(binding_j, 1.0e-6f);
+                float combined_disruption = impact_energy / std::max(combined_binding, 1.0e-6f);
                 float merge_limit = std::max(cfg.merge_speed_threshold, escape_speed * 1.15f);
                 float fragment_limit = std::max(cfg.fragment_speed_threshold, escape_speed * 1.35f);
                 glm::vec3 impact_axis = (rel_speed > 1.0e-5f) ? (rel_vel / rel_speed) : dir;
+                float heat_ratio_i = std::clamp(impact_energy * cfg.collision_heating * 0.08f /
+                                                std::max(bodies[i].mass, 0.01f), 0.0f, 1.5f);
+                float heat_ratio_j = std::clamp(impact_energy * cfg.collision_heating * 0.08f /
+                                                std::max(bodies[j].mass, 0.01f), 0.0f, 1.5f);
+                bool kinetic_shatter = cfg.collision_fragmentation &&
+                    (combined_disruption > 0.75f || disruption_i > 0.95f || disruption_j > 0.95f);
 
                 // Always depenetrate first to reduce persistent overlap jitter.
                 bodies[i].pos -= dir * overlap * (bodies[j].mass / std::max(total_mass, 1.0e-6f));
@@ -1585,7 +1638,7 @@ void CosmosApp::process_collisions(float dt) {
                 }
 
                 // Determine merge vs fragment vs bounce
-                if (cfg.collision_merging && rel_speed <= merge_limit) {
+                if (cfg.collision_merging && rel_speed <= merge_limit && !kinetic_shatter) {
                     // Merge: larger absorbs smaller
                     size_t big = (bodies[i].mass >= bodies[j].mass) ? i : j;
                     size_t small = (big == i) ? j : i;
@@ -1603,6 +1656,7 @@ void CosmosApp::process_collisions(float dt) {
                     // Weighted temperature
                     bodies[big].temperature = (bodies[big].temperature * (total_mass - bodies[small].mass) +
                                                bodies[small].temperature * bodies[small].mass) / total_mass;
+                    bodies[big].internal_energy += bodies[small].internal_energy + impact_energy * 0.08f;
                     if (is_star_type(pre_big.type) && is_star_type(pre_small.type)) {
                         bodies[big].fuel = merged_star_fuel(pre_big, pre_small, total_mass);
                         bodies[big].luminosity = std::pow(std::max(bodies[big].mass, 0.08f), 3.2f) * 0.1f;
@@ -1623,6 +1677,54 @@ void CosmosApp::process_collisions(float dt) {
                     } else {
                         bodies[big].fuel = std::max(bodies[big].fuel, bodies[small].fuel);
                     }
+
+                    if (!is_star_type(pre_big.type) && !is_black_hole_type(pre_big.type) &&
+                        !is_star_type(pre_small.type) && !is_black_hole_type(pre_small.type)) {
+                        float merge_ejecta_fraction = cfg.collision_fragmentation
+                            ? std::clamp(combined_disruption * 0.12f +
+                                         std::max(rel_speed - escape_speed, 0.0f) /
+                                             std::max(fragment_limit, 1.0e-3f) * 0.06f,
+                                         0.0f, 0.32f)
+                            : 0.0f;
+                        float ejecta_mass = total_mass * merge_ejecta_fraction;
+                        float ring_capture = 0.0f;
+                        if (cfg.planetary_rings && ejecta_mass > 0.0f && body_can_host_rings(bodies[big])) {
+                            ring_capture = ejecta_mass * std::clamp(0.06f + combined_disruption * 0.10f, 0.0f, 0.24f);
+                            if (ring_capture > 0.0f)
+                                add_ring_material(bodies[big], pre_small, ring_capture, bodies[big].radius * 1.8f);
+                        }
+
+                        float escaped_mass = std::max(ejecta_mass - ring_capture, 0.0f);
+                        if (escaped_mass > 1.0e-4f) {
+                            glm::vec3 ejecta_origin = (pre_big.pos + pre_small.pos) * 0.5f;
+                            float ejecta_temp = std::clamp(std::max(pre_big.temperature, pre_small.temperature) +
+                                                           900.0f + combined_disruption * 3200.0f,
+                                                           250.0f, 25000.0f);
+                            spawn_fragments(ejecta_origin, new_vel, escaped_mass,
+                                            std::max(2, cfg.fragment_count - 1),
+                                            std::max(pre_big.frag_generation, pre_small.frag_generation),
+                                            ejecta_temp,
+                                            (big == i) ? dir : -dir,
+                                            std::max(rel_speed * (0.30f + combined_disruption * 0.12f), 2.5f),
+                                            &pre_small, combined_disruption + rel_speed / std::max(fragment_limit, 1.0e-3f));
+                            register_mass_loss(bodies[big], escaped_mass, std::max(dt, 1.0e-4f));
+                        }
+
+                        if (ejecta_mass > 0.0f) {
+                            float remaining_mass = std::max(total_mass - ejecta_mass, 1.0e-6f);
+                            float mass_scale = std::cbrt(remaining_mass / std::max(total_mass, 1.0e-6f));
+                            bodies[big].mass = remaining_mass;
+                            bodies[big].radius = std::max(bodies[big].radius * mass_scale, 0.1f);
+                        }
+
+                        apply_impact_signature(
+                            bodies[big],
+                            (big == i) ? dir : -dir,
+                            std::clamp(combined_disruption, 0.0f, 1.25f),
+                            pre_small.mass / std::max(total_mass, 1.0e-6f),
+                            std::max(heat_ratio_i, heat_ratio_j),
+                            std::clamp(pre_small.radius / std::max(bodies[big].radius, 0.1f), 0.08f, 0.95f));
+                    }
                     bodies[big].props_valid = false;
                     bodies[big].visuals_valid = false;
                     bodies[small].marked_for_removal = true;
@@ -1630,7 +1732,9 @@ void CosmosApp::process_collisions(float dt) {
                 else {
                     float vel_along = glm::dot(rel_vel, dir);
                     if (vel_along < 0) {
-                        bool fragmenting = cfg.collision_fragmentation && rel_speed >= fragment_limit;
+                        bool fragmenting = cfg.collision_fragmentation &&
+                            (rel_speed >= fragment_limit || combined_disruption > 0.75f ||
+                             disruption_i > 0.95f || disruption_j > 0.95f);
                         float restitution = fragmenting ? 0.15f : 0.65f;
                         float inv_mass_sum = (1.0f / std::max(bodies[i].mass, 1.0e-6f)) +
                                              (1.0f / std::max(bodies[j].mass, 1.0e-6f));
@@ -1647,11 +1751,28 @@ void CosmosApp::process_collisions(float dt) {
 
                             float catastrophic_ratio = rel_speed / std::max(escape_speed, 1.0e-3f);
                             bool fragment_i = can_fragment(bodies[i]) &&
-                                (bodies[i].mass <= bodies[j].mass || catastrophic_ratio > 2.2f);
+                                (disruption_i > 0.90f ||
+                                 (bodies[i].mass <= bodies[j].mass &&
+                                  (catastrophic_ratio > 1.6f || combined_disruption > 0.62f)) ||
+                                 combined_disruption > 1.10f);
                             bool fragment_j = can_fragment(bodies[j]) &&
-                                (bodies[j].mass < bodies[i].mass || catastrophic_ratio > 2.8f);
+                                (disruption_j > 0.90f ||
+                                 (bodies[j].mass <= bodies[i].mass &&
+                                  (catastrophic_ratio > 1.6f || combined_disruption > 0.62f)) ||
+                                 combined_disruption > 1.10f);
 
-                            float ejecta_speed = std::max(2.0f, rel_speed * 0.35f);
+                            if (combined_disruption > 0.95f && can_fragment(bodies[i]) && can_fragment(bodies[j])) {
+                                fragment_i = true;
+                                fragment_j = true;
+                            }
+                            if (!fragment_i && !fragment_j) {
+                                if (bodies[i].mass <= bodies[j].mass && can_fragment(bodies[i]))
+                                    fragment_i = true;
+                                else if (can_fragment(bodies[j]))
+                                    fragment_j = true;
+                            }
+
+                            float ejecta_speed = std::max(2.0f, rel_speed * (0.35f + combined_disruption * 0.10f));
                             float fragment_mass_i = bodies[i].mass;
                             float fragment_mass_j = bodies[j].mass;
                             if (cfg.planetary_rings && dist < touch * 1.75f) {
@@ -1672,18 +1793,50 @@ void CosmosApp::process_collisions(float dt) {
                                     fragment_mass_j = std::max(fragment_mass_j - captured, 1.0e-4f);
                                 }
                             }
+                            if (!fragment_i) {
+                                apply_impact_signature(
+                                    bodies[i], dir,
+                                    std::clamp(disruption_i + combined_disruption * 0.25f, 0.0f, 1.3f),
+                                    bodies[j].mass / std::max(total_mass, 1.0e-6f),
+                                    heat_ratio_i,
+                                    std::clamp(bodies[j].radius / std::max(bodies[i].radius, 0.1f), 0.08f, 0.95f));
+                            }
+                            if (!fragment_j) {
+                                apply_impact_signature(
+                                    bodies[j], -dir,
+                                    std::clamp(disruption_j + combined_disruption * 0.25f, 0.0f, 1.3f),
+                                    bodies[i].mass / std::max(total_mass, 1.0e-6f),
+                                    heat_ratio_j,
+                                    std::clamp(bodies[i].radius / std::max(bodies[j].radius, 0.1f), 0.08f, 0.95f));
+                            }
                             if (fragment_i) {
                                 spawn_fragments(bodies[i].pos, bodies[i].vel, fragment_mass_i,
                                                 cfg.fragment_count, bodies[i].frag_generation,
-                                                bodies[i].temperature, -impact_axis, ejecta_speed);
+                                                bodies[i].temperature, -impact_axis, ejecta_speed,
+                                                &bodies[i], std::max(disruption_i, combined_disruption));
                                 bodies[i].marked_for_removal = true;
                             }
                             if (fragment_j) {
                                 spawn_fragments(bodies[j].pos, bodies[j].vel, fragment_mass_j,
                                                 cfg.fragment_count, bodies[j].frag_generation,
-                                                bodies[j].temperature, impact_axis, ejecta_speed);
+                                                bodies[j].temperature, impact_axis, ejecta_speed,
+                                                &bodies[j], std::max(disruption_j, combined_disruption));
                                 bodies[j].marked_for_removal = true;
                             }
+                        } else if (!is_star_type(bodies[i].type) && !is_black_hole_type(bodies[i].type) &&
+                                   !is_star_type(bodies[j].type) && !is_black_hole_type(bodies[j].type)) {
+                            apply_impact_signature(
+                                bodies[i], dir,
+                                std::clamp(disruption_i * 0.45f + combined_disruption * 0.18f, 0.0f, 0.75f),
+                                bodies[j].mass / std::max(total_mass, 1.0e-6f),
+                                heat_ratio_i * 0.7f,
+                                std::clamp(bodies[j].radius / std::max(bodies[i].radius, 0.1f), 0.08f, 0.80f));
+                            apply_impact_signature(
+                                bodies[j], -dir,
+                                std::clamp(disruption_j * 0.45f + combined_disruption * 0.18f, 0.0f, 0.75f),
+                                bodies[i].mass / std::max(total_mass, 1.0e-6f),
+                                heat_ratio_j * 0.7f,
+                                std::clamp(bodies[i].radius / std::max(bodies[j].radius, 0.1f), 0.08f, 0.80f));
                         }
                     }
                 }
@@ -1733,7 +1886,8 @@ void CosmosApp::process_roche_limit(float dt) {
                         spawn_fragments(bodies[j].pos, bodies[j].vel,
                                         fragment_mass, std::max(1, cfg.fragment_count - (ring_mass > 0.0f ? 1 : 0)),
                                         bodies[j].frag_generation, bodies[j].temperature,
-                                        tidal_axis, std::max(1.5f, penetration * 12.0f));
+                                        tidal_axis, std::max(1.5f, penetration * 12.0f),
+                                        &bodies[j], 0.55f + penetration * 0.75f);
                         register_mass_loss(bodies[j], fragment_mass, std::max(dt, 1.0e-4f));
                     }
                     bodies[j].marked_for_removal = true;
@@ -1818,6 +1972,15 @@ void CosmosApp::process_temperature(float dt) {
             float transfer = std::min(b.internal_energy, 15.0f * dt);
             b.temperature += transfer / std::max(b.mass, 0.01f);
             b.internal_energy -= transfer;
+        }
+
+        if (b.impact_heat > 0.0f || b.impact_ejecta > 0.0f || b.impact_crater_strength > 0.0f) {
+            float mass_scale = std::clamp(std::cbrt(std::max(b.mass, 1.0e-6f)) + 0.35f, 0.35f, 6.0f);
+            b.impact_heat = std::max(0.0f, b.impact_heat - dt * (0.000028f + cfg.radiative_cooling * 0.020f) / mass_scale);
+            b.impact_ejecta = std::max(0.0f, b.impact_ejecta - dt * 0.000020f *
+                (0.55f + std::clamp(b.atmosphere_retention, 0.0f, 1.0f) * 0.65f));
+            b.impact_crater_strength = std::max(0.0f, b.impact_crater_strength - dt * 0.0000018f / mass_scale);
+            b.impact_radius = std::max(0.0f, b.impact_radius - dt * 0.0000012f / mass_scale);
         }
     }
 }
@@ -2022,12 +2185,29 @@ void CosmosApp::process_stellar_evolution(float dt) {
             continue;
         }
 
-        // Burn fuel: more massive stars burn faster
-        float burn_rate = dt / (cfg.stellar_timescale * std::max(b.mass * b.mass, 1.0f));
+        bool evolved_star =
+            b.stellar_stage == SSTAGE_RED_GIANT ||
+            b.stellar_stage == SSTAGE_SUPERGIANT ||
+            b.stellar_stage == SSTAGE_HYPERGIANT;
+        bool compact_star =
+            b.stellar_stage == SSTAGE_WHITE_DWARF ||
+            b.stellar_stage == SSTAGE_NEUTRON_STAR;
+
+        // Main-sequence lifetime roughly scales as M^-2.5, with post-main-sequence
+        // phases burning the remaining fuel much faster.
+        float stellar_mass = std::clamp(b.mass, 0.08f, 120.0f);
+        float lifetime_scale = cfg.stellar_timescale * 250000.0f;
+        float main_sequence_lifetime = lifetime_scale / std::pow(stellar_mass, 2.5f);
+        float burn_multiplier = compact_star ? 0.0f : (evolved_star ? 7.5f : 1.0f);
+        float burn_rate = (burn_multiplier > 0.0f)
+            ? dt * burn_multiplier / std::max(main_sequence_lifetime, cfg.stellar_timescale * 1200.0f)
+            : 0.0f;
         b.fuel -= burn_rate;
         if (b.fuel < 0.0f) b.fuel = 0.0f;
 
-        float wind_loss = std::min(b.mass * (0.00002f + b.luminosity * 0.000002f) * dt, b.mass * 0.005f);
+        float wind_factor = compact_star ? 0.0f : (evolved_star ? 2.6f : 1.0f);
+        float wind_loss = std::min(b.mass * wind_factor * (0.00002f + b.luminosity * 0.000002f) * dt,
+                                   b.mass * (compact_star ? 0.0f : 0.005f));
         if (wind_loss > 0.0f) {
             b.mass -= wind_loss;
             register_mass_loss(b, wind_loss, dt);
@@ -2050,11 +2230,6 @@ void CosmosApp::process_stellar_evolution(float dt) {
             b.luminosity = std::max(b.luminosity * (b.mass >= CORE_COLLAPSE_MIN_MASS_SOLAR ? 180.0f : 100.0f),
                                     std::pow(std::max(b.mass, 0.1f), 3.5f) * 0.25f);
         }
-
-        bool evolved_star =
-            b.stellar_stage == SSTAGE_RED_GIANT ||
-            b.stellar_stage == SSTAGE_SUPERGIANT ||
-            b.stellar_stage == SSTAGE_HYPERGIANT;
 
         if (evolved_star && b.fuel < 0.05f) {
             if (b.mass >= CORE_COLLAPSE_MIN_MASS_SOLAR) {
@@ -2126,7 +2301,8 @@ void CosmosApp::cleanup_bodies() {
 
 void CosmosApp::spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, int count,
                                 uint32_t parent_generation, float source_temperature,
-                                glm::vec3 impact_axis, float ejecta_speed) {
+                                glm::vec3 impact_axis, float ejecta_speed,
+                                const CelestialBody* source_body, float shock_ratio) {
     if (count < 1 || total_mass <= 0.0f) return;
 
     constexpr float kMinFragmentMass = 0.001f;
@@ -2158,6 +2334,21 @@ void CosmosApp::spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, 
         ? glm::normalize(impact_axis)
         : glm::normalize(glm::vec3(u01(rng) * 2.0f - 1.0f, u01(rng) * 2.0f - 1.0f, u01(rng) * 2.0f - 1.0f));
     float base_ejecta = std::max(ejecta_speed, 4.0f);
+    MaterialComposition source_materials{};
+    if (source_body != nullptr) {
+        source_materials = derive_materials(*source_body);
+    } else {
+        source_materials.silicate = 0.75f;
+        source_materials.iron = 0.25f;
+    }
+    bool gas_source = (source_body != nullptr) && gas_dominated_body(*source_body, source_materials);
+    float normalized_shock = std::clamp(shock_ratio, 0.0f, 2.0f);
+    float gas_frag_chance = std::clamp(source_materials.hydrogen * (0.28f + normalized_shock * 0.22f), 0.0f, 0.78f);
+    float icy_frag_chance = std::clamp(source_materials.water * (0.22f + std::max(0.0f, 0.70f - normalized_shock) * 0.30f),
+                                       0.0f, 0.62f);
+    float molten_bias = std::clamp((source_temperature - 900.0f) / 1500.0f + normalized_shock * 0.55f +
+                                   source_materials.silicate * 0.16f + source_materials.iron * 0.20f,
+                                   0.0f, 1.35f);
 
     std::vector<glm::vec3> rel_vels((size_t)count, glm::vec3(0.0f));
     glm::vec3 momentum_bias(0.0f);
@@ -2185,13 +2376,49 @@ void CosmosApp::spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, 
         frag.vel = vel + rel_vels[(size_t)i];
         frag.mass = frag_mass;
         frag.radius = frag_radius;
-        frag.temperature = source_temperature + base_ejecta * 4.0f;
-        frag.type = CTYPE_ASTEROID;
+        frag.temperature = std::clamp(source_temperature +
+                                      base_ejecta * (5.0f + normalized_shock * 6.5f) *
+                                      (0.55f + u01(rng) * 0.95f),
+                                      40.0f, 30000.0f);
+        float type_roll = u01(rng);
+        if ((gas_source || normalized_shock > 0.95f) && type_roll < gas_frag_chance) {
+            frag.type = CTYPE_NEBULA;
+            frag.radius = std::max(frag_radius * 1.35f, std::cbrt(std::max(frag_mass, kMinFragmentMass)) * 24.0f);
+            frag.temperature = std::max(60.0f, frag.temperature * 0.55f);
+            frag.atmosphere_retention = 1.0f;
+            frag.material_phase = (normalized_shock > 0.95f) ? PHASE_COLLAPSING : PHASE_GAS;
+            frag.phase_intensity = std::clamp(0.40f + source_materials.hydrogen * 0.35f + normalized_shock * 0.18f,
+                                              0.25f, 1.0f);
+            frag.collapse_progress = std::clamp(source_materials.hydrogen * 0.12f + normalized_shock * 0.08f,
+                                                0.0f, 0.28f);
+        } else if (type_roll < gas_frag_chance + icy_frag_chance && frag.temperature < 520.0f) {
+            frag.type = CTYPE_COMET;
+            frag.atmosphere_retention = 0.18f;
+            frag.material_phase = (frag.temperature < 170.0f) ? PHASE_ICE : PHASE_LIQUID;
+            frag.phase_intensity = std::clamp(0.28f + source_materials.water * 0.60f, 0.20f, 1.0f);
+        } else {
+            frag.type = CTYPE_ASTEROID;
+            frag.atmosphere_retention = 0.02f;
+            if (molten_bias > 0.28f || frag.temperature > 950.0f) {
+                frag.material_phase = (frag.temperature > 2400.0f) ? PHASE_PLASMA : PHASE_MOLTEN;
+                frag.phase_intensity = std::clamp(0.24f + molten_bias * 0.65f, 0.18f, 1.0f);
+            } else if (source_materials.water > 0.28f && frag.temperature < 170.0f) {
+                frag.material_phase = PHASE_ICE;
+                frag.phase_intensity = std::clamp(0.22f + source_materials.water * 0.55f, 0.18f, 1.0f);
+            } else {
+                frag.material_phase = PHASE_SOLID;
+                frag.phase_intensity = std::clamp(0.18f + source_materials.silicate * 0.35f +
+                                                  source_materials.iron * 0.20f, 0.12f, 0.85f);
+            }
+        }
         frag.fuel = 0.0f;
+        frag.internal_energy = normalized_shock * frag_mass * (12.0f + base_ejecta * 0.9f);
         frag.seed = rng();
         frag.frag_generation = parent_generation + 1;
         frag.angular_vel = (u01(rng) * 2.0f - 1.0f) * 0.01f;
         frag.name = generate_body_name(frag.seed, frag.type);
+        clear_ring_system(frag);
+        clear_impact_signature(frag);
         refresh_body_render_state(frag, &state);
 
         state.bodies.push_back(frag);
@@ -3954,7 +4181,7 @@ void CosmosApp::draw_bottom_bar() {
 // ── Save / Load ─────────────────────────────────────────────────────────────
 
 static constexpr uint32_t COSMOS_MAGIC   = 0x534D4F43; // "COSM"
-static constexpr uint32_t COSMOS_VERSION = 3;
+static constexpr uint32_t COSMOS_VERSION = 4;
 
 // POD struct for binary serialization of one body (fixed-size fields only)
 #pragma pack(push, 1)
@@ -3997,6 +4224,34 @@ struct BodyPODV2 {
     uint32_t name_len; // followed by name_len bytes of name
 };
 
+struct BodyPODV3 {
+    float pos[3];
+    float vel[3];
+    float mass;
+    float radius;
+    float temperature;
+    uint32_t type;
+    int32_t parent;
+    float age;
+    float internal_energy;
+    float luminosity;
+    float fuel;
+    float atmosphere_retention;
+    float phase_intensity;
+    float collapse_progress;
+    float ring_inner_radius;
+    float ring_outer_radius;
+    float ring_density;
+    float ring_ice_fraction;
+    float ring_tilt;
+    float angular_vel;
+    uint32_t stellar_stage;
+    uint32_t material_phase;
+    uint32_t seed;
+    uint32_t frag_generation;
+    uint32_t name_len; // followed by name_len bytes of name
+};
+
 struct BodyPOD {
     float pos[3];
     float vel[3];
@@ -4017,6 +4272,11 @@ struct BodyPOD {
     float ring_density;
     float ring_ice_fraction;
     float ring_tilt;
+    float impact_normal[3];
+    float impact_crater_strength;
+    float impact_heat;
+    float impact_radius;
+    float impact_ejecta;
     float angular_vel;
     uint32_t stellar_stage;
     uint32_t material_phase;
@@ -4094,6 +4354,13 @@ bool CosmosApp::save_simulation(const std::string& path) {
         pod.ring_density = b.ring_density;
         pod.ring_ice_fraction = b.ring_ice_fraction;
         pod.ring_tilt = b.ring_tilt;
+        pod.impact_normal[0] = b.impact_normal.x;
+        pod.impact_normal[1] = b.impact_normal.y;
+        pod.impact_normal[2] = b.impact_normal.z;
+        pod.impact_crater_strength = b.impact_crater_strength;
+        pod.impact_heat = b.impact_heat;
+        pod.impact_radius = b.impact_radius;
+        pod.impact_ejecta = b.impact_ejecta;
         pod.angular_vel = b.angular_vel;
         pod.stellar_stage = b.stellar_stage;
         pod.material_phase = b.material_phase;
@@ -4173,7 +4440,7 @@ bool CosmosApp::load_simulation(const std::string& path) {
     for (uint32_t i = 0; i < body_count; i++) {
         CelestialBody b;
         uint32_t name_len = 0;
-        if (version >= 3) {
+        if (version >= 4) {
             BodyPOD pod{};
             f.read(reinterpret_cast<char*>(&pod), sizeof(BodyPOD));
             b.pos = {pod.pos[0], pod.pos[1], pod.pos[2]};
@@ -4195,6 +4462,40 @@ bool CosmosApp::load_simulation(const std::string& path) {
             b.ring_density = pod.ring_density;
             b.ring_ice_fraction = pod.ring_ice_fraction;
             b.ring_tilt = pod.ring_tilt;
+            b.impact_normal = {pod.impact_normal[0], pod.impact_normal[1], pod.impact_normal[2]};
+            b.impact_crater_strength = pod.impact_crater_strength;
+            b.impact_heat = pod.impact_heat;
+            b.impact_radius = pod.impact_radius;
+            b.impact_ejecta = pod.impact_ejecta;
+            b.angular_vel = pod.angular_vel;
+            b.stellar_stage = pod.stellar_stage;
+            b.material_phase = pod.material_phase;
+            b.seed = pod.seed;
+            b.frag_generation = pod.frag_generation;
+            name_len = pod.name_len;
+        } else if (version >= 3) {
+            BodyPODV3 pod{};
+            f.read(reinterpret_cast<char*>(&pod), sizeof(BodyPODV3));
+            b.pos = {pod.pos[0], pod.pos[1], pod.pos[2]};
+            b.vel = {pod.vel[0], pod.vel[1], pod.vel[2]};
+            b.mass = pod.mass;
+            b.radius = pod.radius;
+            b.temperature = pod.temperature;
+            b.type = pod.type;
+            b.parent = pod.parent;
+            b.age = pod.age;
+            b.internal_energy = pod.internal_energy;
+            b.luminosity = pod.luminosity;
+            b.fuel = pod.fuel;
+            b.atmosphere_retention = pod.atmosphere_retention;
+            b.phase_intensity = pod.phase_intensity;
+            b.collapse_progress = pod.collapse_progress;
+            b.ring_inner_radius = pod.ring_inner_radius;
+            b.ring_outer_radius = pod.ring_outer_radius;
+            b.ring_density = pod.ring_density;
+            b.ring_ice_fraction = pod.ring_ice_fraction;
+            b.ring_tilt = pod.ring_tilt;
+            clear_impact_signature(b);
             b.angular_vel = pod.angular_vel;
             b.stellar_stage = pod.stellar_stage;
             b.material_phase = pod.material_phase;
@@ -4219,6 +4520,7 @@ bool CosmosApp::load_simulation(const std::string& path) {
             b.phase_intensity = 0.0f;
             b.collapse_progress = 0.0f;
             clear_ring_system(b);
+            clear_impact_signature(b);
             b.angular_vel = pod.angular_vel;
             b.stellar_stage = pod.stellar_stage;
             b.material_phase = PHASE_SOLID;
@@ -4243,6 +4545,7 @@ bool CosmosApp::load_simulation(const std::string& path) {
             b.phase_intensity = 0.0f;
             b.collapse_progress = 0.0f;
             clear_ring_system(b);
+            clear_impact_signature(b);
             b.angular_vel = pod.angular_vel;
             b.stellar_stage = pod.stellar_stage;
             b.material_phase = PHASE_SOLID;
@@ -4286,7 +4589,7 @@ bool CosmosApp::export_body(int index, const std::string& path) {
     std::ofstream f(path);
     if (!f) return false;
 
-    f << "CSBODY 2\n";
+    f << "CSBODY 3\n";
     f << "name " << (b.name.empty() ? "Unnamed" : b.name) << "\n";
     f << "type " << b.type << "\n";
     f << "mass " << b.mass << "\n";
@@ -4305,6 +4608,9 @@ bool CosmosApp::export_body(int index, const std::string& path) {
     f << "collapse_progress " << b.collapse_progress << "\n";
     f << "ring " << b.ring_inner_radius << " " << b.ring_outer_radius << " "
       << b.ring_density << " " << b.ring_ice_fraction << " " << b.ring_tilt << "\n";
+    f << "impact_normal " << b.impact_normal.x << " " << b.impact_normal.y << " " << b.impact_normal.z << "\n";
+    f << "impact_state " << b.impact_crater_strength << " " << b.impact_heat << " "
+      << b.impact_radius << " " << b.impact_ejecta << "\n";
     f << "angular_vel " << b.angular_vel << "\n";
     f << "stellar_stage " << b.stellar_stage << "\n";
     f << "parent " << b.parent << "\n";
@@ -4345,6 +4651,10 @@ bool CosmosApp::import_body(const std::string& path) {
         else if (key == "ring") {
             f >> b.ring_inner_radius >> b.ring_outer_radius >> b.ring_density
               >> b.ring_ice_fraction >> b.ring_tilt;
+        }
+        else if (key == "impact_normal") { f >> b.impact_normal.x >> b.impact_normal.y >> b.impact_normal.z; }
+        else if (key == "impact_state") {
+            f >> b.impact_crater_strength >> b.impact_heat >> b.impact_radius >> b.impact_ejecta;
         }
         else if (key == "angular_vel") { f >> b.angular_vel; }
         else if (key == "stellar_stage") { f >> b.stellar_stage; }
