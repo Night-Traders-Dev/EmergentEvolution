@@ -28,7 +28,7 @@
 #include <vector>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
+#include "../../src/third_party/stb_image_write.h"
 
 // ── Format constants (must match save_load.cpp) ─────────────────────────────
 

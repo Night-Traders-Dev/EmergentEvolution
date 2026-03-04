@@ -4,7 +4,7 @@
 // Run:   ./gen_textures   (outputs to assets/particles/)
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "../src/stb_image_write.h"
+#include "../src/third_party/stb_image_write.h"
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
