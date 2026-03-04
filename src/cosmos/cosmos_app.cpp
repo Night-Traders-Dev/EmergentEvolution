@@ -84,6 +84,32 @@ static uint32_t classify_star_spectral(float temperature, float mass) {
 static constexpr float EARTH_RADIUS_KM_REAL = 6371.0f;
 static constexpr float EARTH_RADIUS_SIM_UNITS = 8.0f;
 static constexpr float SIM_UNIT_TO_KM = EARTH_RADIUS_KM_REAL / EARTH_RADIUS_SIM_UNITS;
+static constexpr float EARTH_MASS_SOLAR = 3.003e-6f;
+static constexpr float JUPITER_MASS_SOLAR = 9.5458e-4f;
+static constexpr float HYDROGEN_BURNING_MASS_SOLAR = 0.075f;
+static constexpr float MAX_MAIN_SEQUENCE_MASS_SOLAR = 150.0f;
+
+struct MaterialComposition {
+    float iron = 0.0f;
+    float silicate = 0.0f;
+    float water = 0.0f;
+    float hydrogen = 0.0f;
+};
+
+struct ComparisonMetrics {
+    float earth_similarity = 0.0f;
+    float life_likelihood = 0.0f;
+};
+
+struct MagneticMetrics {
+    bool  show_magnetosphere = false;
+    float magnetosphere_size = 0.0f;
+    float magnetic_field = 0.0f;
+    bool  show_magnetic_axis = false;
+    float magnetic_pole_angle = 0.0f;
+    bool  particle_jets = false;
+    bool  make_pulsar = false;
+};
 
 
 static uint32_t classify_black_hole(float mass) {
@@ -196,7 +222,10 @@ static void randomize_planet_properties(CelestialBody& body, const CosmosState& 
     if (u01(rng) < 0.15f) body.angular_vel *= -1.0f; // occasional retrograde spin
 }
 
+static void enforce_body_physical_limits(CelestialBody& b);
+
 static void refresh_body_render_state(CelestialBody& body, const CosmosState* state = nullptr) {
+    enforce_body_physical_limits(body);
     refresh_planet_props(body);
     refresh_body_visuals(body, state);
 }
@@ -206,9 +235,187 @@ static float body_density(const CelestialBody& b) {
     return b.mass / std::max(volume, 1.0e-5f);
 }
 
+static float body_volume(const CelestialBody& b) {
+    return (4.0f / 3.0f) * 3.14159265359f * b.radius * b.radius * b.radius;
+}
+
+static float body_surface_gravity(const CelestialBody& b, float G) {
+    return G * b.mass / std::max(b.radius * b.radius, 1.0e-6f);
+}
+
+static float body_escape_velocity(const CelestialBody& b, float G) {
+    return std::sqrt(std::max(2.0f * G * b.mass / std::max(b.radius, 1.0e-6f), 0.0f));
+}
+
 static float body_escape_speed(const CelestialBody& a, const CelestialBody& b, float G) {
     float sep = std::max(a.radius + b.radius, 1.0f);
     return std::sqrt(std::max(2.0f * G * (a.mass + b.mass) / sep, 0.0f));
+}
+
+static void register_mass_loss(CelestialBody& b, float amount, float dt) {
+    if (amount <= 0.0f || dt <= 0.0f) return;
+    b.mass_loss_rate += amount / dt;
+    b.mass_loss_total += amount;
+}
+
+static float expected_planet_radius(float mass_solar) {
+    float mass_earth = std::max(mass_solar / EARTH_MASS_SOLAR, 0.01f);
+    float radius_earth;
+    if (mass_earth < 2.0f) {
+        radius_earth = std::pow(mass_earth, 0.28f);
+    } else if (mass_earth < 130.0f) {
+        radius_earth = 1.5f * std::pow(mass_earth, 0.30f);
+    } else {
+        radius_earth = 11.0f * std::pow(mass_earth / 318.0f, 0.04f);
+    }
+    radius_earth = std::clamp(radius_earth, 0.2f, 13.0f);
+    return radius_earth * EARTH_RADIUS_SIM_UNITS;
+}
+
+static float expected_star_radius(const CelestialBody& b) {
+    float mass = std::clamp(b.mass, 0.02f, MAX_MAIN_SEQUENCE_MASS_SOLAR);
+    if (b.stellar_stage == SSTAGE_WHITE_DWARF)
+        return std::clamp(1.6f + 1.8f / std::pow(std::max(mass, 0.2f), 0.33f), 1.5f, 4.0f);
+    if (b.stellar_stage == SSTAGE_NEUTRON_STAR)
+        return 2.5f;
+    if (b.stellar_stage == SSTAGE_RED_GIANT)
+        return std::clamp(35.0f * std::pow(mass, 0.6f), 30.0f, 220.0f);
+    return std::clamp(10.0f + 20.0f * std::pow(mass, 0.8f), 6.0f, 120.0f);
+}
+
+static MaterialComposition derive_materials(const CelestialBody& b) {
+    MaterialComposition m{};
+    if (is_star_type(b.type)) {
+        m.hydrogen = 1.0f;
+        return m;
+    }
+    if (is_black_hole_type(b.type)) {
+        m.iron = 0.5f;
+        m.silicate = 0.5f;
+        return m;
+    }
+    if (b.type == CTYPE_ASTEROID) {
+        m.iron = std::clamp(b.cached_visuals.metal_frac, 0.0f, 1.0f);
+        m.silicate = std::clamp(1.0f - m.iron - b.cached_visuals.ice_frac, 0.0f, 1.0f);
+        m.water = std::clamp(b.cached_visuals.ice_frac, 0.0f, 1.0f);
+    } else if (b.type == CTYPE_COMET) {
+        m.water = 0.65f;
+        m.silicate = 0.25f;
+        m.iron = 0.10f;
+    } else if (b.type == CTYPE_PLANET || b.type == CTYPE_MOON) {
+        const PlanetProperties& pp = b.cached_props;
+        if (pp.surface == SURF_GAS) {
+            m.hydrogen = std::clamp(pp.atmosphere.h2_frac + pp.atmosphere.he_frac * 0.5f + 0.55f, 0.55f, 0.95f);
+            m.water = std::clamp(pp.ocean_coverage / 100.0f * 0.2f + b.cached_visuals.ice_frac * 0.2f, 0.0f, 0.25f);
+            m.silicate = std::clamp(1.0f - m.hydrogen - m.water - 0.03f, 0.0f, 0.30f);
+            m.iron = std::clamp(1.0f - m.hydrogen - m.water - m.silicate, 0.0f, 0.12f);
+        } else {
+            m.iron = std::clamp(0.15f + b.cached_visuals.metal_frac * 0.55f, 0.05f, 0.45f);
+            m.water = std::clamp((pp.ocean_coverage / 100.0f) * 0.7f + b.cached_visuals.ice_frac * 0.35f, 0.0f, 0.80f);
+            m.hydrogen = std::clamp(pp.atmosphere.h2_frac * 0.4f, 0.0f, 0.25f);
+            m.silicate = std::clamp(1.0f - m.iron - m.water - m.hydrogen, 0.0f, 0.90f);
+        }
+    } else {
+        m.iron = 0.2f;
+        m.silicate = 0.8f;
+    }
+
+    float total = m.iron + m.silicate + m.water + m.hydrogen;
+    if (total > 1.0e-6f) {
+        m.iron /= total;
+        m.silicate /= total;
+        m.water /= total;
+        m.hydrogen /= total;
+    }
+    return m;
+}
+
+static ComparisonMetrics derive_comparisons(const CelestialBody& b) {
+    ComparisonMetrics cm{};
+    if (b.type != CTYPE_PLANET && b.type != CTYPE_MOON)
+        return cm;
+
+    float mass_earth = std::max(b.mass / EARTH_MASS_SOLAR, 1.0e-5f);
+    float radius_earth = std::max(b.radius / EARTH_RADIUS_SIM_UNITS, 1.0e-5f);
+    float temp_score = std::exp(-std::pow((b.temperature - 288.0f) / 95.0f, 2.0f));
+    float mass_score = std::exp(-std::pow(std::log10(mass_earth), 2.0f) / 0.28f);
+    float radius_score = std::exp(-std::pow(std::log10(radius_earth), 2.0f) / 0.25f);
+    float atm_score = (b.cached_props.atmosphere.pressure > 0.02f)
+        ? std::exp(-std::pow(std::log10(std::max(b.cached_props.atmosphere.pressure, 0.01f)), 2.0f) / 0.9f) : 0.2f;
+    float water_score = std::clamp(b.cached_props.ocean_coverage / 60.0f, 0.0f, 1.0f);
+    cm.earth_similarity = std::clamp(temp_score * 0.35f + mass_score * 0.25f +
+                                     radius_score * 0.2f + atm_score * 0.1f + water_score * 0.1f,
+                                     0.0f, 1.0f);
+    float oxygen_bonus = std::clamp(b.cached_props.atmosphere.o2_frac * 2.5f, 0.0f, 0.35f);
+    float vegetation_bonus = std::clamp(b.cached_props.vegetation_coverage / 100.0f, 0.0f, 0.35f);
+    cm.life_likelihood = std::clamp(cm.earth_similarity * 0.6f + water_score * 0.2f +
+                                    oxygen_bonus + vegetation_bonus, 0.0f, 1.0f);
+    return cm;
+}
+
+static MagneticMetrics derive_magnetic_metrics(const CelestialBody& b, float G) {
+    MagneticMetrics mm{};
+    float density = body_density(b);
+    float spin = std::abs(b.angular_vel);
+    float dynamo = std::sqrt(std::max(b.mass, 0.0f)) * std::pow(std::max(b.radius, 0.1f), 0.8f) *
+                   (0.2f + spin * 500.0f) * (0.6f + density * 2.5f);
+    mm.magnetic_field = dynamo;
+    mm.magnetic_pole_angle = hash_float(hash_combine(b.seed, 700u)) * 90.0f;
+
+    if (b.type == CTYPE_PLANET || b.type == CTYPE_MOON) {
+        mm.show_magnetosphere = true;
+        float gravity = body_surface_gravity(b, G);
+        mm.magnetosphere_size = std::clamp(std::pow(std::max(dynamo, 0.01f), 0.33f) *
+                                           (1.5f + gravity * 2.0f), 0.5f, 60.0f);
+        mm.show_magnetic_axis = dynamo > 0.02f;
+    }
+    if (b.stellar_stage == SSTAGE_NEUTRON_STAR || b.stellar_stage == SSTAGE_WHITE_DWARF) {
+        mm.particle_jets = dynamo > 1.5f;
+        mm.make_pulsar = mm.particle_jets && spin > 0.002f;
+        mm.show_magnetic_axis = true;
+    }
+    return mm;
+}
+
+static void enforce_body_physical_limits(CelestialBody& b) {
+    b.mass = std::max(b.mass, 1.0e-6f);
+    b.radius = std::max(b.radius, 0.1f);
+
+    if (is_black_hole_type(b.type)) {
+        b.radius = std::max(0.5f, 2.0f * b.mass);
+        return;
+    }
+
+    if (is_star_type(b.type)) {
+        b.mass = std::clamp(b.mass, 0.01f, MAX_MAIN_SEQUENCE_MASS_SOLAR);
+        float target_r = expected_star_radius(b);
+        b.radius = std::clamp(b.radius, target_r * 0.75f, target_r * 1.25f);
+        if (b.stellar_stage == SSTAGE_MAIN_SEQUENCE)
+            b.temperature = std::clamp(b.temperature, 1800.0f, 55000.0f);
+        return;
+    }
+
+    if (b.mass >= HYDROGEN_BURNING_MASS_SOLAR) {
+        b.type = classify_star_spectral(std::max(b.temperature, 2200.0f), b.mass);
+        b.stellar_stage = SSTAGE_MAIN_SEQUENCE;
+        b.fuel = std::max(b.fuel, 0.9f);
+        b.radius = expected_star_radius(b);
+        b.temperature = std::max(b.temperature, 2200.0f);
+        return;
+    }
+
+    if (b.type == CTYPE_PLANET || b.type == CTYPE_MOON) {
+        float target_r = expected_planet_radius(std::min(b.mass, 0.02f));
+        b.radius = std::clamp(b.radius, target_r * 0.65f, target_r * 1.20f);
+        if (b.type == CTYPE_MOON)
+            b.radius = std::min(b.radius, expected_planet_radius(std::max(b.mass, 1.0e-6f)) * 0.7f);
+    } else if (b.type == CTYPE_ASTEROID || b.type == CTYPE_COMET) {
+        MaterialComposition mat = derive_materials(b);
+        float density_factor = mat.iron * 5.0f + mat.silicate * 3.0f + mat.water * 1.4f + mat.hydrogen * 0.2f;
+        density_factor = std::max(density_factor, 0.5f);
+        float target_r = std::cbrt(b.mass / density_factor) * 18.0f;
+        b.radius = std::clamp(b.radius, std::max(target_r * 0.7f, 0.3f), std::max(target_r * 1.3f, 0.6f));
+    }
 }
 
 static float stellar_luminosity_units(const CelestialBody& b) {
@@ -698,6 +905,7 @@ void CosmosApp::step_physics(float dt) {
     // Integrate (symplectic Euler)
     for (size_t i = 0; i < n; i++) {
         if (bodies[i].marked_for_removal) continue;
+        bodies[i].mass_loss_rate = 0.0f;
         bodies[i].vel += accel[i] * scaled_dt;
         bodies[i].vel *= cfg.damping;
         bodies[i].pos += bodies[i].vel * scaled_dt;
@@ -711,6 +919,9 @@ void CosmosApp::step_physics(float dt) {
     if (cfg.evaporation)        process_evaporation(scaled_dt);
     if (cfg.stellar_evolution)  process_stellar_evolution(scaled_dt);
     cleanup_bodies();
+
+    for (auto& b : state.bodies)
+        enforce_body_physical_limits(b);
 
     // Refresh cached planet properties (only recomputes on temperature band changes)
     for (auto& b : state.bodies) {
@@ -962,8 +1173,10 @@ void CosmosApp::process_evaporation(float dt) {
         // Hot small bodies (comets, asteroids) lose mass
         if (b.temperature > 500.0f && b.mass < 1.0f) {
             float loss = cfg.evaporation_rate * (b.temperature / 1000.0f) * dt;
+            loss = std::min(loss, b.mass * 0.25f);
             b.mass -= loss;
             b.radius *= 0.999f; // shrink slightly
+            register_mass_loss(b, loss, dt);
 
             if (b.mass < 0.001f) {
                 b.marked_for_removal = true;
@@ -986,6 +1199,12 @@ void CosmosApp::process_stellar_evolution(float dt) {
         b.fuel -= burn_rate;
         if (b.fuel < 0.0f) b.fuel = 0.0f;
 
+        float wind_loss = std::min(b.mass * (0.00002f + b.luminosity * 0.000002f) * dt, b.mass * 0.005f);
+        if (wind_loss > 0.0f) {
+            b.mass -= wind_loss;
+            register_mass_loss(b, wind_loss, dt);
+        }
+
         // Reclassify spectral type as temperature changes
         b.type = classify_star_spectral(b.temperature, b.mass);
 
@@ -1006,6 +1225,7 @@ void CosmosApp::process_stellar_evolution(float dt) {
                 // Spawn debris
                 float debris_mass = b.mass * 0.7f;
                 spawn_fragments(b.pos, b.vel, debris_mass, cfg.fragment_count);
+                register_mass_loss(b, debris_mass, dt);
 
                 // Remnant neutron star
                 b.mass *= 0.3f;
@@ -1024,6 +1244,11 @@ void CosmosApp::process_stellar_evolution(float dt) {
             } else {
                 // White dwarf
                 b.stellar_stage = SSTAGE_WHITE_DWARF;
+                float lost = std::max(b.mass - std::max(b.mass * 0.65f, 0.2f), 0.0f);
+                if (lost > 0.0f) {
+                    b.mass -= lost;
+                    register_mass_loss(b, lost, dt);
+                }
                 b.radius = std::max(2.0f, b.radius * 0.02f);
                 b.temperature = 20000.0f;
                 b.luminosity = 0.001f;
@@ -2063,6 +2288,9 @@ void CosmosApp::draw_inspector() {
 
     auto& b = state.bodies[selected_body];
     const auto& vp = b.cached_visuals;
+    MaterialComposition materials = derive_materials(b);
+    ComparisonMetrics comparisons = derive_comparisons(b);
+    MagneticMetrics magnetic = derive_magnetic_metrics(b, cfg.G);
     ImGuiIO& io = ImGui::GetIO();
 
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 320.0f, 46.0f), ImGuiCond_FirstUseEver);
@@ -2163,6 +2391,152 @@ void CosmosApp::draw_inspector() {
     ImGui::NextColumn();
 
     ImGui::Columns(1);
+
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "Cumulative Properties");
+    ImGui::Columns(2, "##cumulative", false);
+    ImGui::SetColumnWidth(0, 140);
+
+    float density = body_density(b);
+    float volume = body_volume(b);
+    float calc_radius = is_star_type(b.type) ? expected_star_radius(b) :
+                        ((b.type == CTYPE_PLANET || b.type == CTYPE_MOON) ? expected_planet_radius(std::min(b.mass, 0.02f)) : b.radius);
+    float surface_g = body_surface_gravity(b, cfg.G);
+    float escape_v = body_escape_velocity(b, cfg.G);
+
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Density");
+    ImGui::NextColumn();
+    ImGui::Text("%.4g M/u^3", density);
+    ImGui::NextColumn();
+
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Volume");
+    ImGui::NextColumn();
+    ImGui::Text("%.4g u^3", volume);
+    ImGui::NextColumn();
+
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Calculated Radius");
+    ImGui::NextColumn();
+    ImGui::Text("%.2f", calc_radius);
+    ImGui::NextColumn();
+
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Surface Gravity");
+    ImGui::NextColumn();
+    ImGui::Text("%.4f", surface_g);
+    ImGui::NextColumn();
+
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Escape Velocity");
+    ImGui::NextColumn();
+    ImGui::Text("%.4f", escape_v);
+    ImGui::NextColumn();
+
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Mass Loss Rate");
+    ImGui::NextColumn();
+    ImGui::Text("%.4e M/s", b.mass_loss_rate);
+    ImGui::NextColumn();
+
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Mass Loss Total");
+    ImGui::NextColumn();
+    ImGui::Text("%.4e M", b.mass_loss_total);
+    ImGui::NextColumn();
+
+    ImGui::Columns(1);
+    if (ImGui::Button("Reset Mass Loss Total", ImVec2(-1, 0)))
+        b.mass_loss_total = 0.0f;
+
+    if (b.type == CTYPE_PLANET || b.type == CTYPE_MOON) {
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "Comparisons");
+        ImGui::Columns(2, "##comparisons", false);
+        ImGui::SetColumnWidth(0, 140);
+
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Earth Similarity");
+        ImGui::NextColumn();
+        ImGui::Text("%.0f%%", comparisons.earth_similarity * 100.0f);
+        ImGui::NextColumn();
+
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Life Likelihood");
+        ImGui::NextColumn();
+        ImGui::Text("%.0f%%", comparisons.life_likelihood * 100.0f);
+        ImGui::NextColumn();
+
+        ImGui::Columns(1);
+    }
+
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "Composition");
+    ImGui::Columns(2, "##materials", false);
+    ImGui::SetColumnWidth(0, 140);
+
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Iron");
+    ImGui::NextColumn();
+    ImGui::Text("%.0f%%", materials.iron * 100.0f);
+    ImGui::NextColumn();
+
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Silicate");
+    ImGui::NextColumn();
+    ImGui::Text("%.0f%%", materials.silicate * 100.0f);
+    ImGui::NextColumn();
+
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Water");
+    ImGui::NextColumn();
+    ImGui::Text("%.0f%%", materials.water * 100.0f);
+    ImGui::NextColumn();
+
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Hydrogen");
+    ImGui::NextColumn();
+    ImGui::Text("%.0f%%", materials.hydrogen * 100.0f);
+    ImGui::NextColumn();
+
+    ImGui::Columns(1);
+
+    if ((b.type == CTYPE_PLANET || b.type == CTYPE_MOON) ||
+        b.stellar_stage == SSTAGE_NEUTRON_STAR || b.stellar_stage == SSTAGE_WHITE_DWARF) {
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "Magnetic Fields");
+        ImGui::Columns(2, "##magnetic", false);
+        ImGui::SetColumnWidth(0, 150);
+
+        if (b.type == CTYPE_PLANET || b.type == CTYPE_MOON) {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Show Magnetosphere");
+            ImGui::NextColumn();
+            ImGui::Text("%s", magnetic.show_magnetosphere ? "Yes" : "No");
+            ImGui::NextColumn();
+
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Magnetosphere Size");
+            ImGui::NextColumn();
+            ImGui::Text("%.2f", magnetic.magnetosphere_size);
+            ImGui::NextColumn();
+        }
+
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Magnetic Field");
+        ImGui::NextColumn();
+        ImGui::Text("%.3f", magnetic.magnetic_field);
+        ImGui::NextColumn();
+
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Show Magnetic Axis");
+        ImGui::NextColumn();
+        ImGui::Text("%s", magnetic.show_magnetic_axis ? "Yes" : "No");
+        ImGui::NextColumn();
+
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Magnetic Pole Angle");
+        ImGui::NextColumn();
+        ImGui::Text("%.1f deg", magnetic.magnetic_pole_angle);
+        ImGui::NextColumn();
+
+        if (b.stellar_stage == SSTAGE_NEUTRON_STAR || b.stellar_stage == SSTAGE_WHITE_DWARF) {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Particle Jets");
+            ImGui::NextColumn();
+            ImGui::Text("%s", magnetic.particle_jets ? "Yes" : "No");
+            ImGui::NextColumn();
+
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Make Pulsar");
+            ImGui::NextColumn();
+            ImGui::Text("%s", magnetic.make_pulsar ? "Yes" : "No");
+            ImGui::NextColumn();
+        }
+
+        ImGui::Columns(1);
+    }
 
     // ── Orbital info ──
     if (b.parent >= 0 && b.parent < (int)state.bodies.size()) {

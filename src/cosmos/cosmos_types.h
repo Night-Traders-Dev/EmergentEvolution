@@ -483,6 +483,8 @@ struct CelestialBody {
     float       internal_energy = 0.0f;
     float       luminosity     = 0.0f;
     float       fuel           = 1.0f;      // 0-1 hydrogen fuel fraction (stars)
+    float       mass_loss_rate = 0.0f;      // solar masses / simulated second
+    float       mass_loss_total = 0.0f;     // cumulative solar masses lost
     float       angular_vel    = 0.0f;
     uint32_t    stellar_stage  = 0;         // StellarStage enum
     bool        marked_for_removal = false;
