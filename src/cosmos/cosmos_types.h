@@ -283,13 +283,13 @@ inline PlanetProperties generate_planet_properties(uint32_t seed, float mass, fl
             pp.surface = SURF_ROCKY;  // barren cold rock
         else
             pp.surface = SURF_FROZEN;
-    } else if (temperature >= 250.0f && temperature <= 380.0f && mass_earth >= 0.3f && mass_earth <= 8.0f) {
+    } else if (temperature >= 235.0f && temperature <= 395.0f && mass_earth >= 0.25f && mass_earth <= 8.0f) {
         // Habitable zone: diverse
-        if (h0 < 0.15f)
+        if (h0 < 0.22f)
             pp.surface = SURF_LIQUID;  // water world
-        else if (h0 < 0.55f)
+        else if (h0 < 0.72f)
             pp.surface = SURF_MIXED;   // earth-like continents
-        else if (h0 < 0.80f)
+        else if (h0 < 0.92f)
             pp.surface = SURF_ROCKY;   // arid/desert
         else
             pp.surface = SURF_FROZEN;  // tidally locked cold side
@@ -334,7 +334,7 @@ inline PlanetProperties generate_planet_properties(uint32_t seed, float mass, fl
         if (ha0 < atm_chance) {
             pp.atmosphere.n2_frac  = 0.1f + hash_float(hash_combine(ha, 4)) * 0.85f;
             pp.atmosphere.co2_frac = hash_float(hash_combine(ha, 5)) * 0.60f;
-            if (temperature >= 230.0f && temperature <= 370.0f && h1 > 0.4f) {
+            if (temperature >= 220.0f && temperature <= 380.0f && h1 > 0.28f) {
                 pp.atmosphere.o2_frac = hash_float(hash_combine(ha, 6)) * 0.30f;
             }
             // Some worlds: thick CO2 (Venus-like)
@@ -379,7 +379,7 @@ inline PlanetProperties generate_planet_properties(uint32_t seed, float mass, fl
                                 pp.planet_class == PCLASS_GAS_GIANT ||
                                 pp.planet_class == PCLASS_ICE_GIANT);
     pp.atmosphere.weather_intensity = pp.atmosphere.has_clouds
-        ? 0.2f + hash_float(hash_combine(ha, 9)) * 0.8f : 0.0f;
+        ? 0.28f + hash_float(hash_combine(ha, 9)) * 0.72f : 0.0f;
 
     // ── Oceans (wider temperature ranges, more types) ──
     uint32_t ho = hash_combine(h, 200);
@@ -391,10 +391,10 @@ inline PlanetProperties generate_planet_properties(uint32_t seed, float mass, fl
         pp.ocean_type     = OCEAN_WATER;
         pp.ocean_coverage = 80.0f + ho0 * 20.0f;
         pp.ocean_depth    = 5.0f + hash_float(hash_combine(ho, 1)) * 50.0f;
-    } else if (temperature >= 250.0f && temperature <= 380.0f && mass_earth >= 0.3f && ho0 > 0.3f) {
+    } else if (temperature >= 235.0f && temperature <= 390.0f && mass_earth >= 0.25f && ho0 > 0.18f) {
         pp.ocean_type     = OCEAN_WATER;
-        pp.ocean_coverage = 15.0f + hash_float(hash_combine(ho, 1)) * 75.0f;
-        pp.ocean_depth    = 0.5f + hash_float(hash_combine(ho, 2)) * 12.0f;
+        pp.ocean_coverage = 22.0f + hash_float(hash_combine(ho, 1)) * 68.0f;
+        pp.ocean_depth    = 0.8f + hash_float(hash_combine(ho, 2)) * 14.0f;
     } else if (temperature < 115.0f && temperature > 65.0f && ho0 > 0.4f) {
         pp.ocean_type     = OCEAN_METHANE;
         pp.ocean_coverage = 5.0f + hash_float(hash_combine(ho, 3)) * 50.0f;
@@ -486,16 +486,25 @@ inline PlanetProperties generate_planet_properties(uint32_t seed, float mass, fl
     // ── Climate ──
     uint32_t hc = hash_combine(h, 400);
     pp.has_weather = pp.atmosphere.pressure > 0.2f;
-    if (pp.has_weather) {
-        float wh = hash_float(hash_combine(hc, 1));
-        if (temperature < 180.0f)               pp.weather_type = WEATHER_SNOW;
-        else if (temperature > 500.0f)           pp.weather_type = WEATHER_DUST;
-        else if (pp.ocean_coverage > 40.0f)      pp.weather_type = (wh > 0.4f) ? WEATHER_STORMS : WEATHER_RAIN;
-        else if (pp.ocean_coverage > 10.0f)      pp.weather_type = (wh > 0.6f) ? WEATHER_RAIN : WEATHER_DUST;
-        else                                     pp.weather_type = (wh > 0.7f) ? WEATHER_STORMS : WEATHER_DUST;
-        pp.cloud_coverage = 5.0f + hash_float(hash_combine(hc, 2)) * 85.0f;
+        if (pp.has_weather) {
+            float wh = hash_float(hash_combine(hc, 1));
+            if (temperature < 180.0f)               pp.weather_type = WEATHER_SNOW;
+            else if (temperature > 500.0f)           pp.weather_type = WEATHER_DUST;
+            else if (pp.ocean_coverage > 40.0f)      pp.weather_type = (wh > 0.4f) ? WEATHER_STORMS : WEATHER_RAIN;
+            else if (pp.ocean_coverage > 10.0f)      pp.weather_type = (wh > 0.6f) ? WEATHER_RAIN : WEATHER_DUST;
+            else                                     pp.weather_type = (wh > 0.7f) ? WEATHER_STORMS : WEATHER_DUST;
+        pp.cloud_coverage = 8.0f + hash_float(hash_combine(hc, 2)) * 85.0f;
         // Dry worlds: less clouds
         if (pp.ocean_coverage < 10.0f) pp.cloud_coverage *= 0.3f;
+    }
+    if (pp.ocean_type == OCEAN_WATER && pp.atmosphere.pressure > 0.18f) {
+        pp.atmosphere.has_clouds = true;
+        pp.has_weather = true;
+        pp.cloud_coverage = std::max(pp.cloud_coverage, 32.0f + hash_float(hash_combine(hc, 15)) * 52.0f);
+        pp.atmosphere.weather_intensity = std::max(pp.atmosphere.weather_intensity,
+            0.40f + hash_float(hash_combine(hc, 16)) * 0.55f);
+        if (pp.weather_type == WEATHER_NONE)
+            pp.weather_type = (pp.cloud_coverage > 62.0f) ? WEATHER_STORMS : WEATHER_RAIN;
     }
     if (pp.planet_class == PCLASS_GAS_GIANT || pp.planet_class == PCLASS_ICE_GIANT) {
         pp.has_weather = true;
@@ -1098,6 +1107,36 @@ inline BodyVisualProperties generate_body_visual_properties(const CelestialBody&
             break;
         default:
             break;
+        }
+
+        if (pp.surface != SURF_GAS) {
+            float ocean_frac = std::clamp(pp.ocean_coverage / 100.0f, 0.0f, 1.0f);
+            float cloud_frac = std::clamp(pp.cloud_coverage / 100.0f, 0.0f, 1.0f);
+            float vegetation_frac = std::clamp(pp.vegetation_coverage / 100.0f, 0.0f, 1.0f);
+            float pressure_frac = std::clamp(pp.atmosphere.pressure / 12.0f, 0.0f, 1.0f);
+            float cold_factor = std::clamp((240.0f - b.temperature) / 220.0f, 0.0f, 1.0f);
+            float hot_factor = std::clamp((b.temperature - 420.0f) / 900.0f, 0.0f, 1.0f);
+            float arid_factor = std::clamp(1.0f - ocean_frac * 0.95f - cloud_frac * 0.30f -
+                                           vegetation_frac * 0.45f, 0.0f, 1.0f);
+            float oxidized_factor = std::clamp(0.10f + h0 * 0.40f + hot_factor * 0.30f +
+                                               arid_factor * 0.22f - ocean_frac * 0.12f,
+                                               0.0f, 1.0f);
+
+            vp.rock_frac = std::clamp(0.18f + h1 * 0.58f + oxidized_factor * 0.18f -
+                                      vegetation_frac * 0.10f, 0.0f, 1.0f);
+            vp.ice_frac = std::clamp(vp.ice_frac + cold_factor * (0.35f + h0 * 0.32f),
+                                     0.0f, 1.0f);
+            vp.metal_frac = std::clamp(vp.metal_frac + (pp.has_iron_core ? 0.18f : 0.03f) +
+                                       h2 * 0.24f + hot_factor * 0.14f, 0.0f, 1.0f);
+            vp.dust_frac = std::clamp(vp.dust_frac + 0.04f + arid_factor * 0.42f +
+                                      hot_factor * 0.14f - ocean_frac * 0.20f,
+                                      0.0f, 1.0f);
+            vp.metallic = std::clamp(vp.metallic + (pp.has_iron_core ? 0.05f + h2 * 0.06f : 0.0f),
+                                     0.0f, 0.25f);
+            vp.specular = std::clamp(vp.specular + ocean_frac * 0.04f + pressure_frac * 0.02f,
+                                     0.02f, 0.24f);
+            vp.roughness = std::clamp(vp.roughness + arid_factor * 0.06f - ocean_frac * 0.10f -
+                                      vegetation_frac * 0.04f, 0.15f, 1.0f);
         }
 
         if (b.type == CTYPE_MOON) {

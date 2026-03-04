@@ -552,12 +552,17 @@ vec3 shade_gas_giant(vec3 normal, Sphere hit, vec3 light_dir) {
     float mass = hit.gravity_params.x;
     float band_freq = 5.0 + hit.terrain_params.y * 0.85;
     vec3 seed_offset = hash31(seed) * 80.0;
+    float lon = atan(normal.z, normal.x);
     float lat = asin(clamp(normal.y, -1.0, 1.0));
-    float warp = noise3D(normal * 3.0 + seed_offset * 0.13) * 0.8;
-    float band = sin(lat * band_freq + warp + fbm(normal * 2.2 + seed_offset * 0.05, 4) * 1.4);
-    float secondary = sin(lat * (band_freq * 0.58) - warp * 0.45 + fbm(normal * 1.6 + seed_offset * 0.09, 3) * 1.2);
     float storms = hit.activity_params.x;
     bool ice_giant = temperature < 170.0 || mass < 2.5e-4;
+    float wind_speed = screen_info.w * (0.08 + storms * 0.22 + hash11(seed * 0.031) * 0.10);
+    float shear = sin(lat * 6.0) * (0.8 + storms * 0.45);
+    float band_lon = lon * (10.0 + hit.terrain_params.y * 0.28) + wind_speed * (1.0 + shear);
+    float fine_lon = lon * (18.0 + hit.terrain_params.y * 0.42) + wind_speed * (1.6 - shear * 0.35);
+    float warp = noise3D(vec3(band_lon * 0.55, lat * 4.0, seed * 0.07) + seed_offset * 0.02) * 0.9;
+    float band = sin(lat * band_freq + warp + fbm(vec3(band_lon * 0.20, lat * 2.0, seed * 0.11), 4) * 1.8);
+    float secondary = sin(lat * (band_freq * 0.62) - warp * 0.55 + fbm(vec3(fine_lon * 0.15, lat * 3.4, seed * 0.17), 3) * 1.4);
 
     vec3 warm;
     vec3 cool;
@@ -573,20 +578,59 @@ vec3 shade_gas_giant(vec3 normal, Sphere hit, vec3 light_dir) {
     }
 
     vec3 col = mix(warm, cool, band * 0.5 + 0.5);
-    col = mix(col, col * 1.08, secondary * 0.5 + 0.5);
-    float storm = fbm(normal * 8.0 + vec3(screen_info.w * 0.02, screen_info.w * -0.014, 0.0) + seed_offset * 0.04, 5);
-    col += (storm - 0.5) * (0.12 + storms * 0.10);
+    col = mix(col, col * 1.14, secondary * 0.5 + 0.5);
+    float cloud_lanes = smoothstep(0.46, 0.78,
+        fbm(vec3(fine_lon * 0.55, lat * 7.5 + sin(band_lon * 0.3) * 0.7, seed * 0.13), 5));
+    col = mix(col, mix(col, vec3(0.95, 0.98, 1.0), ice_giant ? 0.55 : 0.35), cloud_lanes * (0.18 + storms * 0.16));
 
-    vec3 spot_dir = normalize(vec3(cos(seed * 0.01), sin(seed * 0.003) * 0.35, sin(seed * 0.01)));
-    float spot = smoothstep(0.90, 0.97, dot(normal, spot_dir));
-    vec3 storm_col = ice_giant ? vec3(0.90, 0.96, 1.0) : vec3(1.0, 0.78, 0.66);
-    col = mix(col, mix(col * vec3(1.25, 0.84, 0.78), storm_col, 0.5), spot * (0.55 + storms * 0.5));
+    float storm = fbm(vec3(lon * 7.0 - wind_speed * 0.7, lat * 10.0, seed * 0.09) + seed_offset * 0.03, 5);
+    col += (storm - 0.5) * (0.16 + storms * 0.14);
+
+    float giant_storm = exp(-pow((lon + wind_speed * 0.28 - sin(seed * 0.01) * 1.4) / 0.28, 2.0)
+                          - pow((lat - sin(seed * 0.003) * 0.22) / 0.11, 2.0));
+    vec3 storm_col = ice_giant ? vec3(0.92, 0.98, 1.0) : vec3(1.0, 0.74, 0.52);
+    col = mix(col, storm_col, giant_storm * (0.22 + storms * 0.35));
 
     float haze = smoothstep(0.58, 0.94, abs(normal.y));
-    col = mix(col, mix(col, vec3(0.95, 0.98, 1.0), 0.55), haze * (ice_giant ? 0.28 : 0.12));
+    col = mix(col, mix(col, vec3(0.95, 0.98, 1.0), 0.60), haze * (ice_giant ? 0.34 : 0.16));
 
     float ndl = max(dot(normal, light_dir), 0.0);
     return col * (0.28 + 0.72 * ndl);
+}
+
+vec3 rocky_palette(float style, float tone) {
+    vec3 dark;
+    vec3 mid;
+    vec3 bright;
+
+    if (style < 0.5) {
+        dark = vec3(0.08, 0.09, 0.11);
+        mid = vec3(0.28, 0.31, 0.35);
+        bright = vec3(0.60, 0.65, 0.71);
+    } else if (style < 1.5) {
+        dark = vec3(0.15, 0.06, 0.05);
+        mid = vec3(0.45, 0.18, 0.10);
+        bright = vec3(0.78, 0.45, 0.20);
+    } else if (style < 2.5) {
+        dark = vec3(0.21, 0.15, 0.09);
+        mid = vec3(0.57, 0.40, 0.23);
+        bright = vec3(0.86, 0.73, 0.50);
+    } else if (style < 3.5) {
+        dark = vec3(0.13, 0.11, 0.08);
+        mid = vec3(0.36, 0.28, 0.15);
+        bright = vec3(0.72, 0.66, 0.42);
+    } else if (style < 4.5) {
+        dark = vec3(0.09, 0.12, 0.08);
+        mid = vec3(0.26, 0.34, 0.20);
+        bright = vec3(0.60, 0.70, 0.46);
+    } else {
+        dark = vec3(0.16, 0.18, 0.20);
+        mid = vec3(0.44, 0.48, 0.54);
+        bright = vec3(0.82, 0.85, 0.89);
+    }
+
+    vec3 col = mix(dark, mid, smoothstep(0.14, 0.52, tone));
+    return mix(col, bright, smoothstep(0.60, 0.88, tone));
 }
 
 vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
@@ -609,6 +653,8 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     float volcanic = hit.activity_params.z;
 
     vec3 seed_offset = hash31(seed) * 120.0;
+    float lon = atan(normal.z, normal.x);
+    float lat = asin(clamp(normal.y, -1.0, 1.0));
     vec3 np = normal * max(terrain_freq, 1.0) + seed_offset;
     vec3 warp = vec3(
         noise3D(np + vec3(0.0, 5.2, 1.3)),
@@ -641,21 +687,51 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     if (surface_type > 2.5 && surface_type < 3.5)
         return shade_gas_giant(normal, hit, light_dir);
 
-    float sea_level = clamp(1.02 - clamp(ocean_cov, 0.0, 1.0) * 0.92, 0.12, 0.95);
-    vec3 rock_dark = mix(vec3(0.20, 0.17, 0.15), vec3(0.38, 0.29, 0.20), rock_frac);
-    vec3 rock_mid = mix(vec3(0.42, 0.35, 0.28), vec3(0.58, 0.46, 0.32), rock_frac);
-    vec3 rock_bright = mix(vec3(0.72, 0.68, 0.60), vec3(0.82, 0.74, 0.55), metal_frac + 0.2);
+    float sea_level = clamp(1.00 - clamp(ocean_cov, 0.0, 1.0) * 0.90, 0.10, 0.94);
+    float temperate = clamp(1.0 - abs(temperature - 288.0) / 120.0, 0.0, 1.0);
+    float pressure_factor = smoothstep(0.03, 2.5, hit.atmosphere_params.y);
+    float humidity = clamp(ocean_cov * 0.88 + cloud_cov * 0.55 + pressure_factor * 0.18, 0.0, 1.0);
+    float dryness = clamp(1.0 - humidity * 0.90, 0.0, 1.0);
+    float coldness = clamp((245.0 - temperature) / 190.0, 0.0, 1.0);
+    float heat = clamp((temperature - 340.0) / 900.0, 0.0, 1.0);
+    float palette_roll = hash11(seed * 0.021 + terrain_freq * 0.13 + continent_cov * 2.7 +
+                                hit.gravity_params.x * 1800.0);
+    float style = floor(palette_roll * 6.0);
+    if (temperature > 900.0) {
+        style = 1.0;
+    } else if (coldness > 0.55 && ocean_cov < 0.18) {
+        style = 5.0;
+    } else if (dryness > 0.65 && temperature > 285.0) {
+        style = 2.0;
+    } else if (humidity > 0.55 && temperate > 0.40) {
+        style = 3.0;
+    } else if (metal_frac > 0.34 && heat > 0.18) {
+        style = 1.0;
+    }
+
+    vec3 palette_shift = (hash31(seed * 0.113 + surface_type * 9.7) - 0.5) * vec3(0.14, 0.12, 0.10);
+    float rock_tone = clamp(elev + land_mask * 0.08 - valley_mask * 0.05, 0.0, 1.0);
     vec3 ice_col = vec3(0.72, 0.82, 0.95);
-    vec3 col = mix(rock_dark, rock_mid, smoothstep(0.15, 0.5, elev));
-    col = mix(col, rock_bright, smoothstep(0.60, 0.85, elev));
-    float temperate = clamp(1.0 - abs(temperature - 285.0) / 115.0, 0.0, 1.0);
-    vec3 fertile = mix(vec3(0.34, 0.28, 0.16), vec3(0.16, 0.36, 0.18), temperate);
-    col = mix(col, fertile, land_mask * temperate * smoothstep(0.08, 0.55, ocean_cov) * 0.42);
+    vec3 col = rocky_palette(style, rock_tone);
+    col = clamp(col + palette_shift * (0.10 + metal_frac * 0.06), 0.0, 1.0);
+
+    vec3 base_land = rocky_palette(style, clamp(0.44 + elev * 0.22 + rock_frac * 0.10, 0.0, 1.0));
+    vec3 desert_col = mix(vec3(0.60, 0.42, 0.22), vec3(0.86, 0.72, 0.46), smoothstep(0.18, 0.72, elev));
+    vec3 oxidized_col = mix(vec3(0.44, 0.18, 0.12), vec3(0.78, 0.36, 0.16),
+                            smoothstep(0.18, 0.70, metal_frac + heat * 0.5));
+    vec3 vegetated_col = mix(vec3(0.14, 0.22, 0.10), vec3(0.20, 0.46, 0.16), temperate);
+    vegetated_col = mix(vegetated_col, vec3(0.26, 0.58, 0.22), clamp(humidity * temperate, 0.0, 1.0) * 0.55);
+    vec3 land_col = base_land;
+    land_col = mix(land_col, desert_col, dryness * (0.55 + heat * 0.25));
+    land_col = mix(land_col, oxidized_col, clamp(heat * 0.40 + metal_frac * 0.22, 0.0, 0.72));
+    land_col = mix(land_col, vegetated_col, humidity * temperate * (0.60 + pressure_factor * 0.20));
+    land_col = clamp(land_col + palette_shift * 0.08, 0.0, 1.0);
+    col = mix(col, land_col, land_mask * (0.60 + 0.30 * continent_cov + 0.10 * island_cov));
 
     if (surface_type > 1.5 && surface_type < 2.5)
-        col = mix(col, ice_col, 0.68 + ice_frac * 0.22);
+        col = mix(col, ice_col, 0.74 + ice_frac * 0.18);
     else if (surface_type > 3.5)
-        col = mix(col, vec3(0.16, 0.32, 0.12), 0.22);
+        col = mix(col, land_col, 0.18 + humidity * 0.10);
 
     if (temperature < 240.0)
         col = mix(col, ice_col, smoothstep(0.55, 0.92, abs(normal.y)) * clamp(ice_frac + 0.25, 0.0, 1.0));
@@ -666,13 +742,17 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     col = mix(col, ice_col, ice_sheet_mask * clamp(ice_sheet_cov + (temperature < 245.0 ? 0.25 : 0.0), 0.0, 1.0));
 
     bool is_ocean = ocean_cov > 0.01 && elev < sea_level;
+    float coast = smoothstep(sea_level + 0.01, sea_level + 0.09, elev) * land_mask;
+    col = mix(col, vec3(0.90, 0.82, 0.62), coast * (0.30 + humidity * 0.28));
     roughness_out = hit.material_params.x;
     if (is_ocean) {
         float ocean_type = ocean_type_from_temp(temperature);
         float depth = smoothstep(sea_level, sea_level - 0.25, elev);
+        float shallows = 1.0 - smoothstep(sea_level - 0.05, sea_level - 0.18, elev);
         vec3 ocean_col;
         if (ocean_type < 1.5) {
-            ocean_col = mix(vec3(0.03, 0.12, 0.34), vec3(0.06, 0.30, 0.55), 1.0 - depth);
+            ocean_col = mix(vec3(0.02, 0.08, 0.24), vec3(0.08, 0.34, 0.62), 1.0 - depth);
+            ocean_col = mix(ocean_col, vec3(0.24, 0.70, 0.84), shallows * 0.42);
             roughness_out = 0.10;
         } else if (ocean_type < 2.5) {
             ocean_col = mix(vec3(0.02, 0.08, 0.12), vec3(0.08, 0.20, 0.24), 1.0 - depth);
@@ -705,12 +785,18 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     }
 
     if (cloud_cov > 0.01 && surface_type < 3.5) {
-        vec3 cloud_np = normal * 4.5 + seed_offset * 0.03 + vec3(screen_info.w * 0.018, 0.0, -screen_info.w * 0.014);
-        float cloud_shape = smoothstep(0.56 - cloud_cov * 0.16, 0.82, fbm(cloud_np, 5));
-        float shadow = smoothstep(0.55, 0.85, fbm(cloud_np + vec3(2.1, 0.7, 1.4), 5));
+        float cloud_phase = screen_info.w * (0.06 + hit.activity_params.x * 0.22 + hash11(seed * 0.071) * 0.08);
+        vec3 cloud_np = vec3(lon * 7.5 + cloud_phase,
+                             lat * 11.0 + sin(cloud_phase + lon * 2.0) * 0.8,
+                             seed * 0.19);
+        float cloud_shape = smoothstep(0.42 - cloud_cov * 0.24, 0.74, fbm(cloud_np, 5));
+        float cloud_detail = smoothstep(0.52, 0.86, fbm(cloud_np * vec3(1.9, 1.4, 1.0) + vec3(3.2, 1.1, 0.7), 4));
+        float cloud_mask = cloud_shape * mix(0.65, 1.0, cloud_detail);
+        float shadow = smoothstep(0.52, 0.86, fbm(cloud_np + vec3(2.1, 0.7, 1.4), 5));
         float cloud_lit = 0.35 + 0.65 * max(dot(normal, light_dir), 0.0);
-        col = mix(col, vec3(0.92, 0.95, 1.0), cloud_shape * cloud_cov * 0.42 * cloud_lit);
-        col *= 1.0 - shadow * cloud_cov * 0.12;
+        vec3 cloud_col = mix(vec3(0.84, 0.88, 0.94), vec3(0.98, 0.99, 1.0), cloud_lit);
+        col = mix(col, cloud_col, cloud_mask * cloud_cov * (0.64 + 0.24 * cloud_lit));
+        col *= 1.0 - shadow * cloud_cov * 0.18;
     }
 
     float ndl = max(dot(surf_normal, light_dir), 0.0);
@@ -854,10 +940,8 @@ vec3 black_hole_effect(vec3 ro, vec3 rd, Sphere bh, int body_count, bool hit_hor
     col += vec3(0.42, 0.72, 1.0) * jet_axis * jet_height * bh.activity_params.z * 0.55;
 
     if (hit_horizon) {
-        float edge = 1.0 - max(dot(normalize(closest - center), -rd), 0.0);
-        col = mix(col, vec3(0.0), 0.985);
-        col += vec3(1.0, 0.92, 0.82) * pow(edge, 5.0) * (0.08 + bh.activity_params.y * 0.06);
         alpha_out = 1.0;
+        return vec3(0.0);
     } else {
         alpha_out = clamp((influence_radius - influence) / max(influence_radius - radius, 0.001), 0.0, 1.0);
     }

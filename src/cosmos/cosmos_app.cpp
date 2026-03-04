@@ -288,24 +288,60 @@ static void randomize_planet_properties(CelestialBody& body, const CosmosState& 
     constexpr float EARTH_MASS_TO_SOLAR = 3.003e-6f;
     constexpr float PI = 3.14159265359f;
 
+    enum PlanetSpawnArchetype {
+        SPAWN_DWARF_ICE = 0,
+        SPAWN_TERRESTRIAL,
+        SPAWN_OCEAN,
+        SPAWN_DESERT,
+        SPAWN_LAVA,
+        SPAWN_ICE_GIANT,
+        SPAWN_GAS_GIANT,
+    };
+
     std::uniform_real_distribution<float> u01(0.0f, 1.0f);
 
     // Use broad weighted categories so dwarf planets, terrestrial worlds,
     // ice giants, and gas giants all appear regularly.
-    float mass_earth;
     float bucket = u01(rng);
-    if (bucket < 0.16f) {
+    PlanetSpawnArchetype archetype = SPAWN_TERRESTRIAL;
+    if (bucket < 0.12f) archetype = SPAWN_DWARF_ICE;
+    else if (bucket < 0.38f) archetype = SPAWN_TERRESTRIAL;
+    else if (bucket < 0.56f) archetype = SPAWN_OCEAN;
+    else if (bucket < 0.70f) archetype = SPAWN_DESERT;
+    else if (bucket < 0.78f) archetype = SPAWN_LAVA;
+    else if (bucket < 0.90f) archetype = SPAWN_ICE_GIANT;
+    else archetype = SPAWN_GAS_GIANT;
+
+    float mass_earth = 1.0f;
+    switch (archetype) {
+    case SPAWN_DWARF_ICE:
         mass_earth = std::pow(10.0f, std::uniform_real_distribution<float>(
-            std::log10(0.02f), std::log10(0.25f))(rng));
-    } else if (bucket < 0.62f) {
+            std::log10(0.02f), std::log10(0.20f))(rng));
+        break;
+    case SPAWN_TERRESTRIAL:
         mass_earth = std::pow(10.0f, std::uniform_real_distribution<float>(
-            std::log10(0.25f), std::log10(4.0f))(rng));
-    } else if (bucket < 0.84f) {
+            std::log10(0.35f), std::log10(2.5f))(rng));
+        break;
+    case SPAWN_OCEAN:
         mass_earth = std::pow(10.0f, std::uniform_real_distribution<float>(
-            std::log10(4.0f), std::log10(30.0f))(rng));
-    } else {
+            std::log10(0.6f), std::log10(5.0f))(rng));
+        break;
+    case SPAWN_DESERT:
         mass_earth = std::pow(10.0f, std::uniform_real_distribution<float>(
-            std::log10(30.0f), std::log10(1000.0f))(rng));
+            std::log10(0.4f), std::log10(3.5f))(rng));
+        break;
+    case SPAWN_LAVA:
+        mass_earth = std::pow(10.0f, std::uniform_real_distribution<float>(
+            std::log10(0.5f), std::log10(4.5f))(rng));
+        break;
+    case SPAWN_ICE_GIANT:
+        mass_earth = std::pow(10.0f, std::uniform_real_distribution<float>(
+            std::log10(9.0f), std::log10(40.0f))(rng));
+        break;
+    case SPAWN_GAS_GIANT:
+        mass_earth = std::pow(10.0f, std::uniform_real_distribution<float>(
+            std::log10(45.0f), std::log10(1000.0f))(rng));
+        break;
     }
     body.mass = std::clamp(mass_earth * EARTH_MASS_TO_SOLAR, 1.0e-7f, 0.01f);
 
@@ -341,10 +377,43 @@ static void randomize_planet_properties(CelestialBody& body, const CosmosState& 
         const auto& s = state.bodies[(size_t)nearest_star];
         float ratio = std::sqrt(std::max(s.radius, 1.0f) / (2.0f * std::max(nearest_dist, 1.0f)));
         float eq_t = s.temperature * ratio * std::pow(std::max(1.0f - albedo, 0.05f), 0.25f);
-        float greenhouse = std::uniform_real_distribution<float>(0.9f, 1.35f)(rng);
+        float green_min = 0.9f;
+        float green_max = 1.25f;
+        switch (archetype) {
+        case SPAWN_DWARF_ICE: green_min = 0.80f; green_max = 1.00f; break;
+        case SPAWN_TERRESTRIAL: green_min = 0.92f; green_max = 1.18f; break;
+        case SPAWN_OCEAN: green_min = 0.96f; green_max = 1.10f; break;
+        case SPAWN_DESERT: green_min = 1.02f; green_max = 1.24f; break;
+        case SPAWN_LAVA: green_min = 1.08f; green_max = 1.28f; break;
+        case SPAWN_ICE_GIANT: green_min = 0.84f; green_max = 1.02f; break;
+        case SPAWN_GAS_GIANT: green_min = 0.88f; green_max = 1.12f; break;
+        }
+        float greenhouse = std::uniform_real_distribution<float>(green_min, green_max)(rng);
         body.temperature = std::clamp(eq_t * greenhouse, 60.0f, 2500.0f);
     } else {
-        body.temperature = std::uniform_real_distribution<float>(90.0f, 700.0f)(rng);
+        switch (archetype) {
+        case SPAWN_DWARF_ICE:
+            body.temperature = std::uniform_real_distribution<float>(45.0f, 180.0f)(rng);
+            break;
+        case SPAWN_TERRESTRIAL:
+            body.temperature = std::uniform_real_distribution<float>(190.0f, 360.0f)(rng);
+            break;
+        case SPAWN_OCEAN:
+            body.temperature = std::uniform_real_distribution<float>(255.0f, 325.0f)(rng);
+            break;
+        case SPAWN_DESERT:
+            body.temperature = std::uniform_real_distribution<float>(290.0f, 620.0f)(rng);
+            break;
+        case SPAWN_LAVA:
+            body.temperature = std::uniform_real_distribution<float>(650.0f, 1400.0f)(rng);
+            break;
+        case SPAWN_ICE_GIANT:
+            body.temperature = std::uniform_real_distribution<float>(65.0f, 170.0f)(rng);
+            break;
+        case SPAWN_GAS_GIANT:
+            body.temperature = std::uniform_real_distribution<float>(90.0f, 900.0f)(rng);
+            break;
+        }
     }
 
     // Rotation period in hours: small rocky planets trend faster than giants.
@@ -358,7 +427,15 @@ static void randomize_planet_properties(CelestialBody& body, const CosmosState& 
     }
     body.angular_vel = (2.0f * PI) / (period_hours * 3600.0f);
     if (u01(rng) < 0.15f) body.angular_vel *= -1.0f; // occasional retrograde spin
-    body.atmosphere_retention = 1.0f;
+    switch (archetype) {
+    case SPAWN_DWARF_ICE: body.atmosphere_retention = std::uniform_real_distribution<float>(0.10f, 0.45f)(rng); break;
+    case SPAWN_TERRESTRIAL: body.atmosphere_retention = std::uniform_real_distribution<float>(0.55f, 0.95f)(rng); break;
+    case SPAWN_OCEAN: body.atmosphere_retention = std::uniform_real_distribution<float>(0.80f, 1.00f)(rng); break;
+    case SPAWN_DESERT: body.atmosphere_retention = std::uniform_real_distribution<float>(0.35f, 0.85f)(rng); break;
+    case SPAWN_LAVA: body.atmosphere_retention = std::uniform_real_distribution<float>(0.20f, 0.70f)(rng); break;
+    case SPAWN_ICE_GIANT: body.atmosphere_retention = std::uniform_real_distribution<float>(0.92f, 1.00f)(rng); break;
+    case SPAWN_GAS_GIANT: body.atmosphere_retention = 1.0f; break;
+    }
 }
 
 static void randomize_moon_properties(CelestialBody& body, const CosmosState& state,
@@ -853,8 +930,10 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
     nb.mass = spawn_mass;
     nb.radius = std::max(3.0f, std::cbrt(spawn_mass) * 5.0f);
     nb.type = (uint32_t)spawn_type;
-    nb.seed = (uint32_t)(std::hash<float>{}(pos.x) ^ std::hash<float>{}(pos.y) ^
-              std::hash<float>{}(pos.z) ^ (uint32_t)state.bodies.size());
+    uint32_t pos_seed = hash_combine(hash_combine(float_bits(pos.x), float_bits(pos.y)), float_bits(pos.z));
+    nb.seed = hash_combine(hash_combine(pos_seed,
+        (uint32_t)state.bodies.size() * 747796405u + 2891336453u),
+        (uint32_t)(sim_time_ * 1000.0f) + 1181783497u);
     std::mt19937 rng(nb.seed ^ (uint32_t)(sim_time_ * 1000.0f));
 
     if (is_star_type((uint32_t)spawn_type)) {
