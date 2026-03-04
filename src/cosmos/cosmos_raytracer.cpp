@@ -31,6 +31,8 @@ struct SphereGPU {
     glm::vec4 activity_params;    // x = weather/flaring, y = corona/coma, z = tail/accretion, w = lensing/jet
     glm::vec4 magnetosphere_params; // x = field, y = outer radius, z = axis angle, w = trapping
     glm::vec4 gravity_params;     // x = mass, y = stage, z = fuel, w = luminosity
+    glm::vec4 ring_params;        // x = inner radius, y = outer radius, z = density, w = tilt
+    glm::vec4 phase_params;       // x = material phase, y = phase intensity, z = collapse, w = ring ice fraction
 };
 
 // ── Body color helper (matches cosmos_app.cpp) ──────────────────────────────
@@ -339,11 +341,13 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
         float radiation_belts = magnetic.has_magnetosphere
             ? std::clamp((stellar_flux + bh_flux * 1.4f) * (0.18f + magnetic.particle_trapping * 0.72f), 0.0f, 2.2f)
             : 0.0f;
+        bool physical_planet = (b.type == CTYPE_PLANET || b.type == CTYPE_MOON);
+        bool planet_like_visual = (vp.render_class == RENDER_PLANET || vp.render_class == RENDER_MOON);
 
-        float cloud_cov = (b.type == CTYPE_PLANET || b.type == CTYPE_MOON)
-            ? pp.cloud_coverage / 100.0f : 0.0f;
-        float pressure = (b.type == CTYPE_PLANET || b.type == CTYPE_MOON)
-            ? pp.atmosphere.pressure : 0.0f;
+        float cloud_cov = physical_planet ? (pp.cloud_coverage / 100.0f)
+            : (b.type == CTYPE_NEBULA ? vp.cloud_detail : 0.0f);
+        float pressure = physical_planet ? pp.atmosphere.pressure
+            : (b.type == CTYPE_NEBULA ? (35.0f + b.collapse_progress * 140.0f) : 0.0f);
 
         spheres[i].class_seed_temp = glm::vec4(
             shader_seed,
@@ -366,7 +370,7 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
             vp.river_density,
             vp.ice_sheet_coverage);
         float comp_w = vp.dust_frac;
-        if (vp.render_class == RENDER_PLANET || vp.render_class == RENDER_MOON)
+        if (physical_planet && planet_like_visual)
             comp_w = pp.ocean_coverage / 100.0f;
         if (vp.render_class == RENDER_STAR) {
             spheres[i].composition_params = glm::vec4(
@@ -386,7 +390,7 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
             pressure,
             vp.haze_density,
             vp.rayleigh_strength);
-        if (vp.render_class == RENDER_PLANET || vp.render_class == RENDER_MOON) {
+        if (planet_like_visual) {
             spheres[i].activity_params = glm::vec4(
                 vp.weather_strength,
                 vp.aurora_strength,
@@ -422,7 +426,7 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
             magnetic.magnetosphere_size,
             magnetic.axis_angle,
             magnetic.particle_trapping);
-        if (vp.render_class == RENDER_PLANET || vp.render_class == RENDER_MOON) {
+        if (planet_like_visual) {
             spheres[i].gravity_params = glm::vec4(
                 std::max(b.mass, 0.0f),
                 storm_visual,
@@ -435,6 +439,16 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
                 std::clamp(b.fuel, 0.0f, 1.0f),
                 std::max(b.luminosity, 0.0f));
         }
+        spheres[i].ring_params = glm::vec4(
+            std::max(b.ring_inner_radius, 0.0f),
+            std::max(b.ring_outer_radius, 0.0f),
+            std::clamp(b.ring_density, 0.0f, 1.0f),
+            std::clamp(b.ring_tilt, 0.0f, 1.30f));
+        spheres[i].phase_params = glm::vec4(
+            (float)b.material_phase,
+            std::clamp(b.phase_intensity, 0.0f, 1.0f),
+            std::clamp(b.collapse_progress, 0.0f, 1.0f),
+            std::clamp(b.ring_ice_fraction, 0.0f, 1.0f));
     }
 
     if (n > 0) {

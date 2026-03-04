@@ -104,6 +104,16 @@ enum PlanetClass : uint8_t {
     PCLASS_GAS_GIANT = 5,
 };
 
+enum MaterialPhase : uint8_t {
+    PHASE_SOLID = 0,
+    PHASE_LIQUID = 1,
+    PHASE_ICE = 2,
+    PHASE_GAS = 3,
+    PHASE_MOLTEN = 4,
+    PHASE_PLASMA = 5,
+    PHASE_COLLAPSING = 6,
+};
+
 enum BodyRenderClass : uint8_t {
     RENDER_STAR = 0,
     RENDER_PLANET = 1,
@@ -636,8 +646,16 @@ struct CelestialBody {
     float       mass_loss_rate = 0.0f;      // solar masses / simulated second
     float       mass_loss_total = 0.0f;     // cumulative solar masses lost
     float       atmosphere_retention = 1.0f; // 0-1 atmospheric reservoir for erosion / shielding
+    float       phase_intensity = 0.0f;     // 0-1 current strength of dominant material phase
+    float       collapse_progress = 0.0f;   // 0-1 protostellar / cloud collapse state
+    float       ring_inner_radius = 0.0f;   // world-space inner ring radius
+    float       ring_outer_radius = 0.0f;   // world-space outer ring radius
+    float       ring_density = 0.0f;        // 0-1 visual density / optical depth
+    float       ring_ice_fraction = 0.0f;   // 0-1 icy vs dusty ring composition
+    float       ring_tilt = 0.0f;           // radians from "up" for procedural ring axis
     float       angular_vel    = 0.0f;
     uint32_t    stellar_stage  = 0;         // StellarStage enum
+    uint32_t    material_phase = PHASE_SOLID;
     bool        marked_for_removal = false;
     uint32_t    seed           = 0;         // procedural generation seed
     uint32_t    frag_generation = 0;        // how many times this body has been fragmented (0 = original)
@@ -712,6 +730,8 @@ struct CosmosConfig {
 
     // Roche limit
     bool     roche_limit        = true;
+    bool     material_phases    = true;
+    bool     planetary_rings    = true;
 
     // Temperature system
     bool     temperature_system = true;
@@ -977,6 +997,28 @@ inline BodyVisualProperties generate_body_visual_properties(const CelestialBody&
         vp.spin_visual = spin_mag;
         vp.metal_frac = 0.75f;
         vp.dust_frac = 0.25f;
+        return vp;
+    }
+
+    if (b.type == CTYPE_NEBULA) {
+        vp.render_class = RENDER_PLANET;
+        vp.subtype = SURF_GAS;
+        vp.roughness = 1.0f;
+        vp.specular = 0.0f;
+        vp.normal_strength = 0.18f;
+        vp.terrain_amp = 0.08f + h0 * 0.18f;
+        vp.terrain_freq = 1.2f + h1 * 2.2f;
+        vp.ridge_amp = 0.02f + h2 * 0.06f;
+        vp.rock_frac = 0.01f;
+        vp.ice_frac = (b.temperature < 120.0f) ? (0.18f + h0 * 0.20f) : (0.02f + h0 * 0.06f);
+        vp.metal_frac = 0.01f + h1 * 0.04f + std::clamp(b.collapse_progress, 0.0f, 1.0f) * 0.10f;
+        vp.dust_frac = 0.72f + h2 * 0.18f;
+        vp.haze_density = 0.82f;
+        vp.rayleigh_strength = 0.10f;
+        vp.mie_strength = 1.05f;
+        vp.cloud_detail = 0.90f;
+        vp.weather_strength = 0.78f + std::clamp(b.collapse_progress, 0.0f, 1.0f) * 0.18f;
+        vp.spin_visual = spin_mag;
         return vp;
     }
 

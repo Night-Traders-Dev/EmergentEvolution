@@ -28,6 +28,8 @@ struct Sphere {
     vec4 activity_params;
     vec4 magnetosphere_params;
     vec4 gravity_params;
+    vec4 ring_params;
+    vec4 phase_params;
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer SphereBuffer {
@@ -46,6 +48,14 @@ const int SURF_LIQUID = 1;
 const int SURF_FROZEN = 2;
 const int SURF_GAS = 3;
 const int SURF_MIXED = 4;
+
+const int PHASE_SOLID = 0;
+const int PHASE_LIQUID = 1;
+const int PHASE_ICE = 2;
+const int PHASE_GAS = 3;
+const int PHASE_MOLTEN = 4;
+const int PHASE_PLASMA = 5;
+const int PHASE_COLLAPSING = 6;
 
 const int SSTAGE_MAIN_SEQUENCE = 0;
 const int SSTAGE_RED_GIANT = 2;
@@ -390,6 +400,91 @@ vec3 magnetic_axis(float angle, float seed) {
     return normalize(axis);
 }
 
+vec3 ring_axis(float tilt, float seed) {
+    float phase = fract(seed * 0.0173 + 0.61) * 6.28318530718;
+    vec3 axis = vec3(cos(phase) * sin(tilt), cos(tilt), sin(phase) * sin(tilt));
+    if (dot(axis, axis) < 1.0e-5) axis = vec3(0.0, 1.0, 0.0);
+    return normalize(axis);
+}
+
+vec3 phase_emission_tint(float phase_kind, float intensity, float temperature, vec3 base_col) {
+    if (phase_kind < float(PHASE_MOLTEN) - 0.5)
+        return vec3(0.0);
+
+    if (phase_kind < float(PHASE_PLASMA) - 0.5) {
+        vec3 hot = mix(vec3(0.95, 0.18, 0.02), vec3(1.00, 0.58, 0.12),
+                       clamp((temperature - 900.0) / 1200.0, 0.0, 1.0));
+        return hot * intensity * 1.25;
+    }
+    if (phase_kind < float(PHASE_COLLAPSING) - 0.5) {
+        vec3 plasma = mix(vec3(1.00, 0.58, 0.18), vec3(1.00, 0.92, 0.74),
+                          clamp((temperature - 2000.0) / 12000.0, 0.0, 1.0));
+        return plasma * intensity * 1.45;
+    }
+
+    vec3 collapsing = mix(base_col * 0.75 + vec3(0.28, 0.14, 0.06),
+                          vec3(1.0, 0.82, 0.48),
+                          clamp(intensity, 0.0, 1.0));
+    return collapsing * intensity * 0.75;
+}
+
+void accumulate_rings(vec3 ro, vec3 rd, int body_count, float scene_t,
+                      out vec3 ring_col, out float ring_alpha) {
+    ring_col = vec3(0.0);
+    ring_alpha = 0.0;
+
+    for (int i = 0; i < body_count && i < 512; i++) {
+        Sphere body = spheres[i];
+        float inner = body.ring_params.x;
+        float outer = body.ring_params.y;
+        float density = body.ring_params.z;
+        if (density < 0.01 || outer <= inner + 0.01) continue;
+
+        vec3 axis = ring_axis(max(body.ring_params.w, 0.02), body.class_seed_temp.x);
+        float denom = dot(rd, axis);
+        if (abs(denom) < 1.0e-4) continue;
+
+        float t = dot(body.pos_radius.xyz - ro, axis) / denom;
+        if (t <= 0.0) continue;
+        if (scene_t > 0.0 && t > scene_t + 0.02) continue;
+
+        float body_t = intersect_sphere(ro, rd, body.pos_radius.xyz, body.pos_radius.w);
+        if (body_t > 0.0 && body_t < t - 0.02) continue;
+
+        vec3 hit = ro + rd * t;
+        vec3 rel = hit - body.pos_radius.xyz;
+        vec3 planar = rel - axis * dot(rel, axis);
+        float radial = length(planar);
+        if (radial < inner || radial > outer) continue;
+
+        float edge = max((outer - inner) * 0.06, body.pos_radius.w * 0.05);
+        float annulus = smoothstep(inner, inner + edge, radial) *
+                        (1.0 - smoothstep(outer - edge, outer, radial));
+        float ring_u = (radial - inner) / max(outer - inner, 1.0e-4);
+        float az = atan(planar.z, planar.x);
+        float band_noise = fbm(vec3(ring_u * 22.0,
+                                    az * 3.4 + body.class_seed_temp.x * 0.07,
+                                    body.class_seed_temp.x * 0.11), 4);
+        float gaps = smoothstep(0.10, 0.24, abs(sin(ring_u * 36.0 + band_noise * 3.2)));
+        float bands = mix(0.48, 1.0, band_noise) * gaps;
+        float view_facing = 0.35 + 0.65 * clamp(1.0 - abs(dot(rd, axis)), 0.0, 1.0);
+        float shadow = 1.0;
+        float n_dot_l = dot(axis, normalize(vec3(0.45, 0.75, 0.35)));
+        shadow *= 0.78 + 0.22 * abs(n_dot_l);
+
+        vec3 dusty = mix(vec3(0.48, 0.40, 0.30), vec3(0.76, 0.66, 0.52), band_noise);
+        vec3 icy = mix(vec3(0.70, 0.76, 0.84), vec3(0.95, 0.98, 1.0), bands);
+        float ice_fraction = body.phase_params.w;
+        float hot = clamp((body.class_seed_temp.w - 260.0) / 1400.0, 0.0, 1.0);
+        vec3 col = mix(dusty, icy, ice_fraction);
+        col = mix(col, vec3(0.92, 0.42, 0.12), hot * (1.0 - ice_fraction) * 0.55);
+
+        float alpha = density * annulus * bands * view_facing * shadow * 0.72;
+        ring_col += col * alpha;
+        ring_alpha = clamp(ring_alpha + alpha, 0.0, 0.82);
+    }
+}
+
 vec3 magnetosphere_tint(int render_class, float surface_type, float temperature) {
     if (render_class == RENDER_STAR)
         return mix(vec3(1.0, 0.78, 0.50), vec3(0.78, 0.88, 1.0), clamp((temperature - 4500.0) / 18000.0, 0.0, 1.0));
@@ -651,6 +746,9 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     float ice_sheet_cov = hit.feature_params.w;
     float cloud_cov = hit.atmosphere_params.x;
     float volcanic = hit.activity_params.z;
+    float phase_kind = hit.phase_params.x;
+    float phase_intensity = hit.phase_params.y;
+    float collapse_phase = hit.phase_params.z;
 
     vec3 seed_offset = hash31(seed) * 120.0;
     float lon = atan(normal.z, normal.x);
@@ -797,6 +895,24 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
         vec3 cloud_col = mix(vec3(0.84, 0.88, 0.94), vec3(0.98, 0.99, 1.0), cloud_lit);
         col = mix(col, cloud_col, cloud_mask * cloud_cov * (0.64 + 0.24 * cloud_lit));
         col *= 1.0 - shadow * cloud_cov * 0.18;
+    }
+
+    if (phase_kind > float(PHASE_ICE) - 0.5 && phase_kind < float(PHASE_ICE) + 0.5) {
+        col = mix(col, ice_col, phase_intensity * 0.42);
+    } else if (phase_kind > float(PHASE_GAS) - 0.5 && phase_kind < float(PHASE_GAS) + 0.5 &&
+               surface_type < 2.5) {
+        col = mix(col, mix(col, vec3(0.78, 0.72, 0.64), 0.55), phase_intensity * 0.22);
+    } else if (phase_kind > float(PHASE_MOLTEN) - 0.5 && phase_kind < float(PHASE_MOLTEN) + 0.5) {
+        vec3 molten_col = mix(vec3(0.38, 0.08, 0.02), vec3(1.00, 0.52, 0.08),
+                              clamp((temperature - 900.0) / 1000.0, 0.0, 1.0));
+        col = mix(col, molten_col, phase_intensity * (0.30 + 0.32 * (1.0 - land_mask)));
+    } else if (phase_kind > float(PHASE_PLASMA) - 0.5) {
+        vec3 plasma_col = mix(vec3(1.00, 0.58, 0.12), vec3(1.00, 0.92, 0.72),
+                              clamp((temperature - 2000.0) / 12000.0, 0.0, 1.0));
+        col = mix(col, plasma_col, phase_intensity * 0.60);
+    }
+    if (collapse_phase > 0.01) {
+        col = mix(col, col * 0.70 + vec3(0.30, 0.14, 0.06), collapse_phase * 0.28);
     }
 
     float ndl = max(dot(surf_normal, light_dir), 0.0);
@@ -997,6 +1113,11 @@ void main() {
         float fabric_t = -1.0;
         if (sample_space_fabric(ro, rd, body_count, fabric_col, fabric_alpha, fabric_t))
             miss_col = mix(miss_col, miss_col + fabric_col, fabric_alpha);
+        vec3 ring_col = vec3(0.0);
+        float ring_alpha = 0.0;
+        accumulate_rings(ro, rd, body_count, -1.0, ring_col, ring_alpha);
+        if (ring_alpha > 0.0)
+            miss_col = mix(miss_col, miss_col + ring_col, ring_alpha);
         vec3 magnet_col = vec3(0.0);
         float magnet_alpha = 0.0;
         accumulate_magnetospheres(ro, rd, body_count, -1.0, magnet_col, magnet_alpha);
@@ -1024,6 +1145,11 @@ void main() {
     if (render_class == RENDER_BLACK_HOLE || hit.base_emit.a < -0.5) {
         float alpha = 1.0;
         vec3 bh = black_hole_effect(ro, rd, hit, body_count, true, alpha);
+        vec3 ring_col = vec3(0.0);
+        float ring_alpha = 0.0;
+        accumulate_rings(ro, rd, body_count, closest_t, ring_col, ring_alpha);
+        if (ring_alpha > 0.0)
+            bh = mix(bh, bh + ring_col, ring_alpha);
         outColor = vec4(pow(max(bh, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
         return;
     }
@@ -1036,6 +1162,11 @@ void main() {
 
     if (render_class == RENDER_STAR || hit.base_emit.a > 0.0) {
         vec3 star_col = shade_star(normal, rd, hit);
+        vec3 ring_col = vec3(0.0);
+        float ring_alpha = 0.0;
+        accumulate_rings(ro, rd, body_count, closest_t, ring_col, ring_alpha);
+        if (ring_alpha > 0.0)
+            star_col = mix(star_col, star_col + ring_col, ring_alpha);
         vec3 magnet_col = vec3(0.0);
         float magnet_alpha = 0.0;
         accumulate_magnetospheres(ro, rd, body_count, closest_t, magnet_col, magnet_alpha);
@@ -1129,6 +1260,16 @@ void main() {
         }
     }
 
+    if (render_class == RENDER_PLANET || render_class == RENDER_MOON) {
+        float phase_kind = hit.phase_params.x;
+        float phase_intensity = hit.phase_params.y;
+        vec3 emission = phase_emission_tint(phase_kind, phase_intensity, hit.class_seed_temp.w, base_color);
+        if (dot(emission, emission) > 0.0) {
+            float edge_glow = 0.35 + 0.65 * pow(clamp(1.0 - max(dot(normal, -rd), 0.0), 0.0, 1.0), 1.35);
+            final_color += emission * edge_glow;
+        }
+    }
+
     if (render_class == RENDER_COMET) {
         float edge = pow(clamp(1.0 - max(dot(normal, -rd), 0.0), 0.0, 1.0), 2.0);
         float phase = phase_hg(0.55, dot(-rd, primary_light_dir));
@@ -1150,6 +1291,12 @@ void main() {
             overlay *= 0.85;
         final_color = mix(final_color, final_color + fabric_col, overlay);
     }
+
+    vec3 ring_col = vec3(0.0);
+    float ring_alpha = 0.0;
+    accumulate_rings(ro, rd, body_count, closest_t, ring_col, ring_alpha);
+    if (ring_alpha > 0.0)
+        final_color = mix(final_color, final_color + ring_col, ring_alpha);
 
     vec3 magnet_col = vec3(0.0);
     float magnet_alpha = 0.0;

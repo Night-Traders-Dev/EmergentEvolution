@@ -68,6 +68,7 @@ private:
     void process_collisions(float dt);
     void process_roche_limit(float dt);
     void process_temperature(float dt);
+    void process_material_phases(float dt);
     void process_space_weather(float dt);
     void process_evaporation(float dt);
     void process_stellar_evolution(float dt);
