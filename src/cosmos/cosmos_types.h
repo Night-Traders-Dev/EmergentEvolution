@@ -247,7 +247,8 @@ inline int temp_band(float t) {
 
 // ── Generate planet properties deterministically ────────────────────────────
 
-inline PlanetProperties generate_planet_properties(uint32_t seed, float mass, float temperature) {
+inline PlanetProperties generate_planet_properties(uint32_t seed, float mass, float temperature,
+                                                   bool is_moon = false) {
     PlanetProperties pp;
     constexpr float EARTH_MASS_SOLAR = 3.003e-6f;
     float mass_earth = std::max(mass / EARTH_MASS_SOLAR, 0.01f);
@@ -261,7 +262,15 @@ inline PlanetProperties generate_planet_properties(uint32_t seed, float mass, fl
     float h2 = hash_float(hash_combine(h, 2));
 
     // ── Surface composition (broader ranges, more variety) ──
-    if (mass_earth > 80.0f) {
+    if (is_moon) {
+        if (temperature < 170.0f) {
+            pp.surface = (h0 < 0.18f && mass_earth > 0.015f) ? SURF_MIXED : SURF_FROZEN;
+        } else if (temperature >= 250.0f && temperature <= 320.0f && mass_earth > 0.01f && h0 < 0.10f) {
+            pp.surface = SURF_MIXED;
+        } else {
+            pp.surface = (h0 > 0.30f) ? SURF_ROCKY : SURF_MIXED;
+        }
+    } else if (mass_earth > 80.0f) {
         pp.surface = SURF_GAS;
     } else if (mass_earth > 8.0f) {
         // Mini-neptune zone: 70% gas, 30% mixed
@@ -292,7 +301,14 @@ inline PlanetProperties generate_planet_properties(uint32_t seed, float mass, fl
         pp.surface = (h0 > 0.5f) ? SURF_ROCKY : SURF_MIXED;
     }
 
-    if (pp.surface == SURF_GAS) {
+    if (is_moon) {
+        if (pp.surface == SURF_LIQUID)
+            pp.planet_class = PCLASS_OCEAN;
+        else if (mass_earth < 0.03f)
+            pp.planet_class = PCLASS_DWARF;
+        else
+            pp.planet_class = PCLASS_TERRESTRIAL;
+    } else if (pp.surface == SURF_GAS) {
         pp.planet_class = (mass_earth >= 45.0f) ? PCLASS_GAS_GIANT : PCLASS_ICE_GIANT;
     } else if (mass_earth < 0.18f) {
         pp.planet_class = PCLASS_DWARF;
@@ -312,9 +328,9 @@ inline PlanetProperties generate_planet_properties(uint32_t seed, float mass, fl
         pp.atmosphere.he_frac  = 1.0f - pp.atmosphere.h2_frac - 0.03f;
         pp.atmosphere.ch4_frac = hash_float(hash_combine(ha, 2)) * 0.03f;
         pp.atmosphere.pressure = 10.0f + hash_float(hash_combine(ha, 3)) * 200.0f;
-    } else if (mass_earth > 0.08f && temperature > 120.0f) {
+    } else if (mass_earth > (is_moon ? 0.01f : 0.08f) && temperature > 120.0f) {
         // Terrestrial atmosphere — wide variety
-        float atm_chance = std::min(1.0f, 0.16f + mass_earth * 0.22f); // bigger = more likely
+        float atm_chance = std::min(1.0f, (is_moon ? 0.04f : 0.16f) + mass_earth * (is_moon ? 0.12f : 0.22f));
         if (ha0 < atm_chance) {
             pp.atmosphere.n2_frac  = 0.1f + hash_float(hash_combine(ha, 4)) * 0.85f;
             pp.atmosphere.co2_frac = hash_float(hash_combine(ha, 5)) * 0.60f;
@@ -342,7 +358,7 @@ inline PlanetProperties generate_planet_properties(uint32_t seed, float mass, fl
                 pp.atmosphere.nh3_frac /= total;
             }
             // Pressure: thin to thick based on mass and seed
-            float base_p = 0.02f + std::pow(std::min(mass_earth, 30.0f), 0.45f) * 0.55f;
+            float base_p = 0.02f + std::pow(std::min(mass_earth, 30.0f), 0.45f) * (is_moon ? 0.14f : 0.55f);
             pp.atmosphere.pressure = base_p + hash_float(hash_combine(ha, 7)) * base_p * 4.0f;
             if (temperature > 400.0f && pp.atmosphere.co2_frac > 0.5f)
                 pp.atmosphere.pressure = 20.0f + hash_float(hash_combine(ha, 14)) * 80.0f; // Venus-like
@@ -350,7 +366,7 @@ inline PlanetProperties generate_planet_properties(uint32_t seed, float mass, fl
         // else: airless (Mercury/Moon-like) — pressure stays 0
     }
 
-    if (pp.planet_class == PCLASS_DWARF && pp.surface != SURF_GAS) {
+    if ((pp.planet_class == PCLASS_DWARF || is_moon) && pp.surface != SURF_GAS) {
         pp.atmosphere.pressure *= 0.05f + ha0 * 0.25f;
     }
     if (pp.planet_class == PCLASS_GAS_GIANT || pp.planet_class == PCLASS_ICE_GIANT) {
@@ -397,7 +413,7 @@ inline PlanetProperties generate_planet_properties(uint32_t seed, float mass, fl
         pp.ocean_coverage = std::max(pp.ocean_coverage, 85.0f + ho0 * 12.0f);
         pp.ocean_depth = std::max(pp.ocean_depth, 10.0f + hash_float(hash_combine(ho, 9)) * 60.0f);
     }
-    if (pp.planet_class == PCLASS_DWARF && pp.ocean_type != OCEAN_NONE) {
+    if ((pp.planet_class == PCLASS_DWARF || is_moon) && pp.ocean_type != OCEAN_NONE) {
         pp.ocean_coverage *= 0.65f;
         pp.ocean_depth *= 0.55f;
     }
@@ -425,7 +441,7 @@ inline PlanetProperties generate_planet_properties(uint32_t seed, float mass, fl
             ? std::clamp((285.0f - temperature) * 0.45f + hash_float(hash_combine(ht, 10)) * 20.0f +
                          (pp.surface == SURF_FROZEN ? 25.0f : 0.0f), 0.0f, 92.0f)
             : 0.0f;
-        pp.has_iron_core = (mass_earth > 0.12f && hash_float(hash_combine(ht, 11)) > 0.18f) ||
+        pp.has_iron_core = (mass_earth > (is_moon ? 0.025f : 0.12f) && hash_float(hash_combine(ht, 11)) > 0.18f) ||
                            pp.planet_class == PCLASS_SUPER_EARTH;
         pp.has_rivers = (pp.ocean_type == OCEAN_WATER && pp.atmosphere.pressure > 0.12f &&
                          temperature >= 235.0f && temperature <= 340.0f &&
@@ -435,12 +451,24 @@ inline PlanetProperties generate_planet_properties(uint32_t seed, float mass, fl
                          (pp.continent_coverage / 100.0f) * 0.45f +
                          hash_float(hash_combine(ht, 12)) * 0.35f, 0.08f, 1.0f)
             : 0.0f;
-        if (pp.planet_class == PCLASS_DWARF) {
+        if (pp.planet_class == PCLASS_DWARF || is_moon) {
             pp.continent_count = std::min(pp.continent_count, 3);
             pp.continent_coverage *= 0.65f;
             pp.mountain_height *= 0.55f;
             pp.valley_depth *= 0.70f;
             pp.river_density *= 0.35f;
+            pp.island_coverage *= 0.70f;
+        }
+        if (is_moon) {
+            pp.atmosphere.pressure *= 0.45f;
+            pp.cloud_coverage *= 0.35f;
+            pp.continent_count = std::min(pp.continent_count, 2);
+            pp.continent_coverage *= 0.55f;
+            pp.has_weather = pp.atmosphere.pressure > 0.08f;
+            pp.has_rivers = pp.has_rivers && pp.atmosphere.pressure > 0.12f;
+            pp.river_density *= 0.30f;
+            pp.ocean_coverage = std::min(pp.ocean_coverage, 38.0f);
+            pp.ocean_depth *= 0.65f;
         } else if (pp.planet_class == PCLASS_SUPER_EARTH) {
             pp.mountain_height *= 1.25f;
             pp.valley_depth *= 1.15f;
@@ -622,7 +650,7 @@ inline void refresh_planet_props(CelestialBody& b) {
     if (b.type != CTYPE_PLANET && b.type != CTYPE_MOON) return;
     int band = temp_band(b.temperature);
     if (b.props_valid && band == b.cached_temp_band) return; // same band, no change
-    b.cached_props = generate_planet_properties(b.seed, b.mass, b.temperature);
+    b.cached_props = generate_planet_properties(b.seed, b.mass, b.temperature, b.type == CTYPE_MOON);
     float retention = std::clamp(b.atmosphere_retention, 0.0f, 1.0f);
     float retention_scale = (b.cached_props.surface == SURF_GAS)
         ? (0.60f + retention * 0.40f)
@@ -784,7 +812,7 @@ inline MagneticSignature estimate_magnetic_signature(const CelestialBody& b, flo
                           spin * 420.0f + (1.0f - std::clamp(b.fuel, 0.0f, 1.0f)) * 0.35f);
         float compact = (b.stellar_stage == SSTAGE_WHITE_DWARF || b.stellar_stage == SSTAGE_NEUTRON_STAR) ? 1.0f : 0.0f;
         ms.magnetic_field = std::clamp(activity * (0.8f + density * 4.0f + compact * 1.4f), 0.0f, 18.0f);
-        ms.magnetosphere_size = b.radius * std::clamp(2.6f + ms.magnetic_field * 0.22f, 2.8f, 9.5f);
+        ms.magnetosphere_size = b.radius * std::clamp(3.2f + ms.magnetic_field * 0.28f, 3.5f, 12.0f);
         ms.has_magnetosphere = true;
         ms.show_axis = true;
         ms.particle_trapping = std::clamp(ms.magnetic_field * 0.12f, 0.0f, 1.5f);
@@ -812,12 +840,74 @@ inline MagneticSignature estimate_magnetic_signature(const CelestialBody& b, flo
     float gravity = G * b.mass / std::max(b.radius * b.radius, 1.0e-6f);
     float extent = std::pow(std::max(ms.magnetic_field, 0.01f), 0.33f) *
                    (1.3f + gravity * 2.1f + std::clamp(pp.atmosphere.pressure * 0.015f, 0.0f, 0.8f));
-    float max_mult = gas_dynamo ? 18.0f : 10.5f;
-    ms.magnetosphere_size = b.radius * std::clamp(1.35f + extent, 1.5f, max_mult);
+    float max_mult = gas_dynamo ? 22.0f : (b.type == CTYPE_MOON ? 8.0f : 12.0f);
+    ms.magnetosphere_size = b.radius * std::clamp(1.65f + extent, 1.8f, max_mult);
     ms.has_magnetosphere = ms.magnetic_field > 0.03f;
     ms.show_axis = ms.has_magnetosphere;
     ms.particle_trapping = std::clamp(ms.magnetic_field * 0.16f + (gas_dynamo ? 0.35f : 0.0f), 0.0f, 1.5f);
     return ms;
+}
+
+inline float estimate_stellar_luminosity_units(const CelestialBody& b) {
+    if (!is_star_type(b.type)) return 0.0f;
+    float mass_lum = std::pow(std::max(b.mass, 0.05f), 3.5f);
+    float thermal_lum = std::pow(std::max(b.temperature, 100.0f) / 5778.0f, 4.0f) *
+                        std::max(b.radius * b.radius / (30.0f * 30.0f), 0.02f);
+    return std::max(b.luminosity, 0.0f) + mass_lum * 0.1f + thermal_lum;
+}
+
+inline glm::vec3 estimate_magnetic_axis_dir(uint32_t seed) {
+    float tilt = hash_float(hash_combine(seed, 700u)) * 1.57079632679f;
+    float phase = hash_float(hash_combine(seed, 701u)) * 6.28318530718f;
+    glm::vec3 axis(std::cos(phase) * std::sin(tilt),
+                   std::cos(tilt),
+                   std::sin(phase) * std::sin(tilt));
+    if (glm::dot(axis, axis) < 1.0e-6f) axis = glm::vec3(0.0f, 1.0f, 0.0f);
+    return glm::normalize(axis);
+}
+
+inline float estimate_stellar_wind_flux(const CelestialBody& source, const CelestialBody& target,
+                                        float G = 1.0f) {
+    float dist = glm::length(source.pos - target.pos);
+    if (dist <= 1.0e-3f) return 0.0f;
+    MagneticSignature sig = estimate_magnetic_signature(source, G);
+    float flare = std::max(source.cached_visuals.flare_activity, 0.0f);
+    float corona = std::max(source.cached_visuals.corona_strength, 0.0f);
+    float activity = 0.55f + flare * 0.85f + corona * 0.35f + sig.magnetic_field * 0.04f;
+    float luminosity = std::sqrt(std::max(estimate_stellar_luminosity_units(source), 0.0f) + 1.0f);
+    return activity * luminosity / std::max(dist * dist, source.radius * source.radius * 4.0f);
+}
+
+inline float estimate_black_hole_radiation_flux(const CelestialBody& source, const CelestialBody& target,
+                                                const CosmosState* state) {
+    float dist = glm::length(source.pos - target.pos);
+    if (dist <= 1.0e-3f) return 0.0f;
+    float feeding = estimate_black_hole_feeding(source, state);
+    if (feeding <= 0.01f) return 0.0f;
+    glm::vec3 axis = estimate_magnetic_axis_dir(source.seed);
+    glm::vec3 dir = glm::normalize(target.pos - source.pos);
+    float alignment = 0.22f + 0.78f * std::pow(std::abs(glm::dot(dir, axis)), 3.0f);
+    float base = 0.35f + feeding * 1.15f + std::max(source.cached_visuals.jet_strength, 0.0f) * 0.65f;
+    return base * alignment / std::max(dist * dist, source.radius * source.radius * 9.0f);
+}
+
+inline float estimate_space_weather_flux(const CelestialBody& target, const CosmosState* state,
+                                         float G = 1.0f, float* stellar_out = nullptr,
+                                         float* bh_out = nullptr) {
+    float stellar_flux = 0.0f;
+    float bh_flux = 0.0f;
+    if (state) {
+        for (const auto& source : state->bodies) {
+            if (&source == &target || source.marked_for_removal) continue;
+            if (is_star_type(source.type))
+                stellar_flux += estimate_stellar_wind_flux(source, target, G);
+            else if (is_black_hole_type(source.type))
+                bh_flux += estimate_black_hole_radiation_flux(source, target, state);
+        }
+    }
+    if (stellar_out) *stellar_out = stellar_flux;
+    if (bh_out) *bh_out = bh_flux;
+    return stellar_flux + bh_flux * 1.35f;
 }
 
 inline BodyVisualProperties generate_body_visual_properties(const CelestialBody& b,
@@ -1026,6 +1116,12 @@ inline BodyVisualProperties generate_body_visual_properties(const CelestialBody&
 }
 
 inline void refresh_body_visuals(CelestialBody& b, const CosmosState* state = nullptr) {
+    if (state != nullptr) {
+        b.cached_visuals = generate_body_visual_properties(b, state);
+        b.cached_visual_temp_band = temp_band(b.temperature);
+        b.visuals_valid = true;
+        return;
+    }
     int band = temp_band(b.temperature);
     if (b.visuals_valid && band == b.cached_visual_temp_band) return;
     b.cached_visuals = generate_body_visual_properties(b, state);

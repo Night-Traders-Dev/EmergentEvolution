@@ -431,21 +431,47 @@ void accumulate_magnetospheres(vec3 ro, vec3 rd, int body_count, float scene_t,
         float belt = pow(clamp(1.0 - abs(dot(n, axis)), 0.0, 1.0), 5.0);
         float edge = pow(clamp(1.0 - abs(dot(n, -rd)), 0.0, 1.0), 1.8);
         float thickness_n = clamp(path_thickness / max(shell_thickness, 1.0e-4), 0.0, 1.0);
-        float field_glow = field * (0.035 + 0.05 * thickness_n);
+        bool planet_like = (render_class == RENDER_PLANET || render_class == RENDER_MOON);
+        float storm = planet_like ? body.gravity_params.y : body.activity_params.x * 0.45;
+        float retention = planet_like ? body.gravity_params.z : 1.0;
+        float belt_strength = planet_like ? body.gravity_params.w : body.magnetosphere_params.w * (0.45 + storm * 0.30);
+        float phase = screen_info.w * (0.40 + storm * 1.45 + field * 0.035) + body.class_seed_temp.x * 0.21;
+        float field_glow = field * (0.060 + 0.085 * thickness_n);
 
         vec3 tint = magnetosphere_tint(render_class, body.class_seed_temp.z, body.class_seed_temp.w);
         float aurora = body.activity_params.y;
-        float intensity = edge * field_glow;
-        intensity += pole * aurora * 0.12;
-        intensity += belt * body.magnetosphere_params.w * 0.03;
-        if (render_class == RENDER_STAR)
-            intensity += belt * body.activity_params.x * 0.035;
+        float belt_wave = smoothstep(0.52, 0.84,
+            fbm(vec3(atan(n.z, n.x) * 7.5 - phase * 1.4,
+                     dot(n, axis) * 15.0,
+                     body.class_seed_temp.x * 0.09), 4));
+        float aurora_arc = smoothstep(0.50, 0.82,
+            fbm(vec3(atan(n.z, n.x) * 10.0 + phase * 1.8,
+                     abs(dot(n, axis)) * 18.0 - phase * 0.7,
+                     body.class_seed_temp.x * 0.23), 4));
+        float intensity = edge * field_glow * (0.85 + storm * 0.12);
+        if (planet_like) {
+            intensity += pole * aurora * retention * (0.12 + storm * 0.22) * aurora_arc;
+            intensity += belt * belt_strength * (0.03 + storm * 0.025) * belt_wave;
+        } else {
+            intensity += pole * body.activity_params.x * 0.045 * aurora_arc;
+            intensity += belt * belt_strength * 0.025 * belt_wave;
+        }
 
-        intensity = clamp(intensity, 0.0, 0.55);
+        intensity = clamp(intensity, 0.0, 0.78);
         if (intensity <= 0.001) continue;
 
-        magnet_col += tint * intensity * (0.55 + 0.65 * pole + 0.30 * belt);
-        magnet_alpha = clamp(magnet_alpha + intensity * 0.55, 0.0, 0.65);
+        vec3 aurora_tint = mix(vec3(0.18, 1.0, 0.56), vec3(0.52, 0.92, 1.0),
+                               step(2.5, body.class_seed_temp.z));
+        vec3 belt_tint = mix(tint, vec3(0.84, 0.94, 1.0), 0.45);
+        vec3 shell = tint * edge * field_glow * (0.65 + 0.55 * pole + 0.20 * belt);
+        if (planet_like) {
+            shell += aurora_tint * pole * aurora_arc * aurora * retention * (0.20 + storm * 0.38);
+            shell += belt_tint * belt * belt_wave * belt_strength * (0.08 + storm * 0.06);
+        } else {
+            shell += mix(tint, vec3(1.0, 0.92, 0.80), 0.25) * belt * belt_wave * belt_strength * 0.08;
+        }
+        magnet_col += shell;
+        magnet_alpha = clamp(magnet_alpha + intensity * 0.70, 0.0, 0.82);
     }
 }
 
@@ -1001,8 +1027,22 @@ void main() {
                                           hit.atmosphere_params.y, hit.atmosphere_params.z,
                                           hit.atmosphere_params.w, hit.activity_params.w,
                                           hit.class_seed_temp.w);
-        final_color += vec3(0.18, 0.6, 0.42) * hit.activity_params.y *
-                       pow(clamp(1.0 - abs(normal.y), 0.0, 1.0), 6.0);
+        vec3 axis = magnetic_axis(hit.magnetosphere_params.z, hit.class_seed_temp.x);
+        float storm = hit.gravity_params.y;
+        float retention = hit.gravity_params.z;
+        float aurora_base = hit.activity_params.y * retention;
+        if (aurora_base > 0.001) {
+            float pole = pow(clamp(abs(dot(normal, axis)), 0.0, 1.0), 5.0);
+            float view_edge = pow(clamp(1.0 - max(dot(normal, -rd), 0.0), 0.0, 1.0), 2.2);
+            float aurora_phase = screen_info.w * (0.70 + storm * 2.10) + hit.class_seed_temp.x * 0.27;
+            float aurora_arc = smoothstep(0.52, 0.84,
+                fbm(vec3(atan(normal.z, normal.x) * 12.0 + aurora_phase * 1.4,
+                         abs(dot(normal, axis)) * 19.0 - aurora_phase * 0.9,
+                         hit.class_seed_temp.x * 0.19), 4));
+            vec3 aurora_col = mix(vec3(0.18, 1.0, 0.56), vec3(0.54, 0.90, 1.0),
+                                  step(2.5, hit.class_seed_temp.z));
+            final_color += aurora_col * aurora_base * pole * view_edge * aurora_arc * (0.20 + storm * 0.45);
+        }
     }
 
     if (render_class == RENDER_COMET) {

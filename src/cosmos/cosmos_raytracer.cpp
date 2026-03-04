@@ -332,6 +332,13 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
         const PlanetProperties& pp = b.cached_props;
         const BodyVisualProperties& vp = b.cached_visuals;
         MagneticSignature magnetic = estimate_magnetic_signature(b, cfg.G);
+        float stellar_flux = 0.0f;
+        float bh_flux = 0.0f;
+        float space_weather = estimate_space_weather_flux(b, &state, cfg.G, &stellar_flux, &bh_flux);
+        float storm_visual = std::clamp(space_weather * (0.35f + magnetic.magnetic_field * 0.09f), 0.0f, 2.5f);
+        float radiation_belts = magnetic.has_magnetosphere
+            ? std::clamp((stellar_flux + bh_flux * 1.4f) * (0.18f + magnetic.particle_trapping * 0.72f), 0.0f, 2.2f)
+            : 0.0f;
 
         float cloud_cov = (b.type == CTYPE_PLANET || b.type == CTYPE_MOON)
             ? pp.cloud_coverage / 100.0f : 0.0f;
@@ -415,11 +422,19 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
             magnetic.magnetosphere_size,
             magnetic.axis_angle,
             magnetic.particle_trapping);
-        spheres[i].gravity_params = glm::vec4(
-            std::max(b.mass, 0.0f),
-            (float)b.stellar_stage,
-            std::clamp(b.fuel, 0.0f, 1.0f),
-            std::max(b.luminosity, 0.0f));
+        if (vp.render_class == RENDER_PLANET || vp.render_class == RENDER_MOON) {
+            spheres[i].gravity_params = glm::vec4(
+                std::max(b.mass, 0.0f),
+                storm_visual,
+                std::clamp(b.atmosphere_retention, 0.0f, 1.0f),
+                radiation_belts);
+        } else {
+            spheres[i].gravity_params = glm::vec4(
+                std::max(b.mass, 0.0f),
+                (float)b.stellar_stage,
+                std::clamp(b.fuel, 0.0f, 1.0f),
+                std::max(b.luminosity, 0.0f));
+        }
     }
 
     if (n > 0) {

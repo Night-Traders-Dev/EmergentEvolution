@@ -361,6 +361,63 @@ static void randomize_planet_properties(CelestialBody& body, const CosmosState& 
     body.atmosphere_retention = 1.0f;
 }
 
+static void randomize_moon_properties(CelestialBody& body, const CosmosState& state,
+                                      std::mt19937& rng) {
+    constexpr float EARTH_MASS_TO_SOLAR = 3.003e-6f;
+    constexpr float PI = 3.14159265359f;
+    std::uniform_real_distribution<float> u01(0.0f, 1.0f);
+
+    float bucket = u01(rng);
+    float mass_earth;
+    if (bucket < 0.70f) {
+        mass_earth = std::pow(10.0f, std::uniform_real_distribution<float>(
+            std::log10(0.0005f), std::log10(0.03f))(rng));
+    } else if (bucket < 0.95f) {
+        mass_earth = std::pow(10.0f, std::uniform_real_distribution<float>(
+            std::log10(0.03f), std::log10(0.12f))(rng));
+    } else {
+        mass_earth = std::pow(10.0f, std::uniform_real_distribution<float>(
+            std::log10(0.12f), std::log10(0.22f))(rng));
+    }
+    body.mass = std::clamp(mass_earth * EARTH_MASS_TO_SOLAR, 1.0e-8f, 8.0e-7f);
+
+    float radius_earth = std::clamp(0.08f + std::pow(mass_earth, 0.29f) * 0.62f, 0.05f, 0.72f);
+    body.radius = radius_earth * EARTH_RADIUS_SIM_UNITS;
+
+    int nearest_star = -1;
+    float nearest_dist = 1e30f;
+    for (size_t i = 0; i < state.bodies.size(); i++) {
+        const auto& b = state.bodies[i];
+        if (!is_star_type(b.type)) continue;
+        float d = glm::length(b.pos - body.pos);
+        if (d > 1e-3f && d < nearest_dist) {
+            nearest_dist = d;
+            nearest_star = (int)i;
+        }
+    }
+
+    float albedo = std::uniform_real_distribution<float>(0.05f, 0.65f)(rng);
+    if (nearest_star >= 0) {
+        const auto& s = state.bodies[(size_t)nearest_star];
+        float ratio = std::sqrt(std::max(s.radius, 1.0f) / (2.0f * std::max(nearest_dist, 1.0f)));
+        float eq_t = s.temperature * ratio * std::pow(std::max(1.0f - albedo, 0.05f), 0.25f);
+        float greenhouse = std::uniform_real_distribution<float>(0.85f, 1.12f)(rng);
+        body.temperature = std::clamp(eq_t * greenhouse, 40.0f, 900.0f);
+    } else {
+        body.temperature = std::uniform_real_distribution<float>(60.0f, 420.0f)(rng);
+    }
+
+    float period_hours = std::uniform_real_distribution<float>(60.0f, 900.0f)(rng);
+    if (u01(rng) < 0.35f)
+        period_hours = std::uniform_real_distribution<float>(180.0f, 1600.0f)(rng);
+    body.angular_vel = (2.0f * PI) / (period_hours * 3600.0f);
+    if (u01(rng) < 0.05f) body.angular_vel *= -1.0f;
+
+    body.atmosphere_retention = std::clamp(0.08f + mass_earth * 2.4f +
+                                           (body.temperature < 180.0f ? 0.10f : 0.0f),
+                                           0.05f, 0.82f);
+}
+
 static void enforce_body_physical_limits(CelestialBody& b);
 
 static void refresh_body_render_state(CelestialBody& body, const CosmosState* state = nullptr) {
@@ -512,17 +569,6 @@ static MagneticMetrics derive_magnetic_metrics(const CelestialBody& b, float G) 
     return mm;
 }
 
-static glm::vec3 magnetic_axis_dir(const CelestialBody& b) {
-    float tilt = hash_float(hash_combine(b.seed, 700u)) * 1.57079632679f;
-    float phase = hash_float(hash_combine(b.seed, 701u)) * 6.28318530718f;
-    glm::vec3 axis(std::cos(phase) * std::sin(tilt),
-                   std::cos(tilt),
-                   std::sin(phase) * std::sin(tilt));
-    if (glm::dot(axis, axis) < 1.0e-6f)
-        axis = glm::vec3(0.0f, 1.0f, 0.0f);
-    return glm::normalize(axis);
-}
-
 static float magnetic_shielding_score(const CelestialBody& b, float G) {
     MagneticSignature sig = estimate_magnetic_signature(b, G);
     if (!sig.has_magnetosphere) return 0.0f;
@@ -531,29 +577,6 @@ static float magnetic_shielding_score(const CelestialBody& b, float G) {
         ? b.cached_props.atmosphere.pressure : 0.0f;
     return std::clamp(sig.magnetic_field * 0.10f + sig.particle_trapping * 0.32f +
                       escape * 0.16f + atmosphere * 0.008f, 0.0f, 1.25f);
-}
-
-static float star_wind_flux(const CelestialBody& source, const CelestialBody& target, float G) {
-    float dist = glm::length(source.pos - target.pos);
-    if (dist <= 1.0e-3f) return 0.0f;
-    MagneticSignature sig = estimate_magnetic_signature(source, G);
-    float flare = 0.7f + source.cached_visuals.flare_activity + source.cached_visuals.corona_strength * 0.45f;
-    float luminosity = std::sqrt(std::max(stellar_luminosity_units(source), 0.0f) + 1.0f);
-    return flare * (0.5f + sig.magnetic_field * 0.08f) * luminosity /
-           std::max(dist * dist, source.radius * source.radius * 4.0f);
-}
-
-static float black_hole_radiation_flux(const CelestialBody& source, const CelestialBody& target,
-                                       const CosmosState& state) {
-    float dist = glm::length(source.pos - target.pos);
-    if (dist <= 1.0e-3f) return 0.0f;
-    float feeding = estimate_black_hole_feeding(source, &state);
-    if (feeding <= 0.01f) return 0.0f;
-    glm::vec3 axis = magnetic_axis_dir(source);
-    glm::vec3 dir = glm::normalize(target.pos - source.pos);
-    float alignment = 0.22f + 0.78f * std::pow(std::abs(glm::dot(dir, axis)), 3.0f);
-    float base = (0.35f + feeding * 1.15f + source.cached_visuals.jet_strength * 0.65f);
-    return base * alignment / std::max(dist * dist, source.radius * source.radius * 9.0f);
 }
 
 static void enforce_body_physical_limits(CelestialBody& b) {
@@ -845,6 +868,8 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
         nb.temperature = 300.0f;
         if (spawn_type == CTYPE_PLANET) {
             randomize_planet_properties(nb, state, rng);
+        } else if (spawn_type == CTYPE_MOON) {
+            randomize_moon_properties(nb, state, rng);
         } else if (spawn_type == CTYPE_ASTEROID) {
             randomize_small_body_properties(nb, rng, false);
         } else if (spawn_type == CTYPE_COMET) {
@@ -1503,16 +1528,7 @@ void CosmosApp::process_space_weather(float dt) {
 
         float stellar_flux = 0.0f;
         float quasar_flux = 0.0f;
-        for (size_t j = 0; j < bodies.size(); ++j) {
-            if (i == j || bodies[j].marked_for_removal) continue;
-            const CelestialBody& source = bodies[j];
-            if (is_star_type(source.type))
-                stellar_flux += star_wind_flux(source, target, cfg.G);
-            else if (is_black_hole_type(source.type))
-                quasar_flux += black_hole_radiation_flux(source, target, state);
-        }
-
-        float particle_flux = stellar_flux + quasar_flux * 1.35f;
+        float particle_flux = estimate_space_weather_flux(target, &state, cfg.G, &stellar_flux, &quasar_flux);
         if (particle_flux <= 0.0f) continue;
 
         float shielding = magnetic_shielding_score(target, cfg.G);
