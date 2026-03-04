@@ -257,7 +257,8 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
 
     // ── Upload sphere SSBO ─────────────────────────────────────────────────
     int n = std::min((int)state.bodies.size(), MAX_SPHERES);
-    std::vector<SphereGPU> spheres(n);
+    static thread_local std::vector<SphereGPU> spheres;
+    spheres.resize(n);
     for (int i = 0; i < n; i++) {
         const auto& b = state.bodies[i];
         glm::vec3 col = body_color_vec3(b);
@@ -299,10 +300,12 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
         }
     }
 
-    vkMapMemory(vk.device, sphere_ssbo_.memory, 0,
-                n * sizeof(SphereGPU), 0, &mapped);
-    memcpy(mapped, spheres.data(), n * sizeof(SphereGPU));
-    vkUnmapMemory(vk.device, sphere_ssbo_.memory);
+    if (n > 0) {
+        vkMapMemory(vk.device, sphere_ssbo_.memory, 0,
+                    n * sizeof(SphereGPU), 0, &mapped);
+        memcpy(mapped, spheres.data(), n * sizeof(SphereGPU));
+        vkUnmapMemory(vk.device, sphere_ssbo_.memory);
+    }
 
     // ── Draw fullscreen triangle ───────────────────────────────────────────
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);

@@ -8,6 +8,7 @@
 #include <fstream>
 #include <cstring>
 #include <filesystem>
+#include <thread>
 
 // ── Body color (for trail overlay coloring) ─────────────────────────────────
 
@@ -487,10 +488,7 @@ void CosmosApp::step_physics(float dt) {
     std::vector<glm::vec3> accel(n, glm::vec3(0.0f));
     float c2 = cfg.speed_of_light * cfg.speed_of_light;
 
-    for (size_t i = 0; i < n; i++) {
-        if (bodies[i].marked_for_removal) continue;
-        for (size_t j = i + 1; j < n; j++) {
-            if (bodies[j].marked_for_removal) continue;
+    auto accumulate_gravity_pair = [&](size_t i, size_t j, std::vector<glm::vec3>& out_accel) {
             glm::vec3 diff = bodies[j].pos - bodies[i].pos;
             float dist2 = glm::dot(diff, diff) + cfg.softening * cfg.softening;
             float dist  = std::sqrt(dist2);
@@ -567,8 +565,55 @@ void CosmosApp::step_physics(float dt) {
                 }
             }
 
-            accel[i] += acc_i;
-            accel[j] += acc_j;
+            out_accel[i] += acc_i;
+            out_accel[j] += acc_j;
+    };
+
+    constexpr size_t kParallelGravityThreshold = 256;
+    const size_t hw_threads = std::thread::hardware_concurrency() > 0
+                                ? static_cast<size_t>(std::thread::hardware_concurrency())
+                                : 1;
+    const bool use_parallel_gravity =
+        cfg.parallel_gravity && n >= kParallelGravityThreshold && hw_threads > 1;
+
+    if (use_parallel_gravity) {
+        const size_t worker_count = std::min(hw_threads, n);
+        std::vector<std::vector<glm::vec3>> local_accel(
+            worker_count, std::vector<glm::vec3>(n, glm::vec3(0.0f)));
+        std::vector<std::thread> workers;
+        workers.reserve(worker_count);
+
+        for (size_t t = 0; t < worker_count; ++t) {
+            const size_t i_begin = (n * t) / worker_count;
+            const size_t i_end = (n * (t + 1)) / worker_count;
+
+            workers.emplace_back([&, t, i_begin, i_end]() {
+                auto& thread_accel = local_accel[t];
+                for (size_t i = i_begin; i < i_end; ++i) {
+                    if (bodies[i].marked_for_removal) continue;
+                    for (size_t j = i + 1; j < n; ++j) {
+                        if (bodies[j].marked_for_removal) continue;
+                        accumulate_gravity_pair(i, j, thread_accel);
+                    }
+                }
+            });
+        }
+
+        for (auto& worker : workers)
+            worker.join();
+
+        for (size_t t = 0; t < worker_count; ++t) {
+            const auto& thread_accel = local_accel[t];
+            for (size_t i = 0; i < n; ++i)
+                accel[i] += thread_accel[i];
+        }
+    } else {
+        for (size_t i = 0; i < n; ++i) {
+            if (bodies[i].marked_for_removal) continue;
+            for (size_t j = i + 1; j < n; ++j) {
+                if (bodies[j].marked_for_removal) continue;
+                accumulate_gravity_pair(i, j, accel);
+            }
         }
     }
 
@@ -1760,6 +1805,7 @@ void CosmosApp::render_ui() {
     ImGui::Separator();
     ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "General Relativity");
     ImGui::Checkbox("GR Corrections", &cfg.gr_enabled);
+    ImGui::Checkbox("Parallel Gravity", &cfg.parallel_gravity);
     if (cfg.gr_enabled) {
         ImGui::SliderFloat("Precession", &cfg.gr_precession_scale, 0.0f, 10.0f);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Perihelion precession (1PN correction)\n1.0 = physical value");
@@ -2390,6 +2436,7 @@ bool CosmosApp::save_simulation(const std::string& path) {
     if (cfg.stellar_evolution) flags |= 128;
     if (cfg.star_lighting) flags |= 256;
     if (cfg.uniform_lighting) flags |= 512;
+    if (cfg.parallel_gravity) flags |= 1024;
     f.write(reinterpret_cast<const char*>(&flags), sizeof(uint32_t));
 
     f.write(reinterpret_cast<const char*>(&cfg.merge_speed_threshold), sizeof(float));
@@ -2469,6 +2516,7 @@ bool CosmosApp::load_simulation(const std::string& path) {
     cfg.stellar_evolution       = (flags & 128) != 0;
     cfg.star_lighting           = (flags & 256) != 0;
     cfg.uniform_lighting        = (flags & 512) != 0;
+    cfg.parallel_gravity        = (flags & 1024) != 0;
 
     f.read(reinterpret_cast<char*>(&cfg.merge_speed_threshold), sizeof(float));
     f.read(reinterpret_cast<char*>(&cfg.fragment_speed_threshold), sizeof(float));
