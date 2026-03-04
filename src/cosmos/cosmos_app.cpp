@@ -1811,8 +1811,10 @@ void CosmosApp::render_ui() {
     ImGui::Text("Lighting");
     ImGui::Checkbox("Star Lighting",    &cfg.star_lighting);
     ImGui::Checkbox("Uniform Lighting", &cfg.uniform_lighting);
-    if (cfg.star_lighting)
+    if (cfg.star_lighting) {
+        ImGui::Checkbox("Fast Star Lighting", &cfg.fast_star_lighting);
         ImGui::SliderFloat("Ambient", &cfg.ambient_strength, 0.0f, 0.5f);
+    }
 
     ImGui::Separator();
     ImGui::Text("Time Control");

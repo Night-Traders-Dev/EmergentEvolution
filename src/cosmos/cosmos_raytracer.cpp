@@ -10,7 +10,7 @@ struct alignas(16) CameraUBOData {
     glm::mat4 inv_vp;           // 64 bytes
     glm::vec4 eye_pos;          // 16 bytes
     glm::vec4 screen_info;      // 16 bytes (w,h,count,time)
-    glm::vec4 lighting_params;  // 16 bytes (star,uniform,ambient,0)
+    glm::vec4 lighting_params;  // 16 bytes (star,uniform,ambient,fastStar)
 };                              // Total: 112 bytes
 
 struct SphereGPU {
@@ -248,7 +248,7 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
         (cfg.star_lighting && has_stars) ? 1.0f : 0.0f,
         effective_uniform ? 1.0f : 0.0f,
         cfg.ambient_strength,
-        0.0f);
+        cfg.fast_star_lighting ? 1.0f : 0.0f);
 
     void* mapped = nullptr;
     vkMapMemory(vk.device, camera_ubo_.memory, 0, sizeof(CameraUBOData), 0, &mapped);
