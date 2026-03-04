@@ -39,7 +39,10 @@ struct OrbitCamera {
     }
 
     glm::mat4 proj_matrix(float aspect) const {
-        return glm::perspective(glm::radians(fov), aspect, near_clip, far_clip);
+        // Expand far clip with zoom distance so very distant zoom levels remain visible.
+        float dynamic_far = std::max(far_clip, distance * 8.0f);
+        return glm::perspective(glm::radians(fov), aspect, near_clip, dynamic_far);
+
     }
 
     glm::vec3 forward_direction() const {
@@ -78,7 +81,7 @@ struct OrbitCamera {
     void zoom(float delta) {
         float factor = (delta > 0) ? 0.9f : 1.1f;
         target_distance *= factor;
-        target_distance = std::clamp(target_distance, 5.0f, 8000.0f);
+        target_distance = std::max(target_distance, 5.0f);
     }
 
     // Focus on a position: smooth camera pan to body
