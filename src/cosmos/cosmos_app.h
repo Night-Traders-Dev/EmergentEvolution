@@ -71,7 +71,9 @@ private:
     void process_evaporation(float dt);
     void process_stellar_evolution(float dt);
     void cleanup_bodies();
-    void spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, int count, uint32_t parent_generation = 0);
+    void spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, int count,
+                        uint32_t parent_generation = 0, float source_temperature = 300.0f,
+                        glm::vec3 impact_axis = glm::vec3(0.0f), float ejecta_speed = 0.0f);
 
     // Fullscreen overlay screens
     void draw_splash_screen();
@@ -81,7 +83,7 @@ private:
 
     // 3D projection helpers (for overlay drawing only)
     struct Projected { float sx, sy, depth; bool visible; };
-    Projected project(const glm::vec3& world_pos, const glm::mat4& vp,
+    Projected project(const glm::vec3& world_pos, const glm::dmat4& vp,
                       float screen_w, float screen_h) const;
     float screen_radius(float world_radius, float depth, float fov_rad,
                         float screen_h) const;

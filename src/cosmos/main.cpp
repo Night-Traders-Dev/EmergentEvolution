@@ -122,25 +122,25 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
 
         // Unproject screen point to a ray, then intersect with the plane
         // through camera.target perpendicular to the view direction
-        glm::mat4 inv_vp = glm::inverse(app->camera.proj_matrix(aspect) * app->camera.view_matrix());
+        glm::dmat4 inv_vp = glm::inverse(app->camera.proj_matrix_d(aspect) * app->camera.view_matrix_d());
         float ndc_x = ((float)mx / W) * 2.0f - 1.0f;
         float ndc_y = 1.0f - ((float)my / H) * 2.0f;
 
-        glm::vec4 near_clip = inv_vp * glm::vec4(ndc_x, ndc_y, -1.0f, 1.0f);
-        glm::vec4 far_clip  = inv_vp * glm::vec4(ndc_x, ndc_y,  1.0f, 1.0f);
-        glm::vec3 near_pt = glm::vec3(near_clip) / near_clip.w;
-        glm::vec3 far_pt  = glm::vec3(far_clip) / far_clip.w;
-        glm::vec3 ray_dir = glm::normalize(far_pt - near_pt);
+        glm::dvec4 near_clip = inv_vp * glm::dvec4(ndc_x, ndc_y, -1.0, 1.0);
+        glm::dvec4 far_clip  = inv_vp * glm::dvec4(ndc_x, ndc_y,  1.0, 1.0);
+        glm::dvec3 near_pt_d = glm::dvec3(near_clip) / near_clip.w;
+        glm::dvec3 far_pt_d  = glm::dvec3(far_clip) / far_clip.w;
+        glm::dvec3 ray_dir_d = glm::normalize(far_pt_d - near_pt_d);
 
         // Plane through camera.target, normal = view direction (eye → target)
-        glm::vec3 eye = app->camera.eye_position();
-        glm::vec3 plane_normal = glm::normalize(app->camera.target - eye);
-        float denom = glm::dot(ray_dir, plane_normal);
-        glm::vec3 spawn_pos = app->camera.target; // fallback
-        if (std::abs(denom) > 1e-6f) {
-            float t = glm::dot(app->camera.target - near_pt, plane_normal) / denom;
-            if (t > 0.0f)
-                spawn_pos = near_pt + ray_dir * t;
+        glm::dvec3 eye = app->camera.eye_position_d();
+        glm::dvec3 plane_normal = glm::normalize(glm::dvec3(app->camera.target) - eye);
+        double denom = glm::dot(ray_dir_d, plane_normal);
+        glm::vec3 spawn_pos = app->camera.target;
+        if (std::abs(denom) > 1e-9) {
+            double t = glm::dot(glm::dvec3(app->camera.target) - near_pt_d, plane_normal) / denom;
+            if (t > 0.0)
+                spawn_pos = glm::vec3(near_pt_d + ray_dir_d * t);
         }
 
         app->spawn_at(spawn_pos);

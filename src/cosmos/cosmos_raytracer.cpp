@@ -230,14 +230,14 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
                                        float screen_w, float screen_h,
                                        float time) {
     float aspect = screen_w / screen_h;
-    glm::mat4 view = camera.view_matrix();
-    glm::mat4 proj = camera.proj_matrix(aspect);
-    glm::mat4 vp   = proj * view;
+    glm::dmat4 view = camera.view_matrix_d();
+    glm::dmat4 proj = camera.proj_matrix_d(aspect);
+    glm::dmat4 vp   = proj * view;
 
     // ── Upload camera UBO ──────────────────────────────────────────────────
     CameraUBOData cam{};
-    cam.inv_vp         = glm::inverse(vp);
-    cam.eye_pos        = glm::vec4(camera.eye_position(), 0.0f);
+    cam.inv_vp         = glm::mat4(glm::inverse(vp));
+    cam.eye_pos        = glm::vec4(glm::vec3(camera.eye_position_d()), 0.0f);
     cam.screen_info    = glm::vec4(screen_w, screen_h,
                                     (float)std::min((int)state.bodies.size(), MAX_SPHERES),
                                     time);

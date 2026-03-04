@@ -25,24 +25,39 @@ struct OrbitCamera {
     float target_distance = 600.0f;
     float zoom_speed      = 6.0f;
 
-    glm::vec3 eye_position() const {
-        float cos_el = std::cos(elevation);
-        return target + glm::vec3(
-            distance * cos_el * std::sin(azimuth),
-            distance * std::sin(elevation),
-            distance * cos_el * std::cos(azimuth)
+    glm::dvec3 eye_position_d() const {
+        double cos_el = std::cos((double)elevation);
+        return glm::dvec3(target) + glm::dvec3(
+            (double)distance * cos_el * std::sin((double)azimuth),
+            (double)distance * std::sin((double)elevation),
+            (double)distance * cos_el * std::cos((double)azimuth)
         );
     }
 
+    glm::vec3 eye_position() const {
+        return glm::vec3(eye_position_d());
+    }
+
+    glm::dmat4 view_matrix_d() const {
+        return glm::lookAt(eye_position_d(), glm::dvec3(target), glm::dvec3(0.0, 1.0, 0.0));
+    }
+
     glm::mat4 view_matrix() const {
-        return glm::lookAt(eye_position(), target, glm::vec3(0, 1, 0));
+        return glm::mat4(view_matrix_d());
+    }
+
+    glm::dmat4 proj_matrix_d(float aspect) const {
+        double dynamic_far = std::max((double)far_clip, (double)distance * 4.0);
+        double dynamic_near = std::max((double)near_clip, dynamic_far * 1.0e-6);
+        dynamic_near = std::max(dynamic_near, std::min((double)distance * 1.0e-4, dynamic_far * 0.25));
+        if (distance < 500.0f)
+            dynamic_near = std::min(dynamic_near, 0.1);
+        dynamic_near = std::min(dynamic_near, dynamic_far * 0.25);
+        return glm::perspective(glm::radians((double)fov), (double)aspect, dynamic_near, dynamic_far);
     }
 
     glm::mat4 proj_matrix(float aspect) const {
-        // Expand far clip with zoom distance so very distant zoom levels remain visible.
-        float dynamic_far = std::max(far_clip, distance * 8.0f);
-        return glm::perspective(glm::radians(fov), aspect, near_clip, dynamic_far);
-
+        return glm::mat4(proj_matrix_d(aspect));
     }
 
     glm::vec3 forward_direction() const {

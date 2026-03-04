@@ -8,6 +8,7 @@
 #include <fstream>
 #include <cstring>
 #include <filesystem>
+#include <numeric>
 #include <thread>
 
 // ── Body color (for trail overlay coloring) ─────────────────────────────────
@@ -200,6 +201,36 @@ static void refresh_body_render_state(CelestialBody& body, const CosmosState* st
     refresh_body_visuals(body, state);
 }
 
+static float body_density(const CelestialBody& b) {
+    float volume = (4.0f / 3.0f) * 3.14159265359f * b.radius * b.radius * b.radius;
+    return b.mass / std::max(volume, 1.0e-5f);
+}
+
+static float body_escape_speed(const CelestialBody& a, const CelestialBody& b, float G) {
+    float sep = std::max(a.radius + b.radius, 1.0f);
+    return std::sqrt(std::max(2.0f * G * (a.mass + b.mass) / sep, 0.0f));
+}
+
+static float stellar_luminosity_units(const CelestialBody& b) {
+    if (!is_star_type(b.type)) return 0.0f;
+    float mass_lum = std::pow(std::max(b.mass, 0.05f), 3.5f);
+    float thermal_lum = std::pow(std::max(b.temperature, 100.0f) / 5778.0f, 4.0f) *
+                        std::max(b.radius * b.radius / (30.0f * 30.0f), 0.02f);
+    return std::max(b.luminosity, 0.0f) + mass_lum * 0.1f + thermal_lum;
+}
+
+static float equilibrium_temperature_from_star(const CelestialBody& body,
+                                               const CelestialBody& star) {
+    float dist = glm::length(star.pos - body.pos);
+    if (dist <= 1.0e-3f) return body.temperature;
+
+    float albedo = 0.35f;
+    float ratio = std::sqrt(std::max(star.radius, 1.0f) / (2.0f * std::max(dist, 1.0f)));
+    float lum_boost = std::clamp(1.0f + 0.08f * std::log10(std::max(stellar_luminosity_units(star), 1.0f)), 1.0f, 1.6f);
+    return std::max(star.temperature, 50.0f) * ratio *
+           std::pow(std::max(1.0f - albedo, 0.05f), 0.25f) * lum_boost;
+}
+
 // ── Timestep formatting ─────────────────────────────────────────────────────
 
 static const char* format_sim_time(double seconds, char* buf, size_t buf_size) {
@@ -356,23 +387,23 @@ void CosmosApp::init(GLFWwindow* window) {
 
 int CosmosApp::pick_body(float mx, float my, float W, float H) const {
     float aspect = W / H;
-    glm::mat4 vp = camera.proj_matrix(aspect) * camera.view_matrix();
+    glm::dmat4 vp = camera.proj_matrix_d(aspect) * camera.view_matrix_d();
     float fov_rad = glm::radians(camera.fov);
 
     int best = -1;
     float best_dist = 30.0f;
     for (size_t i = 0; i < state.bodies.size(); i++) {
         const auto& b = state.bodies[i];
-        glm::vec4 clip = vp * glm::vec4(b.pos, 1.0f);
-        if (clip.w <= 0.0f) continue;
-        glm::vec3 ndc = glm::vec3(clip) / clip.w;
-        float sx = (ndc.x * 0.5f + 0.5f) * W;
-        float sy = (1.0f - (ndc.y * 0.5f + 0.5f)) * H;
+        glm::dvec4 clip = vp * glm::dvec4(b.pos, 1.0);
+        if (clip.w <= 0.0) continue;
+        glm::dvec3 ndc = glm::dvec3(clip) / clip.w;
+        float sx = (float)((ndc.x * 0.5 + 0.5) * (double)W);
+        float sy = (float)((1.0 - (ndc.y * 0.5 + 0.5)) * (double)H);
 
         float dx = sx - mx;
         float dy = sy - my;
         float d = std::sqrt(dx * dx + dy * dy);
-        float sr = (b.radius / clip.w) * (H / (2.0f * std::tan(fov_rad * 0.5f)));
+        float sr = (float)(((double)b.radius / clip.w) * ((double)H / (2.0 * std::tan((double)fov_rad * 0.5))));
         float pick_r = std::max(sr, 12.0f);
         if (d < pick_r && d < best_dist) {
             best_dist = d;
@@ -717,22 +748,31 @@ void CosmosApp::process_collisions(float dt) {
                 glm::vec3 dir = diff / dist;
                 float overlap = touch - dist;
                 float total_mass = bodies[i].mass + bodies[j].mass;
+                float reduced_mass = (bodies[i].mass * bodies[j].mass) / std::max(total_mass, 1.0e-6f);
 
                 glm::vec3 rel_vel = bodies[j].vel - bodies[i].vel;
                 float rel_speed = glm::length(rel_vel);
+                float escape_speed = body_escape_speed(bodies[i], bodies[j], cfg.G);
+                float impact_energy = 0.5f * reduced_mass * rel_speed * rel_speed;
+                float merge_limit = std::max(cfg.merge_speed_threshold, escape_speed * 1.15f);
+                float fragment_limit = std::max(cfg.fragment_speed_threshold, escape_speed * 1.35f);
+                glm::vec3 impact_axis = (rel_speed > 1.0e-5f) ? (rel_vel / rel_speed) : dir;
+
+                // Always depenetrate first to reduce persistent overlap jitter.
+                bodies[i].pos -= dir * overlap * (bodies[j].mass / std::max(total_mass, 1.0e-6f));
+                bodies[j].pos += dir * overlap * (bodies[i].mass / std::max(total_mass, 1.0e-6f));
 
                 // Collision heating
                 if (cfg.temperature_system) {
-                    float ke = 0.5f * (bodies[i].mass * bodies[j].mass / total_mass) * rel_speed * rel_speed;
-                    float heat = ke * cfg.collision_heating;
+                    float heat = impact_energy * cfg.collision_heating;
                     bodies[i].internal_energy += heat * 0.5f;
                     bodies[j].internal_energy += heat * 0.5f;
-                    bodies[i].temperature += heat * 100.0f / std::max(bodies[i].mass, 0.01f);
-                    bodies[j].temperature += heat * 100.0f / std::max(bodies[j].mass, 0.01f);
+                    bodies[i].temperature += heat * 20.0f / std::max(bodies[i].mass, 0.01f);
+                    bodies[j].temperature += heat * 20.0f / std::max(bodies[j].mass, 0.01f);
                 }
 
                 // Determine merge vs fragment vs bounce
-                if (cfg.collision_merging && rel_speed < cfg.merge_speed_threshold) {
+                if (cfg.collision_merging && rel_speed <= merge_limit) {
                     // Merge: larger absorbs smaller
                     size_t big = (bodies[i].mass >= bodies[j].mass) ? i : j;
                     size_t small = (big == i) ? j : i;
@@ -751,39 +791,44 @@ void CosmosApp::process_collisions(float dt) {
                     bodies[big].fuel = std::max(bodies[big].fuel, bodies[small].fuel);
                     bodies[small].marked_for_removal = true;
                 }
-                else if (cfg.collision_fragmentation && rel_speed > cfg.fragment_speed_threshold) {
-                    size_t big = (bodies[i].mass >= bodies[j].mass) ? i : j;
-                    size_t small = (big == i) ? j : i;
-
-                    // Only fragment if body is large enough and hasn't been fragmented too many times
-                    bool can_fragment = bodies[small].mass >= cfg.min_fragment_mass
-                                     && (int)bodies[small].frag_generation < cfg.max_frag_generation;
-
-                    if (can_fragment) {
-                        spawn_fragments(bodies[small].pos, bodies[small].vel,
-                                        bodies[small].mass, cfg.fragment_count,
-                                        bodies[small].frag_generation);
-                        bodies[small].marked_for_removal = true;
-                    }
-
-                    // Elastic bounce on the big body (always, even if no fragmentation)
-                    float vel_along = glm::dot(rel_vel, dir);
-                    if (vel_along < 0) {
-                        float impulse = -(1.0f + 0.5f) * vel_along / total_mass;
-                        bodies[big].vel += ((big == j) ? 1.0f : -1.0f) * dir * impulse * bodies[small].mass;
-                    }
-                }
                 else {
-                    // Normal elastic bounce
-                    bodies[i].pos -= dir * overlap * (bodies[j].mass / total_mass);
-                    bodies[j].pos += dir * overlap * (bodies[i].mass / total_mass);
-
                     float vel_along = glm::dot(rel_vel, dir);
                     if (vel_along < 0) {
-                        float restitution = 0.8f;
-                        float impulse = -(1.0f + restitution) * vel_along / total_mass;
-                        bodies[i].vel -= dir * impulse * bodies[j].mass;
-                        bodies[j].vel += dir * impulse * bodies[i].mass;
+                        bool fragmenting = cfg.collision_fragmentation && rel_speed >= fragment_limit;
+                        float restitution = fragmenting ? 0.15f : 0.65f;
+                        float inv_mass_sum = (1.0f / std::max(bodies[i].mass, 1.0e-6f)) +
+                                             (1.0f / std::max(bodies[j].mass, 1.0e-6f));
+                        float j_impulse = -(1.0f + restitution) * vel_along / std::max(inv_mass_sum, 1.0e-6f);
+                        glm::vec3 impulse = dir * j_impulse;
+                        bodies[i].vel -= impulse / std::max(bodies[i].mass, 1.0e-6f);
+                        bodies[j].vel += impulse / std::max(bodies[j].mass, 1.0e-6f);
+
+                        if (fragmenting) {
+                            auto can_fragment = [&](const CelestialBody& body) {
+                                return body.mass >= cfg.min_fragment_mass &&
+                                       (int)body.frag_generation < cfg.max_frag_generation;
+                            };
+
+                            float catastrophic_ratio = rel_speed / std::max(escape_speed, 1.0e-3f);
+                            bool fragment_i = can_fragment(bodies[i]) &&
+                                (bodies[i].mass <= bodies[j].mass || catastrophic_ratio > 2.2f);
+                            bool fragment_j = can_fragment(bodies[j]) &&
+                                (bodies[j].mass < bodies[i].mass || catastrophic_ratio > 2.8f);
+
+                            float ejecta_speed = std::max(2.0f, rel_speed * 0.35f);
+                            if (fragment_i) {
+                                spawn_fragments(bodies[i].pos, bodies[i].vel, bodies[i].mass,
+                                                cfg.fragment_count, bodies[i].frag_generation,
+                                                bodies[i].temperature, -impact_axis, ejecta_speed);
+                                bodies[i].marked_for_removal = true;
+                            }
+                            if (fragment_j) {
+                                spawn_fragments(bodies[j].pos, bodies[j].vel, bodies[j].mass,
+                                                cfg.fragment_count, bodies[j].frag_generation,
+                                                bodies[j].temperature, impact_axis, ejecta_speed);
+                                bodies[j].marked_for_removal = true;
+                            }
+                        }
                     }
                 }
             }
@@ -804,16 +849,23 @@ void CosmosApp::process_roche_limit(float /*dt*/) {
             if (bodies[i].mass <= bodies[j].mass * 10.0f) continue; // i must be much larger
 
             float dist = glm::length(bodies[j].pos - bodies[i].pos);
-            float mass_ratio = bodies[i].mass / std::max(bodies[j].mass, 0.001f);
-            float roche_dist = bodies[i].radius * 2.5f * std::cbrt(mass_ratio);
+            float rho_primary = body_density(bodies[i]);
+            float rho_secondary = body_density(bodies[j]);
+            float roche_coeff = cfg.tidal_forces ? 2.44f : 1.26f;
+            float roche_dist = roche_coeff * bodies[i].radius *
+                               std::cbrt(std::max(rho_primary / std::max(rho_secondary, 1.0e-6f), 0.1f));
 
             if (dist < roche_dist && dist > bodies[i].radius) {
+                float penetration = 1.0f - dist / std::max(roche_dist, 1.0f);
+                bodies[j].internal_energy += penetration * bodies[i].mass * 0.1f;
                 // Only tidally disrupt if body is large enough and not at generation limit
                 if (bodies[j].mass >= cfg.min_fragment_mass
                     && (int)bodies[j].frag_generation < cfg.max_frag_generation) {
+                    glm::vec3 tidal_axis = glm::normalize(bodies[j].pos - bodies[i].pos);
                     spawn_fragments(bodies[j].pos, bodies[j].vel,
                                     bodies[j].mass, cfg.fragment_count,
-                                    bodies[j].frag_generation);
+                                    bodies[j].frag_generation, bodies[j].temperature,
+                                    tidal_axis, std::max(1.5f, penetration * 12.0f));
                     bodies[j].marked_for_removal = true;
                 }
             }
@@ -825,38 +877,73 @@ void CosmosApp::process_roche_limit(float /*dt*/) {
 
 void CosmosApp::process_temperature(float dt) {
     auto& bodies = state.bodies;
+    const float background = 2.7f;
 
     for (auto& b : bodies) {
         if (b.marked_for_removal) continue;
-
-        // Stars maintain temperature based on mass and fuel
         if (is_star_type(b.type) && b.fuel > 0.05f) {
-            // Mass-luminosity relation: L ∝ M^3.5
-            b.luminosity = std::pow(b.mass, 3.5f) * 0.1f;
-            // Stars don't cool while burning
+            b.luminosity = std::pow(std::max(b.mass, 0.05f), 3.5f) * 0.1f;
             continue;
         }
-
-        // Radiative cooling (exponential decay toward background 2.7K)
-        float background = 2.7f;
         b.temperature -= cfg.radiative_cooling * (b.temperature - background) * dt;
         if (b.temperature < background) b.temperature = background;
+    }
 
-        // Tidal heating from nearby massive bodies
-        for (const auto& other : bodies) {
-            if (&other == &b || other.marked_for_removal) continue;
-            if (other.mass < b.mass * 5.0f) continue;
+    for (size_t i = 0; i < bodies.size(); ++i) {
+        auto& b = bodies[i];
+        if (b.marked_for_removal || is_star_type(b.type)) continue;
 
-            float dist = glm::length(other.pos - b.pos);
-            if (dist < 1.0f) continue;
-            // Tidal heating ∝ M^2 * R^5 / d^6 (simplified)
-            float tidal = other.mass * other.mass * b.radius / (dist * dist * dist * dist);
-            b.temperature += tidal * 0.1f * dt;
+        float eq_t4_sum = std::pow(background, 4.0f);
+        for (size_t j = 0; j < bodies.size(); ++j) {
+            if (i == j || bodies[j].marked_for_removal || !is_star_type(bodies[j].type)) continue;
+            float eq_t = equilibrium_temperature_from_star(b, bodies[j]);
+            eq_t4_sum += std::pow(eq_t, 4.0f);
         }
 
-        // Drain internal energy into temperature
+        float target_temp = std::pow(std::max(eq_t4_sum, std::pow(background, 4.0f)), 0.25f);
+        if (b.type == CTYPE_PLANET || b.type == CTYPE_MOON) {
+            float greenhouse = 1.0f + std::min(b.cached_props.atmosphere.pressure * 0.015f, 0.35f);
+            target_temp *= greenhouse;
+        }
+
+        float thermal_response = 0.35f / (0.6f + std::cbrt(std::max(b.mass, 1.0e-5f)) * 0.8f);
+        b.temperature += (target_temp - b.temperature) * std::min(thermal_response * dt, 1.0f);
+    }
+
+    for (size_t i = 0; i < bodies.size(); ++i) {
+        if (bodies[i].marked_for_removal) continue;
+        for (size_t j = i + 1; j < bodies.size(); ++j) {
+            if (bodies[j].marked_for_removal) continue;
+
+            glm::vec3 diff = bodies[j].pos - bodies[i].pos;
+            float dist = glm::length(diff);
+            float touch = bodies[i].radius + bodies[j].radius;
+            if (dist < touch * 1.15f) {
+                float contact = 1.0f - dist / std::max(touch * 1.15f, 1.0e-3f);
+                float delta = bodies[j].temperature - bodies[i].temperature;
+                float exchange = delta * contact * std::min(0.25f * dt, 0.5f);
+                float inv_heat_i = 1.0f / std::max(bodies[i].mass, 0.01f);
+                float inv_heat_j = 1.0f / std::max(bodies[j].mass, 0.01f);
+                bodies[i].temperature += exchange * inv_heat_i;
+                bodies[j].temperature -= exchange * inv_heat_j;
+            }
+
+            if (cfg.tidal_forces) {
+                CelestialBody& big = (bodies[i].mass >= bodies[j].mass) ? bodies[i] : bodies[j];
+                CelestialBody& small = (bodies[i].mass >= bodies[j].mass) ? bodies[j] : bodies[i];
+                if (&big != &small && dist > 1.0f && big.mass > small.mass * 5.0f) {
+                    float strain = cfg.G * big.mass * small.radius / (dist * dist * dist);
+                    float dissipation = strain * strain * std::abs(small.angular_vel - big.angular_vel * 0.15f);
+                    small.internal_energy += dissipation * dt * 25.0f;
+                }
+            }
+        }
+    }
+
+    for (auto& b : bodies) {
+        if (b.marked_for_removal) continue;
         if (b.internal_energy > 0.0f) {
-            float transfer = std::min(b.internal_energy, 10.0f * dt);
+            float transfer = std::min(b.internal_energy, 15.0f * dt);
             b.temperature += transfer / std::max(b.mass, 0.01f);
             b.internal_energy -= transfer;
         }
@@ -992,50 +1079,73 @@ void CosmosApp::cleanup_bodies() {
 
 // ── Fragment Spawning ───────────────────────────────────────────────────────
 
-void CosmosApp::spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, int count, uint32_t parent_generation) {
-    if (count < 1) return;
+void CosmosApp::spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, int count,
+                                uint32_t parent_generation, float source_temperature,
+                                glm::vec3 impact_axis, float ejecta_speed) {
+    if (count < 1 || total_mass <= 0.0f) return;
 
-    // Generate random proportions using stick-breaking:
-    // draw (count-1) random break points in [0,1], sort, then differences give proportions.
-    // This produces naturally varied sizes that always sum to total_mass.
-    float breaks[13]; // max count=12 → 11 breaks + 0.0 + 1.0
-    breaks[0] = 0.0f;
-    for (int i = 1; i < count; i++)
-        breaks[i] = (float)rand() / RAND_MAX;
-    breaks[count] = 1.0f;
-    // Simple insertion sort (count is small, max 12)
-    for (int i = 1; i < count; i++) {
-        float key = breaks[i];
-        int j = i - 1;
-        while (j >= 0 && breaks[j] > key) { breaks[j + 1] = breaks[j]; j--; }
-        breaks[j + 1] = key;
+    constexpr float kMinFragmentMass = 0.001f;
+    int max_count = std::max(1, (int)std::floor(total_mass / kMinFragmentMass));
+    count = std::min(count, max_count);
+    if (count < 1) count = 1;
+
+    uint32_t seed = (uint32_t)(std::hash<float>{}(pos.x) ^ std::hash<float>{}(pos.y) ^
+                               std::hash<float>{}(pos.z) ^ std::hash<float>{}(total_mass) ^
+                               (parent_generation * 2654435761u));
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> u01(0.0f, 1.0f);
+
+    std::vector<float> weights((size_t)count, 0.0f);
+    float weight_sum = 0.0f;
+    for (int i = 0; i < count; ++i) {
+        weights[(size_t)i] = 0.25f + u01(rng);
+        weight_sum += weights[(size_t)i];
     }
 
-    float mass_remaining = total_mass;
-    for (int i = 0; i < count; i++) {
-        float proportion = breaks[i + 1] - breaks[i];
-        float frag_mass = total_mass * proportion;
-        // Ensure no fragment has zero mass
-        if (frag_mass < 0.001f) frag_mass = 0.001f;
-        mass_remaining -= frag_mass;
+    std::vector<float> masses((size_t)count, kMinFragmentMass);
+    float remaining_mass = total_mass - kMinFragmentMass * (float)count;
+    if (remaining_mass < 0.0f) remaining_mass = 0.0f;
+    for (int i = 0; i < count; ++i)
+        masses[(size_t)i] += remaining_mass * (weights[(size_t)i] / std::max(weight_sum, 1.0e-6f));
+    masses.back() += total_mass - std::accumulate(masses.begin(), masses.end(), 0.0f);
 
-        // Radius from mass (volume-preserving: r proportional to cbrt(m))
-        float frag_radius = std::max(1.5f, std::cbrt(frag_mass) * 3.0f);
+    glm::vec3 axis = glm::length(impact_axis) > 1.0e-4f
+        ? glm::normalize(impact_axis)
+        : glm::normalize(glm::vec3(u01(rng) * 2.0f - 1.0f, u01(rng) * 2.0f - 1.0f, u01(rng) * 2.0f - 1.0f));
+    float base_ejecta = std::max(ejecta_speed, 4.0f);
+
+    std::vector<glm::vec3> rel_vels((size_t)count, glm::vec3(0.0f));
+    glm::vec3 momentum_bias(0.0f);
+    for (int i = 0; i < count; ++i) {
+        float theta = u01(rng) * 6.28318530718f;
+        float z = u01(rng) * 2.0f - 1.0f;
+        float r = std::sqrt(std::max(1.0f - z * z, 0.0f));
+        glm::vec3 rand_dir(r * std::cos(theta), z, r * std::sin(theta));
+        glm::vec3 dir = glm::normalize(glm::mix(rand_dir, axis, 0.45f + 0.25f * u01(rng)));
+        float speed = base_ejecta * (0.55f + u01(rng) * 0.9f);
+        rel_vels[(size_t)i] = dir * speed;
+        momentum_bias += rel_vels[(size_t)i] * masses[(size_t)i];
+    }
+    momentum_bias /= std::max(total_mass, 1.0e-6f);
+    for (auto& rv : rel_vels)
+        rv -= momentum_bias;
+
+    for (int i = 0; i < count; i++) {
+        float frag_mass = masses[(size_t)i];
+        float frag_radius = std::max(1.2f, std::cbrt(std::max(frag_mass, kMinFragmentMass)) * 3.0f);
 
         CelestialBody frag;
-        float theta = (float)rand() / RAND_MAX * 6.2832f;
-        float phi = (float)rand() / RAND_MAX * 3.1416f - 1.5708f;
-        glm::vec3 dir(cosf(phi) * cosf(theta), sinf(phi), cosf(phi) * sinf(theta));
-
-        frag.pos = pos + dir * (frag_radius * 2.0f + 2.0f);
-        frag.vel = vel + dir * (5.0f + (float)rand() / RAND_MAX * 10.0f);
+        glm::vec3 dir = glm::normalize(rel_vels[(size_t)i] + axis * 0.1f);
+        frag.pos = pos + dir * (frag_radius * 1.5f + 1.0f);
+        frag.vel = vel + rel_vels[(size_t)i];
         frag.mass = frag_mass;
         frag.radius = frag_radius;
-        frag.temperature = 300.0f;
+        frag.temperature = source_temperature + base_ejecta * 4.0f;
         frag.type = CTYPE_ASTEROID;
         frag.fuel = 0.0f;
-        frag.seed = (uint32_t)rand();
+        frag.seed = rng();
         frag.frag_generation = parent_generation + 1;
+        frag.angular_vel = (u01(rng) * 2.0f - 1.0f) * 0.01f;
         frag.name = generate_body_name(frag.seed, frag.type);
         refresh_body_render_state(frag, &state);
 
@@ -1047,20 +1157,20 @@ void CosmosApp::spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, 
 // ── 3D Projection (for overlay) ─────────────────────────────────────────────
 
 CosmosApp::Projected CosmosApp::project(const glm::vec3& world_pos,
-                                         const glm::mat4& vp,
+                                         const glm::dmat4& vp,
                                          float screen_w, float screen_h) const {
-    glm::vec4 clip = vp * glm::vec4(world_pos, 1.0f);
-    if (clip.w <= 0.0f)
+    glm::dvec4 clip = vp * glm::dvec4(world_pos, 1.0);
+    if (clip.w <= 0.0)
         return {0, 0, 0, false};
 
-    glm::vec3 ndc = glm::vec3(clip) / clip.w;
-    float sx = (ndc.x * 0.5f + 0.5f) * screen_w;
-    float sy = (1.0f - (ndc.y * 0.5f + 0.5f)) * screen_h;
+    glm::dvec3 ndc = glm::dvec3(clip) / clip.w;
+    float sx = (float)((ndc.x * 0.5 + 0.5) * (double)screen_w);
+    float sy = (float)((1.0 - (ndc.y * 0.5 + 0.5)) * (double)screen_h);
 
     bool visible = (ndc.x >= -1.2f && ndc.x <= 1.2f &&
                     ndc.y >= -1.2f && ndc.y <= 1.2f &&
                     ndc.z >= 0.0f && ndc.z <= 1.0f);
-    return {sx, sy, clip.w, visible};
+    return {sx, sy, (float)clip.w, visible};
 }
 
 float CosmosApp::screen_radius(float world_radius, float depth,
@@ -1077,9 +1187,9 @@ void CosmosApp::render_overlay() {
     float aspect = W / H;
     float fov_rad = glm::radians(camera.fov);
 
-    glm::mat4 view = camera.view_matrix();
-    glm::mat4 proj = camera.proj_matrix(aspect);
-    glm::mat4 vp = proj * view;
+    glm::dmat4 view = camera.view_matrix_d();
+    glm::dmat4 proj = camera.proj_matrix_d(aspect);
+    glm::dmat4 vp = proj * view;
 
     ImDrawList* fg = ImGui::GetForegroundDrawList();
 
