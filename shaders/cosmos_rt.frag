@@ -118,23 +118,8 @@ float intersect_sphere(vec3 ro, vec3 rd, vec3 center, float radius) {
 
 // ── Procedural starfield background ────────────────────────────────────────
 
-vec3 background(vec3 rd) {
-    vec3 col = vec3(0.008, 0.012, 0.03);
-
-    for (int layer = 0; layer < 3; layer++) {
-        float scale = 800.0 + float(layer) * 400.0;
-        vec2 cell = floor(rd.xz * scale / (abs(rd.y) + 0.3));
-        float h = hash(cell + float(layer) * 137.0);
-        if (h > 0.97) {
-            float brightness = (h - 0.97) / 0.03;
-            brightness *= brightness;
-            float twinkle = 0.7 + 0.3 * sin(screen_info.w * 2.0 + h * 100.0);
-            vec3 star_col = mix(vec3(0.8, 0.85, 1.0), vec3(1.0, 0.95, 0.8), hash(cell + 73.0));
-            col += star_col * brightness * twinkle * 0.4;
-        }
-    }
-
-    return col;
+vec3 background() {
+    return vec3(0.0);
 }
 
 // ── Procedural planet surface ──────────────────────────────────────────────
@@ -607,7 +592,7 @@ void main() {
 
     // ── No hit — background ────────────────────────────────────────────────
     if (closest_idx < 0) {
-        outColor = vec4(background(rd), 1.0);
+        outColor = vec4(background(), 1.0);
         return;
     }
 

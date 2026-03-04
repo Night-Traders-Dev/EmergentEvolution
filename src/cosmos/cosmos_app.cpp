@@ -79,11 +79,82 @@ static uint32_t classify_star_spectral(float temperature, float mass) {
     return CTYPE_STAR_Y;
 }
 
+static constexpr float EARTH_RADIUS_KM_REAL = 6371.0f;
+static constexpr float EARTH_RADIUS_SIM_UNITS = 8.0f;
+static constexpr float SIM_UNIT_TO_KM = EARTH_RADIUS_KM_REAL / EARTH_RADIUS_SIM_UNITS;
+
+
 static uint32_t classify_black_hole(float mass) {
     if (mass < 3.0f)        return CTYPE_BH_PRIMORDIAL;
     if (mass <= 20.0f)      return CTYPE_BH_STELLAR;
     if (mass <= 100000.0f)  return CTYPE_BH_INTERMEDIATE;
     return CTYPE_BH_SUPERMASSIVE;
+}
+
+static void randomize_planet_properties(CelestialBody& body, const CosmosState& state,
+                                        std::mt19937& rng) {
+    // Sample from broad observed exoplanet-like ranges.
+    // Internal mass unit is solar masses; 1 Earth mass ~= 3.003e-6 solar masses.
+    constexpr float EARTH_MASS_TO_SOLAR = 3.003e-6f;
+    constexpr float PI = 3.14159265359f;
+
+    std::uniform_real_distribution<float> u01(0.0f, 1.0f);
+
+    // Log-uniform planet masses: ~0.2 Earth masses to ~3 Jupiter masses.
+    float log_m_earth = std::uniform_real_distribution<float>(
+        std::log10(0.2f), std::log10(1000.0f))(rng);
+    float mass_earth = std::pow(10.0f, log_m_earth);
+    body.mass = std::clamp(mass_earth * EARTH_MASS_TO_SOLAR, 1.0e-7f, 0.01f);
+
+    // Mass-radius relation (very simplified):
+    // rocky (<~2 M_earth), sub-neptune, then gas-giant plateau.
+    float radius_earth = 1.0f;
+    if (mass_earth < 2.0f) {
+        radius_earth = std::pow(mass_earth, 0.28f);
+    } else if (mass_earth < 130.0f) {
+        radius_earth = 1.5f * std::pow(mass_earth, 0.30f);
+    } else {
+        radius_earth = 11.0f * std::pow(mass_earth / 318.0f, 0.04f);
+    }
+    radius_earth = std::clamp(radius_earth, 0.35f, 13.0f);
+    body.radius = radius_earth * EARTH_RADIUS_SIM_UNITS;
+
+    // Estimate equilibrium temperature from nearest star if available.
+    // Using relative stellar scaling: T_eq ~ T_star * sqrt(R_star/(2d)) * (1-A)^(1/4)
+    int nearest_star = -1;
+    float nearest_dist = 1e30f;
+    for (size_t i = 0; i < state.bodies.size(); i++) {
+        const auto& b = state.bodies[i];
+        if (!is_star_type(b.type)) continue;
+        float d = glm::length(b.pos - body.pos);
+        if (d > 1e-3f && d < nearest_dist) {
+            nearest_dist = d;
+            nearest_star = (int)i;
+        }
+    }
+
+    float albedo = std::uniform_real_distribution<float>(0.08f, 0.75f)(rng);
+    if (nearest_star >= 0) {
+        const auto& s = state.bodies[(size_t)nearest_star];
+        float ratio = std::sqrt(std::max(s.radius, 1.0f) / (2.0f * std::max(nearest_dist, 1.0f)));
+        float eq_t = s.temperature * ratio * std::pow(std::max(1.0f - albedo, 0.05f), 0.25f);
+        float greenhouse = std::uniform_real_distribution<float>(0.9f, 1.35f)(rng);
+        body.temperature = std::clamp(eq_t * greenhouse, 60.0f, 2500.0f);
+    } else {
+        body.temperature = std::uniform_real_distribution<float>(90.0f, 700.0f)(rng);
+    }
+
+    // Rotation period in hours: small rocky planets trend faster than giants.
+    float period_hours;
+    if (mass_earth < 2.0f) {
+        period_hours = std::uniform_real_distribution<float>(10.0f, 120.0f)(rng);
+    } else if (mass_earth < 130.0f) {
+        period_hours = std::uniform_real_distribution<float>(8.0f, 50.0f)(rng);
+    } else {
+        period_hours = std::uniform_real_distribution<float>(6.0f, 20.0f)(rng);
+    }
+    body.angular_vel = (2.0f * PI) / (period_hours * 3600.0f);
+    if (u01(rng) < 0.15f) body.angular_vel *= -1.0f; // occasional retrograde spin
 }
 
 // ── Timestep formatting ─────────────────────────────────────────────────────
@@ -298,6 +369,7 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
     nb.type = (uint32_t)spawn_type;
     nb.seed = (uint32_t)(std::hash<float>{}(pos.x) ^ std::hash<float>{}(pos.y) ^
               std::hash<float>{}(pos.z) ^ (uint32_t)state.bodies.size());
+    std::mt19937 rng(nb.seed ^ (uint32_t)(sim_time_ * 1000.0f));
 
     if (is_star_type((uint32_t)spawn_type)) {
         nb.temperature = 5778.0f;
@@ -311,6 +383,9 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
             nb.type = classify_black_hole(nb.mass);
     } else {
         nb.temperature = 300.0f;
+        if (spawn_type == CTYPE_PLANET)
+            randomize_planet_properties(nb, state, rng);
+
     }
 
     if (spawn_in_orbit_ && !state.bodies.empty()) {
@@ -1817,25 +1892,36 @@ void CosmosApp::draw_inspector() {
 
     ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Mass");
     ImGui::NextColumn();
-    if (b.mass >= 1000.0f)
-        ImGui::Text("%.1fk M", b.mass / 1000.0f);
-    else
-        ImGui::Text("%.3f M", b.mass);
+    constexpr double SOLAR_MASS_KG = 1.98847e30;
+    constexpr double KG_TO_LBS = 2.20462262185;
+    double mass_kg = (double)b.mass * SOLAR_MASS_KG;
+    double mass_lbs = mass_kg * KG_TO_LBS;
+    ImGui::Text("%.3e kg / %.3e lbs", mass_kg, mass_lbs);
+
     ImGui::NextColumn();
 
     ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Radius");
     ImGui::NextColumn();
-    ImGui::Text("%.1f", b.radius);
+    constexpr float KM_TO_MILES = 0.6213712f;
+    float radius_km = b.radius;
+    float radius_miles = radius_km * KM_TO_MILES;
+    ImGui::Text("%.1f km / %.1f mi", radius_km, radius_miles);
     ImGui::NextColumn();
 
     ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Temperature");
     ImGui::NextColumn();
-    ImGui::Text("%.0f K", b.temperature);
+    float temp_c = b.temperature - 273.15f;
+    float temp_f = temp_c * 9.0f / 5.0f + 32.0f;
+    ImGui::Text("%.0f K (%.1f C / %.1f F)", b.temperature, temp_c, temp_f);
+
     ImGui::NextColumn();
 
     ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Speed");
     ImGui::NextColumn();
-    ImGui::Text("%.2f", glm::length(b.vel));
+    constexpr float KMH_TO_MPH = 0.6213712f;
+    float speed_kmh = glm::length(b.vel) * SIM_UNIT_TO_KM * 3600.0f;
+    float speed_mph = speed_kmh * KMH_TO_MPH;
+    ImGui::Text("%.1f km/h / %.1f mph", speed_kmh, speed_mph);
     ImGui::NextColumn();
 
     ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Position");
