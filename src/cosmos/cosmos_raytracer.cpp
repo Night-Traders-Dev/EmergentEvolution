@@ -25,10 +25,12 @@ struct SphereGPU {
     glm::vec4 class_seed_temp;    // x = seed, y = render_class, z = subtype, w = temperature
     glm::vec4 terrain_params;     // x = terrain_amp, y = terrain_freq, z = ridge_amp, w = crater_density
     glm::vec4 material_params;    // x = roughness, y = metallic, z = specular, w = normal_strength
+    glm::vec4 feature_params;     // x = continents, y = islands, z = rivers, w = ice sheets
     glm::vec4 composition_params; // x = rock_frac, y = ice_frac, z = metal_frac, w = dust_frac
     glm::vec4 atmosphere_params;  // x = cloud_cov, y = pressure, z = haze_density, w = rayleigh_strength
     glm::vec4 activity_params;    // x = weather/flaring, y = corona/coma, z = tail/accretion, w = lensing/jet
-    glm::vec4 gravity_params;     // x = mass, yzw reserved
+    glm::vec4 magnetosphere_params; // x = field, y = outer radius, z = axis angle, w = trapping
+    glm::vec4 gravity_params;     // x = mass, y = stage, z = fuel, w = luminosity
 };
 
 // ── Body color helper (matches cosmos_app.cpp) ──────────────────────────────
@@ -41,11 +43,27 @@ static glm::vec3 blackbody_tint_cpu(float temperature) {
     return {r, g, b};
 }
 
+static glm::vec3 star_tint_cpu(const CelestialBody& b) {
+    glm::vec3 tint = blackbody_tint_cpu(b.temperature);
+    float giant = (b.stellar_stage == SSTAGE_RED_GIANT) ? 1.0f
+        : std::clamp((b.radius - 40.0f) / 120.0f, 0.0f, 1.0f);
+    float white_dwarf = (b.stellar_stage == SSTAGE_WHITE_DWARF) ? 1.0f : 0.0f;
+    float neutron_star = (b.stellar_stage == SSTAGE_NEUTRON_STAR) ? 1.0f : 0.0f;
+    float massive_hot = std::clamp((b.mass - 8.0f) / 32.0f, 0.0f, 1.0f) *
+        std::clamp((b.temperature - 9000.0f) / 26000.0f, 0.0f, 1.0f);
+    float cool = std::clamp((6000.0f - b.temperature) / 3600.0f, 0.0f, 1.0f);
+    tint = glm::mix(tint, glm::vec3(1.00f, 0.62f, 0.34f), giant * std::max(cool, 0.35f) * 0.75f);
+    tint = glm::mix(tint, glm::vec3(0.76f, 0.86f, 1.00f), massive_hot * 0.70f);
+    tint = glm::mix(tint, glm::vec3(0.92f, 0.96f, 1.00f), white_dwarf * 0.90f);
+    tint = glm::mix(tint, glm::vec3(0.72f, 0.84f, 1.00f), neutron_star * 0.96f);
+    return glm::clamp(tint, glm::vec3(0.0f), glm::vec3(1.0f));
+}
+
 static glm::vec3 body_color_vec3(const CelestialBody& b) {
     if (is_star_type(b.type))
-        return blackbody_tint_cpu(b.temperature);
+        return star_tint_cpu(b);
     if (is_black_hole_type(b.type))
-        return {0.078f, 0.0f, 0.157f};
+        return {0.0f, 0.0f, 0.0f};
     switch (b.type) {
     case CTYPE_PLANET:     return {0.235f, 0.549f, 0.863f};
     case CTYPE_MOON:       return {0.706f, 0.706f, 0.745f};
@@ -313,6 +331,7 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
 
         const PlanetProperties& pp = b.cached_props;
         const BodyVisualProperties& vp = b.cached_visuals;
+        MagneticSignature magnetic = estimate_magnetic_signature(b, cfg.G);
 
         float cloud_cov = (b.type == CTYPE_PLANET || b.type == CTYPE_MOON)
             ? pp.cloud_coverage / 100.0f : 0.0f;
@@ -334,14 +353,27 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
             vp.metallic,
             vp.specular,
             vp.normal_strength);
+        spheres[i].feature_params = glm::vec4(
+            vp.continent_coverage,
+            vp.island_coverage,
+            vp.river_density,
+            vp.ice_sheet_coverage);
         float comp_w = vp.dust_frac;
         if (vp.render_class == RENDER_PLANET || vp.render_class == RENDER_MOON)
             comp_w = pp.ocean_coverage / 100.0f;
-        spheres[i].composition_params = glm::vec4(
-            vp.rock_frac,
-            vp.ice_frac,
-            vp.metal_frac,
-            comp_w);
+        if (vp.render_class == RENDER_STAR) {
+            spheres[i].composition_params = glm::vec4(
+                vp.star_spot_coverage,
+                vp.star_flare_frequency,
+                vp.star_pulsation,
+                vp.star_differential_rotation);
+        } else {
+            spheres[i].composition_params = glm::vec4(
+                vp.rock_frac,
+                vp.ice_frac,
+                vp.metal_frac,
+                comp_w);
+        }
         spheres[i].atmosphere_params = glm::vec4(
             cloud_cov,
             pressure,
@@ -358,7 +390,7 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
                 vp.flare_activity,
                 vp.corona_strength,
                 vp.spin_visual,
-                vp.ridge_amp);
+                vp.star_spot_coverage);
         } else if (vp.render_class == RENDER_COMET) {
             spheres[i].activity_params = glm::vec4(
                 0.0f,
@@ -378,11 +410,16 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
                 0.0f,
                 0.0f);
         }
+        spheres[i].magnetosphere_params = glm::vec4(
+            magnetic.magnetic_field,
+            magnetic.magnetosphere_size,
+            magnetic.axis_angle,
+            magnetic.particle_trapping);
         spheres[i].gravity_params = glm::vec4(
             std::max(b.mass, 0.0f),
-            0.0f,
-            0.0f,
-            0.0f);
+            (float)b.stellar_stage,
+            std::clamp(b.fuel, 0.0f, 1.0f),
+            std::max(b.luminosity, 0.0f));
     }
 
     if (n > 0) {

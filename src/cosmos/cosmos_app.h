@@ -68,8 +68,15 @@ private:
     void process_collisions(float dt);
     void process_roche_limit(float dt);
     void process_temperature(float dt);
+    void process_space_weather(float dt);
     void process_evaporation(float dt);
     void process_stellar_evolution(float dt);
+    void trigger_stellar_supernova(size_t index, float dt, bool thermonuclear = false,
+                                   glm::vec3 impact_axis = glm::vec3(0.0f),
+                                   float ejecta_speed = 0.0f);
+    bool handle_stellar_collision_supernova(size_t i, size_t j, float rel_speed,
+                                            float impact_energy, float escape_speed,
+                                            const glm::vec3& impact_axis, float dt);
     void cleanup_bodies();
     void spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, int count,
                         uint32_t parent_generation = 0, float source_temperature = 300.0f,

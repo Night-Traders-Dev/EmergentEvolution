@@ -13,16 +13,35 @@
 
 // ── Body color (for trail overlay coloring) ─────────────────────────────────
 
+static ImVec4 star_tint_ui(const CelestialBody& b) {
+    float t = std::clamp((b.temperature - 1200.0f) / 32000.0f, 0.0f, 1.0f);
+    glm::vec3 tint(
+        std::clamp(1.25f - t * 0.95f, 0.0f, 1.0f),
+        std::clamp(0.45f + t * 0.6f, 0.0f, 1.0f),
+        std::clamp(-0.1f + t * 1.25f, 0.0f, 1.0f));
+    float giant = (b.stellar_stage == SSTAGE_RED_GIANT) ? 1.0f
+        : std::clamp((b.radius - 40.0f) / 120.0f, 0.0f, 1.0f);
+    float white_dwarf = (b.stellar_stage == SSTAGE_WHITE_DWARF) ? 1.0f : 0.0f;
+    float neutron_star = (b.stellar_stage == SSTAGE_NEUTRON_STAR) ? 1.0f : 0.0f;
+    float massive_hot = std::clamp((b.mass - 8.0f) / 32.0f, 0.0f, 1.0f) *
+        std::clamp((b.temperature - 9000.0f) / 26000.0f, 0.0f, 1.0f);
+    float cool = std::clamp((6000.0f - b.temperature) / 3600.0f, 0.0f, 1.0f);
+    tint = glm::mix(tint, glm::vec3(1.00f, 0.62f, 0.34f), giant * std::max(cool, 0.35f) * 0.75f);
+    tint = glm::mix(tint, glm::vec3(0.76f, 0.86f, 1.00f), massive_hot * 0.70f);
+    tint = glm::mix(tint, glm::vec3(0.92f, 0.96f, 1.00f), white_dwarf * 0.90f);
+    tint = glm::mix(tint, glm::vec3(0.72f, 0.84f, 1.00f), neutron_star * 0.96f);
+    tint = glm::clamp(tint, glm::vec3(0.0f), glm::vec3(1.0f));
+    return ImVec4(tint.r, tint.g, tint.b, 1.0f);
+}
+
 static ImU32 body_color(const CelestialBody& b) {
     if (is_star_type(b.type)) {
-        float t = std::clamp((b.temperature - 2000.0f) / 30000.0f, 0.0f, 1.0f);
-        int r = (int)(255 * std::clamp(1.4f - t * 1.2f, 0.0f, 1.0f));
-        int g = (int)(255 * std::clamp(0.8f + t * 0.2f - std::abs(t - 0.4f), 0.0f, 1.0f));
-        int blue = (int)(255 * std::clamp(t * 1.8f - 0.3f, 0.0f, 1.0f));
-        return IM_COL32(r, g, std::min(blue, 255), 255);
+        ImVec4 tint = star_tint_ui(b);
+        return IM_COL32((int)(tint.x * 255.0f), (int)(tint.y * 255.0f),
+                        (int)(tint.z * 255.0f), 255);
     }
     if (is_black_hole_type(b.type))
-        return IM_COL32(200, 100, 255, 255);
+        return IM_COL32(18, 18, 22, 255);
     switch (b.type) {
     case CTYPE_PLANET:     return IM_COL32(60, 140, 220, 255);
     case CTYPE_MOON:       return IM_COL32(180, 180, 190, 255);
@@ -40,13 +59,17 @@ static const char* const CTYPE_NAMES[] = {
     "Stellar BH", "Intermediate BH", "Supermassive BH", "Primordial BH",
 };
 
+static const char* const PLANET_CLASS_NAMES[] = {
+    "Dwarf Planet", "Terrestrial", "Ocean World", "Super-Earth", "Ice Giant", "Gas Giant",
+};
+
 static const ImU32 CTYPE_COLORS[] = {
     IM_COL32(255, 200, 60, 255),   // Star - gold
     IM_COL32(60, 140, 220, 255),   // Planet - blue
     IM_COL32(180, 180, 190, 255),  // Moon - silver
     IM_COL32(140, 130, 110, 255),  // Asteroid - brown
     IM_COL32(160, 220, 255, 255),  // Comet - ice blue
-    IM_COL32(200, 100, 255, 255),  // Black Hole - purple
+    IM_COL32(18, 18, 22, 255),     // Black Hole - black
     IM_COL32(120, 60, 180, 255),   // Nebula - violet
     IM_COL32(120, 140, 255, 255),  // O - deep blue
     IM_COL32(160, 180, 255, 255),  // B - blue-white
@@ -59,10 +82,10 @@ static const ImU32 CTYPE_COLORS[] = {
     IM_COL32(140, 40, 60, 255),    // T - magenta-brown
     IM_COL32(100, 30, 50, 255),    // Y - very dark
     IM_COL32(100, 180, 255, 255),  // WR - hot blue
-    IM_COL32(180, 80, 220, 255),   // Stellar BH
-    IM_COL32(160, 60, 200, 255),   // Intermediate BH
-    IM_COL32(140, 40, 180, 255),   // Supermassive BH
-    IM_COL32(200, 100, 240, 255),  // Primordial BH
+    IM_COL32(24, 24, 30, 255),     // Stellar BH
+    IM_COL32(18, 18, 24, 255),     // Intermediate BH
+    IM_COL32(12, 12, 18, 255),     // Supermassive BH
+    IM_COL32(32, 32, 40, 255),     // Primordial BH
 };
 
 // ── Star / BH classification helpers ────────────────────────────────────────
@@ -88,6 +111,9 @@ static constexpr float EARTH_MASS_SOLAR = 3.003e-6f;
 static constexpr float JUPITER_MASS_SOLAR = 9.5458e-4f;
 static constexpr float HYDROGEN_BURNING_MASS_SOLAR = 0.075f;
 static constexpr float MAX_MAIN_SEQUENCE_MASS_SOLAR = 150.0f;
+static constexpr float CORE_COLLAPSE_MIN_MASS_SOLAR = 8.0f;
+static constexpr float BLACK_HOLE_MIN_REMNANT_MASS_SOLAR = 20.0f;
+static constexpr float CHANDRASEKHAR_LIMIT_SOLAR = 1.38f;
 
 struct MaterialComposition {
     float iron = 0.0f;
@@ -118,6 +144,47 @@ static uint32_t classify_black_hole(float mass) {
     if (mass <= 100000.0f)  return CTYPE_BH_INTERMEDIATE;
     return CTYPE_BH_SUPERMASSIVE;
 }
+
+static void star_spectral_bounds(uint32_t type, float& min_mass, float& max_mass,
+                                 float& min_temp, float& max_temp) {
+    switch (type) {
+    case CTYPE_STAR_O:  min_mass = 16.0f; max_mass = 80.0f;  min_temp = 30000.0f; max_temp = 52000.0f; break;
+    case CTYPE_STAR_B:  min_mass = 2.1f;  max_mass = 16.0f;  min_temp = 10000.0f; max_temp = 30000.0f; break;
+    case CTYPE_STAR_A:  min_mass = 1.4f;  max_mass = 2.1f;   min_temp = 7500.0f;  max_temp = 10000.0f; break;
+    case CTYPE_STAR_F:  min_mass = 1.04f; max_mass = 1.4f;   min_temp = 6000.0f;  max_temp = 7500.0f; break;
+    case CTYPE_STAR_G:  min_mass = 0.8f;  max_mass = 1.04f;  min_temp = 5200.0f;  max_temp = 6000.0f; break;
+    case CTYPE_STAR_K:  min_mass = 0.45f; max_mass = 0.8f;   min_temp = 3700.0f;  max_temp = 5200.0f; break;
+    case CTYPE_STAR_M:  min_mass = 0.08f; max_mass = 0.45f;  min_temp = 2400.0f;  max_temp = 3700.0f; break;
+    case CTYPE_STAR_L:  min_mass = 0.04f; max_mass = 0.08f;  min_temp = 1300.0f;  max_temp = 2400.0f; break;
+    case CTYPE_STAR_T:  min_mass = 0.02f; max_mass = 0.06f;  min_temp = 500.0f;   max_temp = 1300.0f; break;
+    case CTYPE_STAR_Y:  min_mass = 0.01f; max_mass = 0.04f;  min_temp = 250.0f;   max_temp = 500.0f; break;
+    case CTYPE_STAR_WR: min_mass = 20.0f; max_mass = 120.0f; min_temp = 35000.0f; max_temp = 60000.0f; break;
+    default:            min_mass = 0.08f; max_mass = 60.0f;  min_temp = 2400.0f;  max_temp = 40000.0f; break;
+    }
+}
+
+static float expected_main_sequence_temperature(float mass) {
+    if (mass < 0.08f) return 1800.0f;
+    if (mass < 0.45f) return 2500.0f + (mass - 0.08f) / 0.37f * 1200.0f;
+    if (mass < 0.8f)  return 3700.0f + (mass - 0.45f) / 0.35f * 1500.0f;
+    if (mass < 1.04f) return 5200.0f + (mass - 0.8f) / 0.24f * 600.0f;
+    if (mass < 1.4f)  return 6000.0f + (mass - 1.04f) / 0.36f * 1500.0f;
+    if (mass < 2.1f)  return 7500.0f + (mass - 1.4f) / 0.7f * 2500.0f;
+    if (mass < 16.0f) return 10000.0f + (mass - 2.1f) / 13.9f * 20000.0f;
+    return 30000.0f + std::clamp((mass - 16.0f) / 64.0f, 0.0f, 1.0f) * 22000.0f;
+}
+
+static float stellar_rotation_period_hours(float mass, uint32_t type, std::mt19937& rng) {
+    if (type == CTYPE_STAR_WR || mass > 16.0f)
+        return std::uniform_real_distribution<float>(8.0f, 60.0f)(rng);
+    if (mass > 2.0f)
+        return std::uniform_real_distribution<float>(12.0f, 180.0f)(rng);
+    if (mass > 0.8f)
+        return std::uniform_real_distribution<float>(120.0f, 720.0f)(rng);
+    return std::uniform_real_distribution<float>(240.0f, 1800.0f)(rng);
+}
+
+static float expected_star_radius(const CelestialBody& b);
 
 static void randomize_small_body_properties(CelestialBody& body, std::mt19937& rng,
                                             bool is_comet) {
@@ -155,6 +222,64 @@ static void randomize_small_body_properties(CelestialBody& body, std::mt19937& r
         body.angular_vel *= -1.0f;
 }
 
+static void randomize_star_properties(CelestialBody& body, std::mt19937& rng,
+                                      uint32_t requested_type = CTYPE_STAR) {
+    constexpr float PI = 3.14159265359f;
+    float min_mass, max_mass, min_temp, max_temp;
+    star_spectral_bounds(requested_type, min_mass, max_mass, min_temp, max_temp);
+
+    if (requested_type != CTYPE_STAR)
+        body.mass = std::max(body.mass, min_mass);
+    body.mass = std::clamp(body.mass, 0.01f, MAX_MAIN_SEQUENCE_MASS_SOLAR);
+
+    if (requested_type != CTYPE_STAR) {
+        body.temperature = std::clamp(
+            std::uniform_real_distribution<float>(min_temp, max_temp)(rng) *
+            std::uniform_real_distribution<float>(0.96f, 1.04f)(rng),
+            min_temp, max_temp * 1.03f);
+    } else {
+        float base_t = expected_main_sequence_temperature(body.mass);
+        body.temperature = std::clamp(
+            base_t * std::uniform_real_distribution<float>(0.92f, 1.10f)(rng),
+            1800.0f, 55000.0f);
+    }
+
+    body.type = classify_star_spectral(body.temperature, body.mass);
+    body.stellar_stage = SSTAGE_MAIN_SEQUENCE;
+    body.fuel = std::clamp(std::uniform_real_distribution<float>(0.55f, 1.0f)(rng) -
+                           std::clamp((body.mass - 8.0f) / 80.0f, 0.0f, 0.18f),
+                           0.25f, 1.0f);
+    body.radius = expected_star_radius(body) *
+                  std::uniform_real_distribution<float>(0.82f, 1.22f)(rng);
+    float period_h = stellar_rotation_period_hours(body.mass, body.type, rng);
+    body.angular_vel = (2.0f * PI) / (period_h * 3600.0f);
+    if (std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) < 0.08f)
+        body.angular_vel *= -1.0f;
+    body.luminosity = std::pow(std::max(body.mass, 0.08f), 3.2f) * 0.1f *
+                      std::uniform_real_distribution<float>(0.75f, 1.35f)(rng);
+}
+
+static float merged_star_fuel(const CelestialBody& a, const CelestialBody& b, float total_mass) {
+    float weighted = (a.fuel * a.mass + b.fuel * b.mass) / std::max(total_mass, 1.0e-6f);
+    float mixing_bonus = std::clamp(0.10f + 0.20f * std::min(a.mass, b.mass) / std::max(total_mass, 1.0e-6f),
+                                    0.0f, 0.22f);
+    return std::clamp(weighted * 0.82f + mixing_bonus, 0.05f, 1.0f);
+}
+
+enum StellarRemnantKind {
+    REMNANT_NONE = 0,
+    REMNANT_WHITE_DWARF,
+    REMNANT_NEUTRON_STAR,
+    REMNANT_BLACK_HOLE,
+};
+
+static StellarRemnantKind stellar_remnant_kind(float progenitor_mass, bool thermonuclear = false) {
+    if (thermonuclear) return REMNANT_NONE;
+    if (progenitor_mass < CORE_COLLAPSE_MIN_MASS_SOLAR) return REMNANT_WHITE_DWARF;
+    if (progenitor_mass < BLACK_HOLE_MIN_REMNANT_MASS_SOLAR) return REMNANT_NEUTRON_STAR;
+    return REMNANT_BLACK_HOLE;
+}
+
 
 static void randomize_planet_properties(CelestialBody& body, const CosmosState& state,
                                         std::mt19937& rng) {
@@ -165,10 +290,23 @@ static void randomize_planet_properties(CelestialBody& body, const CosmosState& 
 
     std::uniform_real_distribution<float> u01(0.0f, 1.0f);
 
-    // Log-uniform planet masses: ~0.2 Earth masses to ~3 Jupiter masses.
-    float log_m_earth = std::uniform_real_distribution<float>(
-        std::log10(0.2f), std::log10(1000.0f))(rng);
-    float mass_earth = std::pow(10.0f, log_m_earth);
+    // Use broad weighted categories so dwarf planets, terrestrial worlds,
+    // ice giants, and gas giants all appear regularly.
+    float mass_earth;
+    float bucket = u01(rng);
+    if (bucket < 0.16f) {
+        mass_earth = std::pow(10.0f, std::uniform_real_distribution<float>(
+            std::log10(0.02f), std::log10(0.25f))(rng));
+    } else if (bucket < 0.62f) {
+        mass_earth = std::pow(10.0f, std::uniform_real_distribution<float>(
+            std::log10(0.25f), std::log10(4.0f))(rng));
+    } else if (bucket < 0.84f) {
+        mass_earth = std::pow(10.0f, std::uniform_real_distribution<float>(
+            std::log10(4.0f), std::log10(30.0f))(rng));
+    } else {
+        mass_earth = std::pow(10.0f, std::uniform_real_distribution<float>(
+            std::log10(30.0f), std::log10(1000.0f))(rng));
+    }
     body.mass = std::clamp(mass_earth * EARTH_MASS_TO_SOLAR, 1.0e-7f, 0.01f);
 
     // Mass-radius relation (very simplified):
@@ -220,6 +358,7 @@ static void randomize_planet_properties(CelestialBody& body, const CosmosState& 
     }
     body.angular_vel = (2.0f * PI) / (period_hours * 3600.0f);
     if (u01(rng) < 0.15f) body.angular_vel *= -1.0f; // occasional retrograde spin
+    body.atmosphere_retention = 1.0f;
 }
 
 static void enforce_body_physical_limits(CelestialBody& b);
@@ -278,10 +417,16 @@ static float expected_star_radius(const CelestialBody& b) {
         return std::clamp(1.6f + 1.8f / std::pow(std::max(mass, 0.2f), 0.33f), 1.5f, 4.0f);
     if (b.stellar_stage == SSTAGE_NEUTRON_STAR)
         return 2.5f;
+    if (b.stellar_stage == SSTAGE_HYPERGIANT)
+        return std::clamp(70.0f * std::pow(mass, 0.58f), 60.0f, 320.0f);
+    if (b.stellar_stage == SSTAGE_SUPERGIANT)
+        return std::clamp(48.0f * std::pow(mass, 0.54f), 40.0f, 260.0f);
     if (b.stellar_stage == SSTAGE_RED_GIANT)
         return std::clamp(35.0f * std::pow(mass, 0.6f), 30.0f, 220.0f);
     return std::clamp(10.0f + 20.0f * std::pow(mass, 0.8f), 6.0f, 120.0f);
 }
+
+static float stellar_luminosity_units(const CelestialBody& b);
 
 static MaterialComposition derive_materials(const CelestialBody& b) {
     MaterialComposition m{};
@@ -310,7 +455,8 @@ static MaterialComposition derive_materials(const CelestialBody& b) {
             m.silicate = std::clamp(1.0f - m.hydrogen - m.water - 0.03f, 0.0f, 0.30f);
             m.iron = std::clamp(1.0f - m.hydrogen - m.water - m.silicate, 0.0f, 0.12f);
         } else {
-            m.iron = std::clamp(0.15f + b.cached_visuals.metal_frac * 0.55f, 0.05f, 0.45f);
+            float core_bonus = pp.has_iron_core ? 0.12f : 0.0f;
+            m.iron = std::clamp(0.15f + core_bonus + b.cached_visuals.metal_frac * 0.55f, 0.05f, 0.60f);
             m.water = std::clamp((pp.ocean_coverage / 100.0f) * 0.7f + b.cached_visuals.ice_frac * 0.35f, 0.0f, 0.80f);
             m.hydrogen = std::clamp(pp.atmosphere.h2_frac * 0.4f, 0.0f, 0.25f);
             m.silicate = std::clamp(1.0f - m.iron - m.water - m.hydrogen, 0.0f, 0.90f);
@@ -355,26 +501,59 @@ static ComparisonMetrics derive_comparisons(const CelestialBody& b) {
 
 static MagneticMetrics derive_magnetic_metrics(const CelestialBody& b, float G) {
     MagneticMetrics mm{};
-    float density = body_density(b);
-    float spin = std::abs(b.angular_vel);
-    float dynamo = std::sqrt(std::max(b.mass, 0.0f)) * std::pow(std::max(b.radius, 0.1f), 0.8f) *
-                   (0.2f + spin * 500.0f) * (0.6f + density * 2.5f);
-    mm.magnetic_field = dynamo;
-    mm.magnetic_pole_angle = hash_float(hash_combine(b.seed, 700u)) * 90.0f;
-
-    if (b.type == CTYPE_PLANET || b.type == CTYPE_MOON) {
-        mm.show_magnetosphere = true;
-        float gravity = body_surface_gravity(b, G);
-        mm.magnetosphere_size = std::clamp(std::pow(std::max(dynamo, 0.01f), 0.33f) *
-                                           (1.5f + gravity * 2.0f), 0.5f, 60.0f);
-        mm.show_magnetic_axis = dynamo > 0.02f;
-    }
-    if (b.stellar_stage == SSTAGE_NEUTRON_STAR || b.stellar_stage == SSTAGE_WHITE_DWARF) {
-        mm.particle_jets = dynamo > 1.5f;
-        mm.make_pulsar = mm.particle_jets && spin > 0.002f;
-        mm.show_magnetic_axis = true;
-    }
+    MagneticSignature sig = estimate_magnetic_signature(b, G);
+    mm.show_magnetosphere = sig.has_magnetosphere;
+    mm.magnetosphere_size = sig.magnetosphere_size;
+    mm.magnetic_field = sig.magnetic_field;
+    mm.show_magnetic_axis = sig.show_axis;
+    mm.magnetic_pole_angle = glm::degrees(sig.axis_angle);
+    mm.particle_jets = sig.particle_jets;
+    mm.make_pulsar = sig.pulsar;
     return mm;
+}
+
+static glm::vec3 magnetic_axis_dir(const CelestialBody& b) {
+    float tilt = hash_float(hash_combine(b.seed, 700u)) * 1.57079632679f;
+    float phase = hash_float(hash_combine(b.seed, 701u)) * 6.28318530718f;
+    glm::vec3 axis(std::cos(phase) * std::sin(tilt),
+                   std::cos(tilt),
+                   std::sin(phase) * std::sin(tilt));
+    if (glm::dot(axis, axis) < 1.0e-6f)
+        axis = glm::vec3(0.0f, 1.0f, 0.0f);
+    return glm::normalize(axis);
+}
+
+static float magnetic_shielding_score(const CelestialBody& b, float G) {
+    MagneticSignature sig = estimate_magnetic_signature(b, G);
+    if (!sig.has_magnetosphere) return 0.0f;
+    float escape = body_escape_velocity(b, G);
+    float atmosphere = (b.type == CTYPE_PLANET || b.type == CTYPE_MOON)
+        ? b.cached_props.atmosphere.pressure : 0.0f;
+    return std::clamp(sig.magnetic_field * 0.10f + sig.particle_trapping * 0.32f +
+                      escape * 0.16f + atmosphere * 0.008f, 0.0f, 1.25f);
+}
+
+static float star_wind_flux(const CelestialBody& source, const CelestialBody& target, float G) {
+    float dist = glm::length(source.pos - target.pos);
+    if (dist <= 1.0e-3f) return 0.0f;
+    MagneticSignature sig = estimate_magnetic_signature(source, G);
+    float flare = 0.7f + source.cached_visuals.flare_activity + source.cached_visuals.corona_strength * 0.45f;
+    float luminosity = std::sqrt(std::max(stellar_luminosity_units(source), 0.0f) + 1.0f);
+    return flare * (0.5f + sig.magnetic_field * 0.08f) * luminosity /
+           std::max(dist * dist, source.radius * source.radius * 4.0f);
+}
+
+static float black_hole_radiation_flux(const CelestialBody& source, const CelestialBody& target,
+                                       const CosmosState& state) {
+    float dist = glm::length(source.pos - target.pos);
+    if (dist <= 1.0e-3f) return 0.0f;
+    float feeding = estimate_black_hole_feeding(source, &state);
+    if (feeding <= 0.01f) return 0.0f;
+    glm::vec3 axis = magnetic_axis_dir(source);
+    glm::vec3 dir = glm::normalize(target.pos - source.pos);
+    float alignment = 0.22f + 0.78f * std::pow(std::abs(glm::dot(dir, axis)), 3.0f);
+    float base = (0.35f + feeding * 1.15f + source.cached_visuals.jet_strength * 0.65f);
+    return base * alignment / std::max(dist * dist, source.radius * source.radius * 9.0f);
 }
 
 static void enforce_body_physical_limits(CelestialBody& b) {
@@ -506,6 +685,9 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
     sun.temperature = 5778.0f;
     sun.type = CTYPE_STAR;
     sun.seed = 42;
+    sun.fuel = 0.72f;
+    sun.angular_vel = (2.0f * 3.14159265359f) / (26.0f * 24.0f * 3600.0f);
+    sun.luminosity = std::pow(std::max(sun.mass, 0.08f), 3.2f) * 0.1f;
     sun.type = classify_star_spectral(sun.temperature, sun.mass);
     sun.name = generate_body_name(sun.seed, sun.type);
     state.bodies.push_back(sun);
@@ -653,10 +835,7 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
     std::mt19937 rng(nb.seed ^ (uint32_t)(sim_time_ * 1000.0f));
 
     if (is_star_type((uint32_t)spawn_type)) {
-        nb.temperature = 5778.0f;
-        nb.radius = std::max(15.0f, std::cbrt(spawn_mass) * 6.0f);
-        if (spawn_type == CTYPE_STAR)
-            nb.type = classify_star_spectral(nb.temperature, nb.mass);
+        randomize_star_properties(nb, rng, (uint32_t)spawn_type);
     } else if (is_black_hole_type((uint32_t)spawn_type)) {
         nb.temperature = 0.0f;
         nb.radius = std::max(10.0f, std::cbrt(spawn_mass) * 4.0f);
@@ -916,6 +1095,7 @@ void CosmosApp::step_physics(float dt) {
     if (cfg.collisions)         process_collisions(scaled_dt);
     if (cfg.roche_limit)        process_roche_limit(scaled_dt);
     if (cfg.temperature_system) process_temperature(scaled_dt);
+    if (cfg.temperature_system || cfg.evaporation) process_space_weather(scaled_dt);
     if (cfg.evaporation)        process_evaporation(scaled_dt);
     if (cfg.stellar_evolution)  process_stellar_evolution(scaled_dt);
     cleanup_bodies();
@@ -941,6 +1121,132 @@ void CosmosApp::step_physics(float dt) {
 }
 
 // ── Collision Processing ────────────────────────────────────────────────────
+
+void CosmosApp::trigger_stellar_supernova(size_t index, float dt, bool thermonuclear,
+                                          glm::vec3 impact_axis, float ejecta_speed) {
+    if (index >= state.bodies.size()) return;
+    CelestialBody& b = state.bodies[index];
+    if (b.marked_for_removal) return;
+
+    float progenitor_mass = std::max(b.mass, 0.01f);
+    StellarRemnantKind remnant = stellar_remnant_kind(progenitor_mass, thermonuclear);
+    float remnant_mass = 0.0f;
+
+    switch (remnant) {
+    case REMNANT_WHITE_DWARF:
+        remnant_mass = std::clamp(0.48f + progenitor_mass * 0.10f, 0.45f, 1.30f);
+        break;
+    case REMNANT_NEUTRON_STAR:
+        remnant_mass = std::clamp(1.25f + (progenitor_mass - CORE_COLLAPSE_MIN_MASS_SOLAR) * 0.045f,
+                                  1.25f, 2.40f);
+        break;
+    case REMNANT_BLACK_HOLE:
+        remnant_mass = std::clamp(progenitor_mass * 0.35f, 3.0f, progenitor_mass * 0.85f);
+        break;
+    case REMNANT_NONE:
+    default:
+        remnant_mass = 0.0f;
+        break;
+    }
+
+    float ejecta_mass = std::max(progenitor_mass - remnant_mass, 0.0f);
+    int burst_count = std::clamp(cfg.fragment_count * 2, cfg.fragment_count, 24);
+    glm::vec3 axis = glm::length(impact_axis) > 1.0e-4f
+        ? glm::normalize(impact_axis)
+        : glm::normalize(glm::vec3(0.7f, 0.3f, 0.2f));
+    float burst_speed = ejecta_speed > 0.0f
+        ? ejecta_speed
+        : (thermonuclear ? std::max(22.0f, progenitor_mass * 2.0f)
+                         : std::max(28.0f, progenitor_mass * 1.4f));
+
+    if (ejecta_mass > 1.0e-4f) {
+        spawn_fragments(b.pos, b.vel, ejecta_mass, burst_count,
+                        b.frag_generation, std::max(b.temperature, 6000.0f),
+                        axis, burst_speed);
+        register_mass_loss(b, ejecta_mass, std::max(dt, 1.0e-4f));
+    }
+
+    if (thermonuclear || remnant == REMNANT_NONE) {
+        b.marked_for_removal = true;
+        return;
+    }
+
+    b.mass = remnant_mass;
+    b.fuel = 0.0f;
+    b.internal_energy *= 0.1f;
+
+    if (remnant == REMNANT_WHITE_DWARF) {
+        b.stellar_stage = SSTAGE_WHITE_DWARF;
+        b.temperature = std::clamp(22000.0f + progenitor_mass * 1800.0f, 9000.0f, 120000.0f);
+        b.radius = std::max(1.6f, 1.2f + 1.7f / std::pow(std::max(b.mass, 0.25f), 0.35f));
+        b.luminosity = 0.002f + progenitor_mass * 0.0004f;
+        b.type = classify_star_spectral(std::max(b.temperature, 2200.0f), std::max(b.mass, 0.1f));
+    } else if (remnant == REMNANT_NEUTRON_STAR) {
+        b.stellar_stage = SSTAGE_NEUTRON_STAR;
+        b.temperature = 120000.0f;
+        b.radius = 3.0f;
+        b.luminosity = 0.02f;
+        b.type = classify_star_spectral(std::max(b.temperature, 2200.0f), std::max(b.mass, 0.1f));
+        float spin_sign = (b.angular_vel < 0.0f) ? -1.0f : 1.0f;
+        b.angular_vel = spin_sign * std::clamp(std::abs(b.angular_vel) * 4.0f + 0.002f, 0.002f, 0.05f);
+    } else {
+        b.stellar_stage = SSTAGE_NEUTRON_STAR;
+        b.temperature = 0.0f;
+        b.luminosity = 0.0f;
+        b.type = classify_black_hole(b.mass);
+        b.radius = std::max(0.5f, 2.0f * b.mass);
+    }
+
+    b.vel += axis * (burst_speed * 0.04f / std::max(b.mass, 0.1f));
+    refresh_body_render_state(b, &state);
+}
+
+bool CosmosApp::handle_stellar_collision_supernova(size_t i, size_t j, float rel_speed,
+                                                   float impact_energy, float escape_speed,
+                                                   const glm::vec3& impact_axis, float dt) {
+    if (!is_star_type(state.bodies[i].type) || !is_star_type(state.bodies[j].type))
+        return false;
+
+    CelestialBody& a = state.bodies[i];
+    CelestialBody& b = state.bodies[j];
+    float total_mass = a.mass + b.mass;
+    bool white_dwarf_pair = (a.stellar_stage == SSTAGE_WHITE_DWARF || b.stellar_stage == SSTAGE_WHITE_DWARF);
+    bool thermonuclear = white_dwarf_pair &&
+        total_mass >= CHANDRASEKHAR_LIMIT_SOLAR &&
+        rel_speed >= std::max(cfg.fragment_speed_threshold * 0.7f, escape_speed * 1.1f);
+    bool core_collapse = total_mass >= CORE_COLLAPSE_MIN_MASS_SOLAR &&
+        rel_speed >= std::max(cfg.fragment_speed_threshold * 1.15f, escape_speed * 1.6f) &&
+        impact_energy > total_mass * 25.0f;
+
+    if (!thermonuclear && !core_collapse)
+        return false;
+
+    size_t big = (a.mass >= b.mass) ? i : j;
+    size_t small = (big == i) ? j : i;
+    CelestialBody merged = state.bodies[big];
+
+    merged.pos = (a.pos * a.mass + b.pos * b.mass) / std::max(total_mass, 1.0e-6f);
+    merged.vel = (a.vel * a.mass + b.vel * b.mass) / std::max(total_mass, 1.0e-6f);
+    merged.mass = total_mass;
+    merged.radius = std::cbrt(std::max(a.radius * a.radius * a.radius +
+                                       b.radius * b.radius * b.radius, 1.0f));
+    merged.temperature = std::max((a.temperature * a.mass + b.temperature * b.mass) /
+                                  std::max(total_mass, 1.0e-6f),
+                                  thermonuclear ? 140000.0f : 90000.0f);
+    merged.fuel = thermonuclear ? 0.0f : merged_star_fuel(a, b, total_mass) * 0.7f;
+    merged.internal_energy = a.internal_energy + b.internal_energy + impact_energy * 0.15f;
+    merged.angular_vel = (a.angular_vel * a.mass + b.angular_vel * b.mass) /
+                         std::max(total_mass, 1.0e-6f);
+    merged.type = classify_star_spectral(std::max(merged.temperature, 2200.0f), std::max(merged.mass, 0.1f));
+    merged.stellar_stage = thermonuclear ? SSTAGE_WHITE_DWARF :
+        ((a.stellar_stage == SSTAGE_RED_GIANT || b.stellar_stage == SSTAGE_RED_GIANT)
+            ? SSTAGE_RED_GIANT : SSTAGE_MAIN_SEQUENCE);
+
+    state.bodies[big] = merged;
+    state.bodies[small].marked_for_removal = true;
+    trigger_stellar_supernova(big, dt, thermonuclear, impact_axis, std::max(rel_speed * 0.6f, 24.0f));
+    return true;
+}
 
 void CosmosApp::process_collisions(float dt) {
     auto& bodies = state.bodies;
@@ -982,11 +1288,18 @@ void CosmosApp::process_collisions(float dt) {
                     bodies[j].temperature += heat * 20.0f / std::max(bodies[j].mass, 0.01f);
                 }
 
+                if (handle_stellar_collision_supernova(i, j, rel_speed, impact_energy,
+                                                       escape_speed, impact_axis, dt)) {
+                    continue;
+                }
+
                 // Determine merge vs fragment vs bounce
                 if (cfg.collision_merging && rel_speed <= merge_limit) {
                     // Merge: larger absorbs smaller
                     size_t big = (bodies[i].mass >= bodies[j].mass) ? i : j;
                     size_t small = (big == i) ? j : i;
+                    CelestialBody pre_big = bodies[big];
+                    CelestialBody pre_small = bodies[small];
 
                     // Conserve momentum
                     glm::vec3 new_vel = (bodies[big].mass * bodies[big].vel +
@@ -999,7 +1312,26 @@ void CosmosApp::process_collisions(float dt) {
                     // Weighted temperature
                     bodies[big].temperature = (bodies[big].temperature * (total_mass - bodies[small].mass) +
                                                bodies[small].temperature * bodies[small].mass) / total_mass;
-                    bodies[big].fuel = std::max(bodies[big].fuel, bodies[small].fuel);
+                    if (is_star_type(pre_big.type) && is_star_type(pre_small.type)) {
+                        bodies[big].fuel = merged_star_fuel(pre_big, pre_small, total_mass);
+                        bodies[big].luminosity = std::pow(std::max(bodies[big].mass, 0.08f), 3.2f) * 0.1f;
+                        bodies[big].type = classify_star_spectral(std::max(bodies[big].temperature, 2200.0f),
+                                                                  std::max(bodies[big].mass, 0.1f));
+                        if (bodies[big].mass >= CORE_COLLAPSE_MIN_MASS_SOLAR &&
+                            (pre_big.stellar_stage == SSTAGE_RED_GIANT ||
+                             pre_small.stellar_stage == SSTAGE_RED_GIANT ||
+                             bodies[big].fuel < 0.18f)) {
+                            trigger_stellar_supernova(big, dt, false, impact_axis,
+                                                      std::max(rel_speed * 0.45f, 18.0f));
+                        }
+                        if ((pre_big.stellar_stage == SSTAGE_WHITE_DWARF || pre_small.stellar_stage == SSTAGE_WHITE_DWARF) &&
+                            bodies[big].mass >= CHANDRASEKHAR_LIMIT_SOLAR) {
+                            trigger_stellar_supernova(big, dt, true, impact_axis,
+                                                      std::max(rel_speed * 0.50f, 22.0f));
+                        }
+                    } else {
+                        bodies[big].fuel = std::max(bodies[big].fuel, bodies[small].fuel);
+                    }
                     bodies[small].marked_for_removal = true;
                 }
                 else {
@@ -1161,6 +1493,65 @@ void CosmosApp::process_temperature(float dt) {
     }
 }
 
+void CosmosApp::process_space_weather(float dt) {
+    auto& bodies = state.bodies;
+
+    for (size_t i = 0; i < bodies.size(); ++i) {
+        CelestialBody& target = bodies[i];
+        if (target.marked_for_removal) continue;
+        if (is_star_type(target.type) || is_black_hole_type(target.type)) continue;
+
+        float stellar_flux = 0.0f;
+        float quasar_flux = 0.0f;
+        for (size_t j = 0; j < bodies.size(); ++j) {
+            if (i == j || bodies[j].marked_for_removal) continue;
+            const CelestialBody& source = bodies[j];
+            if (is_star_type(source.type))
+                stellar_flux += star_wind_flux(source, target, cfg.G);
+            else if (is_black_hole_type(source.type))
+                quasar_flux += black_hole_radiation_flux(source, target, state);
+        }
+
+        float particle_flux = stellar_flux + quasar_flux * 1.35f;
+        if (particle_flux <= 0.0f) continue;
+
+        float shielding = magnetic_shielding_score(target, cfg.G);
+        float unshielded_flux = particle_flux * (1.0f - std::min(shielding, 1.0f) * 0.72f);
+        float heating_flux = stellar_flux * (0.22f + (1.0f - std::min(shielding, 1.0f)) * 0.55f) +
+                             quasar_flux * (0.95f + (1.0f - std::min(shielding, 1.0f)) * 0.85f);
+
+        if (cfg.temperature_system) {
+            float heat_gain = heating_flux * dt * std::max(target.radius, 0.5f) * 0.55f;
+            target.internal_energy += heat_gain;
+            target.temperature += heat_gain / std::max(target.mass * 8.0f, 0.02f);
+        }
+
+        if (cfg.evaporation &&
+            (target.type == CTYPE_PLANET || target.type == CTYPE_MOON) &&
+            target.cached_props.atmosphere.pressure > 0.001f) {
+            float escape = body_escape_velocity(target, cfg.G);
+            float retention_resist = 0.20f + escape * 0.30f + shielding * 0.90f;
+            float erosion = unshielded_flux * (0.0004f + cfg.evaporation_rate * 0.0022f) * dt /
+                            std::max(retention_resist, 0.08f);
+            if (target.cached_props.planet_class == PCLASS_GAS_GIANT ||
+                target.cached_props.planet_class == PCLASS_ICE_GIANT) {
+                erosion *= 0.10f;
+            } else if (target.cached_props.planet_class == PCLASS_DWARF) {
+                erosion *= 1.45f;
+            }
+
+            float prev_retention = target.atmosphere_retention;
+            target.atmosphere_retention = std::clamp(target.atmosphere_retention - erosion, 0.0f, 1.0f);
+            if (std::abs(target.atmosphere_retention - prev_retention) > 1.0e-6f) {
+                target.props_valid = false;
+                target.visuals_valid = false;
+                float proxy_loss = std::min(target.mass * erosion * 0.01f, target.mass * 0.0015f);
+                register_mass_loss(target, proxy_loss, dt);
+            }
+        }
+    }
+}
+
 // ── Evaporation ─────────────────────────────────────────────────────────────
 
 void CosmosApp::process_evaporation(float dt) {
@@ -1190,9 +1581,15 @@ void CosmosApp::process_evaporation(float dt) {
 void CosmosApp::process_stellar_evolution(float dt) {
     auto& bodies = state.bodies;
 
-    for (auto& b : bodies) {
+    for (size_t i = 0; i < bodies.size(); ++i) {
+        auto& b = bodies[i];
         if (b.marked_for_removal) continue;
         if (!is_star_type(b.type)) continue;
+
+        if (b.stellar_stage == SSTAGE_WHITE_DWARF && b.mass >= CHANDRASEKHAR_LIMIT_SOLAR) {
+            trigger_stellar_supernova(i, dt, true);
+            continue;
+        }
 
         // Burn fuel: more massive stars burn faster
         float burn_rate = dt / (cfg.stellar_timescale * std::max(b.mass * b.mass, 1.0f));
@@ -1208,51 +1605,43 @@ void CosmosApp::process_stellar_evolution(float dt) {
         // Reclassify spectral type as temperature changes
         b.type = classify_star_spectral(b.temperature, b.mass);
 
-        // Main sequence → red giant
-        if (b.stellar_stage == SSTAGE_MAIN_SEQUENCE && b.fuel < 0.3f) {
-            b.stellar_stage = SSTAGE_RED_GIANT;
-            b.radius *= 5.0f;
-            b.temperature *= 0.5f;
-            b.luminosity *= 100.0f;
+        // Main sequence → evolved giant / supergiant
+        float giant_threshold = (b.mass >= CORE_COLLAPSE_MIN_MASS_SOLAR) ? 0.45f : 0.30f;
+        if (b.stellar_stage == SSTAGE_MAIN_SEQUENCE && b.fuel < giant_threshold) {
+            if (b.mass >= 20.0f)
+                b.stellar_stage = SSTAGE_HYPERGIANT;
+            else if (b.mass >= CORE_COLLAPSE_MIN_MASS_SOLAR)
+                b.stellar_stage = SSTAGE_SUPERGIANT;
+            else
+                b.stellar_stage = SSTAGE_RED_GIANT;
+            b.radius *= (b.mass >= CORE_COLLAPSE_MIN_MASS_SOLAR) ? 6.0f : 5.0f;
+            b.temperature *= (b.mass >= CORE_COLLAPSE_MIN_MASS_SOLAR) ? 0.62f : 0.5f;
+            b.luminosity = std::max(b.luminosity * (b.mass >= CORE_COLLAPSE_MIN_MASS_SOLAR ? 180.0f : 100.0f),
+                                    std::pow(std::max(b.mass, 0.1f), 3.5f) * 0.25f);
         }
 
-        // Red giant → end state
-        if (b.stellar_stage == SSTAGE_RED_GIANT && b.fuel < 0.05f) {
-            if (b.mass > 8.0f) {
-                // Supernova → neutron star
-                b.stellar_stage = SSTAGE_NEUTRON_STAR;
+        bool evolved_star =
+            b.stellar_stage == SSTAGE_RED_GIANT ||
+            b.stellar_stage == SSTAGE_SUPERGIANT ||
+            b.stellar_stage == SSTAGE_HYPERGIANT;
 
-                // Spawn debris
-                float debris_mass = b.mass * 0.7f;
-                spawn_fragments(b.pos, b.vel, debris_mass, cfg.fragment_count);
-                register_mass_loss(b, debris_mass, dt);
-
-                // Remnant neutron star
-                b.mass *= 0.3f;
-                b.radius = 3.0f;
-                b.temperature = 100000.0f;
-                b.luminosity = 0.01f;
-
-                // Give debris a velocity kick
-                size_t n = state.bodies.size();
-                size_t frag_start = (n > (size_t)cfg.fragment_count) ? (n - (size_t)cfg.fragment_count) : 0;
-                for (size_t k = frag_start; k < n; k++) {
-                    glm::vec3 kick_dir = glm::normalize(state.bodies[k].pos - b.pos);
-                    state.bodies[k].vel += kick_dir * 30.0f;
-                    state.bodies[k].temperature = 5000.0f;
-                }
-            } else {
-                // White dwarf
-                b.stellar_stage = SSTAGE_WHITE_DWARF;
-                float lost = std::max(b.mass - std::max(b.mass * 0.65f, 0.2f), 0.0f);
-                if (lost > 0.0f) {
-                    b.mass -= lost;
-                    register_mass_loss(b, lost, dt);
-                }
-                b.radius = std::max(2.0f, b.radius * 0.02f);
-                b.temperature = 20000.0f;
-                b.luminosity = 0.001f;
+        if (evolved_star && b.fuel < 0.05f) {
+            if (b.mass >= CORE_COLLAPSE_MIN_MASS_SOLAR) {
+                trigger_stellar_supernova(i, dt, false);
+                continue;
             }
+
+            // Lower-mass stars end as white dwarfs after envelope loss.
+            b.stellar_stage = SSTAGE_WHITE_DWARF;
+            float lost = std::max(b.mass - std::clamp(0.48f + b.mass * 0.10f, 0.45f, 1.30f), 0.0f);
+            if (lost > 0.0f) {
+                b.mass -= lost;
+                register_mass_loss(b, lost, dt);
+            }
+            b.radius = std::max(1.6f, 1.2f + 1.7f / std::pow(std::max(b.mass, 0.25f), 0.35f));
+            b.temperature = std::clamp(22000.0f + b.mass * 4000.0f, 9000.0f, 120000.0f);
+            b.luminosity = 0.002f + b.mass * 0.0004f;
+            b.type = classify_star_spectral(std::max(b.temperature, 2200.0f), std::max(b.mass, 0.1f));
         }
     }
 }
@@ -1978,9 +2367,13 @@ void CosmosApp::draw_spawn_menu() {
             s.pos = offset; s.mass = 100.0f; s.radius = 30.0f;
             s.temperature = 5778.0f; s.type = classify_star_spectral(5778.0f, 100.0f);
             s.seed = 42;
+            s.fuel = 0.72f;
+            s.angular_vel = (2.0f * 3.14159265359f) / (26.0f * 24.0f * 3600.0f);
+            s.luminosity = std::pow(std::max(s.mass, 0.08f), 3.2f) * 0.1f;
             s.name = generate_body_name(s.seed, s.type);
             int star_idx = (int)state.bodies.size();
             state.bodies.push_back(s); state.trails.emplace_back();
+            refresh_body_render_state(state.bodies.back(), &state);
 
             float radii[] = {80, 140, 210, 300};
             float masses[] = {0.3f, 0.8f, 0.5f, 1.5f};
@@ -2011,16 +2404,24 @@ void CosmosApp::draw_spawn_menu() {
             s1.vel = glm::vec3(0, 0, v * 0.5f);
             s1.mass = 50.0f; s1.radius = 22.0f; s1.temperature = 8000.0f;
             s1.type = classify_star_spectral(8000.0f, 50.0f); s1.seed = 111;
+            s1.fuel = 0.68f;
+            s1.angular_vel = (2.0f * 3.14159265359f) / (38.0f * 3600.0f);
+            s1.luminosity = std::pow(std::max(s1.mass, 0.08f), 3.2f) * 0.1f;
             s1.name = generate_body_name(s1.seed, s1.type);
             state.bodies.push_back(s1); state.trails.emplace_back();
+            refresh_body_render_state(state.bodies.back(), &state);
 
             CelestialBody s2;
             s2.pos = center - glm::vec3(sep * 0.5f, 0, 0);
             s2.vel = glm::vec3(0, 0, -v * 0.5f);
             s2.mass = 50.0f; s2.radius = 22.0f; s2.temperature = 3500.0f;
             s2.type = classify_star_spectral(3500.0f, 50.0f); s2.seed = 222;
+            s2.fuel = 0.62f;
+            s2.angular_vel = (2.0f * 3.14159265359f) / (84.0f * 3600.0f);
+            s2.luminosity = std::pow(std::max(s2.mass, 0.08f), 3.2f) * 0.1f;
             s2.name = generate_body_name(s2.seed, s2.type);
             state.bodies.push_back(s2); state.trails.emplace_back();
+            refresh_body_render_state(state.bodies.back(), &state);
         }
 
         if (ImGui::Button("Add Asteroid Belt", ImVec2(-1, 0))) {
@@ -2520,14 +2921,14 @@ void CosmosApp::draw_inspector() {
 
     ImGui::Columns(1);
 
-    if ((b.type == CTYPE_PLANET || b.type == CTYPE_MOON) ||
-        b.stellar_stage == SSTAGE_NEUTRON_STAR || b.stellar_stage == SSTAGE_WHITE_DWARF) {
+    if (magnetic.show_magnetosphere || magnetic.show_magnetic_axis || magnetic.particle_jets ||
+        is_star_type(b.type)) {
         ImGui::Separator();
         ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "Magnetic Fields");
         ImGui::Columns(2, "##magnetic", false);
         ImGui::SetColumnWidth(0, 150);
 
-        if (b.type == CTYPE_PLANET || b.type == CTYPE_MOON) {
+        if (magnetic.show_magnetosphere) {
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Show Magnetosphere");
             ImGui::NextColumn();
             ImGui::Text("%s", magnetic.show_magnetosphere ? "Yes" : "No");
@@ -2554,7 +2955,7 @@ void CosmosApp::draw_inspector() {
         ImGui::Text("%.1f deg", magnetic.magnetic_pole_angle);
         ImGui::NextColumn();
 
-        if (b.stellar_stage == SSTAGE_NEUTRON_STAR || b.stellar_stage == SSTAGE_WHITE_DWARF) {
+        if (magnetic.particle_jets || magnetic.make_pulsar) {
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Particle Jets");
             ImGui::NextColumn();
             ImGui::Text("%s", magnetic.particle_jets ? "Yes" : "No");
@@ -2713,6 +3114,11 @@ void CosmosApp::draw_inspector() {
         ImGui::Text("%s", SURF_NAMES[pp.surface]);
         ImGui::NextColumn();
 
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Planet Class");
+        ImGui::NextColumn();
+        ImGui::Text("%s", PLANET_CLASS_NAMES[pp.planet_class]);
+        ImGui::NextColumn();
+
         // Atmosphere
         if (pp.atmosphere.pressure > 0.01f) {
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Atm Pressure");
@@ -2760,6 +3166,11 @@ void CosmosApp::draw_inspector() {
             }
         }
 
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Atmosphere Health");
+        ImGui::NextColumn();
+        ImGui::Text("%.0f%%", std::clamp(b.atmosphere_retention, 0.0f, 1.0f) * 100.0f);
+        ImGui::NextColumn();
+
         // Ocean
         if (pp.ocean_type != OCEAN_NONE) {
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Ocean");
@@ -2783,7 +3194,31 @@ void CosmosApp::draw_inspector() {
         if (pp.has_continents) {
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Continents");
             ImGui::NextColumn();
-            ImGui::Text("%d", pp.continent_count);
+            ImGui::Text("%d / %.0f%%", pp.continent_count, pp.continent_coverage);
+            ImGui::NextColumn();
+        }
+        if (pp.has_islands) {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Islands");
+            ImGui::NextColumn();
+            ImGui::Text("%.0f%%", pp.island_coverage);
+            ImGui::NextColumn();
+        }
+        if (pp.has_rivers) {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Rivers");
+            ImGui::NextColumn();
+            ImGui::Text("%.0f%% density", pp.river_density * 100.0f);
+            ImGui::NextColumn();
+        }
+        if (pp.has_ice_sheets) {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Ice Sheets");
+            ImGui::NextColumn();
+            ImGui::Text("%.0f%%", pp.ice_sheet_coverage);
+            ImGui::NextColumn();
+        }
+        if (pp.has_iron_core) {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Iron Core");
+            ImGui::NextColumn();
+            ImGui::Text("Yes");
             ImGui::NextColumn();
         }
 
@@ -3069,10 +3504,29 @@ void CosmosApp::draw_bottom_bar() {
 // ── Save / Load ─────────────────────────────────────────────────────────────
 
 static constexpr uint32_t COSMOS_MAGIC   = 0x534D4F43; // "COSM"
-static constexpr uint32_t COSMOS_VERSION = 1;
+static constexpr uint32_t COSMOS_VERSION = 2;
 
 // POD struct for binary serialization of one body (fixed-size fields only)
 #pragma pack(push, 1)
+struct BodyPODV1 {
+    float pos[3];
+    float vel[3];
+    float mass;
+    float radius;
+    float temperature;
+    uint32_t type;
+    int32_t parent;
+    float age;
+    float internal_energy;
+    float luminosity;
+    float fuel;
+    float angular_vel;
+    uint32_t stellar_stage;
+    uint32_t seed;
+    uint32_t frag_generation;
+    uint32_t name_len; // followed by name_len bytes of name
+};
+
 struct BodyPOD {
     float pos[3];
     float vel[3];
@@ -3085,6 +3539,7 @@ struct BodyPOD {
     float internal_energy;
     float luminosity;
     float fuel;
+    float atmosphere_retention;
     float angular_vel;
     uint32_t stellar_stage;
     uint32_t seed;
@@ -3151,6 +3606,7 @@ bool CosmosApp::save_simulation(const std::string& path) {
         pod.internal_energy = b.internal_energy;
         pod.luminosity = b.luminosity;
         pod.fuel = b.fuel;
+        pod.atmosphere_retention = b.atmosphere_retention;
         pod.angular_vel = b.angular_vel;
         pod.stellar_stage = b.stellar_stage;
         pod.seed = b.seed;
@@ -3221,28 +3677,52 @@ bool CosmosApp::load_simulation(const std::string& path) {
     state.bodies.reserve(body_count);
 
     for (uint32_t i = 0; i < body_count; i++) {
-        BodyPOD pod{};
-        f.read(reinterpret_cast<char*>(&pod), sizeof(BodyPOD));
-
         CelestialBody b;
-        b.pos = {pod.pos[0], pod.pos[1], pod.pos[2]};
-        b.vel = {pod.vel[0], pod.vel[1], pod.vel[2]};
-        b.mass = pod.mass;
-        b.radius = pod.radius;
-        b.temperature = pod.temperature;
-        b.type = pod.type;
-        b.parent = pod.parent;
-        b.age = pod.age;
-        b.internal_energy = pod.internal_energy;
-        b.luminosity = pod.luminosity;
-        b.fuel = pod.fuel;
-        b.angular_vel = pod.angular_vel;
-        b.stellar_stage = pod.stellar_stage;
-        b.seed = pod.seed;
-        b.frag_generation = pod.frag_generation;
-        if (pod.name_len > 0 && pod.name_len < 256) {
-            b.name.resize(pod.name_len);
-            f.read(b.name.data(), pod.name_len);
+        uint32_t name_len = 0;
+        if (version >= 2) {
+            BodyPOD pod{};
+            f.read(reinterpret_cast<char*>(&pod), sizeof(BodyPOD));
+            b.pos = {pod.pos[0], pod.pos[1], pod.pos[2]};
+            b.vel = {pod.vel[0], pod.vel[1], pod.vel[2]};
+            b.mass = pod.mass;
+            b.radius = pod.radius;
+            b.temperature = pod.temperature;
+            b.type = pod.type;
+            b.parent = pod.parent;
+            b.age = pod.age;
+            b.internal_energy = pod.internal_energy;
+            b.luminosity = pod.luminosity;
+            b.fuel = pod.fuel;
+            b.atmosphere_retention = pod.atmosphere_retention;
+            b.angular_vel = pod.angular_vel;
+            b.stellar_stage = pod.stellar_stage;
+            b.seed = pod.seed;
+            b.frag_generation = pod.frag_generation;
+            name_len = pod.name_len;
+        } else {
+            BodyPODV1 pod{};
+            f.read(reinterpret_cast<char*>(&pod), sizeof(BodyPODV1));
+            b.pos = {pod.pos[0], pod.pos[1], pod.pos[2]};
+            b.vel = {pod.vel[0], pod.vel[1], pod.vel[2]};
+            b.mass = pod.mass;
+            b.radius = pod.radius;
+            b.temperature = pod.temperature;
+            b.type = pod.type;
+            b.parent = pod.parent;
+            b.age = pod.age;
+            b.internal_energy = pod.internal_energy;
+            b.luminosity = pod.luminosity;
+            b.fuel = pod.fuel;
+            b.atmosphere_retention = 1.0f;
+            b.angular_vel = pod.angular_vel;
+            b.stellar_stage = pod.stellar_stage;
+            b.seed = pod.seed;
+            b.frag_generation = pod.frag_generation;
+            name_len = pod.name_len;
+        }
+        if (name_len > 0 && name_len < 256) {
+            b.name.resize(name_len);
+            f.read(b.name.data(), name_len);
         }
         state.bodies.push_back(std::move(b));
         state.trails.emplace_back();
@@ -3289,6 +3769,7 @@ bool CosmosApp::export_body(int index, const std::string& path) {
     f << "age " << b.age << "\n";
     f << "luminosity " << b.luminosity << "\n";
     f << "internal_energy " << b.internal_energy << "\n";
+    f << "atmosphere_retention " << b.atmosphere_retention << "\n";
     f << "angular_vel " << b.angular_vel << "\n";
     f << "stellar_stage " << b.stellar_stage << "\n";
     f << "parent " << b.parent << "\n";
@@ -3322,6 +3803,7 @@ bool CosmosApp::import_body(const std::string& path) {
         else if (key == "age") { f >> b.age; }
         else if (key == "luminosity") { f >> b.luminosity; }
         else if (key == "internal_energy") { f >> b.internal_energy; }
+        else if (key == "atmosphere_retention") { f >> b.atmosphere_retention; }
         else if (key == "angular_vel") { f >> b.angular_vel; }
         else if (key == "stellar_stage") { f >> b.stellar_stage; }
         else if (key == "parent") { f >> b.parent; }

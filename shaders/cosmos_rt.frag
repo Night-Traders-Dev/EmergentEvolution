@@ -22,9 +22,11 @@ struct Sphere {
     vec4 class_seed_temp;
     vec4 terrain_params;
     vec4 material_params;
+    vec4 feature_params;
     vec4 composition_params;
     vec4 atmosphere_params;
     vec4 activity_params;
+    vec4 magnetosphere_params;
     vec4 gravity_params;
 };
 
@@ -44,6 +46,11 @@ const int SURF_LIQUID = 1;
 const int SURF_FROZEN = 2;
 const int SURF_GAS = 3;
 const int SURF_MIXED = 4;
+
+const int SSTAGE_MAIN_SEQUENCE = 0;
+const int SSTAGE_RED_GIANT = 2;
+const int SSTAGE_WHITE_DWARF = 7;
+const int SSTAGE_NEUTRON_STAR = 8;
 
 float hash11(float p) {
     p = fract(p * 0.1031);
@@ -126,6 +133,23 @@ vec3 blackbody_tint(float temperature) {
         clamp(0.45 + t * 0.60, 0.0, 1.0),
         clamp(-0.10 + t * 1.25, 0.0, 1.0)
     );
+}
+
+vec3 star_surface_tint(float temperature, float mass, float radius, float stage_f, float luminosity) {
+    vec3 tint = blackbody_tint(temperature);
+    float giant = (abs(stage_f - float(SSTAGE_RED_GIANT)) < 0.5) ? 1.0 : clamp((radius - 40.0) / 120.0, 0.0, 1.0);
+    float white_dwarf = (abs(stage_f - float(SSTAGE_WHITE_DWARF)) < 0.5) ? 1.0 : 0.0;
+    float neutron_star = (abs(stage_f - float(SSTAGE_NEUTRON_STAR)) < 0.5) ? 1.0 : 0.0;
+    float massive_hot = clamp((mass - 8.0) / 32.0, 0.0, 1.0) * clamp((temperature - 9000.0) / 26000.0, 0.0, 1.0);
+    float cool = clamp((6000.0 - temperature) / 3600.0, 0.0, 1.0);
+    float luminous = clamp(log2(max(luminosity + 1.0, 1.0)) / 8.0, 0.0, 1.0);
+
+    tint = mix(tint, vec3(1.00, 0.62, 0.34), giant * max(cool, 0.35) * 0.75);
+    tint = mix(tint, vec3(0.76, 0.86, 1.00), massive_hot * 0.70);
+    tint = mix(tint, vec3(0.92, 0.96, 1.00), white_dwarf * 0.90);
+    tint = mix(tint, vec3(0.72, 0.84, 1.00), neutron_star * 0.96);
+    tint = mix(tint, vec3(1.0), luminous * 0.10);
+    return clamp(tint, 0.0, 1.0);
 }
 
 float phase_hg(float g, float cos_theta) {
@@ -261,24 +285,32 @@ void sample_fabric_field(vec3 world_pos, int body_count, out vec2 warped_local,
 
     for (int i = 0; i < body_count && i < 512; i++) {
         float mass = max(spheres[i].gravity_params.x, 0.0);
-        float display_mass = log2(1.0 + mass * gravity_scale * 8.0);
-        if (display_mass < 0.05) continue;
+        float display_mass = log2(1.0 + mass * gravity_scale * 12.0);
+        if (display_mass < 0.03) continue;
+        float curvature_mass = pow(display_mass, 1.18);
+        int render_class = int(spheres[i].class_seed_temp.y + 0.5);
+        if (render_class == RENDER_PLANET || render_class == RENDER_MOON)
+            curvature_mass *= 1.35;
+        else if (render_class == RENDER_STAR)
+            curvature_mass *= 1.85;
+        else if (render_class == RENDER_BLACK_HOLE)
+            curvature_mass *= 2.75;
 
         vec2 body_local = vec2(dot(spheres[i].pos_radius.xyz - plane_center, plane_right),
                                dot(spheres[i].pos_radius.xyz - plane_center, plane_up));
         vec2 delta = local - body_local;
-        float body_soft = max(spheres[i].pos_radius.w * 1.4, grid_size * 0.35);
+        float body_soft = max(spheres[i].pos_radius.w * 1.1, grid_size * 0.18);
         float dist2 = dot(delta, delta) + body_soft * body_soft;
         float inv_dist = inversesqrt(dist2);
         float inv_dist3 = inv_dist * inv_dist * inv_dist;
 
-        well += display_mass * inv_dist;
-        grad -= delta * display_mass * inv_dist3;
+        well += curvature_mass * inv_dist;
+        grad -= delta * curvature_mass * inv_dist3;
     }
 
-    float well_boost = 1.0 + clamp(well * 0.035, 0.0, 1.4);
-    warped_local = local + grad * (grid_size * fabric_params.z * 0.32 * well_boost);
-    curvature = length(grad) * (grid_size * fabric_params.z * 0.08);
+    float well_boost = 1.0 + clamp(well * 0.06, 0.0, 2.6);
+    warped_local = local + grad * (grid_size * fabric_params.z * 0.72 * well_boost);
+    curvature = length(grad) * (grid_size * fabric_params.z * 0.16);
     flow_dir = grad;
 }
 
@@ -351,37 +383,138 @@ vec3 atmosphere_scatter(vec3 normal, vec3 view_dir, vec3 light_dir, vec3 base_co
     return ray_col * fresnel * density + mie_col * forward * mie_strength * density * 0.8;
 }
 
+vec3 magnetic_axis(float angle, float seed) {
+    float phase = fract(seed * 0.0137 + 0.17) * 6.28318530718;
+    vec3 axis = vec3(cos(phase) * sin(angle), cos(angle), sin(phase) * sin(angle));
+    if (dot(axis, axis) < 1.0e-5) axis = vec3(0.0, 1.0, 0.0);
+    return normalize(axis);
+}
+
+vec3 magnetosphere_tint(int render_class, float surface_type, float temperature) {
+    if (render_class == RENDER_STAR)
+        return mix(vec3(1.0, 0.78, 0.50), vec3(0.78, 0.88, 1.0), clamp((temperature - 4500.0) / 18000.0, 0.0, 1.0));
+    if (surface_type > 2.5 && surface_type < 3.5)
+        return mix(vec3(0.34, 0.72, 1.0), vec3(0.62, 0.86, 1.0), clamp((180.0 - temperature) / 140.0, 0.0, 1.0));
+    return vec3(0.32, 0.88, 0.72);
+}
+
+void accumulate_magnetospheres(vec3 ro, vec3 rd, int body_count, float scene_t,
+                               out vec3 magnet_col, out float magnet_alpha) {
+    magnet_col = vec3(0.0);
+    magnet_alpha = 0.0;
+
+    for (int i = 0; i < body_count && i < 512; i++) {
+        Sphere body = spheres[i];
+        int render_class = int(body.class_seed_temp.y + 0.5);
+        if (render_class != RENDER_PLANET && render_class != RENDER_MOON && render_class != RENDER_STAR)
+            continue;
+
+        float field = body.magnetosphere_params.x;
+        float outer_radius = body.magnetosphere_params.y;
+        if (field < 0.03 || outer_radius <= body.pos_radius.w * 1.04)
+            continue;
+
+        float outer_t = intersect_sphere(ro, rd, body.pos_radius.xyz, outer_radius);
+        if (outer_t < 0.0) continue;
+        if (scene_t > 0.0 && outer_t > scene_t + 0.02) continue;
+
+        float inner_radius = max(body.pos_radius.w * (render_class == RENDER_STAR ? 1.04 : 1.10),
+                                 outer_radius * mix(0.54, 0.72, clamp(body.magnetosphere_params.w, 0.0, 1.0)));
+        float inner_t = intersect_sphere(ro, rd, body.pos_radius.xyz, inner_radius);
+        float shell_thickness = max(outer_radius - inner_radius, body.pos_radius.w * 0.04);
+        float path_thickness = (inner_t > outer_t) ? min(inner_t - outer_t, shell_thickness) : shell_thickness;
+
+        vec3 sample_pos = ro + rd * outer_t;
+        vec3 n = normalize(sample_pos - body.pos_radius.xyz);
+        vec3 axis = magnetic_axis(body.magnetosphere_params.z, body.class_seed_temp.x);
+        float pole = pow(clamp(abs(dot(n, axis)), 0.0, 1.0), 4.5);
+        float belt = pow(clamp(1.0 - abs(dot(n, axis)), 0.0, 1.0), 5.0);
+        float edge = pow(clamp(1.0 - abs(dot(n, -rd)), 0.0, 1.0), 1.8);
+        float thickness_n = clamp(path_thickness / max(shell_thickness, 1.0e-4), 0.0, 1.0);
+        float field_glow = field * (0.035 + 0.05 * thickness_n);
+
+        vec3 tint = magnetosphere_tint(render_class, body.class_seed_temp.z, body.class_seed_temp.w);
+        float aurora = body.activity_params.y;
+        float intensity = edge * field_glow;
+        intensity += pole * aurora * 0.12;
+        intensity += belt * body.magnetosphere_params.w * 0.03;
+        if (render_class == RENDER_STAR)
+            intensity += belt * body.activity_params.x * 0.035;
+
+        intensity = clamp(intensity, 0.0, 0.55);
+        if (intensity <= 0.001) continue;
+
+        magnet_col += tint * intensity * (0.55 + 0.65 * pole + 0.30 * belt);
+        magnet_alpha = clamp(magnet_alpha + intensity * 0.55, 0.0, 0.65);
+    }
+}
+
 vec3 shade_star(vec3 normal, vec3 rd, Sphere hit) {
     float seed = hit.class_seed_temp.x;
     float temperature = hit.class_seed_temp.w;
     float gran_amp = hit.terrain_params.x;
     float gran_freq = hit.terrain_params.y;
-    float spot_strength = hit.activity_params.w;
     float flare_activity = hit.activity_params.x;
     float corona_strength = hit.activity_params.y;
+    float spin_visual = hit.activity_params.z;
+    float spot_strength = hit.activity_params.w;
+    float spot_coverage = hit.composition_params.x;
+    float flare_frequency = max(hit.composition_params.y, 0.3);
+    float pulsation = hit.composition_params.z;
+    float differential_rotation = hit.composition_params.w;
+    float mass = hit.gravity_params.x;
+    float stage = hit.gravity_params.y;
+    float fuel = hit.gravity_params.z;
+    float luminosity = hit.gravity_params.w;
 
-    vec3 tint = blackbody_tint(temperature);
-    vec3 nwarp = normal * gran_freq + hash31(seed) * 15.0;
-    float granulation = fbm(nwarp, 4);
-    float cells = smoothstep(0.44, 0.64, granulation);
-    vec3 gran_col = mix(tint * 0.85, tint * 1.22, cells);
+    vec3 tint = star_surface_tint(temperature, mass, hit.pos_radius.w, stage, luminosity);
+    float lon = atan(normal.z, normal.x);
+    float lat = asin(clamp(normal.y, -1.0, 1.0));
+    float spin_phase = screen_info.w * (0.35 + spin_visual * (1.8 + differential_rotation));
+    vec3 nwarp = vec3(
+        lon * (gran_freq * (1.8 + differential_rotation * 0.8)) + spin_phase,
+        lat * (gran_freq * 3.0),
+        seed * 0.11 + screen_info.w * pulsation * 0.18);
+    float granulation = fbm(nwarp, 5);
+    float cells = smoothstep(0.40 - gran_amp * 0.10, 0.64 + gran_amp * 0.10, granulation);
+    vec3 gran_col = mix(tint * (0.76 + fuel * 0.10), tint * (1.14 + gran_amp * 0.22), cells);
 
+    float active_lat = 0.16 + differential_rotation * 0.24;
+    float magnetic_band = 1.0 - smoothstep(0.08, 0.44, abs(abs(normal.y) - active_lat));
     float cool_star = clamp((6500.0 - temperature) / 4000.0, 0.0, 1.0);
-    float spots = smoothstep(0.58, 0.78, fbm(normal * (gran_freq * 0.55) + hash31(seed * 1.9) * 11.0, 3));
-    float facula = smoothstep(0.42, 0.58, fbm(normal * (gran_freq * 0.7) + hash31(seed * 2.7) * 9.0, 3));
+    vec3 spot_field = vec3(
+        lon * (8.0 + differential_rotation * 8.0) - spin_phase * (0.9 + differential_rotation * 0.5),
+        lat * 14.0,
+        seed * 0.37);
+    float spot_noise = fbm(spot_field, 4);
+    float spot_cluster = fbm(vec3(lon * 4.0 + seed * 0.03, lat * 6.0, seed * 0.59 - spin_phase * 0.25), 3);
+    float spot_mask = spot_noise * 0.72 + spot_cluster * 0.48 + magnetic_band * 0.22;
+    float spot_cut = clamp(1.0 - spot_coverage * (1.35 + cool_star * 0.35), 0.52, 0.92);
+    float spots = smoothstep(spot_cut, min(spot_cut + 0.10, 0.995), spot_mask);
+    float facula = smoothstep(0.46, 0.64, fbm(spot_field * vec3(0.72, 0.82, 1.0) + vec3(0.8, 0.0, 1.7), 4));
     gran_col = mix(gran_col, gran_col * (0.42 + 0.2 * cool_star), spots * spot_strength * cool_star);
-    gran_col += tint * facula * spot_strength * cool_star * 0.14;
+    gran_col += tint * facula * spot_strength * (0.10 + 0.12 * cool_star);
 
     float mu = max(dot(normal, -rd), 0.0);
     float limb_dark = mix(0.45, 0.75, clamp(temperature / 18000.0, 0.0, 1.0));
-    vec3 col = gran_col * mix(limb_dark, 1.0, pow(mu, 0.65));
+    float pulsate = 1.0 + pulsation * 0.06 * sin(screen_info.w * (0.6 + flare_frequency * 0.35) + seed * 0.13);
+    vec3 col = gran_col * mix(limb_dark, 1.0, pow(mu, 0.65)) * pulsate;
 
-    float flare = 0.92 + flare_activity * 0.08 * sin(screen_info.w * (1.2 + flare_activity * 1.8) + seed * 0.13);
-    col *= flare;
+    float global_flare = 0.94 + flare_activity * 0.09 *
+        sin(screen_info.w * (1.0 + flare_frequency * 0.7) + seed * 0.13);
+    col *= global_flare;
 
     if (render_flags.y > 0.5) {
         float edge = pow(clamp(1.0 - mu, 0.0, 1.0), 2.0);
-        col += tint * corona_strength * edge * 0.65;
+        float active_region = smoothstep(0.62, 0.84,
+            fbm(vec3(lon * 6.0 + spin_phase * 0.65, lat * 10.0 - spin_phase * 0.18, seed * 0.41), 4)
+            + magnetic_band * 0.35);
+        float flare_cycle = max(0.0, sin(screen_info.w * (0.7 + flare_frequency * 1.1) + seed * 0.47));
+        float flare_burst = pow(flare_cycle, 8.0) * active_region * flare_activity;
+        float streamer = edge * active_region * (0.35 + 0.65 * flare_burst);
+        col += tint * corona_strength * edge * (0.62 + 0.18 * pulsation);
+        col += mix(tint, vec3(1.00, 0.96, 0.88), 0.35) * streamer * (0.18 + flare_activity * 0.55);
+        col += vec3(0.95, 0.98, 1.0) * flare_burst * edge * (0.25 + corona_strength * 0.65);
     }
 
     return col * (1.1 + hit.base_emit.a * 0.35);
@@ -390,17 +523,21 @@ vec3 shade_star(vec3 normal, vec3 rd, Sphere hit) {
 vec3 shade_gas_giant(vec3 normal, Sphere hit, vec3 light_dir) {
     float seed = hit.class_seed_temp.x;
     float temperature = hit.class_seed_temp.w;
-    float band_freq = 6.0 + hit.terrain_params.y;
+    float mass = hit.gravity_params.x;
+    float band_freq = 5.0 + hit.terrain_params.y * 0.85;
     vec3 seed_offset = hash31(seed) * 80.0;
     float lat = asin(clamp(normal.y, -1.0, 1.0));
     float warp = noise3D(normal * 3.0 + seed_offset * 0.13) * 0.8;
     float band = sin(lat * band_freq + warp + fbm(normal * 2.2 + seed_offset * 0.05, 4) * 1.4);
+    float secondary = sin(lat * (band_freq * 0.58) - warp * 0.45 + fbm(normal * 1.6 + seed_offset * 0.09, 3) * 1.2);
+    float storms = hit.activity_params.x;
+    bool ice_giant = temperature < 170.0 || mass < 2.5e-4;
 
     vec3 warm;
     vec3 cool;
-    if (temperature < 170.0) {
-        warm = vec3(0.35, 0.58, 0.72);
-        cool = vec3(0.10, 0.22, 0.45);
+    if (ice_giant) {
+        warm = vec3(0.38, 0.70, 0.92);
+        cool = vec3(0.10, 0.24, 0.52);
     } else if (temperature > 900.0) {
         warm = vec3(0.95, 0.48, 0.20);
         cool = vec3(0.56, 0.15, 0.08);
@@ -410,12 +547,17 @@ vec3 shade_gas_giant(vec3 normal, Sphere hit, vec3 light_dir) {
     }
 
     vec3 col = mix(warm, cool, band * 0.5 + 0.5);
+    col = mix(col, col * 1.08, secondary * 0.5 + 0.5);
     float storm = fbm(normal * 8.0 + vec3(screen_info.w * 0.02, screen_info.w * -0.014, 0.0) + seed_offset * 0.04, 5);
-    col += (storm - 0.5) * 0.15;
+    col += (storm - 0.5) * (0.12 + storms * 0.10);
 
     vec3 spot_dir = normalize(vec3(cos(seed * 0.01), sin(seed * 0.003) * 0.35, sin(seed * 0.01)));
-    float spot = smoothstep(0.91, 0.97, dot(normal, spot_dir));
-    col = mix(col, col * vec3(1.3, 0.7, 0.6), spot * 0.9);
+    float spot = smoothstep(0.90, 0.97, dot(normal, spot_dir));
+    vec3 storm_col = ice_giant ? vec3(0.90, 0.96, 1.0) : vec3(1.0, 0.78, 0.66);
+    col = mix(col, mix(col * vec3(1.25, 0.84, 0.78), storm_col, 0.5), spot * (0.55 + storms * 0.5));
+
+    float haze = smoothstep(0.58, 0.94, abs(normal.y));
+    col = mix(col, mix(col, vec3(0.95, 0.98, 1.0), 0.55), haze * (ice_giant ? 0.28 : 0.12));
 
     float ndl = max(dot(normal, light_dir), 0.0);
     return col * (0.28 + 0.72 * ndl);
@@ -433,6 +575,10 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     float ice_frac = hit.composition_params.y;
     float metal_frac = hit.composition_params.z;
     float ocean_cov = hit.composition_params.w;
+    float continent_cov = hit.feature_params.x;
+    float island_cov = hit.feature_params.y;
+    float river_density = hit.feature_params.z;
+    float ice_sheet_cov = hit.feature_params.w;
     float cloud_cov = hit.atmosphere_params.x;
     float volcanic = hit.activity_params.z;
 
@@ -445,6 +591,18 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     );
     vec3 warped_np = np + warp * terrain_amp * 0.85;
     float elev = clamp(fbm(warped_np, 6) * (1.0 - ridge_amp * 0.35) + ridged_fbm(warped_np * 0.8, 4) * ridge_amp * 0.55, 0.0, 1.0);
+    vec3 macro_np = normal * max(terrain_freq * 0.36, 0.9) + seed_offset * 0.12;
+    float continent_noise = fbm(macro_np + warp * 0.32, 5);
+    float island_noise = fbm(normal * (terrain_freq * 1.65 + 2.0) + seed_offset * 0.26 + warp * 0.18, 4);
+    float continent_mask = smoothstep(0.58 - continent_cov * 0.40, 0.88 - continent_cov * 0.18, continent_noise);
+    float island_mask = smoothstep(0.80 - island_cov * 0.42, 0.96, island_noise) * (1.0 - continent_mask * 0.72);
+    float land_mask = clamp(continent_mask + island_mask * 0.72, 0.0, 1.0);
+    float mountain_mask = smoothstep(0.54, 0.82, ridged_fbm(warped_np * 0.55 + vec3(4.0, 1.2, 2.0), 4)) * land_mask;
+    float valley_mask = smoothstep(0.42, 0.66, fbm(warped_np * 0.78 + vec3(-3.0, 2.0, 1.0), 4)) *
+                        land_mask * (1.0 - mountain_mask * 0.65);
+    elev = clamp(elev + land_mask * (0.06 + terrain_amp * 0.18) +
+                 mountain_mask * (0.08 + ridge_amp * 0.22) -
+                 valley_mask * (0.04 + terrain_amp * 0.10), 0.0, 1.0);
 
     vec3 tangent;
     vec3 bitangent;
@@ -457,13 +615,16 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     if (surface_type > 2.5 && surface_type < 3.5)
         return shade_gas_giant(normal, hit, light_dir);
 
-    float sea_level = 1.0 - clamp(ocean_cov, 0.0, 1.0);
+    float sea_level = clamp(1.02 - clamp(ocean_cov, 0.0, 1.0) * 0.92, 0.12, 0.95);
     vec3 rock_dark = mix(vec3(0.20, 0.17, 0.15), vec3(0.38, 0.29, 0.20), rock_frac);
     vec3 rock_mid = mix(vec3(0.42, 0.35, 0.28), vec3(0.58, 0.46, 0.32), rock_frac);
     vec3 rock_bright = mix(vec3(0.72, 0.68, 0.60), vec3(0.82, 0.74, 0.55), metal_frac + 0.2);
     vec3 ice_col = vec3(0.72, 0.82, 0.95);
     vec3 col = mix(rock_dark, rock_mid, smoothstep(0.15, 0.5, elev));
     col = mix(col, rock_bright, smoothstep(0.60, 0.85, elev));
+    float temperate = clamp(1.0 - abs(temperature - 285.0) / 115.0, 0.0, 1.0);
+    vec3 fertile = mix(vec3(0.34, 0.28, 0.16), vec3(0.16, 0.36, 0.18), temperate);
+    col = mix(col, fertile, land_mask * temperate * smoothstep(0.08, 0.55, ocean_cov) * 0.42);
 
     if (surface_type > 1.5 && surface_type < 2.5)
         col = mix(col, ice_col, 0.68 + ice_frac * 0.22);
@@ -472,6 +633,11 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
 
     if (temperature < 240.0)
         col = mix(col, ice_col, smoothstep(0.55, 0.92, abs(normal.y)) * clamp(ice_frac + 0.25, 0.0, 1.0));
+
+    float ice_sheet_mask = max(
+        smoothstep(0.40 - ice_sheet_cov * 0.14, 0.98, abs(normal.y)),
+        smoothstep(0.76, 0.95, elev) * (0.35 + ice_sheet_cov * 0.65));
+    col = mix(col, ice_col, ice_sheet_mask * clamp(ice_sheet_cov + (temperature < 245.0 ? 0.25 : 0.0), 0.0, 1.0));
 
     bool is_ocean = ocean_cov > 0.01 && elev < sea_level;
     roughness_out = hit.material_params.x;
@@ -496,6 +662,16 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
         col = mix(col, ocean_col, depth);
     }
 
+    if (!is_ocean && river_density > 0.02) {
+        vec3 river_np = vec3(normal.x * 18.0, normal.y * 8.0, normal.z * 18.0) +
+                        seed_offset * 0.06 + warp * 0.9;
+        float river_field = ridged_fbm(river_np + vec3(screen_info.w * 0.003, 0.0, -screen_info.w * 0.002), 4);
+        float river_pref = smoothstep(sea_level + 0.02, sea_level + 0.28, elev) * land_mask * (1.0 - mountain_mask * 0.55);
+        float river_mask = smoothstep(0.74 - river_density * 0.30, 0.92, river_field) * river_pref;
+        col = mix(col, vec3(0.08, 0.20, 0.36), river_mask * 0.78);
+        roughness_out = mix(roughness_out, 0.20, river_mask * 0.45);
+    }
+
     if (volcanic > 0.01 && temperature > 650.0 && surface_type < 0.5) {
         float cracks = smoothstep(0.46, 0.54, fbm(warped_np * 0.7 + 4.0, 4));
         float lava_glow = 0.65 + 0.35 * sin(screen_info.w * 1.3 + seed * 0.1 + cracks * 5.0);
@@ -503,8 +679,12 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     }
 
     if (cloud_cov > 0.01 && surface_type < 3.5) {
-        float shadow = smoothstep(0.55, 0.85, fbm(normal * 4.0 + seed_offset * 0.03 + vec3(screen_info.w * 0.02), 5));
-        col *= 1.0 - shadow * cloud_cov * 0.18;
+        vec3 cloud_np = normal * 4.5 + seed_offset * 0.03 + vec3(screen_info.w * 0.018, 0.0, -screen_info.w * 0.014);
+        float cloud_shape = smoothstep(0.56 - cloud_cov * 0.16, 0.82, fbm(cloud_np, 5));
+        float shadow = smoothstep(0.55, 0.85, fbm(cloud_np + vec3(2.1, 0.7, 1.4), 5));
+        float cloud_lit = 0.35 + 0.65 * max(dot(normal, light_dir), 0.0);
+        col = mix(col, vec3(0.92, 0.95, 1.0), cloud_shape * cloud_cov * 0.42 * cloud_lit);
+        col *= 1.0 - shadow * cloud_cov * 0.12;
     }
 
     float ndl = max(dot(surf_normal, light_dir), 0.0);
@@ -649,8 +829,8 @@ vec3 black_hole_effect(vec3 ro, vec3 rd, Sphere bh, int body_count, bool hit_hor
 
     if (hit_horizon) {
         float edge = 1.0 - max(dot(normalize(closest - center), -rd), 0.0);
-        col = mix(col, vec3(0.0), 0.92);
-        col += vec3(0.3, 0.18, 0.5) * pow(edge, 4.0) * 0.25;
+        col = mix(col, vec3(0.0), 0.985);
+        col += vec3(1.0, 0.92, 0.82) * pow(edge, 5.0) * (0.08 + bh.activity_params.y * 0.06);
         alpha_out = 1.0;
     } else {
         alpha_out = clamp((influence_radius - influence) / max(influence_radius - radius, 0.001), 0.0, 1.0);
@@ -707,6 +887,11 @@ void main() {
         float fabric_t = -1.0;
         if (sample_space_fabric(ro, rd, body_count, fabric_col, fabric_alpha, fabric_t))
             miss_col = mix(miss_col, miss_col + fabric_col, fabric_alpha);
+        vec3 magnet_col = vec3(0.0);
+        float magnet_alpha = 0.0;
+        accumulate_magnetospheres(ro, rd, body_count, -1.0, magnet_col, magnet_alpha);
+        if (magnet_alpha > 0.0)
+            miss_col = mix(miss_col, miss_col + magnet_col, magnet_alpha);
         for (int i = 0; i < body_count && i < 512; i++) {
             if (int(spheres[i].class_seed_temp.y + 0.5) != RENDER_BLACK_HOLE) continue;
             float effect_alpha = 0.0;
@@ -741,6 +926,11 @@ void main() {
 
     if (render_class == RENDER_STAR || hit.base_emit.a > 0.0) {
         vec3 star_col = shade_star(normal, rd, hit);
+        vec3 magnet_col = vec3(0.0);
+        float magnet_alpha = 0.0;
+        accumulate_magnetospheres(ro, rd, body_count, closest_t, magnet_col, magnet_alpha);
+        if (magnet_alpha > 0.0)
+            star_col = mix(star_col, star_col + magnet_col, magnet_alpha);
         outColor = vec4(pow(max(star_col, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
         return;
     }
@@ -836,6 +1026,12 @@ void main() {
             overlay *= 0.85;
         final_color = mix(final_color, final_color + fabric_col, overlay);
     }
+
+    vec3 magnet_col = vec3(0.0);
+    float magnet_alpha = 0.0;
+    accumulate_magnetospheres(ro, rd, body_count, closest_t, magnet_col, magnet_alpha);
+    if (magnet_alpha > 0.0)
+        final_color = mix(final_color, final_color + magnet_col, magnet_alpha);
 
     outColor = vec4(pow(max(final_color, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
 }
