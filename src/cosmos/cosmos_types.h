@@ -500,6 +500,7 @@ struct CosmosConfig {
     // Lighting
     bool     star_lighting    = true;   // stars act as point light sources
     bool     uniform_lighting = false;  // everything uniformly illuminated
+    bool     fast_star_lighting = true; // use strongest-star direct lighting path
     float    ambient_strength = 0.08f;  // ambient light level in star mode
 
     // General Relativity corrections
@@ -508,6 +509,9 @@ struct CosmosConfig {
     float    gr_time_dilation     = 1.0f;    // gravitational time dilation factor
     float    gr_frame_dragging    = 1.0f;    // Lense-Thirring frame dragging
     float    speed_of_light       = 300.0f;  // c in simulation units (orbital speeds ~1-30)
+
+    // Physics parallelization
+    bool     parallel_gravity     = true;    // parallelize pairwise gravity accumulation
 };
 
 // ── Body collection ─────────────────────────────────────────────────────────

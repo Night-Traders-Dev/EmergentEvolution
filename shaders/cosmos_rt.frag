@@ -9,7 +9,7 @@ layout(std140, set = 0, binding = 0) uniform CameraUBO {
     mat4 inv_vp;            // inverse view-projection matrix
     vec4 eye_pos;           // xyz = camera position
     vec4 screen_info;       // x = width, y = height, z = body_count, w = time
-    vec4 lighting_params;   // x = star_lighting, y = uniform_lighting, z = ambient, w = unused
+    vec4 lighting_params;   // x = star_lighting, y = uniform_lighting, z = ambient, w = fast_star_lighting
 };
 
 // ── Sphere data ────────────────────────────────────────────────────────────
@@ -560,6 +560,7 @@ void main() {
     bool use_star_lighting    = lighting_params.x > 0.5;
     bool use_uniform_lighting = lighting_params.y > 0.5;
     float ambient = lighting_params.z;
+    bool use_fast_star_lighting = lighting_params.w > 0.5;
 
     // ── Reconstruct ray from pixel ─────────────────────────────────────────
     vec2 ndc = fragUV * 2.0 - 1.0;
@@ -606,6 +607,7 @@ void main() {
     // Find primary light direction (nearest/brightest star)
     vec3 primary_light_dir = normalize(vec3(0.5, 0.8, 0.3));
     float best_light_power = 0.0;
+    int primary_light_idx = -1;
     for (int i = 0; i < body_count && i < 512; i++) {
         if (spheres[i].color_emit.a <= 0.0) continue;
         vec3 to_light = spheres[i].pos_radius.xyz - hit_pos;
@@ -614,6 +616,7 @@ void main() {
         if (power > best_light_power) {
             best_light_power = power;
             primary_light_dir = normalize(to_light);
+            primary_light_idx = i;
         }
     }
 
@@ -655,13 +658,11 @@ void main() {
     if (use_star_lighting) {
         final_color += base_color * ambient;
 
-        for (int i = 0; i < body_count && i < 512; i++) {
-            if (spheres[i].color_emit.a <= 0.0) continue;
-            if (i == closest_idx) continue;
-
-            vec3 light_pos = spheres[i].pos_radius.xyz;
-            float light_radius = spheres[i].pos_radius.w;
-            vec3 light_color = spheres[i].color_emit.rgb * spheres[i].color_emit.a;
+        if (use_fast_star_lighting && primary_light_idx >= 0 && primary_light_idx != closest_idx) {
+            vec3 light_pos = spheres[primary_light_idx].pos_radius.xyz;
+            float light_radius = spheres[primary_light_idx].pos_radius.w;
+            vec3 light_color = spheres[primary_light_idx].color_emit.rgb *
+                               spheres[primary_light_idx].color_emit.a;
 
             vec3 to_light = light_pos - hit_pos;
             float light_dist = length(to_light);
@@ -670,7 +671,7 @@ void main() {
             vec3 shadow_origin = hit_pos + normal * 0.1;
             bool in_shadow = false;
             for (int j = 0; j < body_count && j < 512; j++) {
-                if (j == closest_idx || j == i) continue;
+                if (j == closest_idx || j == primary_light_idx) continue;
                 float st = intersect_sphere(shadow_origin, L,
                     spheres[j].pos_radius.xyz,
                     spheres[j].pos_radius.w);
@@ -691,6 +692,45 @@ void main() {
                 vec3 H = normalize(L + V);
                 float spec = pow(max(dot(normal, H), 0.0), 32.0);
                 final_color += light_color * spec * atten * 0.3;
+            }
+        } else if (!use_fast_star_lighting) {
+            for (int i = 0; i < body_count && i < 512; i++) {
+                if (spheres[i].color_emit.a <= 0.0) continue;
+                if (i == closest_idx) continue;
+
+                vec3 light_pos = spheres[i].pos_radius.xyz;
+                float light_radius = spheres[i].pos_radius.w;
+                vec3 light_color = spheres[i].color_emit.rgb * spheres[i].color_emit.a;
+
+                vec3 to_light = light_pos - hit_pos;
+                float light_dist = length(to_light);
+                vec3 L = to_light / light_dist;
+
+                vec3 shadow_origin = hit_pos + normal * 0.1;
+                bool in_shadow = false;
+                for (int j = 0; j < body_count && j < 512; j++) {
+                    if (j == closest_idx || j == i) continue;
+                    float st = intersect_sphere(shadow_origin, L,
+                        spheres[j].pos_radius.xyz,
+                        spheres[j].pos_radius.w);
+                    if (st > 0.0 && st < light_dist) {
+                        in_shadow = true;
+                        break;
+                    }
+                }
+
+                if (!in_shadow) {
+                    float atten = 1.0 / (1.0 + (light_dist * light_dist) /
+                        (light_radius * light_radius * 400.0));
+
+                    float ndl = max(dot(normal, L), 0.0);
+                    final_color += base_color * light_color * ndl * atten;
+
+                    vec3 V = normalize(eye_pos.xyz - hit_pos);
+                    vec3 H = normalize(L + V);
+                    float spec = pow(max(dot(normal, H), 0.0), 32.0);
+                    final_color += light_color * spec * atten * 0.3;
+                }
             }
         }
     }
