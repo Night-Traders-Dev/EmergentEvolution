@@ -10,6 +10,10 @@ layout(std140, set = 0, binding = 0) uniform CameraUBO {
     vec4 lighting_params; // x=star, y=uniform, z=ambient, w=fastStar
     vec4 quality_params;  // x=quality, y=hq
     vec4 render_flags;    // x=background, y=corona, z=comet tails, w=bh lensing
+    vec4 fabric_params;   // x=enabled, y=grid size, z=warp strength, w=gravity scale
+    vec4 fabric_center;   // xyz=focus plane center
+    vec4 fabric_right;    // xyz=focus plane right axis
+    vec4 fabric_up;       // xyz=focus plane up axis
 };
 
 struct Sphere {
@@ -21,6 +25,7 @@ struct Sphere {
     vec4 composition_params;
     vec4 atmosphere_params;
     vec4 activity_params;
+    vec4 gravity_params;
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer SphereBuffer {
@@ -148,6 +153,16 @@ float intersect_sphere(vec3 ro, vec3 rd, vec3 center, float radius) {
     return -1.0;
 }
 
+bool intersect_plane(vec3 ro, vec3 rd, vec3 plane_point, vec3 plane_normal, out float t) {
+    float denom = dot(rd, plane_normal);
+    if (abs(denom) < 1.0e-5) {
+        t = -1.0;
+        return false;
+    }
+    t = dot(plane_point - ro, plane_normal) / denom;
+    return t > 0.001;
+}
+
 float irregular_radius_scale(vec3 dir, float seed, float roughness) {
     float n = noise3D(dir * 6.0 + vec3(seed * 0.021, seed * 0.017, seed * 0.013));
     return clamp(1.0 + n * roughness, 0.65, 1.45);
@@ -221,6 +236,99 @@ vec3 background(vec3 rd) {
     bg += vec3(0.020, 0.022, 0.028) * pow(galactic, 2.0);
     bg += sample_starfield(rd);
     return bg;
+}
+
+float grid_mask(vec2 p, float cell_size, float thickness) {
+    vec2 scaled = p / max(cell_size, 1.0e-4);
+    vec2 fw = max(fwidth(scaled), vec2(1.0e-4));
+    vec2 dist = abs(fract(scaled - 0.5) - 0.5);
+    vec2 line = 1.0 - smoothstep(vec2(0.0), fw * (1.2 + thickness), dist);
+    return clamp(max(line.x, line.y), 0.0, 1.0);
+}
+
+void sample_fabric_field(vec3 world_pos, int body_count, out vec2 warped_local,
+                         out float well, out float curvature, out vec2 flow_dir) {
+    vec3 plane_center = fabric_center.xyz;
+    vec3 plane_right = normalize(fabric_right.xyz);
+    vec3 plane_up = normalize(fabric_up.xyz);
+    vec2 local = vec2(dot(world_pos - plane_center, plane_right),
+                      dot(world_pos - plane_center, plane_up));
+
+    vec2 grad = vec2(0.0);
+    float grid_size = max(fabric_params.y, 1.0);
+    float gravity_scale = max(fabric_params.w, 0.001);
+    well = 0.0;
+
+    for (int i = 0; i < body_count && i < 512; i++) {
+        float mass = max(spheres[i].gravity_params.x, 0.0);
+        float display_mass = log2(1.0 + mass * gravity_scale * 8.0);
+        if (display_mass < 0.05) continue;
+
+        vec2 body_local = vec2(dot(spheres[i].pos_radius.xyz - plane_center, plane_right),
+                               dot(spheres[i].pos_radius.xyz - plane_center, plane_up));
+        vec2 delta = local - body_local;
+        float body_soft = max(spheres[i].pos_radius.w * 1.4, grid_size * 0.35);
+        float dist2 = dot(delta, delta) + body_soft * body_soft;
+        float inv_dist = inversesqrt(dist2);
+        float inv_dist3 = inv_dist * inv_dist * inv_dist;
+
+        well += display_mass * inv_dist;
+        grad -= delta * display_mass * inv_dist3;
+    }
+
+    float well_boost = 1.0 + clamp(well * 0.035, 0.0, 1.4);
+    warped_local = local + grad * (grid_size * fabric_params.z * 0.32 * well_boost);
+    curvature = length(grad) * (grid_size * fabric_params.z * 0.08);
+    flow_dir = grad;
+}
+
+bool sample_space_fabric(vec3 ro, vec3 rd, int body_count,
+                         out vec3 fabric_col, out float fabric_alpha, out float fabric_t) {
+    if (fabric_params.x < 0.5) {
+        fabric_t = -1.0;
+        fabric_col = vec3(0.0);
+        fabric_alpha = 0.0;
+        return false;
+    }
+
+    vec3 plane_right = normalize(fabric_right.xyz);
+    vec3 plane_up = normalize(fabric_up.xyz);
+    vec3 plane_normal = normalize(cross(plane_right, plane_up));
+    if (!intersect_plane(ro, rd, fabric_center.xyz, plane_normal, fabric_t)) {
+        fabric_col = vec3(0.0);
+        fabric_alpha = 0.0;
+        return false;
+    }
+
+    vec3 world_pos = ro + rd * fabric_t;
+    vec2 warped_local;
+    float well;
+    float curvature;
+    vec2 flow_dir;
+    sample_fabric_field(world_pos, body_count, warped_local, well, curvature, flow_dir);
+
+    float grid_size = max(fabric_params.y, 1.0);
+    float minor = grid_mask(warped_local, grid_size, 0.00);
+    float major = grid_mask(warped_local, grid_size * 5.0, 0.05);
+    float well_glow = 1.0 - exp(-well * 0.20);
+    float facing = abs(dot(rd, plane_normal));
+    float flow_len = length(flow_dir);
+    float flow_boost = clamp(flow_len * grid_size * 0.06, 0.0, 1.0);
+    float bend_boost = clamp(curvature * 0.85, 0.0, 1.0);
+    float minor_intensity = minor * (0.16 + 0.10 * well_glow + 0.08 * bend_boost);
+    float major_intensity = major * (0.28 + 0.14 * well_glow + 0.10 * bend_boost);
+    float line_alpha = minor_intensity + major_intensity;
+    line_alpha *= 0.28 + 0.52 * facing;
+    line_alpha *= 0.82 + 0.28 * max(well_glow, flow_boost);
+    line_alpha = clamp(line_alpha, 0.0, 0.48);
+
+    vec3 line_col = vec3(0.96 + 0.04 * well_glow);
+    line_col = clamp(line_col, 0.0, 1.0);
+    vec3 col = line_col * (minor_intensity * 1.05 + major_intensity * 1.18);
+
+    fabric_col = col;
+    fabric_alpha = line_alpha;
+    return true;
 }
 
 float ocean_type_from_temp(float temperature) {
@@ -491,7 +599,7 @@ bool in_shadow(vec3 origin, vec3 light_dir, float light_dist, int body_count, in
     return false;
 }
 
-vec3 black_hole_effect(vec3 ro, vec3 rd, Sphere bh, bool hit_horizon, out float alpha_out) {
+vec3 black_hole_effect(vec3 ro, vec3 rd, Sphere bh, int body_count, bool hit_horizon, out float alpha_out) {
     vec3 center = bh.pos_radius.xyz;
     float radius = bh.pos_radius.w;
     vec3 to_center = center - ro;
@@ -515,6 +623,11 @@ vec3 black_hole_effect(vec3 ro, vec3 rd, Sphere bh, bool hit_horizon, out float 
     }
 
     vec3 col = background(lensed_dir);
+    vec3 fabric_col = vec3(0.0);
+    float fabric_alpha = 0.0;
+    float fabric_t = -1.0;
+    if (sample_space_fabric(ro, lensed_dir, body_count, fabric_col, fabric_alpha, fabric_t))
+        col = mix(col, col + fabric_col, fabric_alpha);
     float disk_plane = abs(rel.y);
     float disk_rad = length(rel.xz);
     float inner = smoothstep(radius * 1.15, radius * 1.7, disk_rad);
@@ -589,10 +702,15 @@ void main() {
 
     if (closest_idx < 0) {
         vec3 miss_col = background(rd);
+        vec3 fabric_col = vec3(0.0);
+        float fabric_alpha = 0.0;
+        float fabric_t = -1.0;
+        if (sample_space_fabric(ro, rd, body_count, fabric_col, fabric_alpha, fabric_t))
+            miss_col = mix(miss_col, miss_col + fabric_col, fabric_alpha);
         for (int i = 0; i < body_count && i < 512; i++) {
             if (int(spheres[i].class_seed_temp.y + 0.5) != RENDER_BLACK_HOLE) continue;
             float effect_alpha = 0.0;
-            vec3 effect = black_hole_effect(ro, rd, spheres[i], false, effect_alpha);
+            vec3 effect = black_hole_effect(ro, rd, spheres[i], body_count, false, effect_alpha);
             miss_col = mix(miss_col, effect, effect_alpha);
         }
         outColor = vec4(pow(max(miss_col, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
@@ -610,7 +728,7 @@ void main() {
 
     if (render_class == RENDER_BLACK_HOLE || hit.base_emit.a < -0.5) {
         float alpha = 1.0;
-        vec3 bh = black_hole_effect(ro, rd, hit, true, alpha);
+        vec3 bh = black_hole_effect(ro, rd, hit, body_count, true, alpha);
         outColor = vec4(pow(max(bh, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
         return;
     }
@@ -707,6 +825,16 @@ void main() {
             float tail = pow(clamp(1.0 - max(dot(-rd, anti_sun), 0.0), 0.0, 1.0), 1.5);
             final_color += vec3(0.55, 0.72, 0.95) * hit.activity_params.z * align * tail * 0.9;
         }
+    }
+
+    vec3 fabric_col = vec3(0.0);
+    float fabric_alpha = 0.0;
+    float fabric_t = -1.0;
+    if (sample_space_fabric(ro, rd, body_count, fabric_col, fabric_alpha, fabric_t)) {
+        float overlay = fabric_alpha * 0.75;
+        if (fabric_t > closest_t)
+            overlay *= 0.85;
+        final_color = mix(final_color, final_color + fabric_col, overlay);
     }
 
     outColor = vec4(pow(max(final_color, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);

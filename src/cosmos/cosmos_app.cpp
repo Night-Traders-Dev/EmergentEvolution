@@ -1502,6 +1502,22 @@ void CosmosApp::render_overlay() {
         float alpha = 160.0f + 60.0f * std::sin(sim_time_ * 3.0f);
         fg->AddText(ImVec2(tx, ty), IM_COL32(255, 200, 80, (int)alpha), track_label);
     }
+
+    if (cfg.cosmos_space_fabric) {
+        char fabric_label[96];
+        snprintf(fabric_label, sizeof(fabric_label), "Space fabric: %.1f units per square",
+                 cfg.cosmos_space_fabric_grid_size);
+        ImVec2 label_size = ImGui::CalcTextSize(fabric_label);
+        float px = 16.0f;
+        float py = H - label_size.y - 18.0f;
+        fg->AddRectFilled(ImVec2(px - 8.0f, py - 4.0f),
+                          ImVec2(px + label_size.x + 8.0f, py + label_size.y + 4.0f),
+                          IM_COL32(10, 14, 24, 180), 4.0f);
+        fg->AddRect(ImVec2(px - 8.0f, py - 4.0f),
+                    ImVec2(px + label_size.x + 8.0f, py + label_size.y + 4.0f),
+                    IM_COL32(80, 150, 230, 110), 4.0f, 0, 1.0f);
+        fg->AddText(ImVec2(px, py), IM_COL32(180, 220, 255, 235), fabric_label);
+    }
 }
 
 // ── Menu background (animated cosmic particles) ─────────────────────────────
@@ -2165,6 +2181,21 @@ void CosmosApp::render_ui() {
     ImGui::Checkbox("Star Corona", &cfg.cosmos_star_corona);
     ImGui::Checkbox("Comet Tails", &cfg.cosmos_comet_tails);
     ImGui::Checkbox("Black Hole Lensing", &cfg.cosmos_blackhole_lensing);
+    ImGui::Checkbox("Space Fabric Grid", &cfg.cosmos_space_fabric);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Draw a reference plane through the camera focus and warp it by body mass.");
+    if (cfg.cosmos_space_fabric) {
+        ImGui::SliderFloat("Fabric Square Size", &cfg.cosmos_space_fabric_grid_size,
+                           5.0f, 200.0f, "%.1f u", ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat("Fabric Curvature", &cfg.cosmos_space_fabric_strength,
+                           0.1f, 3.0f, "%.2f");
+        if (ImGui::Button("Snap Fabric View Isometric")) {
+            camera.azimuth = glm::radians(45.0f);
+            camera.elevation = glm::radians(35.2643897f);
+            camera.target_distance = camera.distance;
+        }
+        ImGui::Text("Each square spans %.1f simulation units.", cfg.cosmos_space_fabric_grid_size);
+    }
     ImGui::SliderInt("Cosmos Quality", &cfg.cosmos_quality, 0, 2,
                      cfg.cosmos_quality == 0 ? "Low" :
                      (cfg.cosmos_quality == 1 ? "Balanced" : "High"));

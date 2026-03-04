@@ -566,7 +566,10 @@ struct CosmosConfig {
     bool     cosmos_star_corona = true;
     bool     cosmos_comet_tails = true;
     bool     cosmos_blackhole_lensing = true;
+    bool     cosmos_space_fabric = false;
     int      cosmos_quality = 1;        // 0=low, 1=balanced, 2=high
+    float    cosmos_space_fabric_grid_size = 40.0f;
+    float    cosmos_space_fabric_strength = 1.0f;
 
     // General Relativity corrections
     bool     gr_enabled           = true;    // enable GR corrections

@@ -13,7 +13,11 @@ struct alignas(16) CameraUBOData {
     glm::vec4 lighting_params;  // 16 bytes (star,uniform,ambient,fastStar)
     glm::vec4 quality_params;   // 16 bytes (quality,hq,reserved,reserved)
     glm::vec4 render_flags;     // 16 bytes (bg,corona,cometTails,bhLensing)
-};                              // Total: 144 bytes
+    glm::vec4 fabric_params;    // 16 bytes (enabled,gridSize,warpStrength,G)
+    glm::vec4 fabric_center;    // 16 bytes (plane center xyz)
+    glm::vec4 fabric_right;     // 16 bytes (plane right xyz)
+    glm::vec4 fabric_up;        // 16 bytes (plane up xyz)
+};                              // Total: 208 bytes
 
 struct SphereGPU {
     glm::vec4 pos_radius;         // xyz = position, w = radius
@@ -24,6 +28,7 @@ struct SphereGPU {
     glm::vec4 composition_params; // x = rock_frac, y = ice_frac, z = metal_frac, w = dust_frac
     glm::vec4 atmosphere_params;  // x = cloud_cov, y = pressure, z = haze_density, w = rayleigh_strength
     glm::vec4 activity_params;    // x = weather/flaring, y = corona/coma, z = tail/accretion, w = lensing/jet
+    glm::vec4 gravity_params;     // x = mass, yzw reserved
 };
 
 // ── Body color helper (matches cosmos_app.cpp) ──────────────────────────────
@@ -230,14 +235,16 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
                                        float screen_w, float screen_h,
                                        float time) {
     float aspect = screen_w / screen_h;
-    glm::dmat4 view = camera.view_matrix_d();
+    glm::dvec3 target_origin = glm::dvec3(camera.target);
+    glm::dvec3 eye_rel = camera.eye_position_d() - target_origin;
+    glm::dmat4 view = glm::lookAt(eye_rel, glm::dvec3(0.0), glm::dvec3(0.0, 1.0, 0.0));
     glm::dmat4 proj = camera.proj_matrix_d(aspect);
     glm::dmat4 vp   = proj * view;
 
     // ── Upload camera UBO ──────────────────────────────────────────────────
     CameraUBOData cam{};
     cam.inv_vp         = glm::mat4(glm::inverse(vp));
-    cam.eye_pos        = glm::vec4(glm::vec3(camera.eye_position_d()), 0.0f);
+    cam.eye_pos        = glm::vec4(glm::vec3(eye_rel), 0.0f);
     cam.screen_info    = glm::vec4(screen_w, screen_h,
                                     (float)std::min((int)state.bodies.size(), MAX_SPHERES),
                                     time);
@@ -266,6 +273,17 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
         cfg.cosmos_star_corona ? 1.0f : 0.0f,
         cfg.cosmos_comet_tails ? 1.0f : 0.0f,
         cfg.cosmos_blackhole_lensing ? 1.0f : 0.0f);
+    cam.fabric_params = glm::vec4(
+        cfg.cosmos_space_fabric ? 1.0f : 0.0f,
+        std::max(cfg.cosmos_space_fabric_grid_size, 1.0f),
+        std::max(cfg.cosmos_space_fabric_strength, 0.0f),
+        std::max(cfg.G, 0.001f));
+    const float iso_axis = 0.70710678f;
+    cam.fabric_center = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
+    // Keep the fabric anchored to a world-space horizontal plane so it reads
+    // like the classic isometric gravity grid instead of a camera-facing sheet.
+    cam.fabric_right = glm::vec4(iso_axis, 0.0f, iso_axis, 0.0f);
+    cam.fabric_up = glm::vec4(-iso_axis, 0.0f, iso_axis, 0.0f);
 
     void* mapped = nullptr;
     vkMapMemory(vk.device, camera_ubo_.memory, 0, sizeof(CameraUBOData), 0, &mapped);
@@ -285,7 +303,7 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
         if (is_black_hole_type(b.type))
             emissive = -1.0f;
 
-        spheres[i].pos_radius = glm::vec4(b.pos, b.radius);
+        spheres[i].pos_radius = glm::vec4(glm::vec3(glm::dvec3(b.pos) - target_origin), b.radius);
         spheres[i].base_emit = glm::vec4(col, emissive);
 
         // Normalize seed to shader-friendly range: raw uint32 can be ~4 billion,
@@ -360,6 +378,11 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
                 0.0f,
                 0.0f);
         }
+        spheres[i].gravity_params = glm::vec4(
+            std::max(b.mass, 0.0f),
+            0.0f,
+            0.0f,
+            0.0f);
     }
 
     if (n > 0) {
