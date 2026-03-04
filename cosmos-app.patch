@@ -1,0 +1,359 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/src/cosmos/cosmos_app.cpp b/src/cosmos/cosmos_app.cpp
+index ec0f1d24b57e134073e59731d6417ca210f1d0b0..10ce5ff20b0b3e3dcb8eb417be9b842785a4aac5 100644
+--- a/src/cosmos/cosmos_app.cpp
++++ b/src/cosmos/cosmos_app.cpp
+@@ -1,35 +1,36 @@
+ #include "cosmos/cosmos_app.h"
+ #include "common/paths.h"
+ #include "imgui.h"
+ #include <GLFW/glfw3.h>
+ #include <cmath>
+ #include <algorithm>
+ #include <random>
+ #include <fstream>
+ #include <cstring>
+ #include <filesystem>
++#include <thread>
+ 
+ // ── Body color (for trail overlay coloring) ─────────────────────────────────
+ 
+ static ImU32 body_color(const CelestialBody& b) {
+     if (is_star_type(b.type)) {
+         float t = std::clamp((b.temperature - 2000.0f) / 30000.0f, 0.0f, 1.0f);
+         int r = (int)(255 * std::clamp(1.4f - t * 1.2f, 0.0f, 1.0f));
+         int g = (int)(255 * std::clamp(0.8f + t * 0.2f - std::abs(t - 0.4f), 0.0f, 1.0f));
+         int blue = (int)(255 * std::clamp(t * 1.8f - 0.3f, 0.0f, 1.0f));
+         return IM_COL32(r, g, std::min(blue, 255), 255);
+     }
+     if (is_black_hole_type(b.type))
+         return IM_COL32(200, 100, 255, 255);
+     switch (b.type) {
+     case CTYPE_PLANET:     return IM_COL32(60, 140, 220, 255);
+     case CTYPE_MOON:       return IM_COL32(180, 180, 190, 255);
+     case CTYPE_ASTEROID:   return IM_COL32(140, 130, 110, 255);
+     case CTYPE_COMET:      return IM_COL32(160, 220, 255, 255);
+     case CTYPE_NEBULA:     return IM_COL32(120, 60, 180, 255);
+     default:               return IM_COL32(200, 200, 200, 255);
+     }
+ }
+ 
+ static const char* const CTYPE_NAMES[] = {
+     "Star", "Planet", "Moon", "Asteroid", "Comet", "Black Hole", "Nebula",
+@@ -465,54 +466,51 @@ void CosmosApp::tick(GLFWwindow* window, float dt) {
+ 
+     // DrawList overlays (trails, selection, focus indicator)
+     if (!show_splash && !show_pause_menu)
+         render_overlay();
+ 
+     // ImGui UI panels
+     render_ui();
+ 
+     renderer.end_frame(vk);
+ }
+ 
+ // ── Physics (CPU N-body, 3D) ────────────────────────────────────────────────
+ 
+ void CosmosApp::step_physics(float dt) {
+     cfg.dt_scale = (float)std::pow(10.0, cfg.time_exponent);
+     float scaled_dt = dt * cfg.dt_scale;
+     cfg.sim_time_accumulated += (double)scaled_dt;
+     auto& bodies = state.bodies;
+     size_t n = bodies.size();
+     if (n == 0) return;
+ 
+     // Compute gravitational acceleration (Newtonian + GR corrections)
+     std::vector<glm::vec3> accel(n, glm::vec3(0.0f));
+     float c2 = cfg.speed_of_light * cfg.speed_of_light;
+ 
+-    for (size_t i = 0; i < n; i++) {
+-        if (bodies[i].marked_for_removal) continue;
+-        for (size_t j = i + 1; j < n; j++) {
+-            if (bodies[j].marked_for_removal) continue;
++    auto accumulate_gravity_pair = [&](size_t i, size_t j, std::vector<glm::vec3>& out_accel) {
+             glm::vec3 diff = bodies[j].pos - bodies[i].pos;
+             float dist2 = glm::dot(diff, diff) + cfg.softening * cfg.softening;
+             float dist  = std::sqrt(dist2);
+             float force = cfg.G * bodies[i].mass * bodies[j].mass / dist2;
+             glm::vec3 dir = diff / dist;
+ 
+             // Newtonian gravity
+             glm::vec3 acc_i = dir * (force / bodies[i].mass);
+             glm::vec3 acc_j = -dir * (force / bodies[j].mass);
+ 
+             // ── General Relativity corrections ──
+             if (cfg.gr_enabled && c2 > 0.0f) {
+                 // 1. Post-Newtonian perihelion precession (1PN correction)
+                 //    a_GR = (GM/r²c²) * [ (4GM/r - v²)r̂ + 4(v·r̂)v ]
+                 //    This produces the correct perihelion advance rate.
+                 {
+                     float GM_j = cfg.G * bodies[j].mass;
+                     float GM_i = cfg.G * bodies[i].mass;
+ 
+                     // Correction on body i from body j
+                     glm::vec3 rvel_i = bodies[i].vel;
+                     float vi2 = glm::dot(rvel_i, rvel_i);
+                     float vr_i = glm::dot(rvel_i, dir);
+                     float pn_scale_i = GM_j / (dist * c2) * cfg.gr_precession_scale;
+                     glm::vec3 gr_i = pn_scale_i * ((4.0f * GM_j / dist - vi2) * dir + 4.0f * vr_i * rvel_i);
+@@ -545,52 +543,99 @@ void CosmosApp::step_physics(float dt) {
+                 if (cfg.gr_frame_dragging > 0.0f) {
+                     for (int pair = 0; pair < 2; pair++) {
+                         size_t src = (pair == 0) ? j : i;
+                         size_t dst = (pair == 0) ? i : j;
+                         if (std::abs(bodies[src].angular_vel) < 1e-6f) continue;
+ 
+                         // Angular momentum J ∝ mass * radius² * angular_vel
+                         float J = bodies[src].mass * bodies[src].radius * bodies[src].radius *
+                                   bodies[src].angular_vel;
+                         glm::vec3 J_hat(0, 1, 0); // spin axis assumed Y-up
+                         float coeff = cfg.gr_frame_dragging * cfg.G * J / (c2 * dist * dist * dist);
+ 
+                         glm::vec3 r_hat = (pair == 0) ? dir : -dir;
+                         glm::vec3 v_dst = bodies[dst].vel;
+                         glm::vec3 vxJ = glm::cross(v_dst, J_hat);
+                         float rdotJ = glm::dot(r_hat, J_hat);
+                         glm::vec3 vxr = glm::cross(v_dst, r_hat);
+                         glm::vec3 a_lt = coeff * (vxJ - 3.0f * rdotJ * vxr);
+ 
+                         if (pair == 0) acc_i += a_lt;
+                         else           acc_j += a_lt;
+                     }
+                 }
+             }
+ 
+-            accel[i] += acc_i;
+-            accel[j] += acc_j;
++            out_accel[i] += acc_i;
++            out_accel[j] += acc_j;
++    };
++
++    constexpr size_t kParallelGravityThreshold = 256;
++    const size_t hw_threads = std::thread::hardware_concurrency() > 0
++                                ? static_cast<size_t>(std::thread::hardware_concurrency())
++                                : 1;
++    const bool use_parallel_gravity =
++        cfg.parallel_gravity && n >= kParallelGravityThreshold && hw_threads > 1;
++
++    if (use_parallel_gravity) {
++        const size_t worker_count = std::min(hw_threads, n);
++        std::vector<std::vector<glm::vec3>> local_accel(
++            worker_count, std::vector<glm::vec3>(n, glm::vec3(0.0f)));
++        std::vector<std::thread> workers;
++        workers.reserve(worker_count);
++
++        for (size_t t = 0; t < worker_count; ++t) {
++            const size_t i_begin = (n * t) / worker_count;
++            const size_t i_end = (n * (t + 1)) / worker_count;
++
++            workers.emplace_back([&, t, i_begin, i_end]() {
++                auto& thread_accel = local_accel[t];
++                for (size_t i = i_begin; i < i_end; ++i) {
++                    if (bodies[i].marked_for_removal) continue;
++                    for (size_t j = i + 1; j < n; ++j) {
++                        if (bodies[j].marked_for_removal) continue;
++                        accumulate_gravity_pair(i, j, thread_accel);
++                    }
++                }
++            });
++        }
++
++        for (auto& worker : workers)
++            worker.join();
++
++        for (size_t t = 0; t < worker_count; ++t) {
++            const auto& thread_accel = local_accel[t];
++            for (size_t i = 0; i < n; ++i)
++                accel[i] += thread_accel[i];
++        }
++    } else {
++        for (size_t i = 0; i < n; ++i) {
++            if (bodies[i].marked_for_removal) continue;
++            for (size_t j = i + 1; j < n; ++j) {
++                if (bodies[j].marked_for_removal) continue;
++                accumulate_gravity_pair(i, j, accel);
++            }
+         }
+     }
+ 
+     // Integrate (symplectic Euler)
+     for (size_t i = 0; i < n; i++) {
+         if (bodies[i].marked_for_removal) continue;
+         bodies[i].vel += accel[i] * scaled_dt;
+         bodies[i].vel *= cfg.damping;
+         bodies[i].pos += bodies[i].vel * scaled_dt;
+         bodies[i].age += scaled_dt;
+     }
+ 
+     // Physics subsystems
+     if (cfg.collisions)         process_collisions(scaled_dt);
+     if (cfg.roche_limit)        process_roche_limit(scaled_dt);
+     if (cfg.temperature_system) process_temperature(scaled_dt);
+     if (cfg.evaporation)        process_evaporation(scaled_dt);
+     if (cfg.stellar_evolution)  process_stellar_evolution(scaled_dt);
+     cleanup_bodies();
+ 
+     // Refresh cached planet properties (only recomputes on temperature band changes)
+     for (auto& b : state.bodies)
+         refresh_planet_props(b);
+ 
+     // Update trails
+@@ -1738,50 +1783,51 @@ void CosmosApp::render_ui() {
+         double rate = std::pow(10.0, cfg.time_exponent);
+         format_sim_time(rate, rate_buf, sizeof(rate_buf));
+         ImGui::SameLine();
+         ImGui::Text("%s/s", rate_buf);
+ 
+         format_sim_time(cfg.sim_time_accumulated, time_buf, sizeof(time_buf));
+         ImGui::Text("Sim Time: %s", time_buf);
+ 
+         struct Preset { const char* label; double exp; };
+         static const Preset presets[] = {
+             {"1 s/s",   0.0},   {"1 min/s", 1.778},
+             {"1 hr/s",  3.556}, {"1 day/s", 4.937},
+             {"1 yr/s",  7.499}, {"1 Myr/s", 13.499},
+             {"1 Gyr/s", 16.499},
+         };
+         for (int i = 0; i < 7; i++) {
+             if (i > 0) ImGui::SameLine();
+             if (ImGui::SmallButton(presets[i].label))
+                 cfg.time_exponent = presets[i].exp;
+         }
+     }
+ 
+     ImGui::Separator();
+     ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "General Relativity");
+     ImGui::Checkbox("GR Corrections", &cfg.gr_enabled);
++    ImGui::Checkbox("Parallel Gravity", &cfg.parallel_gravity);
+     if (cfg.gr_enabled) {
+         ImGui::SliderFloat("Precession", &cfg.gr_precession_scale, 0.0f, 10.0f);
+         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Perihelion precession (1PN correction)\n1.0 = physical value");
+         ImGui::SliderFloat("Time Dilation", &cfg.gr_time_dilation, 0.0f, 5.0f);
+         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Gravitational time dilation effect");
+         ImGui::SliderFloat("Frame Drag", &cfg.gr_frame_dragging, 0.0f, 5.0f);
+         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Lense-Thirring frame dragging\nfrom spinning bodies");
+         ImGui::SliderFloat("Speed of Light", &cfg.speed_of_light, 50.0f, 1000.0f);
+         if (ImGui::IsItemHovered()) ImGui::SetTooltip("c in simulation units\n(lower = stronger GR effects)");
+     }
+ 
+     ImGui::End();
+     } // settings_visible_
+ 
+     // Body Inspector
+     draw_inspector();
+ 
+     // Spawn menu
+     draw_spawn_menu();
+ 
+     // File dialog
+     draw_file_dialog();
+ 
+     // Save status toast
+     if (save_status_timer_ > 0.0f) {
+@@ -2368,50 +2414,51 @@ bool CosmosApp::save_simulation(const std::string& path) {
+     std::ofstream f(path, std::ios::binary);
+     if (!f) return false;
+ 
+     // Header
+     f.write(reinterpret_cast<const char*>(&COSMOS_MAGIC), 4);
+     f.write(reinterpret_cast<const char*>(&COSMOS_VERSION), 4);
+ 
+     // Config (selected POD fields)
+     f.write(reinterpret_cast<const char*>(&cfg.G), sizeof(float));
+     f.write(reinterpret_cast<const char*>(&cfg.time_exponent), sizeof(double));
+     f.write(reinterpret_cast<const char*>(&cfg.sim_time_accumulated), sizeof(double));
+     f.write(reinterpret_cast<const char*>(&cfg.softening), sizeof(float));
+     f.write(reinterpret_cast<const char*>(&cfg.damping), sizeof(float));
+ 
+     uint32_t flags = 0;
+     if (cfg.collisions) flags |= 1;
+     if (cfg.tidal_forces) flags |= 2;
+     if (cfg.collision_merging) flags |= 4;
+     if (cfg.collision_fragmentation) flags |= 8;
+     if (cfg.roche_limit) flags |= 16;
+     if (cfg.temperature_system) flags |= 32;
+     if (cfg.evaporation) flags |= 64;
+     if (cfg.stellar_evolution) flags |= 128;
+     if (cfg.star_lighting) flags |= 256;
+     if (cfg.uniform_lighting) flags |= 512;
++    if (cfg.parallel_gravity) flags |= 1024;
+     f.write(reinterpret_cast<const char*>(&flags), sizeof(uint32_t));
+ 
+     f.write(reinterpret_cast<const char*>(&cfg.merge_speed_threshold), sizeof(float));
+     f.write(reinterpret_cast<const char*>(&cfg.fragment_speed_threshold), sizeof(float));
+     f.write(reinterpret_cast<const char*>(&cfg.fragment_count), sizeof(int));
+     f.write(reinterpret_cast<const char*>(&cfg.radiative_cooling), sizeof(float));
+     f.write(reinterpret_cast<const char*>(&cfg.collision_heating), sizeof(float));
+     f.write(reinterpret_cast<const char*>(&cfg.evaporation_rate), sizeof(float));
+     f.write(reinterpret_cast<const char*>(&cfg.stellar_timescale), sizeof(float));
+     f.write(reinterpret_cast<const char*>(&cfg.ambient_strength), sizeof(float));
+     f.write(reinterpret_cast<const char*>(&cfg.min_fragment_mass), sizeof(float));
+     f.write(reinterpret_cast<const char*>(&cfg.max_frag_generation), sizeof(int));
+ 
+     // Body count
+     uint32_t body_count = (uint32_t)state.bodies.size();
+     f.write(reinterpret_cast<const char*>(&body_count), 4);
+ 
+     // Bodies
+     for (const auto& b : state.bodies) {
+         BodyPOD pod{};
+         pod.pos[0] = b.pos.x; pod.pos[1] = b.pos.y; pod.pos[2] = b.pos.z;
+         pod.vel[0] = b.vel.x; pod.vel[1] = b.vel.y; pod.vel[2] = b.vel.z;
+         pod.mass = b.mass;
+         pod.radius = b.radius;
+         pod.temperature = b.temperature;
+@@ -2447,50 +2494,51 @@ bool CosmosApp::load_simulation(const std::string& path) {
+ 
+     uint32_t magic = 0, version = 0;
+     f.read(reinterpret_cast<char*>(&magic), 4);
+     f.read(reinterpret_cast<char*>(&version), 4);
+     if (magic != COSMOS_MAGIC || version > COSMOS_VERSION) return false;
+ 
+     // Config
+     f.read(reinterpret_cast<char*>(&cfg.G), sizeof(float));
+     f.read(reinterpret_cast<char*>(&cfg.time_exponent), sizeof(double));
+     f.read(reinterpret_cast<char*>(&cfg.sim_time_accumulated), sizeof(double));
+     f.read(reinterpret_cast<char*>(&cfg.softening), sizeof(float));
+     f.read(reinterpret_cast<char*>(&cfg.damping), sizeof(float));
+ 
+     uint32_t flags = 0;
+     f.read(reinterpret_cast<char*>(&flags), sizeof(uint32_t));
+     cfg.collisions              = (flags & 1) != 0;
+     cfg.tidal_forces            = (flags & 2) != 0;
+     cfg.collision_merging       = (flags & 4) != 0;
+     cfg.collision_fragmentation = (flags & 8) != 0;
+     cfg.roche_limit             = (flags & 16) != 0;
+     cfg.temperature_system      = (flags & 32) != 0;
+     cfg.evaporation             = (flags & 64) != 0;
+     cfg.stellar_evolution       = (flags & 128) != 0;
+     cfg.star_lighting           = (flags & 256) != 0;
+     cfg.uniform_lighting        = (flags & 512) != 0;
++    cfg.parallel_gravity        = (flags & 1024) != 0;
+ 
+     f.read(reinterpret_cast<char*>(&cfg.merge_speed_threshold), sizeof(float));
+     f.read(reinterpret_cast<char*>(&cfg.fragment_speed_threshold), sizeof(float));
+     f.read(reinterpret_cast<char*>(&cfg.fragment_count), sizeof(int));
+     f.read(reinterpret_cast<char*>(&cfg.radiative_cooling), sizeof(float));
+     f.read(reinterpret_cast<char*>(&cfg.collision_heating), sizeof(float));
+     f.read(reinterpret_cast<char*>(&cfg.evaporation_rate), sizeof(float));
+     f.read(reinterpret_cast<char*>(&cfg.stellar_timescale), sizeof(float));
+     f.read(reinterpret_cast<char*>(&cfg.ambient_strength), sizeof(float));
+     f.read(reinterpret_cast<char*>(&cfg.min_fragment_mass), sizeof(float));
+     f.read(reinterpret_cast<char*>(&cfg.max_frag_generation), sizeof(int));
+ 
+     // Body count
+     uint32_t body_count = 0;
+     f.read(reinterpret_cast<char*>(&body_count), 4);
+     if (body_count > 10000) return false; // sanity check
+ 
+     state.clear();
+     state.bodies.reserve(body_count);
+ 
+     for (uint32_t i = 0; i < body_count; i++) {
+         BodyPOD pod{};
+         f.read(reinterpret_cast<char*>(&pod), sizeof(BodyPOD));
+ 
+         CelestialBody b;
+ 
+EOF
+)

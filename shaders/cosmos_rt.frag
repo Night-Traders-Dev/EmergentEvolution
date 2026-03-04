@@ -116,6 +116,52 @@ float intersect_sphere(vec3 ro, vec3 rd, vec3 center, float radius) {
     return -1.0;
 }
 
+
+
+float irregular_radius_scale(vec3 dir, float seed, float roughness) {
+    float n = noise3D(dir * 6.0 + vec3(seed * 0.021, seed * 0.017, seed * 0.013));
+    float r = 1.0 + n * roughness;
+    return clamp(r, 0.65, 1.45);
+}
+
+float irregular_sdf(vec3 p, vec3 center, float base_radius, float seed, float roughness) {
+    vec3 d = normalize(p - center);
+    float target_r = base_radius * irregular_radius_scale(d, seed, roughness);
+    return length(p - center) - target_r;
+}
+
+float intersect_irregular_body(vec3 ro, vec3 rd, vec3 center, float base_radius,
+                               float seed, float roughness) {
+    float bound_r = base_radius * (1.0 + roughness * 1.3);
+    float t0 = intersect_sphere(ro, rd, center, bound_r);
+    if (t0 < 0.0) return -1.0;
+
+    float t = max(t0 - base_radius * roughness, 0.001);
+    for (int i = 0; i < 28; i++) {
+        vec3 p = ro + rd * t;
+        float d = irregular_sdf(p, center, base_radius, seed, roughness);
+        if (d < 0.001) return t;
+        t += max(d * 0.65, 0.002);
+        if (t > t0 + base_radius * (2.0 + roughness * 3.0)) break;
+    }
+    return -1.0;
+}
+
+vec3 irregular_normal(vec3 p, vec3 center, float base_radius, float seed, float roughness) {
+    float e = max(base_radius * 0.008, 0.02);
+    vec2 h = vec2(e, 0.0);
+    float dx = irregular_sdf(p + vec3(h.x, h.y, h.y), center, base_radius, seed, roughness)
+             - irregular_sdf(p - vec3(h.x, h.y, h.y), center, base_radius, seed, roughness);
+    float dy = irregular_sdf(p + vec3(h.y, h.x, h.y), center, base_radius, seed, roughness)
+             - irregular_sdf(p - vec3(h.y, h.x, h.y), center, base_radius, seed, roughness);
+    float dz = irregular_sdf(p + vec3(h.y, h.y, h.x), center, base_radius, seed, roughness)
+             - irregular_sdf(p - vec3(h.y, h.y, h.x), center, base_radius, seed, roughness);
+    return normalize(vec3(dx, dy, dz));
+}
+
+
+
+
 // ── Procedural starfield background ────────────────────────────────────────
 
 vec3 background() {
@@ -576,14 +622,28 @@ void main() {
     vec3 ro = eye_pos.xyz;
     vec3 rd = normalize(far_world.xyz - near_world.xyz);
 
-    // ── Trace all spheres ──────────────────────────────────────────────────
+    // ── Trace all bodies ──────────────────────────────────────────────────
     float closest_t = 1e30;
     int closest_idx = -1;
 
     for (int i = 0; i < body_count && i < 512; i++) {
-        float t = intersect_sphere(ro, rd,
-            spheres[i].pos_radius.xyz,
-            spheres[i].pos_radius.w);
+        float body_flags = spheres[i].atmo_data.w;
+        bool is_asteroid = mod(floor(body_flags / 64.0), 2.0) > 0.5;
+        bool is_comet = mod(floor(body_flags / 128.0), 2.0) > 0.5;
+
+        float t;
+        if (is_asteroid || is_comet) {
+            float roughness = is_comet ? 0.34 : 0.22;
+            t = intersect_irregular_body(ro, rd,
+                spheres[i].pos_radius.xyz,
+                spheres[i].pos_radius.w,
+                spheres[i].planet_data.x,
+                roughness);
+        } else {
+            t = intersect_sphere(ro, rd,
+                spheres[i].pos_radius.xyz,
+                spheres[i].pos_radius.w);
+        }
         if (t > 0.0 && t < closest_t) {
             closest_t = t;
             closest_idx = i;
@@ -598,9 +658,23 @@ void main() {
 
     // ── Hit — compute shading ──────────────────────────────────────────────
     Sphere hit = spheres[closest_idx];
+    float hit_flags = hit.atmo_data.w;
+    bool is_asteroid_body = mod(floor(hit_flags / 64.0), 2.0) > 0.5;
+    bool is_comet_body = mod(floor(hit_flags / 128.0), 2.0) > 0.5;
+    float irregularity = is_comet_body ? 0.34 : 0.22;
     vec3 hit_pos = ro + rd * closest_t;
     vec3 normal = normalize(hit_pos - hit.pos_radius.xyz);
+    if (is_asteroid_body || is_comet_body) {
+        normal = irregular_normal(hit_pos, hit.pos_radius.xyz, hit.pos_radius.w,
+                                  hit.planet_data.x, irregularity);
+    }
     vec3 base_color = hit.color_emit.rgb;
+    if (is_asteroid_body || is_comet_body) {
+        float chip = fbm(normal * 9.0 + vec3(hit.planet_data.x * 0.05), 4);
+        base_color *= mix(0.65, 1.15, chip);
+        if (is_comet_body)
+            base_color = mix(base_color, vec3(0.82, 0.88, 0.95), 0.25);
+    }
     float emissive = hit.color_emit.a;
 
     // Find primary light direction (nearest/brightest star)
@@ -628,7 +702,7 @@ void main() {
     }
 
     // ── Check if this is a planet/moon with procedural texturing ──────────
-    bool is_planet_body = hit.atmo_data.w > 0.5;
+    bool is_planet_body = hit.atmo_data.w > 0.5 && !is_asteroid_body && !is_comet_body;
     float planet_roughness = 0.8;
     float planet_elev = 0.5;
     if (is_planet_body) {

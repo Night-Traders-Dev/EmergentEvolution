@@ -508,6 +508,9 @@ struct CosmosConfig {
     float    gr_time_dilation     = 1.0f;    // gravitational time dilation factor
     float    gr_frame_dragging    = 1.0f;    // Lense-Thirring frame dragging
     float    speed_of_light       = 300.0f;  // c in simulation units (orbital speeds ~1-30)
+
+    // Physics parallelization
+    bool     parallel_gravity     = true;    // parallelize pairwise gravity accumulation
 };
 
 // ── Body collection ─────────────────────────────────────────────────────────

@@ -268,7 +268,12 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
         spheres[i].pos_radius = glm::vec4(b.pos, b.radius);
         spheres[i].color_emit = glm::vec4(col, emissive);
 
-        // Pack planet/moon data for shader procedural textures
+        // Normalize seed to shader-friendly range: raw uint32 can be ~4 billion,
+        // far beyond float32 precision for noise functions using fract().
+        // Pack into [0, 10000) so seed*0.01 stays in [0, 100).
+        float shader_seed = (float)(b.seed % 10000u) + (float)((b.seed >> 16) & 0xFFu) * 0.001f;
+
+        // Pack body data for shader texturing / shape hints.        
         if (b.type == CTYPE_PLANET || b.type == CTYPE_MOON) {
             const PlanetProperties& pp = b.cached_props;
 
@@ -294,8 +299,13 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
                 pp.vegetation_coverage / 100.0f,
                 body_flags);
         } else {
-            spheres[i].planet_data = glm::vec4(0.0f);
-            spheres[i].atmo_data   = glm::vec4(0.0f);
+            float body_flags = 0.0f;
+            if (b.type == CTYPE_ASTEROID) body_flags += 64.0f;
+            if (b.type == CTYPE_COMET)    body_flags += 128.0f;
+
+            spheres[i].planet_data = glm::vec4(shader_seed, 0.0f, 0.0f, b.temperature);
+            spheres[i].atmo_data   = glm::vec4(0.0f, 0.0f, 0.0f, body_flags);
+
         }
     }
 
