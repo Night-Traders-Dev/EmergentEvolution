@@ -1,12 +1,51 @@
 #include "cosmos/cosmos_app_internal.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <fstream>
+#include <type_traits>
 
 namespace {
 
 constexpr uint32_t COSMOS_MAGIC   = 0x534D4F43; // "COSM"
 constexpr uint32_t COSMOS_VERSION = 9;
+constexpr uint32_t COSMOS_SETTINGS_MAGIC   = 0x54475343; // "CSGT"
+constexpr uint32_t COSMOS_SETTINGS_VERSION = 1;
+constexpr const char* COSMOS_SETTINGS_PATH = "cosmos_settings.bin";
+
+struct PersistedUiSettingsV1 {
+    int32_t spawn_type = CTYPE_PLANET;
+    float spawn_mass = 3.003e-6f;
+    uint8_t spawn_in_orbit = 0;
+    uint8_t spawn_menu_visible = 1;
+    uint8_t settings_visible = 1;
+    uint8_t body_list_visible = 1;
+    uint8_t bottom_bar_autohide = 1;
+    uint8_t override_temperature = 0;
+    float temperature = 300.0f;
+    uint8_t override_radius = 0;
+    float radius = 8.0f;
+    uint8_t override_rotation = 0;
+    float rotation_hours = 24.0f;
+    uint8_t override_velocity = 0;
+    float velocity_kms[3] = {0.0f, 0.0f, 0.0f};
+    uint8_t override_material = 0;
+    float material_iron = 0.20f;
+    float material_silicate = 0.60f;
+    float material_ice = 0.20f;
+    float material_hydrogen = 0.0f;
+    int32_t planet_look = 0;
+    uint8_t spawn_rings = 0;
+    uint8_t spawn_moons = 0;
+    int32_t moon_count = 1;
+    uint8_t override_ring_layout = 0;
+    float ring_inner_mult = 1.6f;
+    float ring_outer_mult = 3.0f;
+    float ring_density = 0.35f;
+    float ring_ice_fraction = 0.55f;
+    int32_t small_body_spawn_count = 1;
+    int32_t small_body_layout = 0;
+};
 
 #pragma pack(push, 1)
 struct BodyPODV1 {
@@ -668,4 +707,121 @@ bool CosmosApp::import_body(const std::string& path) {
     state.bodies.push_back(std::move(b));
     state.trails.emplace_back();
     return true;
+}
+
+void CosmosApp::save_persistent_settings() const {
+    static_assert(std::is_trivially_copyable<CosmosConfig>::value,
+                  "CosmosConfig must stay trivially copyable for persistence.");
+
+    std::ofstream f(COSMOS_SETTINGS_PATH, std::ios::binary | std::ios::trunc);
+    if (!f) return;
+
+    uint32_t magic = COSMOS_SETTINGS_MAGIC;
+    uint32_t version = COSMOS_SETTINGS_VERSION;
+    uint32_t cfg_size = (uint32_t)sizeof(CosmosConfig);
+    f.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
+    f.write(reinterpret_cast<const char*>(&version), sizeof(version));
+    f.write(reinterpret_cast<const char*>(&cfg_size), sizeof(cfg_size));
+    f.write(reinterpret_cast<const char*>(&cfg), sizeof(CosmosConfig));
+
+    PersistedUiSettingsV1 ui{};
+    ui.spawn_type = spawn_type;
+    ui.spawn_mass = spawn_mass;
+    ui.spawn_in_orbit = spawn_in_orbit_ ? 1u : 0u;
+    ui.spawn_menu_visible = spawn_menu_visible_ ? 1u : 0u;
+    ui.settings_visible = settings_visible_ ? 1u : 0u;
+    ui.body_list_visible = body_list_visible_ ? 1u : 0u;
+    ui.bottom_bar_autohide = bottom_bar_autohide_ ? 1u : 0u;
+    ui.override_temperature = spawn_draft_.override_temperature ? 1u : 0u;
+    ui.temperature = spawn_draft_.temperature;
+    ui.override_radius = spawn_draft_.override_radius ? 1u : 0u;
+    ui.radius = spawn_draft_.radius;
+    ui.override_rotation = spawn_draft_.override_rotation ? 1u : 0u;
+    ui.rotation_hours = spawn_draft_.rotation_hours;
+    ui.override_velocity = spawn_draft_.override_velocity ? 1u : 0u;
+    ui.velocity_kms[0] = spawn_draft_.velocity_kms.x;
+    ui.velocity_kms[1] = spawn_draft_.velocity_kms.y;
+    ui.velocity_kms[2] = spawn_draft_.velocity_kms.z;
+    ui.override_material = spawn_draft_.override_material ? 1u : 0u;
+    ui.material_iron = spawn_draft_.material_iron;
+    ui.material_silicate = spawn_draft_.material_silicate;
+    ui.material_ice = spawn_draft_.material_ice;
+    ui.material_hydrogen = spawn_draft_.material_hydrogen;
+    ui.planet_look = spawn_draft_.planet_look;
+    ui.spawn_rings = spawn_draft_.spawn_rings ? 1u : 0u;
+    ui.spawn_moons = spawn_draft_.spawn_moons ? 1u : 0u;
+    ui.moon_count = spawn_draft_.moon_count;
+    ui.override_ring_layout = spawn_draft_.override_ring_layout ? 1u : 0u;
+    ui.ring_inner_mult = spawn_draft_.ring_inner_mult;
+    ui.ring_outer_mult = spawn_draft_.ring_outer_mult;
+    ui.ring_density = spawn_draft_.ring_density;
+    ui.ring_ice_fraction = spawn_draft_.ring_ice_fraction;
+    ui.small_body_spawn_count = spawn_draft_.small_body_spawn_count;
+    ui.small_body_layout = spawn_draft_.small_body_layout;
+    f.write(reinterpret_cast<const char*>(&ui), sizeof(ui));
+}
+
+void CosmosApp::load_persistent_settings() {
+    std::ifstream f(COSMOS_SETTINGS_PATH, std::ios::binary);
+    if (!f) return;
+
+    uint32_t magic = 0;
+    uint32_t version = 0;
+    uint32_t cfg_size = 0;
+    f.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+    f.read(reinterpret_cast<char*>(&version), sizeof(version));
+    f.read(reinterpret_cast<char*>(&cfg_size), sizeof(cfg_size));
+    if (!f.good() || magic != COSMOS_SETTINGS_MAGIC || version > COSMOS_SETTINGS_VERSION)
+        return;
+
+    if (cfg_size == sizeof(CosmosConfig)) {
+        f.read(reinterpret_cast<char*>(&cfg), sizeof(CosmosConfig));
+    } else {
+        if (cfg_size > 0 && cfg_size < (1u << 20))
+            f.seekg((std::streamoff)cfg_size, std::ios::cur);
+        else
+            return;
+    }
+    if (!f.good()) return;
+
+    if (version >= 1) {
+        PersistedUiSettingsV1 ui{};
+        f.read(reinterpret_cast<char*>(&ui), sizeof(ui));
+        if (!f.good()) return;
+
+        spawn_type = std::clamp(ui.spawn_type, 0, (int)CTYPE_COUNT - 1);
+        spawn_mass = std::clamp(ui.spawn_mass, 1.0e-13f, 500.0f);
+        spawn_in_orbit_ = ui.spawn_in_orbit != 0;
+        spawn_menu_visible_ = ui.spawn_menu_visible != 0;
+        settings_visible_ = ui.settings_visible != 0;
+        body_list_visible_ = ui.body_list_visible != 0;
+        bottom_bar_autohide_ = ui.bottom_bar_autohide != 0;
+        spawn_draft_.override_temperature = ui.override_temperature != 0;
+        spawn_draft_.temperature = std::clamp(ui.temperature, 2.7f, 120000.0f);
+        spawn_draft_.override_radius = ui.override_radius != 0;
+        spawn_draft_.radius = std::max(ui.radius, 0.04f);
+        spawn_draft_.override_rotation = ui.override_rotation != 0;
+        spawn_draft_.rotation_hours = std::clamp(ui.rotation_hours, 0.1f, 2000.0f);
+        spawn_draft_.override_velocity = ui.override_velocity != 0;
+        spawn_draft_.velocity_kms = glm::vec3(
+            std::clamp(ui.velocity_kms[0], -200.0f, 200.0f),
+            std::clamp(ui.velocity_kms[1], -200.0f, 200.0f),
+            std::clamp(ui.velocity_kms[2], -200.0f, 200.0f));
+        spawn_draft_.override_material = ui.override_material != 0;
+        spawn_draft_.material_iron = std::clamp(ui.material_iron, 0.0f, 1.0f);
+        spawn_draft_.material_silicate = std::clamp(ui.material_silicate, 0.0f, 1.0f);
+        spawn_draft_.material_ice = std::clamp(ui.material_ice, 0.0f, 1.0f);
+        spawn_draft_.material_hydrogen = std::clamp(ui.material_hydrogen, 0.0f, 1.0f);
+        spawn_draft_.planet_look = std::clamp(ui.planet_look, 0, 4);
+        spawn_draft_.spawn_rings = ui.spawn_rings != 0;
+        spawn_draft_.spawn_moons = ui.spawn_moons != 0;
+        spawn_draft_.moon_count = std::clamp(ui.moon_count, 1, 8);
+        spawn_draft_.override_ring_layout = ui.override_ring_layout != 0;
+        spawn_draft_.ring_inner_mult = std::clamp(ui.ring_inner_mult, 1.15f, 4.0f);
+        spawn_draft_.ring_outer_mult = std::clamp(ui.ring_outer_mult, 1.5f, 8.0f);
+        spawn_draft_.ring_density = std::clamp(ui.ring_density, 0.01f, 1.0f);
+        spawn_draft_.ring_ice_fraction = std::clamp(ui.ring_ice_fraction, 0.0f, 1.0f);
+        spawn_draft_.small_body_spawn_count = std::clamp(ui.small_body_spawn_count, 1, 1000);
+        spawn_draft_.small_body_layout = std::clamp(ui.small_body_layout, 0, 3);
+    }
 }

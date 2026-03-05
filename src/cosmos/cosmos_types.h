@@ -712,27 +712,36 @@ inline void refresh_planet_props(CelestialBody& b) {
     }
 
     if (b.forced_surface >= 0) {
+        float mass_earth = b.mass / 3.003e-6f;
         switch (b.forced_surface) {
         case 0: // rocky
             b.cached_props.surface = SURF_ROCKY;
+            b.cached_props.planet_class = (mass_earth > 2.4f) ? PCLASS_SUPER_EARTH : PCLASS_TERRESTRIAL;
             b.cached_props.ocean_type = OCEAN_NONE;
             b.cached_props.ocean_coverage = 0.0f;
             b.cached_props.cloud_coverage = std::min(b.cached_props.cloud_coverage, 25.0f);
+            b.cached_props.vegetation_coverage = std::min(b.cached_props.vegetation_coverage, 12.0f);
             break;
         case 1: // water
             b.cached_props.surface = SURF_LIQUID;
+            b.cached_props.planet_class = PCLASS_OCEAN;
             b.cached_props.ocean_type = OCEAN_WATER;
-            b.cached_props.ocean_coverage = std::max(b.cached_props.ocean_coverage, 55.0f);
+            b.cached_props.ocean_coverage = std::max(b.cached_props.ocean_coverage, 82.0f);
             b.cached_props.cloud_coverage = std::max(b.cached_props.cloud_coverage, 35.0f);
+            b.cached_props.vegetation_coverage = std::min(b.cached_props.vegetation_coverage, 8.0f);
             break;
         case 2: // ice
             b.cached_props.surface = SURF_FROZEN;
+            b.cached_props.planet_class = (mass_earth < 0.18f) ? PCLASS_DWARF : PCLASS_TERRESTRIAL;
             b.cached_props.ocean_type = OCEAN_NONE;
             b.cached_props.ocean_coverage = std::min(b.cached_props.ocean_coverage, 15.0f);
             b.cached_props.ice_sheet_coverage = std::max(b.cached_props.ice_sheet_coverage, 70.0f);
+            b.cached_props.cloud_coverage = std::min(b.cached_props.cloud_coverage, 35.0f);
+            b.cached_props.vegetation_coverage = 0.0f;
             break;
         case 3: // earth-like
-            b.cached_props.surface = SURF_ROCKY;
+            b.cached_props.surface = SURF_MIXED;
+            b.cached_props.planet_class = PCLASS_TERRESTRIAL;
             b.cached_props.ocean_type = OCEAN_WATER;
             b.cached_props.ocean_coverage = std::clamp(b.cached_props.ocean_coverage, 40.0f, 75.0f);
             b.cached_props.atmosphere.n2_frac = 0.78f;
@@ -740,7 +749,10 @@ inline void refresh_planet_props(CelestialBody& b) {
             b.cached_props.atmosphere.co2_frac = std::clamp(b.cached_props.atmosphere.co2_frac, 0.0001f, 0.02f);
             b.cached_props.atmosphere.pressure = std::clamp(b.cached_props.atmosphere.pressure, 0.6f, 2.2f);
             b.cached_props.cloud_coverage = std::clamp(b.cached_props.cloud_coverage, 20.0f, 80.0f);
-            b.cached_props.vegetation_coverage = std::max(b.cached_props.vegetation_coverage, 18.0f);
+            b.cached_props.vegetation_coverage = std::max(b.cached_props.vegetation_coverage, 28.0f);
+            b.cached_props.has_continents = true;
+            b.cached_props.has_weather = true;
+            b.cached_props.weather_type = (b.cached_props.cloud_coverage > 62.0f) ? WEATHER_STORMS : WEATHER_RAIN;
             break;
         default:
             break;
@@ -1105,9 +1117,9 @@ inline BodyVisualProperties generate_body_visual_properties(const CelestialBody&
         float impact_heat = std::clamp(b.impact_heat, 0.0f, 1.0f);
         vp.render_class = is_comet ? RENDER_COMET : RENDER_ASTEROID;
         vp.subtype = is_comet ? (uint8_t)SMALLBODY_ICY : (uint8_t)(hash_combine(h, 9) % 4u);
-        vp.terrain_amp = is_dust ? 0.05f + h0 * 0.08f : (is_comet ? 0.32f + h0 * 0.18f : 0.22f + h0 * 0.22f);
-        vp.terrain_freq = is_dust ? (8.0f + h1 * 9.0f) : (2.5f + h1 * 5.5f);
-        vp.ridge_amp = is_dust ? (0.03f + h2 * 0.08f) : (0.2f + h2 * 0.45f);
+        vp.terrain_amp = is_dust ? 0.05f + h0 * 0.08f : (is_comet ? 0.24f + h0 * 0.14f : 0.34f + h0 * 0.26f);
+        vp.terrain_freq = is_dust ? (8.0f + h1 * 9.0f) : (is_comet ? 2.4f + h1 * 3.6f : 3.8f + h1 * 6.8f);
+        vp.ridge_amp = is_dust ? (0.03f + h2 * 0.08f) : (is_comet ? 0.16f + h2 * 0.24f : 0.34f + h2 * 0.46f);
         vp.crater_density = is_dust ? (0.15f + h1 * 0.20f) : (is_comet ? 0.25f + h1 * 0.25f : 0.55f + h1 * 0.35f);
         vp.normal_strength = is_dust ? 0.65f : (is_comet ? 1.2f : 1.0f);
         vp.roughness = is_dust ? 0.95f : 0.78f;
@@ -1182,15 +1194,55 @@ inline BodyVisualProperties generate_body_visual_properties(const CelestialBody&
 
         switch (pp.surface) {
         case SURF_ROCKY:
-            vp.rock_frac = 0.75f; vp.dust_frac = 0.18f; vp.roughness = 0.88f; break;
+            vp.rock_frac = 0.75f;
+            vp.dust_frac = 0.18f;
+            vp.roughness = 0.88f;
+            vp.terrain_amp = std::clamp(vp.terrain_amp + 0.10f, 0.16f, 1.0f);
+            vp.terrain_freq = std::clamp(vp.terrain_freq + 1.2f, 2.5f, 12.0f);
+            vp.ridge_amp = std::clamp(vp.ridge_amp + 0.10f, 0.15f, 1.0f);
+            break;
         case SURF_LIQUID:
-            vp.rock_frac = 0.20f; vp.dust_frac = 0.08f; vp.specular = 0.12f; vp.roughness = 0.22f; break;
+            vp.rock_frac = 0.20f;
+            vp.dust_frac = 0.08f;
+            vp.specular = 0.12f;
+            vp.roughness = 0.22f;
+            vp.terrain_amp = std::clamp(vp.terrain_amp * 0.75f, 0.08f, 0.70f);
+            vp.ridge_amp = std::clamp(vp.ridge_amp * 0.75f, 0.04f, 0.85f);
+            break;
         case SURF_FROZEN:
-            vp.rock_frac = 0.25f; vp.ice_frac = 0.65f; vp.roughness = 0.45f; vp.specular = 0.10f; break;
+            vp.rock_frac = 0.25f;
+            vp.ice_frac = 0.65f;
+            vp.roughness = 0.45f;
+            vp.specular = 0.10f;
+            vp.terrain_freq = std::clamp(vp.terrain_freq + 2.2f, 3.0f, 16.0f);
+            vp.ridge_amp = std::clamp(vp.ridge_amp + 0.08f, 0.12f, 1.0f);
+            break;
         case SURF_GAS:
-            vp.rock_frac = 0.0f; vp.ice_frac = 0.0f; vp.dust_frac = 0.55f; vp.roughness = 1.0f; vp.normal_strength = 0.3f; break;
+            vp.rock_frac = 0.0f;
+            vp.ice_frac = 0.0f;
+            vp.dust_frac = 0.55f;
+            vp.roughness = 1.0f;
+            vp.normal_strength = 0.3f;
+            vp.terrain_amp = std::clamp(0.06f + h0 * 0.14f, 0.05f, 0.26f);
+            vp.terrain_freq = std::clamp(8.0f + h1 * 10.0f, 6.0f, 20.0f);
+            vp.ridge_amp = std::clamp(0.04f + h2 * 0.18f, 0.02f, 0.34f);
+            break;
         case SURF_MIXED:
-            vp.rock_frac = 0.55f; vp.dust_frac = 0.15f; vp.roughness = 0.75f; break;
+            vp.rock_frac = 0.55f;
+            vp.dust_frac = 0.15f;
+            vp.roughness = 0.75f;
+            vp.terrain_amp = std::clamp(vp.terrain_amp + 0.06f, 0.12f, 1.0f);
+            vp.terrain_freq = std::clamp(vp.terrain_freq + 0.8f, 2.2f, 12.0f);
+            break;
+        }
+
+        if (pp.surface == SURF_MIXED &&
+            b.temperature >= 240.0f && b.temperature <= 330.0f &&
+            pp.ocean_coverage >= 20.0f && pp.ocean_coverage <= 80.0f) {
+            vp.terrain_amp = std::clamp(vp.terrain_amp + 0.08f, 0.16f, 1.0f);
+            vp.ridge_amp = std::clamp(vp.ridge_amp + 0.10f, 0.12f, 1.0f);
+            vp.cloud_detail = std::max(vp.cloud_detail, 0.45f);
+            vp.weather_strength = std::max(vp.weather_strength, 0.38f);
         }
 
         switch (pp.ocean_type) {
@@ -1271,6 +1323,10 @@ inline BodyVisualProperties generate_body_visual_properties(const CelestialBody&
             vp.weather_strength *= 0.25f;
             vp.specular *= (pp.surface == SURF_FROZEN) ? 1.15f : 0.65f;
             vp.roughness = std::clamp(vp.roughness + (pp.surface == SURF_FROZEN ? -0.10f : 0.06f), 0.15f, 1.0f);
+            if (pp.surface == SURF_FROZEN) {
+                vp.terrain_freq = std::clamp(vp.terrain_freq + 2.0f, 3.5f, 18.0f);
+                vp.ridge_amp = std::clamp(vp.ridge_amp + 0.08f, 0.14f, 1.0f);
+            }
         }
         vp.crater_density = std::clamp(vp.crater_density + impact_damage * 0.45f, 0.0f, 1.0f);
         vp.volcanic_activity = std::max(vp.volcanic_activity, impact_heat * 0.85f);

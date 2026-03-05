@@ -89,6 +89,8 @@ private:
                              float density, float ice_fraction);
     void apply_dust_debug_mode();
     void cleanup_bodies();
+    void load_persistent_settings();
+    void save_persistent_settings() const;
     void spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, int count,
                         uint32_t parent_generation = 0, float source_temperature = 300.0f,
                         glm::vec3 impact_axis = glm::vec3(0.0f), float ejecta_speed = 0.0f,
@@ -152,6 +154,8 @@ private:
         float ring_outer_mult = 3.0f;
         float ring_density = 0.35f;
         float ring_ice_fraction = 0.55f;
+        int small_body_spawn_count = 1; // asteroid/comet/dust only
+        int small_body_layout = 0; // 0=random, 1=sphere, 2=cube, 3=torus
     };
     SpawnDraftSettings spawn_draft_;
 

@@ -99,11 +99,196 @@ float noise3D(vec3 p) {
                        dot(hash33(i + vec3(1,1,1)), f - vec3(1,1,1)), u.x), u.y), u.z);
 }
 
+vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec4 permute(vec4 x) { return mod289((x * 34.0 + 1.0) * x); }
+vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+
+float simplex3D(vec3 v) {
+    const vec2 C = vec2(1.0 / 6.0, 1.0 / 3.0);
+    const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+    vec3 i = floor(v + dot(v, C.yyy));
+    vec3 x0 = v - i + dot(i, C.xxx);
+    vec3 g = step(x0.yzx, x0.xyz);
+    vec3 l = 1.0 - g;
+    vec3 i1 = min(g.xyz, l.zxy);
+    vec3 i2 = max(g.xyz, l.zxy);
+    vec3 x1 = x0 - i1 + C.xxx;
+    vec3 x2 = x0 - i2 + C.yyy;
+    vec3 x3 = x0 - D.yyy;
+    i = mod289(i);
+    vec4 p = permute(permute(permute(
+                   i.z + vec4(0.0, i1.z, i2.z, 1.0))
+                 + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+                 + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+
+    float n_ = 1.0 / 7.0;
+    vec3 ns = n_ * D.wyz - D.xzx;
+    vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+    vec4 x_ = floor(j * ns.z);
+    vec4 y_ = floor(j - 7.0 * x_);
+    vec4 x = x_ * ns.x + ns.yyyy;
+    vec4 y = y_ * ns.x + ns.yyyy;
+    vec4 h = 1.0 - abs(x) - abs(y);
+    vec4 b0 = vec4(x.xy, y.xy);
+    vec4 b1 = vec4(x.zw, y.zw);
+    vec4 s0 = floor(b0) * 2.0 + 1.0;
+    vec4 s1 = floor(b1) * 2.0 + 1.0;
+    vec4 sh = -step(h, vec4(0.0));
+    vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
+    vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+    vec3 p0 = vec3(a0.xy, h.x);
+    vec3 p1 = vec3(a0.zw, h.y);
+    vec3 p2 = vec3(a1.xy, h.z);
+    vec3 p3 = vec3(a1.zw, h.w);
+    vec4 norm = taylorInvSqrt(vec4(dot(p0, p0), dot(p1, p1), dot(p2, p2), dot(p3, p3)));
+    p0 *= norm.x;
+    p1 *= norm.y;
+    p2 *= norm.z;
+    p3 *= norm.w;
+    vec4 m = max(0.6 - vec4(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), 0.0);
+    m = m * m;
+    return 42.0 * dot(m * m, vec4(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3)));
+}
+
+int adjusted_octaves(int base_octaves);
+
+float billow_fbm(vec3 p, int octaves) {
+    float val = 0.0;
+    float amp = 0.5;
+    float freq = 1.0;
+    int octs = adjusted_octaves(octaves);
+    for (int i = 0; i < octs; i++) {
+        float n = abs(simplex3D(p * freq));
+        val += amp * (n * 2.0 - 1.0);
+        freq *= 2.02;
+        amp *= 0.5;
+    }
+    return val * 0.5 + 0.5;
+}
+
+float rigid_multifractal(vec3 p, int octaves) {
+    float sum = 0.0;
+    float amp = 0.65;
+    float freq = 1.0;
+    float weight = 1.0;
+    int octs = adjusted_octaves(octaves);
+    for (int i = 0; i < octs; i++) {
+        float n = 1.0 - abs(simplex3D(p * freq));
+        n *= n;
+        n *= weight;
+        weight = clamp(n * 2.1, 0.0, 1.0);
+        sum += n * amp;
+        freq *= 2.12;
+        amp *= 0.55;
+    }
+    return sum;
+}
+
+vec2 voronoi_f1_f2(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    float f1 = 1.0e9;
+    float f2 = 1.0e9;
+    for (int z = -1; z <= 1; ++z) {
+        for (int y = -1; y <= 1; ++y) {
+            for (int x = -1; x <= 1; ++x) {
+                vec3 cell = vec3(float(x), float(y), float(z));
+                vec3 jitter = hash33(i + cell) * 0.5 + 0.5;
+                vec3 r = cell + jitter - f;
+                float d = dot(r, r);
+                if (d < f1) {
+                    f2 = f1;
+                    f1 = d;
+                } else if (d < f2) {
+                    f2 = d;
+                }
+            }
+        }
+    }
+    return vec2(sqrt(max(f1, 0.0)), sqrt(max(f2, 0.0)));
+}
+
+float white_noise(vec3 p) {
+    return fract(sin(dot(p, vec3(37.17, 61.43, 97.29))) * 43758.5453);
+}
+
+vec3 domain_warp(vec3 p, float strength) {
+    vec3 q = vec3(
+        simplex3D(p + vec3(12.7, 4.3, 9.2)),
+        simplex3D(p + vec3(5.1, 17.9, 2.6)),
+        simplex3D(p + vec3(8.3, 1.7, 21.4)));
+    return p + q * strength;
+}
+
+vec3 cube_sphere_coords(vec3 n) {
+    float m = max(max(abs(n.x), abs(n.y)), abs(n.z));
+    return n / max(m, 1.0e-4);
+}
+
+float hydraulic_erosion_mask(vec3 p) {
+    vec3 flow = p;
+    float erosion = 0.0;
+    float carry = 0.46;
+    for (int i = 0; i < 4; ++i) {
+        vec3 grad = vec3(
+            simplex3D(flow + vec3(0.035, 0.0, 0.0)) - simplex3D(flow - vec3(0.035, 0.0, 0.0)),
+            simplex3D(flow + vec3(0.0, 0.035, 0.0)) - simplex3D(flow - vec3(0.0, 0.035, 0.0)),
+            simplex3D(flow + vec3(0.0, 0.0, 0.035)) - simplex3D(flow - vec3(0.0, 0.0, 0.035)));
+        float g2 = dot(grad, grad);
+        vec3 dir = (g2 > 1.0e-6) ? (grad * inversesqrt(g2)) : vec3(0.0, -1.0, 0.0);
+        flow -= dir * (0.26 + float(i) * 0.18);
+        float channel = 1.0 - abs(simplex3D(flow * 1.65 + vec3(float(i) * 7.3)));
+        erosion += channel * carry;
+        carry *= 0.56;
+    }
+    return clamp(erosion, 0.0, 1.0);
+}
+
+vec3 whittaker_biome(float temp_n, float humid_n) {
+    vec3 tundra = vec3(0.60, 0.64, 0.58);
+    vec3 boreal = vec3(0.26, 0.40, 0.25);
+    vec3 grass = vec3(0.38, 0.52, 0.24);
+    vec3 temperate = vec3(0.20, 0.46, 0.18);
+    vec3 rainforest = vec3(0.08, 0.36, 0.12);
+    vec3 desert = vec3(0.78, 0.66, 0.44);
+    vec3 scrub = vec3(0.56, 0.48, 0.30);
+    vec3 snow = vec3(0.86, 0.90, 0.95);
+
+    if (temp_n < 0.18) return mix(tundra, snow, smoothstep(0.45, 0.95, humid_n));
+    if (temp_n < 0.35) return mix(tundra, boreal, smoothstep(0.25, 0.85, humid_n));
+    if (temp_n < 0.62) {
+        vec3 dry = mix(scrub, grass, smoothstep(0.10, 0.55, humid_n));
+        vec3 wet = mix(temperate, rainforest, smoothstep(0.60, 1.0, humid_n));
+        return mix(dry, wet, smoothstep(0.45, 0.95, humid_n));
+    }
+    return mix(desert, rainforest, smoothstep(0.35, 0.95, humid_n));
+}
+
 int adjusted_octaves(int base_octaves) {
     int quality = int(quality_params.x + 0.5);
     if (quality <= 0) return max(1, base_octaves - 2);
     if (quality == 1) return max(1, base_octaves - 1);
     return base_octaves;
+}
+
+vec3 gerstner_lobes(vec2 uv, float t, float seed, float scale) {
+    vec2 d1 = normalize(vec2(0.84, 0.54));
+    vec2 d2 = normalize(vec2(-0.36, 0.93));
+    vec2 d3 = normalize(vec2(0.24, -0.97));
+    float p1 = dot(uv, d1) * 10.0 + t * (1.0 + hash11(seed * 0.31) * 1.2);
+    float p2 = dot(uv, d2) * 17.0 + t * (1.6 + hash11(seed * 0.19) * 1.1) + 1.7;
+    float p3 = dot(uv, d3) * 24.0 + t * (2.2 + hash11(seed * 0.41) * 1.4) + 2.8;
+    float h1 = sin(p1) * 0.55;
+    float h2 = sin(p2) * 0.30;
+    float h3 = sin(p3) * 0.15;
+    float gx = cos(p1) * d1.x * 10.0 * 0.55 +
+               cos(p2) * d2.x * 17.0 * 0.30 +
+               cos(p3) * d3.x * 24.0 * 0.15;
+    float gy = cos(p1) * d1.y * 10.0 * 0.55 +
+               cos(p2) * d2.y * 17.0 * 0.30 +
+               cos(p3) * d3.y * 24.0 * 0.15;
+    return vec3((h1 + h2 + h3) * scale, gx * scale, gy * scale);
 }
 
 float fbm(vec3 p, int octaves) {
@@ -204,15 +389,39 @@ float irregular_radius_scale(vec3 dir, float seed, float roughness) {
     return clamp(1.0 + n * roughness, 0.65, 1.45);
 }
 
+float rubble_pile_sdf(vec3 local, float base_radius, float seed, float roughness) {
+    vec3 lp = local / max(base_radius, 1.0e-4);
+    float hull = -1.0e5;
+    for (int i = 0; i < 14; ++i) {
+        float fi = float(i);
+        vec3 n = normalize(hash33(vec3(seed * 0.019 + fi * 17.0, seed * 0.013 + fi * 11.0, seed * 0.031 + fi * 7.0)));
+        float plane_r = 0.62 + hash11(seed * 0.037 + fi * 2.73) * 0.44;
+        hull = max(hull, dot(lp, n) - plane_r);
+    }
+
+    float simplex = simplex3D(lp * 5.6 + vec3(seed * 0.021)) * 0.14 * roughness;
+    float rigid = rigid_multifractal(lp * 4.2 + vec3(seed * 0.017), 4) * 0.22 * roughness;
+    vec2 vor = voronoi_f1_f2(lp * 6.4 + vec3(seed * 0.023));
+    float shards = smoothstep(0.02, 0.20, vor.y - vor.x);
+    float pits = smoothstep(0.36, 0.72, 1.0 - vor.x);
+    float disp = simplex - rigid * 0.55 + shards * 0.08 * roughness - pits * 0.12 * roughness;
+    return (hull + disp) * base_radius;
+}
+
 float irregular_sdf(vec3 p, vec3 center, float base_radius, float seed, float roughness) {
-    vec3 d = normalize(p - center);
+    vec3 local = p - center;
+    bool rubble_mode = roughness < 0.30;
+    if (rubble_mode) {
+        return rubble_pile_sdf(local, base_radius, seed, roughness * 1.8);
+    }
+    vec3 d = normalize(local);
     float target_r = base_radius * irregular_radius_scale(d, seed, roughness);
-    return length(p - center) - target_r;
+    return length(local) - target_r;
 }
 
 float intersect_irregular_body(vec3 ro, vec3 rd, vec3 center, float base_radius,
                                float seed, float roughness) {
-    float bound_r = base_radius * (1.0 + roughness * 1.3);
+    float bound_r = base_radius * (1.0 + roughness * 2.1);
     float t0 = intersect_sphere(ro, rd, center, bound_r);
     if (t0 < 0.0) return -1.0;
 
@@ -708,7 +917,7 @@ vec3 shade_star(vec3 normal, vec3 rd, Sphere hit) {
     return col * (1.1 + hit.base_emit.a * 0.35);
 }
 
-vec3 shade_gas_giant(vec3 normal, Sphere hit, vec3 light_dir) {
+vec3 shade_gas_giant(vec3 normal, Sphere hit, vec3 light_dir, vec3 view_dir) {
     float seed = hit.class_seed_temp.x;
     float temperature = hit.class_seed_temp.w;
     float mass = hit.gravity_params.x;
@@ -718,13 +927,18 @@ vec3 shade_gas_giant(vec3 normal, Sphere hit, vec3 light_dir) {
     float lat = asin(clamp(normal.y, -1.0, 1.0));
     float storms = hit.activity_params.x;
     bool ice_giant = temperature < 170.0 || mass < 2.5e-4;
-    float wind_speed = screen_info.w * (0.08 + storms * 0.22 + hash11(seed * 0.031) * 0.10);
+    float lat_abs = abs(normal.y);
+    float zonal_speed = mix(1.90, 0.35, pow(lat_abs, 1.55));
+    float wind_speed = screen_info.w * (0.08 + storms * 0.22 + hash11(seed * 0.031) * 0.10) * zonal_speed;
+    vec3 flow_uv = vec3(lon * 2.6, lat * 5.0, seed * 0.07 + screen_info.w * 0.02);
+    vec3 flow_map = domain_warp(flow_uv, 0.55 + storms * 0.25);
     float shear = sin(lat * 6.0) * (0.8 + storms * 0.45);
-    float band_lon = lon * (10.0 + hit.terrain_params.y * 0.28) + wind_speed * (1.0 + shear);
-    float fine_lon = lon * (18.0 + hit.terrain_params.y * 0.42) + wind_speed * (1.6 - shear * 0.35);
-    float warp = noise3D(vec3(band_lon * 0.55, lat * 4.0, seed * 0.07) + seed_offset * 0.02) * 0.9;
+    float band_lon = lon * (10.0 + hit.terrain_params.y * 0.28) + wind_speed * (1.0 + shear) + flow_map.x * 0.42;
+    float fine_lon = lon * (18.0 + hit.terrain_params.y * 0.42) + wind_speed * (1.6 - shear * 0.35) + flow_map.y * 0.55;
+    float warp = simplex3D(vec3(band_lon * 0.52, lat * 4.4, seed * 0.07) + seed_offset * 0.02) * 1.1;
     float band = sin(lat * band_freq + warp + fbm(vec3(band_lon * 0.20, lat * 2.0, seed * 0.11), 4) * 1.8);
-    float secondary = sin(lat * (band_freq * 0.62) - warp * 0.55 + fbm(vec3(fine_lon * 0.15, lat * 3.4, seed * 0.17), 3) * 1.4);
+    float secondary = sin(lat * (band_freq * 0.62) - warp * 0.55 +
+                          fbm(vec3(fine_lon * 0.15, lat * 3.4, seed * 0.17), 3) * 1.4);
 
     vec3 warm;
     vec3 cool;
@@ -755,6 +969,9 @@ vec3 shade_gas_giant(vec3 normal, Sphere hit, vec3 light_dir) {
 
     float haze = smoothstep(0.58, 0.94, abs(normal.y));
     col = mix(col, mix(col, vec3(0.95, 0.98, 1.0), 0.60), haze * (ice_giant ? 0.34 : 0.16));
+    float fresnel = pow(clamp(1.0 - max(dot(normal, -view_dir), 0.0), 0.0, 1.0), 2.8);
+    vec3 rim_tint = ice_giant ? vec3(0.70, 0.82, 0.96) : vec3(0.92, 0.88, 0.74);
+    col = mix(col, mix(col, rim_tint, 0.28), fresnel * (0.34 + storms * 0.18));
 
     float ndl = max(dot(normal, light_dir), 0.0);
     return col * (0.28 + 0.72 * ndl);
@@ -817,18 +1034,40 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     float phase_intensity = hit.phase_params.y;
     float collapse_phase = hit.phase_params.z;
     float impact_heat = hit.impact_params.y;
+    bool frozen_world = (surface_type > 1.5 && surface_type < 2.5);
+    bool gas_world = (surface_type > 2.5 && surface_type < 3.5);
+    bool mixed_world = (surface_type > 3.5);
+    bool water_world = (surface_type > 0.5 && surface_type < 1.5);
+    bool earth_like_world = mixed_world && ocean_cov > 0.20 && ocean_cov < 0.80 &&
+                            temperature >= 240.0 && temperature <= 330.0;
 
     vec3 seed_offset = hash31(seed) * 120.0;
     float lon = atan(normal.z, normal.x);
     float lat = asin(clamp(normal.y, -1.0, 1.0));
-    vec3 np = normal * max(terrain_freq, 1.0) + seed_offset;
+    vec3 cube_np = cube_sphere_coords(normal) * max(terrain_freq, 1.0) + seed_offset;
+    vec3 np = cube_np;
     vec3 warp = vec3(
-        noise3D(np + vec3(0.0, 5.2, 1.3)),
-        noise3D(np + vec3(5.2, 1.3, 0.0)),
-        noise3D(np + vec3(1.3, 0.0, 5.2))
+        simplex3D(np + vec3(0.0, 5.2, 1.3)),
+        simplex3D(np + vec3(5.2, 1.3, 0.0)),
+        simplex3D(np + vec3(1.3, 0.0, 5.2))
     );
-    vec3 warped_np = np + warp * terrain_amp * 0.85;
-    float elev = clamp(fbm(warped_np, 6) * (1.0 - ridge_amp * 0.35) + ridged_fbm(warped_np * 0.8, 4) * ridge_amp * 0.55, 0.0, 1.0);
+    vec3 warped_np = domain_warp(np + warp * terrain_amp * 0.35, 0.22 + ridge_amp * 0.30);
+    float base_fbm = fbm(warped_np * 0.95, 6);
+    float simplex_elev = simplex3D(warped_np * 1.15) * 0.5 + 0.5;
+    float rigid_detail = rigid_multifractal(warped_np * 1.6 + vec3(seed * 0.09), 5);
+    float billow_mtn = billow_fbm(warped_np * 1.25 + vec3(7.0, 2.0, 4.0), 5);
+    float elev = clamp(mix(base_fbm, simplex_elev, 0.35) +
+                       rigid_detail * 0.18 + billow_mtn * 0.12 * ridge_amp, 0.0, 1.0);
+    if (!gas_world && surface_type < 0.5) {
+        float crater_field = crater_mask(normal, seed * 1.17, clamp(hit.terrain_params.w + 0.18, 0.0, 1.0));
+        elev = clamp(elev - crater_field * 0.10 + rigid_detail * 0.05, 0.0, 1.0);
+    }
+    if (frozen_world) {
+        vec2 cell = voronoi_f1_f2(warped_np * 3.5 + vec3(seed * 0.11));
+        float cracks = smoothstep(0.03, 0.18, cell.y - cell.x);
+        float basin = smoothstep(0.20, 0.54, cell.x);
+        elev = clamp(elev + cracks * 0.06 - basin * 0.08, 0.0, 1.0);
+    }
     vec3 macro_np = normal * max(terrain_freq * 0.36, 0.9) + seed_offset * 0.12;
     float continent_noise = fbm(macro_np + warp * 0.32, 5);
     float island_noise = fbm(normal * (terrain_freq * 1.65 + 2.0) + seed_offset * 0.26 + warp * 0.18, 4);
@@ -838,6 +1077,16 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     float mountain_mask = smoothstep(0.54, 0.82, ridged_fbm(warped_np * 0.55 + vec3(4.0, 1.2, 2.0), 4)) * land_mask;
     float valley_mask = smoothstep(0.42, 0.66, fbm(warped_np * 0.78 + vec3(-3.0, 2.0, 1.0), 4)) *
                         land_mask * (1.0 - mountain_mask * 0.65);
+    if (earth_like_world) {
+        float continent_simplex = simplex3D(macro_np * 1.35 + warp * 0.22) * 0.5 + 0.5;
+        continent_mask = smoothstep(0.45 - continent_cov * 0.28, 0.72, continent_simplex);
+        land_mask = clamp(max(land_mask, continent_mask), 0.0, 1.0);
+        float billow_ranges = billow_fbm(warped_np * 1.42 + vec3(seed * 0.13), 5);
+        mountain_mask = max(mountain_mask, smoothstep(0.60, 0.88, billow_ranges) * land_mask);
+        float erosion = hydraulic_erosion_mask(warped_np * 1.9 + vec3(seed * 0.07));
+        valley_mask = max(valley_mask, erosion * land_mask * (1.0 - mountain_mask * 0.45));
+        elev = clamp(elev - erosion * 0.08 * land_mask + mountain_mask * 0.06, 0.0, 1.0);
+    }
     elev = clamp(elev + land_mask * (0.06 + terrain_amp * 0.18) +
                  mountain_mask * (0.08 + ridge_amp * 0.22) -
                  valley_mask * (0.04 + terrain_amp * 0.10), 0.0, 1.0);
@@ -849,11 +1098,15 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     float e_du = fbm((normal + tangent * eps) * terrain_freq + seed_offset, 4) - elev;
     float e_dv = fbm((normal + bitangent * eps) * terrain_freq + seed_offset, 4) - elev;
     surf_normal = normalize(normal + (tangent * e_du + bitangent * e_dv) * hit.material_params.w * 10.0);
+    float slope = clamp(1.0 - max(dot(surf_normal, normal), 0.0), 0.0, 1.0);
 
     if (surface_type > 2.5 && surface_type < 3.5)
-        return shade_gas_giant(normal, hit, light_dir);
+        return shade_gas_giant(normal, hit, light_dir, rd);
 
     float sea_level = clamp(1.00 - clamp(ocean_cov, 0.0, 1.0) * 0.90, 0.10, 0.94);
+    if (water_world) {
+        sea_level = max(sea_level, 0.68 + ocean_cov * 0.24);
+    }
     float temperate = clamp(1.0 - abs(temperature - 288.0) / 120.0, 0.0, 1.0);
     float pressure_factor = smoothstep(0.03, 2.5, hit.atmosphere_params.y);
     float humidity = clamp(ocean_cov * 0.88 + cloud_cov * 0.55 + pressure_factor * 0.18, 0.0, 1.0);
@@ -891,6 +1144,20 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     land_col = mix(land_col, desert_col, dryness * (0.55 + heat * 0.25));
     land_col = mix(land_col, oxidized_col, clamp(heat * 0.40 + metal_frac * 0.22, 0.0, 0.72));
     land_col = mix(land_col, vegetated_col, humidity * temperate * (0.60 + pressure_factor * 0.20));
+    if (surface_type < 0.5) {
+        float steep = smoothstep(0.10, 0.58, slope);
+        float flats = 1.0 - steep;
+        vec3 dust_tone = mix(vec3(0.52, 0.42, 0.28), vec3(0.72, 0.62, 0.45), clamp(elev + dryness * 0.3, 0.0, 1.0));
+        land_col = mix(land_col, dust_tone, flats * dryness * 0.40);
+        land_col = mix(land_col, land_col * 0.58, steep * 0.58);
+    }
+    if (earth_like_world) {
+        float biome_temp = clamp((temperature - 170.0) / 220.0 + elev * 0.12 - abs(normal.y) * 0.18, 0.0, 1.0);
+        float biome_humidity = clamp(humidity * 0.72 + river_density * 0.35 +
+                                     (1.0 - dryness) * 0.24 + valley_mask * 0.18, 0.0, 1.0);
+        vec3 biome_col = whittaker_biome(biome_temp, biome_humidity);
+        land_col = mix(land_col, biome_col, land_mask * (0.45 + 0.18 * temperate));
+    }
     land_col = clamp(land_col + palette_shift * 0.08, 0.0, 1.0);
     col = mix(col, land_col, land_mask * (0.60 + 0.30 * continent_cov + 0.10 * island_cov));
 
@@ -913,7 +1180,11 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     roughness_out = hit.material_params.x;
     if (is_ocean) {
         float ocean_type = ocean_type_from_temp(temperature);
-        float depth = smoothstep(sea_level, sea_level - 0.25, elev);
+        vec2 wave_uv = vec2(lon, lat * 1.4 + sin(lon * 2.0) * 0.08);
+        float wave_time = screen_info.w * (0.40 + hit.activity_params.x * 0.65);
+        vec3 waves = gerstner_lobes(wave_uv, wave_time, seed, water_world ? 0.034 : 0.014);
+        float wave_height = waves.x;
+        float depth = smoothstep(sea_level + wave_height, sea_level - 0.25, elev);
         float shallows = 1.0 - smoothstep(sea_level - 0.05, sea_level - 0.18, elev);
         vec3 ocean_col;
         if (ocean_type < 1.5) {
@@ -931,6 +1202,13 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
             ocean_col = mix(vec3(0.45, 0.08, 0.02), vec3(1.00, 0.55, 0.08), fbm(warped_np * 1.8, 4)) * glow;
             roughness_out = 0.22;
         }
+        if (water_world) {
+            float abyss = smoothstep(0.25, 1.0, depth);
+            ocean_col = mix(ocean_col, vec3(0.01, 0.05, 0.13), abyss * 0.55);
+        }
+        vec3 wave_normal = normalize(normal + tangent * waves.y * 0.08 + bitangent * waves.z * 0.08);
+        surf_normal = mix(surf_normal, wave_normal, water_world ? 0.92 : 0.68);
+        roughness_out = min(roughness_out, water_world ? 0.07 : 0.10);
         col = mix(col, ocean_col, depth);
     }
 
@@ -983,6 +1261,15 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
         col = mix(col, col * 0.70 + vec3(0.30, 0.14, 0.06), collapse_phase * 0.28);
     }
 
+    if (frozen_world) {
+        float backlit = pow(clamp(dot(-light_dir, surf_normal), 0.0, 1.0), 1.4);
+        float edge = pow(clamp(1.0 - max(dot(surf_normal, -rd), 0.0), 0.0, 1.0), 1.9);
+        float sss = backlit * edge * (0.12 + 0.42 * clamp(ice_frac + ice_sheet_cov * 0.45, 0.0, 1.0));
+        col += vec3(0.18, 0.28, 0.38) * sss;
+        float sparkle = pow(white_noise(warped_np * 170.0 + vec3(screen_info.w * 0.16)), 26.0);
+        col += vec3(0.70, 0.80, 0.95) * sparkle * (0.05 + 0.08 * ice_frac);
+    }
+
     if (hit.impact_params.x > 0.001) {
         float basin;
         float rim;
@@ -1012,6 +1299,12 @@ vec3 shade_moon_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     if (hit.composition_params.y > 0.35) {
         float fractures = ridged_fbm(normal * 18.0 + hash31(seed) * 8.0, 4);
         col += vec3(0.10, 0.14, 0.18) * smoothstep(0.35, 0.65, fractures) * 0.35;
+        vec2 ice_cells = voronoi_f1_f2(normal * 16.0 + vec3(seed * 0.05));
+        float crack_lines = smoothstep(0.02, 0.14, ice_cells.y - ice_cells.x);
+        col += vec3(0.26, 0.34, 0.44) * crack_lines * 0.20;
+        float ice_sss = pow(clamp(dot(-light_dir, surf_normal), 0.0, 1.0), 1.3) *
+                        pow(clamp(1.0 - max(dot(surf_normal, -rd), 0.0), 0.0, 1.0), 2.0);
+        col += vec3(0.14, 0.22, 0.30) * ice_sss * 0.16;
         roughness_out = max(0.22, roughness_out - 0.08);
     }
     if (hit.impact_params.x > 0.001) {
@@ -1029,12 +1322,20 @@ vec3 shade_asteroid_surface(vec3 normal, Sphere hit, vec3 light_dir, bool is_com
     float seed = hit.class_seed_temp.x;
     float subtype = hit.class_seed_temp.z;
     float crater = crater_mask(normal, seed, hit.terrain_params.w);
-    float chip = fbm(normal * 9.0 + hash31(seed) * 6.0, 4);
+    vec3 rubble_np = normal * (6.0 + hit.terrain_params.y * 1.4) + hash31(seed) * 5.0;
+    float simplex = simplex3D(rubble_np * 1.6 + vec3(seed * 0.09)) * 0.5 + 0.5;
+    float rigid = rigid_multifractal(rubble_np * 1.3 + vec3(seed * 0.07), 4);
+    vec2 vor = voronoi_f1_f2(rubble_np * 2.5 + vec3(seed * 0.11));
+    float shard_faces = smoothstep(0.03, 0.16, vor.y - vor.x);
+    float shattered = smoothstep(0.20, 0.64, 1.0 - vor.x);
+    float chip = clamp(simplex * 0.46 + rigid * 0.42 + shard_faces * 0.28 - shattered * 0.18, 0.0, 1.0);
+    float jagged = smoothstep(0.48, 0.88, rigid);
     vec3 col;
 
     if (is_comet_body) {
-        col = mix(vec3(0.10, 0.09, 0.08), vec3(0.72, 0.78, 0.86), smoothstep(0.55, 0.9, chip) * hit.composition_params.y);
+        col = mix(vec3(0.10, 0.09, 0.08), vec3(0.72, 0.78, 0.86), smoothstep(0.45, 0.9, chip) * hit.composition_params.y);
         col = mix(col, vec3(0.20, 0.18, 0.16), crater * 0.35);
+        col = mix(col, vec3(0.84, 0.90, 0.95), shard_faces * hit.composition_params.y * 0.24);
         roughness_out = 0.75;
     } else if (subtype < 0.5) {
         col = vec3(0.14, 0.12, 0.11);
@@ -1051,6 +1352,8 @@ vec3 shade_asteroid_surface(vec3 normal, Sphere hit, vec3 light_dir, bool is_com
     }
 
     col *= mix(0.7, 1.15, chip);
+    col = mix(col, col * 0.54, jagged * 0.48);
+    col = mix(col, col + vec3(0.10, 0.09, 0.08), shard_faces * 0.22);
     col = mix(col, col * 0.55, crater * 0.5);
     float weathering = 0.5 + 0.5 * dot(normal, normalize(vec3(0.7, 0.2, -0.4)));
     col *= mix(0.88, 1.06, weathering);

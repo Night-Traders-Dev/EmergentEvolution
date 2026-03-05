@@ -335,10 +335,11 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
         spheres[i].pos_radius = glm::vec4(glm::vec3(glm::dvec3(b.pos) - target_origin), render_radius);
         spheres[i].base_emit = glm::vec4(col, emissive);
 
-        // Normalize seed to shader-friendly range: raw uint32 can be ~4 billion,
-        // far beyond float32 precision for noise functions using fract().
-        // Pack into [0, 10000) so seed*0.01 stays in [0, 100).
-        float shader_seed = (float)(b.seed % 10000u) + (float)((b.seed >> 16) & 0xFFu) * 0.001f;
+        // Keep enough entropy in shader seed while staying in float-safe range.
+        // Include index jitter so two identical body seeds still don't alias visually.
+        float shader_seed = (float)(b.seed & 0xFFFFu) +
+                            (float)((b.seed >> 16) & 0xFFFFu) * 0.0001f +
+                            (float)i * 0.173f;
 
         const PlanetProperties& pp = b.cached_props;
         const BodyVisualProperties& vp = b.cached_visuals;

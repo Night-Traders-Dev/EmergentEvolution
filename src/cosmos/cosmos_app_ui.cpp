@@ -873,6 +873,12 @@ void CosmosApp::draw_spawn_menu() {
         ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Dynamics");
         ImGui::SliderFloat("Mass##Spawn", &spawn_mass, 1.0e-13f, 500.0f, "%.3e", ImGuiSliderFlags_Logarithmic);
         ImGui::Checkbox("Orbital Velocity", &spawn_in_orbit_);
+        bool small_type = (spawn_type == CTYPE_ASTEROID || spawn_type == CTYPE_COMET || spawn_type == CTYPE_DUST);
+        if (small_type) {
+            const char* layouts[] = {"Random", "Sphere", "Cube", "Torus"};
+            ImGui::SliderInt("Spawn Count", &spawn_draft_.small_body_spawn_count, 1, 1000);
+            ImGui::Combo("Spawn Layout", &spawn_draft_.small_body_layout, layouts, IM_ARRAYSIZE(layouts));
+        }
         ImGui::Checkbox("Override Temperature", &spawn_draft_.override_temperature);
         if (spawn_draft_.override_temperature)
             ImGui::SliderFloat("Temperature K", &spawn_draft_.temperature, 2.7f, 8000.0f, "%.1f");
@@ -1048,7 +1054,13 @@ void CosmosApp::draw_spawn_menu() {
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(r * 0.60f, g * 0.60f, b * 0.60f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(r * 0.75f, g * 0.75f, b * 0.75f, 1.0f));
     char label[64];
-    snprintf(label, sizeof(label), "Spawn %s at Origin", CTYPE_NAMES[spawn_type % CTYPE_COUNT]);
+    bool small_type = (spawn_type == CTYPE_ASTEROID || spawn_type == CTYPE_COMET || spawn_type == CTYPE_DUST);
+    int batch_count = std::clamp(spawn_draft_.small_body_spawn_count, 1, 1000);
+    if (small_type && batch_count > 1) {
+        snprintf(label, sizeof(label), "Spawn x%d %s", batch_count, CTYPE_NAMES[spawn_type % CTYPE_COUNT]);
+    } else {
+        snprintf(label, sizeof(label), "Spawn %s at Origin", CTYPE_NAMES[spawn_type % CTYPE_COUNT]);
+    }
     if (ImGui::Button(label, ImVec2(-1, 34))) {
         spawn_at(camera.target);
     }

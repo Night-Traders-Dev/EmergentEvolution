@@ -3,6 +3,7 @@
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <numeric>
@@ -1020,6 +1021,8 @@ void CosmosApp::init(GLFWwindow* window) {
     camera.target_distance = 600.0f;
     camera.elevation = 0.5f;
     camera.azimuth = 0.0f;
+
+    load_persistent_settings();
 }
 
 // ── Body picking (screen-space hit test) ─────────────────────────────────────
@@ -1053,6 +1056,7 @@ int CosmosApp::pick_body(float mx, float my, float W, float H) const {
 }
 
 void CosmosApp::destroy() {
+    save_persistent_settings();
     vkDeviceWaitIdle(vk.device);
     raytracer_.destroy(vk);
     renderer.destroy(vk);
@@ -1074,153 +1078,232 @@ void CosmosApp::reset_simulation() {
 }
 
 void CosmosApp::spawn_at(glm::vec3 pos) {
-    CelestialBody nb;
-    nb.pos = pos;
-    nb.vel = glm::vec3(0.0f);
-    nb.mass = spawn_mass;
-    nb.radius = std::max(3.0f, std::cbrt(spawn_mass) * 5.0f);
-    nb.type = (uint32_t)spawn_type;
-    uint32_t pos_seed = hash_combine(hash_combine(float_bits(pos.x), float_bits(pos.y)), float_bits(pos.z));
-    nb.seed = hash_combine(hash_combine(pos_seed,
-        (uint32_t)state.bodies.size() * 747796405u + 2891336453u),
-        (uint32_t)(sim_time_ * 1000.0f) + 1181783497u);
-    std::mt19937 rng(nb.seed ^ (uint32_t)(sim_time_ * 1000.0f));
-    clear_ring_system(nb);
-    nb.material_phase = PHASE_SOLID;
-    nb.phase_intensity = 0.0f;
-    nb.collapse_progress = 0.0f;
-    clear_impact_signature(nb);
-    nb.forced_surface = -1;
-    nb.custom_material = false;
+    const bool is_small_body = (spawn_type == CTYPE_ASTEROID || spawn_type == CTYPE_COMET || spawn_type == CTYPE_DUST);
+    const int requested_count = std::clamp(spawn_draft_.small_body_spawn_count, 1, 1000);
+    const bool use_batch = is_small_body && requested_count > 1;
+    const int spawn_count = use_batch ? requested_count : 1;
 
-    if (is_star_type((uint32_t)spawn_type)) {
-        randomize_star_properties(nb, rng, (uint32_t)spawn_type);
-        nb.material_phase = PHASE_PLASMA;
-        nb.phase_intensity = 1.0f;
-    } else if (is_black_hole_type((uint32_t)spawn_type)) {
-        nb.temperature = 0.0f;
-        nb.radius = std::max(10.0f, std::cbrt(spawn_mass) * 4.0f);
-        if (spawn_type == CTYPE_BLACK_HOLE)
-            nb.type = classify_black_hole(nb.mass);
-        nb.material_phase = PHASE_PLASMA;
-        nb.phase_intensity = 1.0f;
-    } else {
-        nb.temperature = 300.0f;
-        if (spawn_type == CTYPE_PLANET) {
-            randomize_planet_properties(nb, state, cfg, rng);
-        } else if (spawn_type == CTYPE_MOON) {
-            randomize_moon_properties(nb, state, rng);
-        } else if (spawn_type == CTYPE_ASTEROID) {
-            randomize_small_body_properties(nb, rng, false);
-        } else if (spawn_type == CTYPE_COMET) {
-            randomize_small_body_properties(nb, rng, true);
-        } else if (spawn_type == CTYPE_DUST) {
-            randomize_dust_properties(nb, rng);
-        } else if (spawn_type == CTYPE_NEBULA) {
-            randomize_nebula_properties(nb, rng);
+    uint32_t base_seed = hash_combine(hash_combine(float_bits(pos.x), float_bits(pos.y)), float_bits(pos.z));
+    base_seed = hash_combine(base_seed, (uint32_t)spawn_type);
+    base_seed = hash_combine(base_seed, (uint32_t)(sim_time_ * 1000.0f) + 2166136261u);
+    uint64_t wall_ticks = (uint64_t)std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    std::random_device rd;
+    base_seed = hash_combine(base_seed, (uint32_t)wall_ticks);
+    base_seed = hash_combine(base_seed, (uint32_t)(wall_ticks >> 32));
+    base_seed = hash_combine(base_seed, rd());
+    std::mt19937 layout_rng(base_seed ^ 0x9E3779B9u);
+    std::uniform_real_distribution<float> unit01(0.0f, 1.0f);
+    std::uniform_real_distribution<float> jitter01(-1.0f, 1.0f);
+
+    float nominal_radius = spawn_draft_.override_radius
+        ? std::max(0.04f, spawn_draft_.radius)
+        : std::max(0.06f, std::cbrt(std::max(spawn_mass, 1.0e-13f)) * 5.0f);
+    float cluster_radius = std::max(6.0f, std::cbrt((float)spawn_count) * std::max(1.2f, nominal_radius) * 4.0f);
+
+    auto layout_offset = [&](int index) -> glm::vec3 {
+        if (!use_batch) return glm::vec3(0.0f);
+        const float two_pi = 6.28318530718f;
+        const int layout = std::clamp(spawn_draft_.small_body_layout, 0, 3);
+        switch (layout) {
+        case 1: { // Sphere
+            float u = ((float)index + 0.5f) / (float)spawn_count;
+            float y = 1.0f - 2.0f * u;
+            float rr = std::sqrt(std::max(0.0f, 1.0f - y * y));
+            float theta = 2.39996323f * (float)index;
+            glm::vec3 dir(std::cos(theta) * rr, y, std::sin(theta) * rr);
+            float radial = cluster_radius * (0.42f + 0.58f * unit01(layout_rng));
+            return dir * radial;
         }
-    }
+        case 2: { // Cube
+            int side = std::max(1, (int)std::ceil(std::cbrt((float)spawn_count)));
+            int ix = index % side;
+            int iy = (index / side) % side;
+            int iz = index / (side * side);
+            float denom = (side > 1) ? (float)(side - 1) : 1.0f;
+            float spacing = (cluster_radius * 2.0f) / denom;
+            return glm::vec3(
+                ((float)ix - 0.5f * (float)(side - 1)) * spacing,
+                ((float)iy - 0.5f * (float)(side - 1)) * spacing,
+                ((float)iz - 0.5f * (float)(side - 1)) * spacing);
+        }
+        case 3: { // Torus
+            float t = (float)index / (float)spawn_count;
+            float u = t * two_pi;
+            float frac = std::fmod((float)index * 0.61803398875f + unit01(layout_rng) * 0.2f, 1.0f);
+            if (frac < 0.0f) frac += 1.0f;
+            float v = frac * two_pi;
+            float major = cluster_radius;
+            float minor = cluster_radius * 0.30f;
+            float ring = major + minor * std::cos(v);
+            return glm::vec3(ring * std::cos(u), minor * std::sin(v), ring * std::sin(u));
+        }
+        default: { // Random
+            return glm::vec3(
+                jitter01(layout_rng) * cluster_radius,
+                jitter01(layout_rng) * cluster_radius,
+                jitter01(layout_rng) * cluster_radius);
+        }
+        }
+    };
 
-    if (spawn_draft_.override_temperature)
-        nb.temperature = std::clamp(spawn_draft_.temperature, 2.7f, 120000.0f);
-    if (spawn_draft_.override_radius)
-        nb.radius = std::max(0.04f, spawn_draft_.radius);
-    if (spawn_draft_.override_rotation) {
-        float hours = std::max(spawn_draft_.rotation_hours, 0.1f);
-        float sign = (nb.angular_vel < 0.0f) ? -1.0f : 1.0f;
-        nb.angular_vel = sign * (2.0f * 3.14159265359f) / (hours * 3600.0f);
-    }
-    if (spawn_draft_.override_material) {
-        nb.custom_material = true;
-        nb.custom_iron = std::max(spawn_draft_.material_iron, 0.0f);
-        nb.custom_silicate = std::max(spawn_draft_.material_silicate, 0.0f);
-        nb.custom_water = std::max(spawn_draft_.material_ice, 0.0f);
-        nb.custom_hydrogen = std::max(spawn_draft_.material_hydrogen, 0.0f);
-    }
-    if ((nb.type == CTYPE_PLANET || nb.type == CTYPE_MOON) && spawn_draft_.planet_look > 0) {
-        float mass_earth = nb.mass / std::max(EARTH_MASS_SOLAR, 1.0e-12f);
-        bool likely_gas = mass_earth > 10.0f;
-        if (!likely_gas) {
-            switch (spawn_draft_.planet_look) {
-            case 1: nb.forced_surface = 0; break; // rocky
-            case 2: nb.forced_surface = 1; break; // water
-            case 3: nb.forced_surface = 2; break; // ice
-            case 4: nb.forced_surface = 3; break; // earth-like
-            default: nb.forced_surface = -1; break;
+    auto spawn_single = [&](const glm::vec3& spawn_pos, int ordinal) -> int {
+        CelestialBody nb;
+        nb.pos = spawn_pos;
+        nb.vel = glm::vec3(0.0f);
+        nb.mass = spawn_mass;
+        nb.radius = std::max(3.0f, std::cbrt(spawn_mass) * 5.0f);
+        nb.type = (uint32_t)spawn_type;
+        uint32_t pos_seed = hash_combine(hash_combine(float_bits(spawn_pos.x), float_bits(spawn_pos.y)), float_bits(spawn_pos.z));
+        nb.seed = hash_combine(hash_combine(pos_seed,
+            (uint32_t)state.bodies.size() * 747796405u + 2891336453u),
+            (uint32_t)(sim_time_ * 1000.0f) + 1181783497u + (uint32_t)ordinal * 2654435761u);
+        std::mt19937 rng(nb.seed ^ (uint32_t)(sim_time_ * 1000.0f) ^ ((uint32_t)ordinal * 1013904223u));
+        clear_ring_system(nb);
+        nb.material_phase = PHASE_SOLID;
+        nb.phase_intensity = 0.0f;
+        nb.collapse_progress = 0.0f;
+        clear_impact_signature(nb);
+        nb.forced_surface = -1;
+        nb.custom_material = false;
+        nb.props_valid = false;
+        nb.visuals_valid = false;
+        nb.cached_temp_band = -1;
+        nb.cached_visual_temp_band = -1;
+
+        if (is_star_type((uint32_t)spawn_type)) {
+            randomize_star_properties(nb, rng, (uint32_t)spawn_type);
+            nb.material_phase = PHASE_PLASMA;
+            nb.phase_intensity = 1.0f;
+        } else if (is_black_hole_type((uint32_t)spawn_type)) {
+            nb.temperature = 0.0f;
+            nb.radius = std::max(10.0f, std::cbrt(spawn_mass) * 4.0f);
+            if (spawn_type == CTYPE_BLACK_HOLE)
+                nb.type = classify_black_hole(nb.mass);
+            nb.material_phase = PHASE_PLASMA;
+            nb.phase_intensity = 1.0f;
+        } else {
+            nb.temperature = 300.0f;
+            if (spawn_type == CTYPE_PLANET) {
+                randomize_planet_properties(nb, state, cfg, rng);
+            } else if (spawn_type == CTYPE_MOON) {
+                randomize_moon_properties(nb, state, rng);
+            } else if (spawn_type == CTYPE_ASTEROID) {
+                randomize_small_body_properties(nb, rng, false);
+            } else if (spawn_type == CTYPE_COMET) {
+                randomize_small_body_properties(nb, rng, true);
+            } else if (spawn_type == CTYPE_DUST) {
+                randomize_dust_properties(nb, rng);
+            } else if (spawn_type == CTYPE_NEBULA) {
+                randomize_nebula_properties(nb, rng);
             }
-            nb.props_valid = false;
-            nb.visuals_valid = false;
         }
-    }
-    if (body_can_host_rings(nb)) {
-        if (spawn_draft_.spawn_rings) {
-            if (spawn_draft_.override_ring_layout) {
-                set_ring_system(nb,
-                    nb.radius * std::max(spawn_draft_.ring_inner_mult, 1.15f),
-                    nb.radius * std::max(spawn_draft_.ring_outer_mult, spawn_draft_.ring_inner_mult + 0.25f),
-                    std::clamp(spawn_draft_.ring_density, 0.01f, 1.0f),
-                    std::clamp(spawn_draft_.ring_ice_fraction, 0.0f, 1.0f),
-                    std::clamp(std::abs(nb.angular_vel) * 150.0f, 0.02f, 0.45f));
-            } else if (nb.ring_density <= 0.001f) {
-                set_ring_system(nb, nb.radius * 1.5f, nb.radius * 3.0f, 0.32f, 0.55f, 0.12f);
+
+        if (spawn_draft_.override_temperature)
+            nb.temperature = std::clamp(spawn_draft_.temperature, 2.7f, 120000.0f);
+        if (spawn_draft_.override_radius)
+            nb.radius = std::max(0.04f, spawn_draft_.radius);
+        if (spawn_draft_.override_rotation) {
+            float hours = std::max(spawn_draft_.rotation_hours, 0.1f);
+            float sign = (nb.angular_vel < 0.0f) ? -1.0f : 1.0f;
+            nb.angular_vel = sign * (2.0f * 3.14159265359f) / (hours * 3600.0f);
+        }
+        if (spawn_draft_.override_material) {
+            nb.custom_material = true;
+            nb.custom_iron = std::max(spawn_draft_.material_iron, 0.0f);
+            nb.custom_silicate = std::max(spawn_draft_.material_silicate, 0.0f);
+            nb.custom_water = std::max(spawn_draft_.material_ice, 0.0f);
+            nb.custom_hydrogen = std::max(spawn_draft_.material_hydrogen, 0.0f);
+        }
+        if ((nb.type == CTYPE_PLANET || nb.type == CTYPE_MOON) && spawn_draft_.planet_look > 0) {
+            float mass_earth = nb.mass / std::max(EARTH_MASS_SOLAR, 1.0e-12f);
+            bool likely_gas = mass_earth > 10.0f;
+            if (!likely_gas) {
+                switch (spawn_draft_.planet_look) {
+                case 1: nb.forced_surface = 0; break; // rocky
+                case 2: nb.forced_surface = 1; break; // water
+                case 3: nb.forced_surface = 2; break; // ice
+                case 4: nb.forced_surface = 3; break; // earth-like
+                default: nb.forced_surface = -1; break;
+                }
+                nb.props_valid = false;
+                nb.visuals_valid = false;
+            }
+        }
+        if (body_can_host_rings(nb)) {
+            if (spawn_draft_.spawn_rings) {
+                if (spawn_draft_.override_ring_layout) {
+                    set_ring_system(nb,
+                        nb.radius * std::max(spawn_draft_.ring_inner_mult, 1.15f),
+                        nb.radius * std::max(spawn_draft_.ring_outer_mult, spawn_draft_.ring_inner_mult + 0.25f),
+                        std::clamp(spawn_draft_.ring_density, 0.01f, 1.0f),
+                        std::clamp(spawn_draft_.ring_ice_fraction, 0.0f, 1.0f),
+                        std::clamp(std::abs(nb.angular_vel) * 150.0f, 0.02f, 0.45f));
+                } else if (nb.ring_density <= 0.001f) {
+                    set_ring_system(nb, nb.radius * 1.5f, nb.radius * 3.0f, 0.32f, 0.55f, 0.12f);
+                }
+            } else {
+                clear_ring_system(nb);
             }
         } else {
             clear_ring_system(nb);
         }
-    } else {
-        clear_ring_system(nb);
-    }
 
-
-    if (spawn_in_orbit_ && !state.bodies.empty()) {
-        int nearest = -1;
-        float nearest_dist = 1e9f;
-        for (size_t i = 0; i < state.bodies.size(); i++) {
-            float d = glm::length(state.bodies[i].pos - nb.pos);
-            if (d > 0.1f && d < nearest_dist && state.bodies[i].mass > nb.mass) {
-                nearest_dist = d;
-                nearest = (int)i;
+        if (spawn_in_orbit_ && !state.bodies.empty()) {
+            int nearest = -1;
+            float nearest_dist = 1e9f;
+            for (size_t i = 0; i < state.bodies.size(); i++) {
+                float d = glm::length(state.bodies[i].pos - nb.pos);
+                if (d > 0.1f && d < nearest_dist && state.bodies[i].mass > nb.mass) {
+                    nearest_dist = d;
+                    nearest = (int)i;
+                }
+            }
+            if (nearest >= 0) {
+                nb.parent = nearest;
+                glm::vec3 diff = nb.pos - state.bodies[nearest].pos;
+                float dist = glm::length(diff);
+                if (dist > 0.1f) {
+                    float v = std::sqrt(cfg.G * state.bodies[nearest].mass / dist);
+                    glm::vec3 dir = glm::normalize(diff);
+                    glm::vec3 perp(-dir.z, 0.0f, dir.x);
+                    nb.vel = state.bodies[nearest].vel + perp * v;
+                }
             }
         }
-        if (nearest >= 0) {
-            nb.parent = nearest;
-            glm::vec3 diff = nb.pos - state.bodies[nearest].pos;
-            float dist = glm::length(diff);
-            if (dist > 0.1f) {
-                float v = std::sqrt(cfg.G * state.bodies[nearest].mass / dist);
-                glm::vec3 dir = glm::normalize(diff);
-                glm::vec3 perp(-dir.z, 0.0f, dir.x);
-                nb.vel = state.bodies[nearest].vel + perp * v;
-            }
+        if (spawn_draft_.override_velocity) {
+            nb.vel += spawn_draft_.velocity_kms / SIM_UNIT_TO_KM;
         }
-    }
-    if (spawn_draft_.override_velocity) {
-        nb.vel += spawn_draft_.velocity_kms / SIM_UNIT_TO_KM;
-    }
 
-    nb.name = generate_body_name(nb.seed, nb.type);
-    nb.non_attracting = (nb.type == CTYPE_DUST) ? cfg.dust_debug_non_attracting : nb.non_attracting;
-    refresh_body_render_state(nb, &state);
-    state.bodies.push_back(nb);
-    state.trails.emplace_back();
+        nb.name = generate_body_name(nb.seed, nb.type);
+        nb.non_attracting = (nb.type == CTYPE_DUST) ? cfg.dust_debug_non_attracting : nb.non_attracting;
+        refresh_body_render_state(nb, &state);
+        state.bodies.push_back(nb);
+        state.trails.emplace_back();
 
-    int host_idx = (int)state.bodies.size() - 1;
-    const auto spawned = state.bodies[(size_t)host_idx];
-    if (cfg.planetary_rings && spawned.ring_density > 0.001f &&
-        (spawned.type == CTYPE_PLANET || spawned.type == CTYPE_MOON)) {
-        float annulus = std::max(spawned.ring_outer_radius * spawned.ring_outer_radius -
-                                 spawned.ring_inner_radius * spawned.ring_inner_radius, 1.0f);
-        float mass_hint = std::max(spawned.mass * spawned.ring_density * 0.0000025f *
-                                   (annulus / std::max(spawned.radius * spawned.radius, 1.0e-5f)),
-                                   std::max(cfg.min_fragment_mass, 1.0e-12f) * 2.0f);
-        spawn_dust_ring(host_idx, mass_hint, spawned.ring_inner_radius, spawned.ring_outer_radius,
-                        spawned.ring_density, spawned.ring_ice_fraction, spawned.seed ^ 0xD05751EDu);
-        if (host_idx >= 0 && host_idx < (int)state.bodies.size())
-            clear_ring_system(state.bodies[(size_t)host_idx]);
+        int host_idx = (int)state.bodies.size() - 1;
+        const auto spawned = state.bodies[(size_t)host_idx];
+        if (cfg.planetary_rings && spawned.ring_density > 0.001f &&
+            (spawned.type == CTYPE_PLANET || spawned.type == CTYPE_MOON)) {
+            float annulus = std::max(spawned.ring_outer_radius * spawned.ring_outer_radius -
+                                     spawned.ring_inner_radius * spawned.ring_inner_radius, 1.0f);
+            float mass_hint = std::max(spawned.mass * spawned.ring_density * 0.0000025f *
+                                       (annulus / std::max(spawned.radius * spawned.radius, 1.0e-5f)),
+                                       std::max(cfg.min_fragment_mass, 1.0e-12f) * 2.0f);
+            spawn_dust_ring(host_idx, mass_hint, spawned.ring_inner_radius, spawned.ring_outer_radius,
+                            spawned.ring_density, spawned.ring_ice_fraction, spawned.seed ^ 0xD05751EDu);
+            if (host_idx >= 0 && host_idx < (int)state.bodies.size())
+                clear_ring_system(state.bodies[(size_t)host_idx]);
+        }
+
+        if (spawn_draft_.spawn_moons && host_idx >= 0 && host_idx < (int)state.bodies.size())
+            spawn_moons_for_host(host_idx, std::clamp(spawn_draft_.moon_count, 1, 8));
+        return host_idx;
+    };
+
+    for (int i = 0; i < spawn_count; ++i) {
+        glm::vec3 offset = layout_offset(i);
+        spawn_single(pos + offset, i);
     }
-
-    if (spawn_draft_.spawn_moons && host_idx >= 0 && host_idx < (int)state.bodies.size())
-        spawn_moons_for_host(host_idx, std::clamp(spawn_draft_.moon_count, 1, 8));
 }
 
 // ── Tick ─────────────────────────────────────────────────────────────────────
