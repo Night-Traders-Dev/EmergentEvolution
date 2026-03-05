@@ -8,7 +8,7 @@ layout(std140, set = 0, binding = 0) uniform CameraUBO {
     vec4 eye_pos;
     vec4 screen_info;
     vec4 lighting_params; // x=star, y=uniform, z=ambient, w=fastStar
-    vec4 quality_params;  // x=quality, y=hq
+    vec4 quality_params;  // x=quality, y=hq, z=bg preset
     vec4 render_flags;    // x=background, y=corona, z=comet tails, w=bh lensing
     vec4 fabric_params;   // x=enabled, y=grid size, z=warp strength, w=gravity scale
     vec4 fabric_center;   // xyz=focus plane center
@@ -271,30 +271,71 @@ void impact_masks(vec3 normal, Sphere hit, out float basin, out float rim, out f
     ejecta = ejecta_band * ejecta_strength * smoothstep(0.42, 0.88, ejecta_noise);
 }
 
-float starfield_layer(vec3 rd, float scale, float threshold) {
+float starfield_layer(vec3 rd, float scale, float threshold, float sharpness) {
     vec3 p = normalize(rd) * scale;
     float n = fbm(p + vec3(17.0, 31.0, 47.0), 3);
     float s = smoothstep(threshold, 1.0, n);
-    return s * s;
+    return pow(max(s, 0.0), sharpness);
 }
 
 vec3 sample_starfield(vec3 rd) {
-    float stars1 = starfield_layer(rd, 48.0, 0.86);
-    float stars2 = starfield_layer(rd * 1.7 + 0.3, 110.0, 0.90);
-    float twinkle = 0.9 + 0.1 * sin(screen_info.w * 0.2 + rd.x * 100.0);
-    vec3 tint = mix(vec3(0.7, 0.75, 0.85), vec3(1.0, 0.95, 0.8), hash11(rd.x * 71.0 + rd.y * 39.0 + rd.z * 113.0));
-    return tint * (stars1 * 1.1 + stars2 * 0.8) * twinkle;
+    float stars_faint = starfield_layer(rd, 64.0, 0.84, 2.0);
+    float stars_mid = starfield_layer(rd * 1.7 + 0.3, 138.0, 0.90, 3.5);
+    float stars_bright = starfield_layer(rd * 2.8 - 0.4, 240.0, 0.965, 9.0);
+    float twinkle = 0.96 + 0.04 * sin(screen_info.w * 0.16 + rd.x * 133.0 + rd.z * 91.0);
+
+    float tint_seed = hash11(rd.x * 71.0 + rd.y * 39.0 + rd.z * 113.0);
+    vec3 warm = vec3(1.00, 0.95, 0.82);
+    vec3 cool = vec3(0.72, 0.82, 1.00);
+    vec3 neutral = vec3(0.92, 0.93, 0.96);
+    vec3 tint = mix(neutral, mix(warm, cool, smoothstep(0.45, 0.92, tint_seed)), 0.75);
+
+    float dense = stars_faint * 0.95 + stars_mid * 0.85;
+    float bright = stars_bright * (1.2 + 0.6 * hash11(tint_seed * 91.0));
+    return tint * (dense + bright) * twinkle;
 }
 
 vec3 background(vec3 rd) {
     if (render_flags.x < 0.5) return vec3(0.0);
 
-    float galactic = pow(clamp(1.0 - abs(rd.y + noise3D(rd * 2.0) * 0.18), 0.0, 1.0), 4.0);
-    float nebula = fbm(rd * 7.0 + vec3(1.3, -2.1, 0.7), 4);
-    vec3 bg = vec3(0.0008, 0.0011, 0.0018);
-    bg += vec3(0.035, 0.030, 0.045) * galactic * (0.25 + nebula * 0.75);
-    bg += vec3(0.020, 0.022, 0.028) * pow(galactic, 2.0);
-    bg += sample_starfield(rd);
+    int preset = int(quality_params.z + 0.5);
+    float galactic_band = pow(clamp(1.0 - abs(rd.y * 0.80 + noise3D(rd * 2.1) * 0.12), 0.0, 1.0), 5.6);
+    float dust = smoothstep(0.40, 0.88, fbm(rd * 12.0 + vec3(2.3, -1.8, 0.5), 5));
+    float nebula = fbm(rd * 6.5 + vec3(1.3, -2.1, 0.7), 4);
+
+    vec3 bg = vec3(0.00012, 0.00016, 0.00028);
+    vec3 milky_col = mix(vec3(0.009, 0.010, 0.012), vec3(0.026, 0.023, 0.019), nebula);
+    float band_core = galactic_band * (0.35 + 0.70 * (1.0 - dust * 0.85));
+    bg += milky_col * band_core;
+    bg += vec3(0.008, 0.007, 0.006) * pow(galactic_band, 2.1) * (1.0 - dust);
+
+    if (preset == 1) { // Deep black
+        bg = vec3(0.00003, 0.00004, 0.00007);
+        bg += vec3(0.004, 0.004, 0.005) * pow(galactic_band, 2.8) * (1.0 - dust);
+        bg += sample_starfield(rd) * 0.75;
+    } else if (preset == 2) { // Nebula
+        float nebula2 = fbm(rd * 5.2 + vec3(-3.1, 1.4, 2.2), 5);
+        vec3 haze = mix(vec3(0.08, 0.03, 0.10), vec3(0.02, 0.07, 0.12), nebula2);
+        bg = vec3(0.00020, 0.00025, 0.00045);
+        bg += haze * (0.18 + 0.35 * galactic_band) * smoothstep(0.28, 0.92, nebula);
+        bg += vec3(0.010, 0.008, 0.011) * pow(galactic_band, 1.9);
+        bg += sample_starfield(rd) * 0.92;
+    } else if (preset == 3) { // Warm dust
+        vec3 warm = mix(vec3(0.015, 0.010, 0.006), vec3(0.032, 0.020, 0.010), nebula);
+        bg = vec3(0.00010, 0.00008, 0.00006);
+        bg += warm * (0.28 + 0.55 * galactic_band) * (1.0 - dust * 0.55);
+        bg += vec3(0.006, 0.005, 0.004) * pow(galactic_band, 2.0);
+        bg += sample_starfield(rd) * 0.86;
+    } else if (preset == 4) { // Blue haze
+        float haze_n = fbm(rd * 8.0 + vec3(5.3, -2.0, 1.0), 4);
+        vec3 haze = mix(vec3(0.010, 0.022, 0.050), vec3(0.020, 0.040, 0.085), haze_n);
+        bg = vec3(0.00010, 0.00016, 0.00035);
+        bg += haze * (0.22 + 0.60 * galactic_band);
+        bg += vec3(0.007, 0.010, 0.016) * pow(galactic_band, 2.2);
+        bg += sample_starfield(rd) * 0.95;
+    } else { // Realistic
+        bg += sample_starfield(rd);
+    }
     return bg;
 }
 

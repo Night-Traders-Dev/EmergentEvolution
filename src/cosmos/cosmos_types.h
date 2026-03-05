@@ -662,6 +662,7 @@ struct CelestialBody {
     uint32_t    stellar_stage  = 0;         // StellarStage enum
     uint32_t    material_phase = PHASE_SOLID;
     bool        marked_for_removal = false;
+    bool        non_attracting = false;     // affected by gravity but does not source gravity
     uint32_t    seed           = 0;         // procedural generation seed
     uint32_t    frag_generation = 0;        // how many times this body has been fragmented (0 = original)
     std::string name;                       // procedural or user-given name
@@ -715,7 +716,7 @@ struct CosmosConfig {
     float    softening      = 5.0f;     // gravity softening length
     float    damping        = 1.0f;     // velocity damping (1 = none)
     bool     collisions     = true;
-    bool     tidal_forces   = false;
+    bool     tidal_forces   = true;
     bool     show_orbits    = true;
     bool     show_trails    = true;
     uint32_t trail_length   = 120;      // max trail points per body
@@ -730,13 +731,23 @@ struct CosmosConfig {
     float    merge_speed_threshold   = 5.0f;     // relative speed below which bodies merge
     float    fragment_speed_threshold = 20.0f;   // relative speed above which bodies fragment
     int      fragment_count          = 4;        // number of fragments from collision/tidal breakup (1-12)
-    float    min_fragment_mass       = 0.05f;    // bodies below this mass cannot fragment (just bounce)
+    float    min_fragment_mass       = 1.0e-8f;  // bodies below this mass cannot fragment (just bounce)
     int      max_frag_generation     = 2;        // max times a body can be re-fragmented (0=originals only)
 
     // Roche limit
     bool     roche_limit        = true;
+    bool     roche_limit_fluid  = true;
+    bool     roche_limit_rigid  = true;
     bool     material_phases    = true;
     bool     planetary_rings    = true;
+
+    // Dynamic performance budget
+    bool     dynamic_budget_enabled      = true;
+    int      dynamic_max_fragments       = 300;   // attracting fragment cap
+    int      dynamic_max_non_attracting  = 900;   // debris cap
+    float    dynamic_explosion_density   = 0.25f; // per-event share of non-attracting budget (0-1)
+    float    dynamic_reduction_percent   = 0.20f; // cull percent when reducing (0-1)
+    float    dynamic_target_fps          = 60.0f; // target framerate
 
     // Temperature system
     bool     temperature_system = true;
@@ -762,6 +773,7 @@ struct CosmosConfig {
     bool     cosmos_comet_tails = true;
     bool     cosmos_blackhole_lensing = true;
     bool     cosmos_space_fabric = false;
+    int      cosmos_background_preset = 0; // 0=realistic, 1=deep black, 2=nebula, 3=warm dust, 4=blue haze
     int      cosmos_quality = 1;        // 0=low, 1=balanced, 2=high
     float    cosmos_space_fabric_grid_size = 40.0f;
     float    cosmos_space_fabric_strength = 1.0f;

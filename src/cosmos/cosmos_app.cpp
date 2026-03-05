@@ -45,6 +45,37 @@ static bool body_can_host_rings(const CelestialBody& body) {
     return body.type == CTYPE_PLANET || body.type == CTYPE_MOON || body.type == CTYPE_NEBULA;
 }
 
+static bool fragment_like_body(const CelestialBody& body) {
+    return (int)body.frag_generation > 0 &&
+        !is_star_type(body.type) && !is_black_hole_type(body.type);
+}
+
+static bool roche_secondary_fluid_like(const CelestialBody& body) {
+    if (body.type == CTYPE_NEBULA || body.type == CTYPE_COMET)
+        return true;
+    if (body.material_phase == PHASE_GAS || body.material_phase == PHASE_LIQUID ||
+        body.material_phase == PHASE_PLASMA || body.material_phase == PHASE_COLLAPSING)
+        return true;
+    if ((body.type == CTYPE_PLANET || body.type == CTYPE_MOON) &&
+        body.props_valid && body.cached_props.surface == SURF_GAS)
+        return true;
+    return false;
+}
+
+static float roche_distance_for_mode(const CelestialBody& primary,
+                                     const CelestialBody& secondary,
+                                     bool fluid_mode) {
+    float rho_primary = std::max(body_density(primary), 1.0e-6f);
+    float rho_secondary = std::max(body_density(secondary), 1.0e-6f);
+    float ratio = std::max(rho_primary / rho_secondary, 1.0e-4f);
+    if (fluid_mode) {
+        // Fluid Roche limit: d ≈ 2.423 R_M (rho_M / rho_m)^(1/3)
+        return 2.423f * std::max(primary.radius, 1.0e-4f) * std::cbrt(ratio);
+    }
+    // Rigid Roche limit: d = R_M (2 rho_M / rho_m)^(1/3)
+    return std::max(primary.radius, 1.0e-4f) * std::cbrt(2.0f * ratio);
+}
+
 static void set_ring_system(CelestialBody& body, float inner_radius, float outer_radius,
                             float density, float ice_fraction, float tilt) {
     body.ring_inner_radius = std::max(inner_radius, body.radius * 1.15f);
@@ -276,7 +307,7 @@ static void randomize_planet_properties(CelestialBody& body, const CosmosState& 
     float mass_hint_earth = body.mass / EARTH_MASS_TO_SOLAR;
     if (mass_hint_earth >= 0.02f && mass_hint_earth <= 2000.0f) {
         float hinted = mass_hint_earth * std::pow(10.0f, std::uniform_real_distribution<float>(-0.22f, 0.22f)(rng));
-        mass_earth = glm::mix(mass_earth, hinted, 0.45f);
+        mass_earth = glm::mix(mass_earth, hinted, 0.88f);
     }
     mass_earth *= std::uniform_real_distribution<float>(0.72f, 1.38f)(rng);
     mass_earth = std::clamp(mass_earth, 0.02f, 1200.0f);
@@ -430,7 +461,7 @@ static void randomize_moon_properties(CelestialBody& body, const CosmosState& st
     float moon_mass_hint_earth = body.mass / EARTH_MASS_TO_SOLAR;
     if (moon_mass_hint_earth >= 0.0002f && moon_mass_hint_earth <= 0.40f) {
         float hinted = moon_mass_hint_earth * std::pow(10.0f, std::uniform_real_distribution<float>(-0.18f, 0.18f)(rng));
-        mass_earth = glm::mix(mass_earth, hinted, 0.55f);
+        mass_earth = glm::mix(mass_earth, hinted, 0.92f);
     }
     mass_earth *= std::uniform_real_distribution<float>(0.68f, 1.52f)(rng);
     mass_earth = std::clamp(mass_earth, 0.0002f, 0.35f);
@@ -766,7 +797,7 @@ static float magnetic_shielding_score(const CelestialBody& b, float G) {
 }
 
 static void enforce_body_physical_limits(CelestialBody& b) {
-    b.mass = std::max(b.mass, 1.0e-6f);
+    b.mass = std::max(b.mass, 1.0e-12f);
     b.radius = std::max(b.radius, 0.1f);
 
     if (is_black_hole_type(b.type)) {
@@ -840,7 +871,7 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
     CelestialBody sun;
     sun.pos  = {0.0f, 0.0f, 0.0f};
     sun.vel  = {0.0f, 0.0f, 0.0f};
-    sun.mass = 100.0f;
+    sun.mass = 1.0f;
     sun.radius = 30.0f;
     sun.temperature = 5778.0f;
     sun.type = CTYPE_STAR;
@@ -854,7 +885,8 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
 
     // Planets in circular orbits in the XZ plane
     const float orbit_radii[] = {100.0f, 170.0f, 250.0f, 350.0f};
-    const float planet_mass[] = {0.5f, 1.0f, 0.8f, 2.0f};
+    // Solar-mass units: roughly Mercury, Earth, Mars, Jupiter class worlds.
+    const float planet_mass[] = {1.66e-7f, 3.00e-6f, 3.22e-7f, 9.54e-4f};
     const float planet_temp[] = {700.0f, 300.0f, 200.0f, 120.0f};
     for (int i = 0; i < 4; i++) {
         CelestialBody p;
@@ -879,7 +911,7 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
         moon.pos = state.bodies[2].pos + glm::vec3(25.0f, 0.0f, 0.0f);
         float moon_v = std::sqrt(cfg.G * state.bodies[2].mass / 25.0f);
         moon.vel = state.bodies[2].vel + glm::vec3(0.0f, 0.0f, moon_v);
-        moon.mass = 0.05f;
+        moon.mass = 3.70e-8f;
         moon.radius = 4.0f;
         moon.temperature = 200.0f;
         moon.type = CTYPE_MOON;
@@ -902,8 +934,8 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
                            std::sin(angle) * r);
         float v = std::sqrt(cfg.G * sun.mass / r) * randf(0.9f, 1.1f);
         a.vel = glm::vec3(-std::sin(angle) * v, 0.0f, std::cos(angle) * v);
-        a.mass = randf(0.01f, 0.05f);
-        a.radius = randf(2.0f, 4.0f);
+        a.mass = randf(5.0e-11f, 3.0e-9f);
+        a.radius = randf(0.4f, 1.6f);
         a.temperature = 100.0f;
         a.type = CTYPE_ASTEROID;
         a.seed = (uint32_t)(rng());
@@ -1116,8 +1148,15 @@ void CosmosApp::tick(GLFWwindow* window, float dt) {
 // ── Physics (CPU N-body, 3D) ────────────────────────────────────────────────
 
 void CosmosApp::step_physics(float dt) {
+    float frame_dt = std::max(dt, 1.0e-4f);
+    float instant_fps = 1.0f / frame_dt;
+    if (!std::isfinite(smoothed_fps_))
+        smoothed_fps_ = instant_fps;
+    smoothed_fps_ = smoothed_fps_ * 0.92f + instant_fps * 0.08f;
+
     cfg.dt_scale = (float)std::pow(10.0, cfg.time_exponent);
-    float scaled_dt = dt * cfg.dt_scale;
+    float time_sign = reverse_time_ ? -1.0f : 1.0f;
+    float scaled_dt = dt * cfg.dt_scale * time_sign;
     cfg.sim_time_accumulated += (double)scaled_dt;
     auto& bodies = state.bodies;
     size_t n = bodies.size();
@@ -1128,84 +1167,54 @@ void CosmosApp::step_physics(float dt) {
     float c2 = cfg.speed_of_light * cfg.speed_of_light;
 
     auto accumulate_gravity_pair = [&](size_t i, size_t j, std::vector<glm::vec3>& out_accel) {
+            bool source_i = !bodies[i].non_attracting;
+            bool source_j = !bodies[j].non_attracting;
+            if (!source_i && !source_j) return;
+
             glm::vec3 diff = bodies[j].pos - bodies[i].pos;
             float dist2 = glm::dot(diff, diff) + cfg.softening * cfg.softening;
             float dist  = std::sqrt(dist2);
-            float force = cfg.G * bodies[i].mass * bodies[j].mass / dist2;
+            if (dist <= 1.0e-6f) return;
             glm::vec3 dir = diff / dist;
 
-            // Newtonian gravity
-            glm::vec3 acc_i = dir * (force / bodies[i].mass);
-            glm::vec3 acc_j = -dir * (force / bodies[j].mass);
+            auto apply_source_accel = [&](size_t target, size_t source, const glm::vec3& r_hat) {
+                float GM = cfg.G * bodies[source].mass;
+                glm::vec3 acc = r_hat * (GM / dist2);
 
-            // ── General Relativity corrections ──
-            if (cfg.gr_enabled && c2 > 0.0f) {
-                // 1. Post-Newtonian perihelion precession (1PN correction)
-                //    a_GR = (GM/r²c²) * [ (4GM/r - v²)r̂ + 4(v·r̂)v ]
-                //    This produces the correct perihelion advance rate.
-                {
-                    float GM_j = cfg.G * bodies[j].mass;
-                    float GM_i = cfg.G * bodies[i].mass;
+                if (cfg.gr_enabled && c2 > 0.0f) {
+                    if (cfg.gr_precession_scale > 0.0f) {
+                        glm::vec3 v_t = bodies[target].vel;
+                        float v2 = glm::dot(v_t, v_t);
+                        float vr = glm::dot(v_t, r_hat);
+                        float pn_scale = GM / (dist * c2) * cfg.gr_precession_scale;
+                        acc += pn_scale * ((4.0f * GM / dist - v2) * r_hat + 4.0f * vr * v_t);
+                    }
 
-                    // Correction on body i from body j
-                    glm::vec3 rvel_i = bodies[i].vel;
-                    float vi2 = glm::dot(rvel_i, rvel_i);
-                    float vr_i = glm::dot(rvel_i, dir);
-                    float pn_scale_i = GM_j / (dist * c2) * cfg.gr_precession_scale;
-                    glm::vec3 gr_i = pn_scale_i * ((4.0f * GM_j / dist - vi2) * dir + 4.0f * vr_i * rvel_i);
-                    acc_i += gr_i;
+                    if (cfg.gr_time_dilation > 0.0f) {
+                        float phi = -GM / dist;
+                        float td = 1.0f + cfg.gr_time_dilation * phi / c2;
+                        acc *= td;
+                    }
 
-                    // Correction on body j from body i
-                    glm::vec3 rvel_j = bodies[j].vel;
-                    float vj2 = glm::dot(rvel_j, rvel_j);
-                    float vr_j = glm::dot(rvel_j, -dir);
-                    float pn_scale_j = GM_i / (dist * c2) * cfg.gr_precession_scale;
-                    glm::vec3 gr_j = pn_scale_j * ((4.0f * GM_i / dist - vj2) * (-dir) + 4.0f * vr_j * rvel_j);
-                    acc_j += gr_j;
-                }
-
-                // 2. Gravitational time dilation effect on effective acceleration
-                //    Objects deeper in a gravitational well experience time more slowly.
-                //    Effective boost: a *= 1 + Φ/c² where Φ = -GM/r
-                if (cfg.gr_time_dilation > 0.0f) {
-                    float phi_j = -cfg.G * bodies[j].mass / dist;  // potential at i from j
-                    float phi_i = -cfg.G * bodies[i].mass / dist;  // potential at j from i
-                    float td_i = 1.0f + cfg.gr_time_dilation * phi_j / c2;
-                    float td_j = 1.0f + cfg.gr_time_dilation * phi_i / c2;
-                    acc_i *= td_i;
-                    acc_j *= td_j;
-                }
-
-                // 3. Frame dragging (Lense-Thirring) for spinning bodies
-                //    a_LT ∝ (GJ/(c²r³)) × [(v×Ĵ) - 3(r̂·Ĵ)(v×r̂)]
-                //    Angular velocity serves as spin proxy
-                if (cfg.gr_frame_dragging > 0.0f) {
-                    for (int pair = 0; pair < 2; pair++) {
-                        size_t src = (pair == 0) ? j : i;
-                        size_t dst = (pair == 0) ? i : j;
-                        if (std::abs(bodies[src].angular_vel) < 1e-6f) continue;
-
-                        // Angular momentum J ∝ mass * radius² * angular_vel
-                        float J = bodies[src].mass * bodies[src].radius * bodies[src].radius *
-                                  bodies[src].angular_vel;
-                        glm::vec3 J_hat(0, 1, 0); // spin axis assumed Y-up
+                    if (cfg.gr_frame_dragging > 0.0f &&
+                        std::abs(bodies[source].angular_vel) > 1e-6f) {
+                        float J = bodies[source].mass * bodies[source].radius * bodies[source].radius *
+                                  bodies[source].angular_vel;
+                        glm::vec3 J_hat(0, 1, 0);
                         float coeff = cfg.gr_frame_dragging * cfg.G * J / (c2 * dist * dist * dist);
-
-                        glm::vec3 r_hat = (pair == 0) ? dir : -dir;
-                        glm::vec3 v_dst = bodies[dst].vel;
-                        glm::vec3 vxJ = glm::cross(v_dst, J_hat);
+                        glm::vec3 v_t = bodies[target].vel;
+                        glm::vec3 vxJ = glm::cross(v_t, J_hat);
                         float rdotJ = glm::dot(r_hat, J_hat);
-                        glm::vec3 vxr = glm::cross(v_dst, r_hat);
-                        glm::vec3 a_lt = coeff * (vxJ - 3.0f * rdotJ * vxr);
-
-                        if (pair == 0) acc_i += a_lt;
-                        else           acc_j += a_lt;
+                        glm::vec3 vxr = glm::cross(v_t, r_hat);
+                        acc += coeff * (vxJ - 3.0f * rdotJ * vxr);
                     }
                 }
-            }
 
-            out_accel[i] += acc_i;
-            out_accel[j] += acc_j;
+                out_accel[target] += acc;
+            };
+
+            if (source_j) apply_source_accel(i, j, dir);
+            if (source_i) apply_source_accel(j, i, -dir);
     };
 
     constexpr size_t kParallelGravityThreshold = 256;
@@ -1267,8 +1276,8 @@ void CosmosApp::step_physics(float dt) {
     }
 
     // Physics subsystems
+    if (cfg.roche_limit || cfg.tidal_forces) process_roche_limit(scaled_dt);
     if (cfg.collisions)         process_collisions(scaled_dt);
-    if (cfg.roche_limit)        process_roche_limit(scaled_dt);
     if (cfg.temperature_system) process_temperature(scaled_dt);
     if (cfg.temperature_system || cfg.evaporation) process_space_weather(scaled_dt);
     if (cfg.material_phases)    process_material_phases(scaled_dt);
@@ -1436,299 +1445,439 @@ void CosmosApp::process_collisions(float dt) {
     auto& bodies = state.bodies;
     size_t n = bodies.size();
 
-    for (size_t i = 0; i < n; i++) {
+    for (size_t i = 0; i < n; ++i) {
         if (bodies[i].marked_for_removal) continue;
-        for (size_t j = i + 1; j < n; j++) {
+        for (size_t j = i + 1; j < n; ++j) {
             if (bodies[j].marked_for_removal) continue;
 
+            glm::vec3 rel_vel = bodies[j].vel - bodies[i].vel;
             glm::vec3 diff = bodies[j].pos - bodies[i].pos;
             float dist = glm::length(diff);
             float touch = bodies[i].radius + bodies[j].radius;
 
-            if (dist < touch && dist > 0.01f) {
-                glm::vec3 dir = diff / dist;
-                float overlap = touch - dist;
-                float total_mass = bodies[i].mass + bodies[j].mass;
-                float reduced_mass = (bodies[i].mass * bodies[j].mass) / std::max(total_mass, 1.0e-6f);
+            glm::vec3 prev_diff = diff - rel_vel * dt;
+            glm::vec3 seg = diff - prev_diff;
+            float seg_len2 = glm::dot(seg, seg);
+            float sweep_t = 0.0f;
+            if (seg_len2 > 1.0e-8f)
+                sweep_t = std::clamp(-glm::dot(prev_diff, seg) / seg_len2, 0.0f, 1.0f);
+            glm::vec3 closest_rel = prev_diff + seg * sweep_t;
+            float sweep_dist = glm::length(closest_rel);
 
-                glm::vec3 rel_vel = bodies[j].vel - bodies[i].vel;
-                float rel_speed = glm::length(rel_vel);
-                float escape_speed = body_escape_speed(bodies[i], bodies[j], cfg.G);
-                bool soft_body_pair =
-                    !is_star_type(bodies[i].type) && !is_star_type(bodies[j].type) &&
-                    !is_black_hole_type(bodies[i].type) && !is_black_hole_type(bodies[j].type) &&
-                    bodies[i].type != CTYPE_NEBULA && bodies[j].type != CTYPE_NEBULA;
-                float contact_speed = rel_speed;
-                if (soft_body_pair) {
-                    float infall_floor = escape_speed * ((dist < touch * 0.98f) ? 0.92f : 0.72f);
-                    contact_speed = std::max(rel_speed, infall_floor);
+            bool overlap_now = (dist < touch);
+            bool swept_hit = (sweep_dist < touch);
+            if (!overlap_now && !swept_hit) continue;
+
+            float contact_dist = overlap_now ? dist : sweep_dist;
+            glm::vec3 normal = overlap_now ? (diff / std::max(dist, 1.0e-6f))
+                                           : (closest_rel / std::max(sweep_dist, 1.0e-6f));
+            if (glm::length(normal) < 1.0e-5f) {
+                if (glm::length(rel_vel) > 1.0e-5f) {
+                    normal = glm::normalize(rel_vel);
+                } else {
+                    // Deterministic fallback axis for near-identical overlap states.
+                    uint32_t h = (uint32_t)(i * 73856093u) ^ (uint32_t)(j * 19349663u);
+                    float x = ((h & 1023u) / 1023.0f) * 2.0f - 1.0f;
+                    float y = (((h >> 10) & 1023u) / 1023.0f) * 2.0f - 1.0f;
+                    float z = (((h >> 20) & 1023u) / 1023.0f) * 2.0f - 1.0f;
+                    normal = glm::normalize(glm::vec3(x, y, z));
+                    if (glm::length(normal) < 1.0e-5f)
+                        normal = glm::vec3(0.0f, 1.0f, 0.0f);
                 }
-                float impact_energy = 0.5f * reduced_mass * contact_speed * contact_speed;
-                float binding_i = body_gravitational_binding_energy(bodies[i], cfg.G);
-                float binding_j = body_gravitational_binding_energy(bodies[j], cfg.G);
-                float combined_binding = binding_i + binding_j;
-                float disruption_i = impact_energy / std::max(binding_i, 1.0e-6f);
-                float disruption_j = impact_energy / std::max(binding_j, 1.0e-6f);
-                float combined_disruption = impact_energy / std::max(combined_binding, 1.0e-6f);
-                float merge_limit = soft_body_pair
-                    ? std::max(escape_speed * 0.38f, cfg.merge_speed_threshold * 0.01f)
-                    : std::max(cfg.merge_speed_threshold, escape_speed * 1.15f);
-                float fragment_limit = soft_body_pair
-                    ? std::max(escape_speed * 0.78f, cfg.fragment_speed_threshold * 0.02f)
-                    : std::max(cfg.fragment_speed_threshold, escape_speed * 1.35f);
-                glm::vec3 impact_axis = (rel_speed > 1.0e-5f) ? (rel_vel / rel_speed) : dir;
-                float heat_ratio_i = std::clamp(impact_energy * cfg.collision_heating * (soft_body_pair ? 0.35f : 0.08f) /
-                                                std::max(bodies[i].mass, 1.0e-4f), 0.0f, 1.8f);
-                float heat_ratio_j = std::clamp(impact_energy * cfg.collision_heating * (soft_body_pair ? 0.35f : 0.08f) /
-                                                std::max(bodies[j].mass, 1.0e-4f), 0.0f, 1.8f);
-                bool kinetic_shatter = cfg.collision_fragmentation &&
-                    (combined_disruption > (soft_body_pair ? 0.48f : 0.75f) ||
-                     disruption_i > (soft_body_pair ? 0.60f : 0.95f) ||
-                     disruption_j > (soft_body_pair ? 0.60f : 0.95f));
+            }
 
-                // Always depenetrate first to reduce persistent overlap jitter.
-                bodies[i].pos -= dir * overlap * (bodies[j].mass / std::max(total_mass, 1.0e-6f));
-                bodies[j].pos += dir * overlap * (bodies[i].mass / std::max(total_mass, 1.0e-6f));
+            float overlap = std::max(touch - contact_dist, 0.0f);
+            float overlap_fraction = overlap / std::max(touch, 1.0e-6f);
+            float total_mass = bodies[i].mass + bodies[j].mass;
+            if (total_mass <= 1.0e-8f) continue;
 
-                // Collision heating
-                if (cfg.temperature_system) {
-                    float heat = impact_energy * cfg.collision_heating * (soft_body_pair ? 1.8f : 1.0f);
-                    bodies[i].internal_energy += heat * 0.5f;
-                    bodies[j].internal_energy += heat * 0.5f;
-                    bodies[i].temperature += std::min(heat * (soft_body_pair ? 120.0f : 20.0f) /
-                                                      std::max(bodies[i].mass, 1.0e-4f), 22000.0f);
-                    bodies[j].temperature += std::min(heat * (soft_body_pair ? 120.0f : 20.0f) /
-                                                      std::max(bodies[j].mass, 1.0e-4f), 22000.0f);
+            // Immediate depenetration to avoid sticky overlap accumulation.
+            if (overlap_now && overlap > 0.0f) {
+                bodies[i].pos -= normal * overlap * (bodies[j].mass / std::max(total_mass, 1.0e-6f));
+                bodies[j].pos += normal * overlap * (bodies[i].mass / std::max(total_mass, 1.0e-6f));
+            }
+            float rel_speed = glm::length(rel_vel);
+            float vel_along = glm::dot(rel_vel, normal);
+            float closing_speed = std::max(-vel_along, 0.0f);
+            float escape_speed = body_escape_speed(bodies[i], bodies[j], cfg.G);
+
+            bool soft_body_pair =
+                !is_star_type(bodies[i].type) && !is_star_type(bodies[j].type) &&
+                !is_black_hole_type(bodies[i].type) && !is_black_hole_type(bodies[j].type) &&
+                bodies[i].type != CTYPE_NEBULA && bodies[j].type != CTYPE_NEBULA;
+            bool small_soft_pair = soft_body_pair &&
+                std::max(bodies[i].radius, bodies[j].radius) < (EARTH_RADIUS_SIM_UNITS * 0.95f);
+            bool compact_i = is_star_type(bodies[i].type) || is_black_hole_type(bodies[i].type);
+            bool compact_j = is_star_type(bodies[j].type) || is_black_hole_type(bodies[j].type);
+            bool compact_vs_soft = (compact_i != compact_j);
+
+            float infall_speed = soft_body_pair ? std::max(closing_speed, escape_speed * 0.45f) : closing_speed;
+            float compression_speed = overlap_fraction * escape_speed * (soft_body_pair ? 2.8f : 1.6f);
+            float impact_speed = std::max(rel_speed, std::max(infall_speed, compression_speed));
+            float reduced_mass = (bodies[i].mass * bodies[j].mass) / std::max(total_mass, 1.0e-6f);
+            float impact_energy = 0.5f * reduced_mass * impact_speed * impact_speed;
+
+            float binding_i = body_gravitational_binding_energy(bodies[i], cfg.G);
+            float binding_j = body_gravitational_binding_energy(bodies[j], cfg.G);
+            float combined_binding = binding_i + binding_j;
+            float disruption_i = impact_energy / std::max(binding_i, 1.0e-6f);
+            float disruption_j = impact_energy / std::max(binding_j, 1.0e-6f);
+            float combined_disruption = impact_energy / std::max(combined_binding, 1.0e-6f);
+            glm::vec3 impact_axis = (rel_speed > 1.0e-5f) ? (rel_vel / rel_speed) : normal;
+
+            // Collision heating (kinetic -> thermal/internal).
+            if (cfg.temperature_system) {
+                float heat = impact_energy * cfg.collision_heating * (soft_body_pair ? 1.35f : 0.85f);
+                bodies[i].internal_energy += heat * 0.5f;
+                bodies[j].internal_energy += heat * 0.5f;
+                bodies[i].temperature += std::min(heat * (soft_body_pair ? 80.0f : 16.0f) /
+                                                  std::max(bodies[i].mass, 1.0e-6f), 18000.0f);
+                bodies[j].temperature += std::min(heat * (soft_body_pair ? 80.0f : 16.0f) /
+                                                  std::max(bodies[j].mass, 1.0e-6f), 18000.0f);
+            }
+
+            if (handle_stellar_collision_supernova(i, j, rel_speed, impact_energy,
+                                                   escape_speed, impact_axis, dt)) {
+                continue;
+            }
+
+            float merge_speed_limit = 0.0f;
+            float fragment_speed_limit = 0.0f;
+            if (soft_body_pair) {
+                if (small_soft_pair) {
+                    merge_speed_limit = std::max(escape_speed * 0.20f, 1.0e-4f);
+                    fragment_speed_limit = std::max(escape_speed * 0.35f, 2.5e-4f);
+                } else {
+                    merge_speed_limit = std::max(std::max(escape_speed * 0.55f, cfg.merge_speed_threshold * 0.0005f), 0.0015f);
+                    fragment_speed_limit = std::max(std::max(escape_speed * 2.20f, cfg.fragment_speed_threshold * 0.0010f),
+                                                    merge_speed_limit * 2.0f);
                 }
+            } else {
+                merge_speed_limit = std::max(cfg.merge_speed_threshold, escape_speed * 0.95f);
+                fragment_speed_limit = std::max(cfg.fragment_speed_threshold, escape_speed * 1.15f);
+            }
 
-                if (handle_stellar_collision_supernova(i, j, rel_speed, impact_energy,
-                                                       escape_speed, impact_axis, dt)) {
-                    continue;
-                }
+            bool catastrophic_fragment =
+                (impact_speed >= (soft_body_pair ? fragment_speed_limit * 1.15f : fragment_speed_limit) ||
+                 combined_disruption > (soft_body_pair ? 0.35f : 0.72f) ||
+                 disruption_i > (soft_body_pair ? 0.38f : 0.92f) ||
+                 disruption_j > (soft_body_pair ? 0.38f : 0.92f) ||
+                 (compact_vs_soft && (swept_hit || overlap_fraction > 0.005f)));
 
-                // Determine merge vs fragment vs bounce
-                bool gentle_merge = rel_speed <= merge_limit && !kinetic_shatter &&
-                    (!soft_body_pair ||
-                     (combined_disruption < 0.18f && disruption_i < 0.24f && disruption_j < 0.24f));
-                if (cfg.collision_merging && gentle_merge) {
-                    // Merge: larger absorbs smaller
-                    size_t big = (bodies[i].mass >= bodies[j].mass) ? i : j;
-                    size_t small = (big == i) ? j : i;
-                    CelestialBody pre_big = bodies[big];
-                    CelestialBody pre_small = bodies[small];
+            bool optional_fragment = cfg.collision_fragmentation &&
+                (impact_speed >= fragment_speed_limit * (soft_body_pair ? 0.90f : 0.90f) ||
+                 combined_disruption > (soft_body_pair ? 0.22f : 0.60f) ||
+                 disruption_i > (soft_body_pair ? 0.26f : 0.75f) ||
+                 disruption_j > (soft_body_pair ? 0.26f : 0.75f));
 
-                    // Conserve momentum
-                    glm::vec3 new_vel = (bodies[big].mass * bodies[big].vel +
-                                         bodies[small].mass * bodies[small].vel) / total_mass;
-                    bodies[big].vel = new_vel;
-                    bodies[big].mass += bodies[small].mass;
-                    // Conserve volume: r = cbrt(r1^3 + r2^3)
-                    float r1 = bodies[big].radius, r2 = bodies[small].radius;
-                    bodies[big].radius = std::cbrt(r1 * r1 * r1 + r2 * r2 * r2);
-                    // Weighted temperature
-                    bodies[big].temperature = (bodies[big].temperature * (total_mass - bodies[small].mass) +
-                                               bodies[small].temperature * bodies[small].mass) / total_mass;
-                    bodies[big].internal_energy += bodies[small].internal_energy + impact_energy * 0.08f;
-                    if (soft_body_pair) {
-                        bodies[big].temperature += std::min(impact_energy * 260.0f / std::max(total_mass, 1.0e-4f),
-                                                            18000.0f);
+            bool fragment_candidate = catastrophic_fragment || optional_fragment ||
+                (soft_body_pair && swept_hit && impact_speed > fragment_speed_limit * 0.75f);
+            bool ultra_gentle_soft = soft_body_pair &&
+                impact_speed < merge_speed_limit * 0.95f &&
+                combined_disruption < 0.030f &&
+                overlap_fraction < 0.12f;
+            if (small_soft_pair) {
+                ultra_gentle_soft = impact_speed < merge_speed_limit * 0.60f &&
+                    combined_disruption < 0.005f &&
+                    overlap_fraction < 0.01f;
+            }
+            if (ultra_gentle_soft)
+                fragment_candidate = false;
+            if (small_soft_pair && cfg.collision_fragmentation &&
+                (overlap_now || swept_hit) && !ultra_gentle_soft)
+                fragment_candidate = true;
+
+            bool sticky_soft_merge = soft_body_pair && !cfg.collision_fragmentation &&
+                overlap_now && !fragment_candidate &&
+                impact_speed < fragment_speed_limit * 0.95f &&
+                combined_disruption < 0.20f;
+
+            bool merge_candidate = cfg.collision_merging &&
+                !swept_hit &&
+                ((overlap_now &&
+                  rel_speed <= merge_speed_limit &&
+                  closing_speed <= merge_speed_limit &&
+                  impact_speed <= fragment_speed_limit * (soft_body_pair ? 0.70f : 0.90f) &&
+                  overlap_fraction >= (soft_body_pair ? 0.03f : 0.006f) &&
+                  combined_disruption < (soft_body_pair ? 0.06f : 0.55f)) ||
+                 sticky_soft_merge) &&
+                !fragment_candidate;
+            if (soft_body_pair && cfg.collision_fragmentation)
+                merge_candidate = merge_candidate && ultra_gentle_soft;
+            if (small_soft_pair && cfg.collision_fragmentation)
+                merge_candidate = false;
+
+            if (merge_candidate) {
+                size_t big = (bodies[i].mass >= bodies[j].mass) ? i : j;
+                size_t small = (big == i) ? j : i;
+                CelestialBody pre_big = bodies[big];
+                CelestialBody pre_small = bodies[small];
+
+                glm::vec3 com_pos = (pre_big.pos * pre_big.mass + pre_small.pos * pre_small.mass) /
+                                    std::max(total_mass, 1.0e-6f);
+                glm::vec3 com_vel = (pre_big.vel * pre_big.mass + pre_small.vel * pre_small.mass) /
+                                    std::max(total_mass, 1.0e-6f);
+                float merged_temp = (pre_big.temperature * pre_big.mass + pre_small.temperature * pre_small.mass) /
+                                    std::max(total_mass, 1.0e-6f);
+
+                bodies[big].pos = com_pos;
+                bodies[big].vel = com_vel;
+                bodies[big].mass = total_mass;
+                bodies[big].radius = std::cbrt(std::max(pre_big.radius * pre_big.radius * pre_big.radius +
+                                                        pre_small.radius * pre_small.radius * pre_small.radius,
+                                                        1.0e-6f));
+                bodies[big].temperature = merged_temp +
+                    std::min(impact_energy * (soft_body_pair ? 28.0f : 10.0f) / std::max(total_mass, 1.0e-6f), 4500.0f);
+                bodies[big].internal_energy = pre_big.internal_energy + pre_small.internal_energy + impact_energy * 0.06f;
+                bodies[big].angular_vel = (pre_big.angular_vel * pre_big.mass + pre_small.angular_vel * pre_small.mass) /
+                                          std::max(total_mass, 1.0e-6f);
+
+                if (is_star_type(pre_big.type) && is_star_type(pre_small.type)) {
+                    bodies[big].fuel = merged_star_fuel(pre_big, pre_small, total_mass);
+                    bodies[big].luminosity = std::pow(std::max(bodies[big].mass, 0.08f), 3.2f) * 0.1f;
+                    bodies[big].type = classify_star_spectral(std::max(bodies[big].temperature, 2200.0f),
+                                                              std::max(bodies[big].mass, 0.1f));
+                    if (bodies[big].mass >= CORE_COLLAPSE_MIN_MASS_SOLAR &&
+                        (pre_big.stellar_stage == SSTAGE_RED_GIANT ||
+                         pre_small.stellar_stage == SSTAGE_RED_GIANT ||
+                         bodies[big].fuel < 0.18f)) {
+                        trigger_stellar_supernova(big, dt, false, impact_axis, std::max(rel_speed * 0.45f, 18.0f));
                     }
-                    if (is_star_type(pre_big.type) && is_star_type(pre_small.type)) {
-                        bodies[big].fuel = merged_star_fuel(pre_big, pre_small, total_mass);
-                        bodies[big].luminosity = std::pow(std::max(bodies[big].mass, 0.08f), 3.2f) * 0.1f;
-                        bodies[big].type = classify_star_spectral(std::max(bodies[big].temperature, 2200.0f),
-                                                                  std::max(bodies[big].mass, 0.1f));
-                        if (bodies[big].mass >= CORE_COLLAPSE_MIN_MASS_SOLAR &&
-                            (pre_big.stellar_stage == SSTAGE_RED_GIANT ||
-                             pre_small.stellar_stage == SSTAGE_RED_GIANT ||
-                             bodies[big].fuel < 0.18f)) {
-                            trigger_stellar_supernova(big, dt, false, impact_axis,
-                                                      std::max(rel_speed * 0.45f, 18.0f));
+                    if ((pre_big.stellar_stage == SSTAGE_WHITE_DWARF || pre_small.stellar_stage == SSTAGE_WHITE_DWARF) &&
+                        bodies[big].mass >= CHANDRASEKHAR_LIMIT_SOLAR) {
+                        trigger_stellar_supernova(big, dt, true, impact_axis, std::max(rel_speed * 0.50f, 22.0f));
+                    }
+                } else {
+                    bodies[big].fuel = std::max(pre_big.fuel, pre_small.fuel);
+                }
+
+                // Gentle post-merge ejecta only for high-disruption mergers.
+                if (!is_star_type(pre_big.type) && !is_black_hole_type(pre_big.type) &&
+                    !is_star_type(pre_small.type) && !is_black_hole_type(pre_small.type) &&
+                    cfg.collision_fragmentation) {
+                    float ejecta_fraction = std::clamp((combined_disruption - (soft_body_pair ? 0.10f : 0.22f)) *
+                                                       (soft_body_pair ? 0.35f : 0.20f),
+                                                       0.0f, soft_body_pair ? 0.18f : 0.10f);
+                    float ejecta_mass = total_mass * ejecta_fraction;
+                    if (ejecta_mass > 1.0e-8f) {
+                        int ejecta_count = std::clamp(std::max(2, cfg.fragment_count / 2), 2, 8);
+                        float merger_ejecta_speed = soft_body_pair
+                            ? std::clamp(escape_speed * 0.55f + closing_speed * 0.20f, 0.004f, 0.045f)
+                            : std::max(impact_speed * 0.35f, 2.0f);
+                        spawn_fragments((pre_big.pos + pre_small.pos) * 0.5f, com_vel, ejecta_mass,
+                                        ejecta_count, std::max(pre_big.frag_generation, pre_small.frag_generation),
+                                        std::max(pre_big.temperature, pre_small.temperature),
+                                        (big == i) ? normal : -normal,
+                                        merger_ejecta_speed,
+                                        &pre_small, combined_disruption);
+                        register_mass_loss(bodies[big], ejecta_mass, std::max(dt, 1.0e-4f));
+                        float remaining_mass = std::max(total_mass - ejecta_mass, 1.0e-8f);
+                        float mass_scale = std::cbrt(remaining_mass / std::max(total_mass, 1.0e-8f));
+                        bodies[big].mass = remaining_mass;
+                        bodies[big].radius = std::max(bodies[big].radius * mass_scale, 0.1f);
+                    }
+
+                    apply_impact_signature(
+                        bodies[big], (big == i) ? normal : -normal,
+                        std::clamp(combined_disruption, 0.0f, 1.2f),
+                        pre_small.mass / std::max(total_mass, 1.0e-6f),
+                        std::clamp(impact_energy * cfg.collision_heating / std::max(total_mass, 1.0e-6f), 0.0f, 1.5f),
+                        std::clamp(pre_small.radius / std::max(bodies[big].radius, 0.1f), 0.08f, 0.95f));
+                }
+
+                bodies[big].props_valid = false;
+                bodies[big].visuals_valid = false;
+                bodies[small].marked_for_removal = true;
+                continue;
+            }
+
+            bool closing_contact = vel_along < 0.0f || (soft_body_pair && dist < touch * 0.99f) || swept_hit;
+            if (!closing_contact) continue;
+
+            bool fragmenting = fragment_candidate;
+            float restitution = fragmenting ? 0.0f : (soft_body_pair ? 0.0f : 0.28f);
+            float inv_mass_sum = (1.0f / std::max(bodies[i].mass, 1.0e-6f)) +
+                                 (1.0f / std::max(bodies[j].mass, 1.0e-6f));
+            float impulse_speed = (vel_along < -1.0e-5f) ? vel_along : (soft_body_pair ? 0.0f : -impact_speed * 0.35f);
+            float j_impulse = -(1.0f + restitution) * impulse_speed / std::max(inv_mass_sum, 1.0e-6f);
+            glm::vec3 impulse = normal * j_impulse;
+            bodies[i].vel -= impulse / std::max(bodies[i].mass, 1.0e-6f);
+            bodies[j].vel += impulse / std::max(bodies[j].mass, 1.0e-6f);
+
+            // Tangential damping keeps non-fragment impacts from behaving like pinballs.
+            glm::vec3 post_rel = bodies[j].vel - bodies[i].vel;
+            glm::vec3 tangential = post_rel - normal * glm::dot(post_rel, normal);
+            float tangential_len = glm::length(tangential);
+            if (tangential_len > 1.0e-6f) {
+                glm::vec3 tangent_dir = tangential / tangential_len;
+                float tangential_reduce = tangential_len * (fragmenting ? 0.80f : (soft_body_pair ? 0.90f : 0.35f));
+                float jt = tangential_reduce / std::max(inv_mass_sum, 1.0e-6f);
+                glm::vec3 tangent_impulse = tangent_dir * jt;
+                bodies[i].vel += tangent_impulse / std::max(bodies[i].mass, 1.0e-6f);
+                bodies[j].vel -= tangent_impulse / std::max(bodies[j].mass, 1.0e-6f);
+            }
+
+            float effective_min_frag_mass = std::max(1.0e-12f, std::min(cfg.min_fragment_mass, 1.0e-9f));
+            auto can_fragment = [&](const CelestialBody& body) {
+                return body.mass >= effective_min_frag_mass &&
+                       (int)body.frag_generation < cfg.max_frag_generation &&
+                       !is_star_type(body.type) &&
+                       !is_black_hole_type(body.type);
+            };
+
+            if (fragmenting) {
+                bool fragment_i = can_fragment(bodies[i]) &&
+                    (disruption_i > (soft_body_pair ? 0.20f : 0.78f) ||
+                     (bodies[i].mass <= bodies[j].mass && combined_disruption > (soft_body_pair ? 0.15f : 0.58f)));
+                bool fragment_j = can_fragment(bodies[j]) &&
+                    (disruption_j > (soft_body_pair ? 0.20f : 0.78f) ||
+                     (bodies[j].mass <= bodies[i].mass && combined_disruption > (soft_body_pair ? 0.15f : 0.58f)));
+
+                if (combined_disruption > (soft_body_pair ? 0.30f : 0.90f) &&
+                    can_fragment(bodies[i]) && can_fragment(bodies[j])) {
+                    fragment_i = true;
+                    fragment_j = true;
+                }
+                if (!fragment_i && !fragment_j) {
+                    if (bodies[i].mass <= bodies[j].mass && (can_fragment(bodies[i]) || bodies[i].mass > 2.0e-9f))
+                        fragment_i = true;
+                    else if (can_fragment(bodies[j]) || bodies[j].mass > 2.0e-9f)
+                        fragment_j = true;
+                }
+
+                int shock_fragments = std::clamp(
+                    cfg.fragment_count + (int)std::floor(combined_disruption * (soft_body_pair ? 4.0f : 2.0f)),
+                    cfg.fragment_count, 12);
+                if (soft_body_pair && !compact_vs_soft)
+                    shock_fragments = std::clamp(shock_fragments, 2, 6);
+                if (compact_vs_soft)
+                    shock_fragments = std::clamp(std::max(2, cfg.fragment_count / 2), 2, 6);
+                float ejecta_speed = 0.0f;
+                if (soft_body_pair && !compact_vs_soft) {
+                    ejecta_speed = std::clamp(
+                        escape_speed * (0.40f + combined_disruption * 0.60f) + closing_speed * 0.18f,
+                        0.004f, 0.060f);
+                } else if (compact_vs_soft) {
+                    ejecta_speed = std::clamp(
+                        escape_speed * (0.65f + combined_disruption * 0.70f) + closing_speed * 0.28f,
+                        0.010f, 0.20f);
+                } else {
+                    ejecta_speed = std::max(2.0f, impact_speed * (0.32f + combined_disruption * 0.18f));
+                }
+
+                if (fragment_i) {
+                    bool keep_remnant = false;
+                    float removed = bodies[i].mass;
+                    if (soft_body_pair && !compact_vs_soft &&
+                        (bodies[i].type == CTYPE_PLANET || bodies[i].type == CTYPE_MOON)) {
+                        float severity = std::clamp(
+                            0.28f + combined_disruption * 0.32f + disruption_i * 0.24f +
+                            std::min(overlap_fraction, 0.6f) * 0.30f, 0.10f, 0.70f);
+                        float remnant_fraction = std::max(1.0f - severity,
+                            impact_speed < fragment_speed_limit * 1.10f ? 0.45f : 0.28f);
+                        float remnant_mass = bodies[i].mass * remnant_fraction;
+                        if (remnant_mass > effective_min_frag_mass * 2.0f) {
+                            keep_remnant = true;
+                            removed = bodies[i].mass - remnant_mass;
+                            float mass_scale = std::cbrt(remnant_mass / std::max(bodies[i].mass, 1.0e-12f));
+                            bodies[i].mass = remnant_mass;
+                            bodies[i].radius = std::max(bodies[i].radius * mass_scale, 0.1f);
+                            bodies[i].frag_generation = std::min<uint32_t>(bodies[i].frag_generation + 1u,
+                                                                           (uint32_t)cfg.max_frag_generation);
+                            bodies[i].props_valid = false;
+                            bodies[i].visuals_valid = false;
                         }
-                        if ((pre_big.stellar_stage == SSTAGE_WHITE_DWARF || pre_small.stellar_stage == SSTAGE_WHITE_DWARF) &&
-                            bodies[big].mass >= CHANDRASEKHAR_LIMIT_SOLAR) {
-                            trigger_stellar_supernova(big, dt, true, impact_axis,
-                                                      std::max(rel_speed * 0.50f, 22.0f));
-                        }
+                    }
+
+                    if (removed > effective_min_frag_mass * 0.25f) {
+                        spawn_fragments(bodies[i].pos, bodies[i].vel, removed,
+                                        shock_fragments, bodies[i].frag_generation,
+                                        bodies[i].temperature, -impact_axis, ejecta_speed,
+                                        &bodies[i], std::max(disruption_i, combined_disruption));
+                        register_mass_loss(bodies[i], removed, std::max(dt, 1.0e-4f));
+                    }
+                    if (!keep_remnant) {
+                        bodies[i].marked_for_removal = true;
                     } else {
-                        bodies[big].fuel = std::max(bodies[big].fuel, bodies[small].fuel);
-                    }
-
-                    if (!is_star_type(pre_big.type) && !is_black_hole_type(pre_big.type) &&
-                        !is_star_type(pre_small.type) && !is_black_hole_type(pre_small.type)) {
-                        int shock_fragments = std::clamp(
-                            cfg.fragment_count + (int)std::floor(combined_disruption * (soft_body_pair ? 5.0f : 3.0f)),
-                            cfg.fragment_count, 12);
-                        float merge_ejecta_fraction = cfg.collision_fragmentation
-                            ? std::clamp(combined_disruption * (soft_body_pair ? 0.22f : 0.12f) +
-                                         std::max(contact_speed - escape_speed, 0.0f) /
-                                             std::max(fragment_limit, 1.0e-3f) * (soft_body_pair ? 0.12f : 0.06f),
-                                         0.0f, soft_body_pair ? 0.58f : 0.32f)
-                            : 0.0f;
-                        float ejecta_mass = total_mass * merge_ejecta_fraction;
-                        float ring_capture = 0.0f;
-                        if (cfg.planetary_rings && ejecta_mass > 0.0f && body_can_host_rings(bodies[big])) {
-                            ring_capture = ejecta_mass * std::clamp(0.06f + combined_disruption * 0.10f, 0.0f, 0.24f);
-                            if (ring_capture > 0.0f)
-                                add_ring_material(bodies[big], pre_small, ring_capture, bodies[big].radius * 1.8f);
-                        }
-
-                        float escaped_mass = std::max(ejecta_mass - ring_capture, 0.0f);
-                        if (escaped_mass > 1.0e-4f) {
-                            glm::vec3 ejecta_origin = (pre_big.pos + pre_small.pos) * 0.5f;
-                            float ejecta_temp = std::clamp(std::max(pre_big.temperature, pre_small.temperature) +
-                                                           900.0f + combined_disruption * 3200.0f,
-                                                           250.0f, 25000.0f);
-                            spawn_fragments(ejecta_origin, new_vel, escaped_mass,
-                                            std::max(2, shock_fragments - 1),
-                                            std::max(pre_big.frag_generation, pre_small.frag_generation),
-                                            ejecta_temp,
-                                            (big == i) ? dir : -dir,
-                                            std::max(contact_speed * (0.30f + combined_disruption * 0.12f), 2.5f),
-                                            &pre_small, combined_disruption + contact_speed / std::max(fragment_limit, 1.0e-3f));
-                            register_mass_loss(bodies[big], escaped_mass, std::max(dt, 1.0e-4f));
-                        }
-
-                        if (ejecta_mass > 0.0f) {
-                            float remaining_mass = std::max(total_mass - ejecta_mass, 1.0e-6f);
-                            float mass_scale = std::cbrt(remaining_mass / std::max(total_mass, 1.0e-6f));
-                            bodies[big].mass = remaining_mass;
-                            bodies[big].radius = std::max(bodies[big].radius * mass_scale, 0.1f);
-                        }
-
                         apply_impact_signature(
-                            bodies[big],
-                            (big == i) ? dir : -dir,
-                            std::clamp(combined_disruption, 0.0f, 1.25f),
-                            pre_small.mass / std::max(total_mass, 1.0e-6f),
-                            std::max(heat_ratio_i, heat_ratio_j),
-                            std::clamp(pre_small.radius / std::max(bodies[big].radius, 0.1f), 0.08f, 0.95f));
+                            bodies[i], normal,
+                            std::clamp(disruption_i + combined_disruption * 0.30f, 0.0f, 1.4f),
+                            removed / std::max(removed + bodies[i].mass, 1.0e-8f),
+                            std::clamp(impact_energy * cfg.collision_heating / std::max(bodies[i].mass, 1.0e-6f), 0.0f, 1.6f),
+                            0.30f);
                     }
-                    bodies[big].props_valid = false;
-                    bodies[big].visuals_valid = false;
-                    bodies[small].marked_for_removal = true;
+                } else {
+                    apply_impact_signature(
+                        bodies[i], normal,
+                        std::clamp(disruption_i + combined_disruption * 0.20f, 0.0f, 1.2f),
+                        bodies[j].mass / std::max(total_mass, 1.0e-6f),
+                        std::clamp(impact_energy * cfg.collision_heating / std::max(bodies[i].mass, 1.0e-6f), 0.0f, 1.4f),
+                        std::clamp(bodies[j].radius / std::max(bodies[i].radius, 0.1f), 0.08f, 0.90f));
                 }
-                else {
-                    float vel_along = glm::dot(rel_vel, dir);
-                    bool closing_contact = vel_along < 0.0f || (soft_body_pair && dist < touch * 0.985f);
-                    if (closing_contact) {
-                        bool fragmenting = cfg.collision_fragmentation &&
-                            (contact_speed >= fragment_limit ||
-                             combined_disruption > (soft_body_pair ? 0.45f : 0.75f) ||
-                             disruption_i > (soft_body_pair ? 0.58f : 0.95f) ||
-                             disruption_j > (soft_body_pair ? 0.58f : 0.95f));
-                        float restitution = fragmenting ? 0.15f : 0.65f;
-                        float inv_mass_sum = (1.0f / std::max(bodies[i].mass, 1.0e-6f)) +
-                                             (1.0f / std::max(bodies[j].mass, 1.0e-6f));
-                        float impulse_speed = (vel_along < -1.0e-5f) ? vel_along : -contact_speed;
-                        float j_impulse = -(1.0f + restitution) * impulse_speed / std::max(inv_mass_sum, 1.0e-6f);
-                        glm::vec3 impulse = dir * j_impulse;
-                        bodies[i].vel -= impulse / std::max(bodies[i].mass, 1.0e-6f);
-                        bodies[j].vel += impulse / std::max(bodies[j].mass, 1.0e-6f);
 
-                        if (fragmenting) {
-                            auto can_fragment = [&](const CelestialBody& body) {
-                                return body.mass >= cfg.min_fragment_mass &&
-                                       (int)body.frag_generation < cfg.max_frag_generation;
-                            };
-
-                            float catastrophic_ratio = contact_speed / std::max(escape_speed, 1.0e-3f);
-                            bool fragment_i = can_fragment(bodies[i]) &&
-                                (disruption_i > (soft_body_pair ? 0.52f : 0.90f) ||
-                                 (bodies[i].mass <= bodies[j].mass &&
-                                  (catastrophic_ratio > (soft_body_pair ? 1.15f : 1.6f) ||
-                                   combined_disruption > (soft_body_pair ? 0.40f : 0.62f))) ||
-                                 combined_disruption > (soft_body_pair ? 0.72f : 1.10f));
-                            bool fragment_j = can_fragment(bodies[j]) &&
-                                (disruption_j > (soft_body_pair ? 0.52f : 0.90f) ||
-                                 (bodies[j].mass <= bodies[i].mass &&
-                                  (catastrophic_ratio > (soft_body_pair ? 1.15f : 1.6f) ||
-                                   combined_disruption > (soft_body_pair ? 0.40f : 0.62f))) ||
-                                 combined_disruption > (soft_body_pair ? 0.72f : 1.10f));
-
-                            if (combined_disruption > (soft_body_pair ? 0.62f : 0.95f) &&
-                                can_fragment(bodies[i]) && can_fragment(bodies[j])) {
-                                fragment_i = true;
-                                fragment_j = true;
-                            }
-                            if (!fragment_i && !fragment_j) {
-                                if (bodies[i].mass <= bodies[j].mass && can_fragment(bodies[i]))
-                                    fragment_i = true;
-                                else if (can_fragment(bodies[j]))
-                                    fragment_j = true;
-                            }
-
-                            float ejecta_speed = std::max(2.0f, contact_speed * (0.38f + combined_disruption * 0.14f));
-                            int shock_fragments = std::clamp(
-                                cfg.fragment_count + (int)std::floor(combined_disruption * (soft_body_pair ? 6.0f : 3.0f)),
-                                cfg.fragment_count, 12);
-                            float fragment_mass_i = bodies[i].mass;
-                            float fragment_mass_j = bodies[j].mass;
-                            if (cfg.planetary_rings && dist < touch * 1.75f) {
-                                if (fragment_i && !fragment_j && body_can_host_rings(bodies[j])) {
-                                    float captured = bodies[i].mass * std::clamp(0.10f + 0.06f * catastrophic_ratio, 0.0f, 0.28f);
-                                    bodies[j].mass += captured;
-                                    add_ring_material(bodies[j], bodies[i], captured, touch * (1.1f + catastrophic_ratio * 0.08f));
-                                    bodies[j].props_valid = false;
-                                    bodies[j].visuals_valid = false;
-                                    fragment_mass_i = std::max(fragment_mass_i - captured, 1.0e-4f);
-                                }
-                                if (fragment_j && !fragment_i && body_can_host_rings(bodies[i])) {
-                                    float captured = bodies[j].mass * std::clamp(0.10f + 0.06f * catastrophic_ratio, 0.0f, 0.28f);
-                                    bodies[i].mass += captured;
-                                    add_ring_material(bodies[i], bodies[j], captured, touch * (1.1f + catastrophic_ratio * 0.08f));
-                                    bodies[i].props_valid = false;
-                                    bodies[i].visuals_valid = false;
-                                    fragment_mass_j = std::max(fragment_mass_j - captured, 1.0e-4f);
-                                }
-                            }
-                            if (!fragment_i) {
-                                apply_impact_signature(
-                                    bodies[i], dir,
-                                    std::clamp(disruption_i + combined_disruption * 0.25f, 0.0f, 1.3f),
-                                    bodies[j].mass / std::max(total_mass, 1.0e-6f),
-                                    heat_ratio_i,
-                                    std::clamp(bodies[j].radius / std::max(bodies[i].radius, 0.1f), 0.08f, 0.95f));
-                            }
-                            if (!fragment_j) {
-                                apply_impact_signature(
-                                    bodies[j], -dir,
-                                    std::clamp(disruption_j + combined_disruption * 0.25f, 0.0f, 1.3f),
-                                    bodies[i].mass / std::max(total_mass, 1.0e-6f),
-                                    heat_ratio_j,
-                                    std::clamp(bodies[i].radius / std::max(bodies[j].radius, 0.1f), 0.08f, 0.95f));
-                            }
-                            if (fragment_i) {
-                                spawn_fragments(bodies[i].pos, bodies[i].vel, fragment_mass_i,
-                                                shock_fragments, bodies[i].frag_generation,
-                                                bodies[i].temperature, -impact_axis, ejecta_speed,
-                                                &bodies[i], std::max(disruption_i, combined_disruption));
-                                bodies[i].marked_for_removal = true;
-                            }
-                            if (fragment_j) {
-                                spawn_fragments(bodies[j].pos, bodies[j].vel, fragment_mass_j,
-                                                shock_fragments, bodies[j].frag_generation,
-                                                bodies[j].temperature, impact_axis, ejecta_speed,
-                                                &bodies[j], std::max(disruption_j, combined_disruption));
-                                bodies[j].marked_for_removal = true;
-                            }
-                        } else if (!is_star_type(bodies[i].type) && !is_black_hole_type(bodies[i].type) &&
-                                   !is_star_type(bodies[j].type) && !is_black_hole_type(bodies[j].type)) {
-                            apply_impact_signature(
-                                bodies[i], dir,
-                                std::clamp(disruption_i * 0.45f + combined_disruption * 0.18f, 0.0f, 0.75f),
-                                bodies[j].mass / std::max(total_mass, 1.0e-6f),
-                                heat_ratio_i * 0.7f,
-                                std::clamp(bodies[j].radius / std::max(bodies[i].radius, 0.1f), 0.08f, 0.80f));
-                            apply_impact_signature(
-                                bodies[j], -dir,
-                                std::clamp(disruption_j * 0.45f + combined_disruption * 0.18f, 0.0f, 0.75f),
-                                bodies[i].mass / std::max(total_mass, 1.0e-6f),
-                                heat_ratio_j * 0.7f,
-                                std::clamp(bodies[i].radius / std::max(bodies[j].radius, 0.1f), 0.08f, 0.80f));
+                if (fragment_j) {
+                    bool keep_remnant = false;
+                    float removed = bodies[j].mass;
+                    if (soft_body_pair && !compact_vs_soft &&
+                        (bodies[j].type == CTYPE_PLANET || bodies[j].type == CTYPE_MOON)) {
+                        float severity = std::clamp(
+                            0.28f + combined_disruption * 0.32f + disruption_j * 0.24f +
+                            std::min(overlap_fraction, 0.6f) * 0.30f, 0.10f, 0.70f);
+                        float remnant_fraction = std::max(1.0f - severity,
+                            impact_speed < fragment_speed_limit * 1.10f ? 0.45f : 0.28f);
+                        float remnant_mass = bodies[j].mass * remnant_fraction;
+                        if (remnant_mass > effective_min_frag_mass * 2.0f) {
+                            keep_remnant = true;
+                            removed = bodies[j].mass - remnant_mass;
+                            float mass_scale = std::cbrt(remnant_mass / std::max(bodies[j].mass, 1.0e-12f));
+                            bodies[j].mass = remnant_mass;
+                            bodies[j].radius = std::max(bodies[j].radius * mass_scale, 0.1f);
+                            bodies[j].frag_generation = std::min<uint32_t>(bodies[j].frag_generation + 1u,
+                                                                           (uint32_t)cfg.max_frag_generation);
+                            bodies[j].props_valid = false;
+                            bodies[j].visuals_valid = false;
                         }
                     }
+
+                    if (removed > effective_min_frag_mass * 0.25f) {
+                        spawn_fragments(bodies[j].pos, bodies[j].vel, removed,
+                                        shock_fragments, bodies[j].frag_generation,
+                                        bodies[j].temperature, impact_axis, ejecta_speed,
+                                        &bodies[j], std::max(disruption_j, combined_disruption));
+                        register_mass_loss(bodies[j], removed, std::max(dt, 1.0e-4f));
+                    }
+                    if (!keep_remnant) {
+                        bodies[j].marked_for_removal = true;
+                    } else {
+                        apply_impact_signature(
+                            bodies[j], -normal,
+                            std::clamp(disruption_j + combined_disruption * 0.30f, 0.0f, 1.4f),
+                            removed / std::max(removed + bodies[j].mass, 1.0e-8f),
+                            std::clamp(impact_energy * cfg.collision_heating / std::max(bodies[j].mass, 1.0e-6f), 0.0f, 1.6f),
+                            0.30f);
+                    }
+                } else {
+                    apply_impact_signature(
+                        bodies[j], -normal,
+                        std::clamp(disruption_j + combined_disruption * 0.20f, 0.0f, 1.2f),
+                        bodies[i].mass / std::max(total_mass, 1.0e-6f),
+                        std::clamp(impact_energy * cfg.collision_heating / std::max(bodies[j].mass, 1.0e-6f), 0.0f, 1.4f),
+                        std::clamp(bodies[i].radius / std::max(bodies[j].radius, 0.1f), 0.08f, 0.90f));
                 }
+            } else if (!is_star_type(bodies[i].type) && !is_black_hole_type(bodies[i].type) &&
+                       !is_star_type(bodies[j].type) && !is_black_hole_type(bodies[j].type)) {
+                apply_impact_signature(
+                    bodies[i], normal,
+                    std::clamp(disruption_i * 0.40f + combined_disruption * 0.16f, 0.0f, 0.70f),
+                    bodies[j].mass / std::max(total_mass, 1.0e-6f),
+                    std::clamp(impact_energy * cfg.collision_heating / std::max(bodies[i].mass, 1.0e-6f), 0.0f, 0.9f),
+                    std::clamp(bodies[j].radius / std::max(bodies[i].radius, 0.1f), 0.08f, 0.80f));
+                apply_impact_signature(
+                    bodies[j], -normal,
+                    std::clamp(disruption_j * 0.40f + combined_disruption * 0.16f, 0.0f, 0.70f),
+                    bodies[i].mass / std::max(total_mass, 1.0e-6f),
+                    std::clamp(impact_energy * cfg.collision_heating / std::max(bodies[j].mass, 1.0e-6f), 0.0f, 0.9f),
+                    std::clamp(bodies[i].radius / std::max(bodies[j].radius, 0.1f), 0.08f, 0.80f));
             }
         }
     }
@@ -1739,51 +1888,153 @@ void CosmosApp::process_collisions(float dt) {
 void CosmosApp::process_roche_limit(float dt) {
     auto& bodies = state.bodies;
     size_t n = bodies.size();
+    bool allow_disruption = cfg.roche_limit && (cfg.roche_limit_fluid || cfg.roche_limit_rigid);
 
-    for (size_t i = 0; i < n; i++) {
+    for (size_t i = 0; i < n; ++i) {
         if (bodies[i].marked_for_removal) continue;
-        for (size_t j = 0; j < n; j++) {
+        for (size_t j = 0; j < n; ++j) {
             if (i == j || bodies[j].marked_for_removal) continue;
-            if (bodies[i].mass <= bodies[j].mass * 10.0f) continue; // i must be much larger
+            if (is_black_hole_type(bodies[j].type)) continue;
+            if (bodies[i].mass <= bodies[j].mass * 2.5f) continue;
 
-            float dist = glm::length(bodies[j].pos - bodies[i].pos);
-            float rho_primary = body_density(bodies[i]);
-            float rho_secondary = body_density(bodies[j]);
-            float roche_coeff = cfg.tidal_forces ? 2.44f : 1.26f;
-            float roche_dist = roche_coeff * bodies[i].radius *
-                               std::cbrt(std::max(rho_primary / std::max(rho_secondary, 1.0e-6f), 0.1f));
+            glm::vec3 rel_vel = bodies[j].vel - bodies[i].vel;
+            glm::vec3 delta = bodies[j].pos - bodies[i].pos;
+            float dist = glm::length(delta);
+            bool fluid_like_secondary = roche_secondary_fluid_like(bodies[j]);
+            float roche_fluid = roche_distance_for_mode(bodies[i], bodies[j], true);
+            float roche_rigid = roche_distance_for_mode(bodies[i], bodies[j], false);
+            float heating_limit = std::max(roche_fluid, roche_rigid);
 
-            if (dist < roche_dist && dist > bodies[i].radius) {
-                float penetration = 1.0f - dist / std::max(roche_dist, 1.0f);
-                bodies[j].internal_energy += penetration * bodies[i].mass * 0.1f;
-                // Only tidally disrupt if body is large enough and not at generation limit
-                if (bodies[j].mass >= cfg.min_fragment_mass
-                    && (int)bodies[j].frag_generation < cfg.max_frag_generation) {
-                    float secondary_mass = bodies[j].mass;
-                    float ring_fraction = (cfg.planetary_rings && body_can_host_rings(bodies[i]))
-                        ? std::clamp(0.28f + penetration * 0.42f, 0.0f, 0.82f)
-                        : 0.0f;
-                    float ring_mass = secondary_mass * ring_fraction;
-                    if (ring_mass > 0.0f) {
-                        bodies[i].mass += ring_mass;
-                        add_ring_material(bodies[i], bodies[j], ring_mass, roche_dist);
-                    }
-
-                    float fragment_mass = std::max(secondary_mass - ring_mass, 0.0f);
-                    glm::vec3 tidal_axis = glm::normalize(bodies[j].pos - bodies[i].pos);
-                    if (fragment_mass > 1.0e-4f) {
-                        spawn_fragments(bodies[j].pos, bodies[j].vel,
-                                        fragment_mass, std::max(1, cfg.fragment_count - (ring_mass > 0.0f ? 1 : 0)),
-                                        bodies[j].frag_generation, bodies[j].temperature,
-                                        tidal_axis, std::max(1.5f, penetration * 12.0f),
-                                        &bodies[j], 0.55f + penetration * 0.75f);
-                        register_mass_loss(bodies[j], fragment_mass, std::max(dt, 1.0e-4f));
-                    }
-                    bodies[j].marked_for_removal = true;
-                    bodies[i].props_valid = false;
-                    bodies[i].visuals_valid = false;
+            float disruption_limit = 0.0f;
+            bool using_fluid_limit = false;
+            if (allow_disruption) {
+                if (fluid_like_secondary && cfg.roche_limit_fluid) {
+                    disruption_limit = roche_fluid;
+                    using_fluid_limit = true;
+                } else if (!fluid_like_secondary && cfg.roche_limit_rigid) {
+                    disruption_limit = roche_rigid;
+                    using_fluid_limit = false;
+                } else if (cfg.roche_limit_fluid && !cfg.roche_limit_rigid) {
+                    disruption_limit = roche_fluid;
+                    using_fluid_limit = true;
+                } else if (cfg.roche_limit_rigid && !cfg.roche_limit_fluid) {
+                    disruption_limit = roche_rigid;
+                    using_fluid_limit = false;
+                } else {
+                    disruption_limit = fluid_like_secondary ? roche_fluid : roche_rigid;
+                    using_fluid_limit = fluid_like_secondary;
                 }
             }
+
+            glm::vec3 prev_delta = delta - rel_vel * dt;
+            glm::vec3 seg = delta - prev_delta;
+            float seg_len2 = glm::dot(seg, seg);
+            float sweep_t = 0.0f;
+            if (seg_len2 > 1.0e-8f)
+                sweep_t = std::clamp(-glm::dot(prev_delta, seg) / seg_len2, 0.0f, 1.0f);
+            glm::vec3 closest_rel = prev_delta + seg * sweep_t;
+            float sweep_dist = glm::length(closest_rel);
+            float eval_dist = std::min(dist, sweep_dist);
+
+            float interaction_limit = 0.0f;
+            if (cfg.tidal_forces) interaction_limit = heating_limit;
+            if (allow_disruption) interaction_limit = std::max(interaction_limit, disruption_limit);
+            if (interaction_limit <= 0.0f || eval_dist >= interaction_limit) continue;
+            if (eval_dist <= std::max(bodies[i].radius * 1.01f, 1.0e-4f)) continue;
+
+            float heating_overflow = std::clamp((heating_limit - eval_dist) /
+                std::max(heating_limit, 1.0e-4f), 0.0f, 1.0f);
+            float disruption_overflow = (allow_disruption && disruption_limit > 0.0f)
+                ? std::clamp((disruption_limit - eval_dist) / std::max(disruption_limit, 1.0e-4f), 0.0f, 1.0f)
+                : 0.0f;
+            glm::vec3 tidal_axis = (sweep_dist < dist && sweep_dist > 1.0e-5f)
+                ? (closest_rel / sweep_dist)
+                : glm::normalize(delta);
+            if (glm::length(tidal_axis) < 1.0e-5f)
+                tidal_axis = glm::vec3(0.0f, 1.0f, 0.0f);
+
+            // Baseline tidal work/heat in Roche zone.
+            float tide_strain = cfg.G * bodies[i].mass * bodies[j].radius /
+                std::max(eval_dist * eval_dist * eval_dist, 1.0e-6f);
+            float tidal_work = tide_strain * (0.45f + heating_overflow * 2.0f) * dt * 1400.0f;
+            if (tidal_work > 0.0f) {
+                bodies[j].internal_energy += tidal_work;
+                bodies[j].temperature += std::min(tidal_work / std::max(bodies[j].mass * 0.08f, 1.0e-7f), 4000.0f);
+                if (bodies[j].type == CTYPE_PLANET || bodies[j].type == CTYPE_MOON) {
+                    bodies[j].impact_heat = std::max(
+                        bodies[j].impact_heat,
+                        std::clamp(heating_overflow * 0.75f, 0.0f, 0.95f));
+                    bodies[j].visuals_valid = false;
+                }
+            }
+            if (!allow_disruption || eval_dist >= disruption_limit)
+                continue;
+
+            float effective_min_frag_mass = std::max(1.0e-12f, std::min(cfg.min_fragment_mass, 1.0e-9f));
+            if (bodies[j].mass < effective_min_frag_mass ||
+                (int)bodies[j].frag_generation >= cfg.max_frag_generation) {
+                continue;
+            }
+
+            // Partial Roche stripping (instead of instant full deletion).
+            float secondary_mass = bodies[j].mass;
+            float local_orbital_speed = std::sqrt(std::max(cfg.G * bodies[i].mass /
+                std::max(eval_dist, 1.0e-6f), 0.0f));
+            float speed_ratio = glm::length(rel_vel) / std::max(local_orbital_speed, 1.0e-4f);
+            float dynamic_overflow = disruption_overflow +
+                std::clamp((speed_ratio - 0.8f) * 0.28f, 0.0f, 0.45f);
+            float strip_fraction = using_fluid_limit
+                ? std::clamp(0.10f + dynamic_overflow * 0.92f, 0.04f, 0.98f)
+                : std::clamp(0.06f + dynamic_overflow * 0.66f, 0.02f, 0.86f);
+            if (eval_dist < disruption_limit * (using_fluid_limit ? 0.62f : 0.52f) ||
+                disruption_overflow > (using_fluid_limit ? 0.72f : 0.82f))
+                strip_fraction = std::max(strip_fraction, using_fluid_limit ? 0.93f : 0.78f);
+            float stripped_mass = secondary_mass * strip_fraction;
+            if (stripped_mass <= 1.0e-9f) continue;
+
+            float ring_fraction = (cfg.planetary_rings && body_can_host_rings(bodies[i]))
+                ? std::clamp((using_fluid_limit ? 0.18f : 0.08f) + disruption_overflow * 0.32f, 0.0f, 0.75f)
+                : 0.0f;
+            float ring_mass = stripped_mass * ring_fraction;
+            if (ring_mass > 0.0f) {
+                bodies[i].mass += ring_mass;
+                add_ring_material(bodies[i], bodies[j], ring_mass, disruption_limit);
+                bodies[i].props_valid = false;
+                bodies[i].visuals_valid = false;
+            }
+
+            float fragment_mass = std::max(stripped_mass - ring_mass, 0.0f);
+            if (fragment_mass > 1.0e-9f) {
+                int fragment_count = std::clamp(
+                    std::max(1, cfg.fragment_count / 2 + (int)std::floor(disruption_overflow * (using_fluid_limit ? 3.8f : 2.4f))),
+                                                1, 10);
+                float speed_scale = using_fluid_limit ? 0.08f : 0.055f;
+                float roche_ejecta_speed = std::clamp(local_orbital_speed * (speed_scale + dynamic_overflow * 0.13f),
+                                                      0.0003f, using_fluid_limit ? 0.012f : 0.009f);
+                spawn_fragments(bodies[j].pos, bodies[j].vel, fragment_mass, fragment_count,
+                                bodies[j].frag_generation, bodies[j].temperature,
+                                tidal_axis, roche_ejecta_speed,
+                                &bodies[j], 0.45f + disruption_overflow * 0.90f);
+            }
+
+            register_mass_loss(bodies[j], stripped_mass, std::max(dt, 1.0e-4f));
+            float remaining_mass = std::max(secondary_mass - stripped_mass, 0.0f);
+            if (remaining_mass <= effective_min_frag_mass) {
+                bodies[j].marked_for_removal = true;
+                continue;
+            }
+
+            float mass_scale = std::cbrt(remaining_mass / std::max(secondary_mass, 1.0e-8f));
+            bodies[j].mass = remaining_mass;
+            bodies[j].radius = std::max(bodies[j].radius * mass_scale, 0.1f);
+            bodies[j].props_valid = false;
+            bodies[j].visuals_valid = false;
+            apply_impact_signature(
+                bodies[j], -tidal_axis,
+                std::clamp(disruption_overflow * 0.8f, 0.0f, 1.2f),
+                stripped_mass / std::max(secondary_mass, 1.0e-8f),
+                std::clamp(tidal_work / std::max(bodies[j].mass, 1.0e-8f), 0.0f, 1.0f),
+                std::clamp(0.18f + disruption_overflow * 0.45f, 0.08f, 0.92f));
         }
     }
 }
@@ -1844,27 +2095,41 @@ void CosmosApp::process_temperature(float dt) {
             }
 
             if (cfg.tidal_forces) {
-                CelestialBody& big = (bodies[i].mass >= bodies[j].mass) ? bodies[i] : bodies[j];
-                CelestialBody& small = (bodies[i].mass >= bodies[j].mass) ? bodies[j] : bodies[i];
-                if (&big != &small && dist > 1.0f && big.mass > small.mass * 5.0f) {
-                    float rho_big = body_density(big);
-                    float rho_small = body_density(small);
-                    float roche_dist = 2.44f * big.radius *
-                        std::cbrt(std::max(rho_big / std::max(rho_small, 1.0e-6f), 0.1f));
-                    float tidal_reach = std::max(roche_dist * 4.0f, big.radius * 2.0f);
+                size_t big_idx = (bodies[i].mass >= bodies[j].mass) ? i : j;
+                size_t small_idx = (big_idx == i) ? j : i;
+                CelestialBody& big = bodies[big_idx];
+                CelestialBody& small = bodies[small_idx];
+
+                if (dist > std::max(big.radius * 1.05f, 1.0f) && big.mass > small.mass * 2.0f) {
+                    bool fluid_like_small = roche_secondary_fluid_like(small);
+                    float roche_fluid = roche_distance_for_mode(big, small, true);
+                    float roche_rigid = roche_distance_for_mode(big, small, false);
+                    float roche_dist = 0.0f;
+                    if (cfg.roche_limit_fluid && cfg.roche_limit_rigid)
+                        roche_dist = fluid_like_small ? roche_fluid : roche_rigid;
+                    else if (cfg.roche_limit_fluid)
+                        roche_dist = roche_fluid;
+                    else if (cfg.roche_limit_rigid)
+                        roche_dist = roche_rigid;
+                    else
+                        roche_dist = std::max(roche_fluid, roche_rigid);
+                    float tidal_reach = std::max(roche_dist * 6.0f, big.radius * 3.0f);
                     if (dist < tidal_reach) {
                         float proximity = 1.0f - std::clamp((dist - big.radius) /
                             std::max(tidal_reach - big.radius, 1.0e-3f), 0.0f, 1.0f);
-                        float orbital_shear = glm::length(small.vel - big.vel);
-                        float spin_shear = std::abs(small.angular_vel - big.angular_vel * 0.35f);
-                        float tide = cfg.G * big.mass * small.radius / std::max(dist * dist * dist, 1.0e-6f);
-                        float dissipation = tide * (0.4f + orbital_shear * 180.0f + spin_shear * 3200.0f) *
-                                            proximity * proximity * dt * 220.0f;
+                        float orbital_rate = std::sqrt(std::max(cfg.G * (big.mass + small.mass) /
+                            std::max(dist * dist * dist, 1.0e-6f), 0.0f));
+                        float spin_mismatch = std::abs(std::abs(small.angular_vel) - orbital_rate);
+                        float shear_speed = glm::length(small.vel - big.vel);
+                        float strain = cfg.G * big.mass * small.radius / std::max(dist * dist * dist, 1.0e-6f);
+                        float dissipation = strain * strain *
+                            (0.20f + spin_mismatch * 3600.0f + shear_speed * 0.12f) *
+                            proximity * proximity * dt * 18000.0f;
                         if (dissipation > 0.0f) {
                             small.internal_energy += dissipation;
-                            small.temperature += std::min(dissipation / std::max(small.mass * 0.06f, 1.0e-5f), 8000.0f);
+                            small.temperature += std::min(dissipation / std::max(small.mass * 0.08f, 1.0e-7f), 12000.0f);
                             if (small.type == CTYPE_PLANET || small.type == CTYPE_MOON) {
-                                small.impact_heat = std::max(small.impact_heat, std::clamp(proximity * 0.65f, 0.0f, 0.75f));
+                                small.impact_heat = std::max(small.impact_heat, std::clamp(proximity * 0.75f, 0.0f, 0.95f));
                                 small.visuals_valid = false;
                             }
                         }
@@ -2066,17 +2331,51 @@ void CosmosApp::process_evaporation(float dt) {
         if (b.marked_for_removal) continue;
         if (is_star_type(b.type) || is_black_hole_type(b.type)) continue;
 
-        // Hot small bodies (comets, asteroids) lose mass
-        if (b.temperature > 500.0f && b.mass < 1.0f) {
-            float loss = cfg.evaporation_rate * (b.temperature / 1000.0f) * dt;
-            loss = std::min(loss, b.mass * 0.25f);
-            b.mass -= loss;
-            b.radius *= 0.999f; // shrink slightly
-            register_mass_loss(b, loss, dt);
-
-            if (b.mass < 0.001f) {
-                b.marked_for_removal = true;
+        if (b.type == CTYPE_PLANET || b.type == CTYPE_MOON) {
+            float vapor_threshold = 650.0f;
+            if (b.cached_props.planet_class == PCLASS_GAS_GIANT ||
+                b.cached_props.planet_class == PCLASS_ICE_GIANT) {
+                vapor_threshold = 900.0f;
             }
+
+            if (b.temperature > vapor_threshold) {
+                float heat_factor = (b.temperature - vapor_threshold) / std::max(vapor_threshold, 1.0f);
+                float escape = body_escape_velocity(b, cfg.G);
+                float escape_resist = 0.18f + escape * 0.42f;
+                float class_scale = (b.cached_props.planet_class == PCLASS_GAS_GIANT ||
+                                     b.cached_props.planet_class == PCLASS_ICE_GIANT) ? 0.45f : 1.0f;
+                float loss = cfg.evaporation_rate * heat_factor * dt * 0.060f * class_scale /
+                             std::max(escape_resist, 0.12f);
+                loss = std::min(loss, b.mass * 0.030f);
+                if (loss > 0.0f) {
+                    b.mass -= loss;
+                    b.radius = std::max(b.radius * 0.99985f, 0.08f);
+                    b.atmosphere_retention = std::max(0.0f, b.atmosphere_retention - loss / std::max(b.mass + loss, 1.0e-12f));
+                    b.props_valid = false;
+                    b.visuals_valid = false;
+                    register_mass_loss(b, loss, dt);
+                }
+            }
+            continue;
+        }
+
+        if (b.type != CTYPE_ASTEROID && b.type != CTYPE_COMET && b.type != CTYPE_NEBULA) continue;
+
+        float vapor_threshold = (b.type == CTYPE_COMET) ? 220.0f : 700.0f;
+        if (b.temperature <= vapor_threshold) continue;
+
+        float heat_factor = (b.temperature - vapor_threshold) / std::max(vapor_threshold, 1.0f);
+        float loss = cfg.evaporation_rate * heat_factor * dt *
+            (b.type == CTYPE_NEBULA ? 0.12f : (b.type == CTYPE_COMET ? 0.07f : 0.05f));
+        loss = std::min(loss, b.mass * 0.08f);
+        if (loss <= 0.0f) continue;
+
+        b.mass -= loss;
+        b.radius = std::max(b.radius * 0.9996f, 0.05f);
+        register_mass_loss(b, loss, dt);
+
+        if (b.mass < 5.0e-11f) {
+            b.marked_for_removal = true;
         }
     }
 }
@@ -2167,6 +2466,85 @@ void CosmosApp::process_stellar_evolution(float dt) {
 
 void CosmosApp::cleanup_bodies() {
     auto& bodies = state.bodies;
+
+    auto finite_vec3 = [](const glm::vec3& v) {
+        return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+    };
+    for (auto& b : bodies) {
+        bool invalid = !finite_vec3(b.pos) || !finite_vec3(b.vel) ||
+            !std::isfinite(b.mass) || !std::isfinite(b.radius) ||
+            !std::isfinite(b.temperature) || !std::isfinite(b.internal_energy) ||
+            b.mass <= 0.0f || b.radius <= 0.0f;
+        if (invalid)
+            b.marked_for_removal = true;
+        if (is_star_type(b.type) || is_black_hole_type(b.type) ||
+            b.type == CTYPE_PLANET || b.type == CTYPE_MOON) {
+            b.non_attracting = false;
+        }
+    }
+
+    if (cfg.dynamic_budget_enabled) {
+        int max_fragments = std::max(cfg.dynamic_max_fragments, 0);
+        int max_non_attracting = std::max(cfg.dynamic_max_non_attracting, 0);
+        float reduction = std::clamp(cfg.dynamic_reduction_percent, 0.01f, 1.0f);
+        float target_fps = std::max(cfg.dynamic_target_fps, 1.0f);
+
+        std::vector<size_t> attracting_fragments;
+        std::vector<size_t> non_attracting_fragments;
+        attracting_fragments.reserve(bodies.size());
+        non_attracting_fragments.reserve(bodies.size());
+
+        for (size_t i = 0; i < bodies.size(); ++i) {
+            const auto& b = bodies[i];
+            if (b.marked_for_removal) continue;
+            if (!fragment_like_body(b)) continue;
+            if (b.non_attracting) non_attracting_fragments.push_back(i);
+            else attracting_fragments.push_back(i);
+        }
+
+        if ((int)attracting_fragments.size() > max_fragments) {
+            int to_convert = (int)attracting_fragments.size() - max_fragments;
+            std::sort(attracting_fragments.begin(), attracting_fragments.end(),
+                      [&](size_t a, size_t b) {
+                          const auto& ba = bodies[a];
+                          const auto& bb = bodies[b];
+                          if (std::abs(ba.mass - bb.mass) > 1.0e-12f)
+                              return ba.mass < bb.mass;
+                          return ba.age > bb.age;
+                      });
+            for (int k = 0; k < to_convert && k < (int)attracting_fragments.size(); ++k) {
+                size_t idx = attracting_fragments[(size_t)k];
+                bodies[idx].non_attracting = true;
+                non_attracting_fragments.push_back(idx);
+            }
+        }
+
+        int desired_non_attracting = max_non_attracting;
+        if (smoothed_fps_ < target_fps) {
+            float deficit = std::clamp((target_fps - smoothed_fps_) / target_fps, 0.0f, 1.0f);
+            int fps_cut = (int)std::ceil((float)non_attracting_fragments.size() *
+                                         reduction * (0.50f + deficit * 1.50f));
+            desired_non_attracting = std::max(0, desired_non_attracting - fps_cut);
+        }
+
+        if ((int)non_attracting_fragments.size() > desired_non_attracting) {
+            int overflow = (int)non_attracting_fragments.size() - desired_non_attracting;
+            int chunk = (int)std::ceil((float)non_attracting_fragments.size() * reduction);
+            int to_remove = std::max(overflow, chunk);
+            std::sort(non_attracting_fragments.begin(), non_attracting_fragments.end(),
+                      [&](size_t a, size_t b) {
+                          const auto& ba = bodies[a];
+                          const auto& bb = bodies[b];
+                          if (std::abs(ba.mass - bb.mass) > 1.0e-12f)
+                              return ba.mass < bb.mass;
+                          return ba.age > bb.age;
+                      });
+            for (int k = 0; k < to_remove && k < (int)non_attracting_fragments.size(); ++k) {
+                bodies[non_attracting_fragments[(size_t)k]].marked_for_removal = true;
+            }
+        }
+    }
+
     bool any_removed = false;
     for (const auto& b : bodies) {
         if (b.marked_for_removal) { any_removed = true; break; }
@@ -2215,8 +2593,27 @@ void CosmosApp::spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, 
                                 glm::vec3 impact_axis, float ejecta_speed,
                                 const CelestialBody* source_body, float shock_ratio) {
     if (count < 1 || total_mass <= 0.0f) return;
+    if (!std::isfinite(total_mass) || !std::isfinite(pos.x) || !std::isfinite(pos.y) || !std::isfinite(pos.z) ||
+        !std::isfinite(vel.x) || !std::isfinite(vel.y) || !std::isfinite(vel.z)) return;
+    if ((int)parent_generation >= cfg.max_frag_generation) return;
 
-    constexpr float kMinFragmentMass = 0.001f;
+    size_t body_count = state.bodies.size();
+    if (cfg.dynamic_budget_enabled) {
+        int attract_cap = std::max(cfg.dynamic_max_fragments, 0);
+        int non_attract_cap = std::max(cfg.dynamic_max_non_attracting, 0);
+        int total_budget_cap = std::max(attract_cap + non_attract_cap + 256, 1);
+        if ((int)body_count >= total_budget_cap) return;
+        int capacity = total_budget_cap - (int)body_count;
+        count = std::min(count, capacity);
+
+        int per_event_cap = std::max(
+            1, (int)std::ceil((float)non_attract_cap *
+                std::clamp(cfg.dynamic_explosion_density, 0.01f, 1.0f)));
+        count = std::min(count, per_event_cap);
+    }
+    if (count < 1) return;
+
+    float kMinFragmentMass = std::max(1.0e-12f, std::min(cfg.min_fragment_mass, 1.0e-9f));
     int max_count = std::max(1, (int)std::floor(total_mass / kMinFragmentMass));
     count = std::min(count, max_count);
     if (count < 1) count = 1;
@@ -2241,10 +2638,18 @@ void CosmosApp::spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, 
         masses[(size_t)i] += remaining_mass * (weights[(size_t)i] / std::max(weight_sum, 1.0e-6f));
     masses.back() += total_mass - std::accumulate(masses.begin(), masses.end(), 0.0f);
 
-    glm::vec3 axis = glm::length(impact_axis) > 1.0e-4f
-        ? glm::normalize(impact_axis)
-        : glm::normalize(glm::vec3(u01(rng) * 2.0f - 1.0f, u01(rng) * 2.0f - 1.0f, u01(rng) * 2.0f - 1.0f));
-    float base_ejecta = std::max(ejecta_speed, 4.0f);
+    auto safe_normalize = [](const glm::vec3& v, const glm::vec3& fallback) {
+        float l2 = glm::dot(v, v);
+        if (!std::isfinite(l2) || l2 < 1.0e-12f) return fallback;
+        return v / std::sqrt(l2);
+    };
+    glm::vec3 axis = safe_normalize(impact_axis, glm::vec3(0.0f, 1.0f, 0.0f));
+    if (glm::dot(axis, axis) < 1.0e-8f) {
+        axis = safe_normalize(glm::vec3(u01(rng) * 2.0f - 1.0f,
+                                        u01(rng) * 2.0f - 1.0f,
+                                        u01(rng) * 2.0f - 1.0f),
+                              glm::vec3(0.0f, 1.0f, 0.0f));
+    }
     MaterialComposition source_materials{};
     if (source_body != nullptr) {
         source_materials = derive_materials(*source_body);
@@ -2252,14 +2657,49 @@ void CosmosApp::spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, 
         source_materials.silicate = 0.75f;
         source_materials.iron = 0.25f;
     }
+    bool energetic_source = source_body != nullptr &&
+        (is_star_type(source_body->type) || is_black_hole_type(source_body->type) ||
+         source_body->type == CTYPE_NEBULA);
+    float min_ejecta = energetic_source ? 4.0f : 0.004f;
+    float max_ejecta = energetic_source ? 120.0f : 0.080f;
+    float base_ejecta = std::clamp(std::max(ejecta_speed, min_ejecta), min_ejecta, max_ejecta);
+    if (!std::isfinite(base_ejecta)) base_ejecta = min_ejecta;
     bool gas_source = (source_body != nullptr) && gas_dominated_body(*source_body, source_materials);
     float normalized_shock = std::clamp(shock_ratio, 0.0f, 2.0f);
-    float gas_frag_chance = std::clamp(source_materials.hydrogen * (0.28f + normalized_shock * 0.22f), 0.0f, 0.78f);
+    float gas_frag_chance = gas_source
+        ? std::clamp(source_materials.hydrogen * (0.28f + normalized_shock * 0.22f), 0.0f, 0.78f)
+        : 0.0f;
     float icy_frag_chance = std::clamp(source_materials.water * (0.22f + std::max(0.0f, 0.70f - normalized_shock) * 0.30f),
                                        0.0f, 0.62f);
     float molten_bias = std::clamp((source_temperature - 900.0f) / 1500.0f + normalized_shock * 0.55f +
                                    source_materials.silicate * 0.16f + source_materials.iron * 0.20f,
                                    0.0f, 1.35f);
+
+    // Planetary breakups should produce a few dominant chunks instead of equal tiny shards.
+    if (!energetic_source && count <= 6 && remaining_mass > 0.0f) {
+        int dom = (int)(u01(rng) * (float)count);
+        if (dom >= count) dom = count - 1;
+        float target_dom = std::clamp(total_mass * (0.35f + u01(rng) * 0.20f),
+                                      total_mass * 0.25f, total_mass * 0.60f);
+        float current_dom = masses[(size_t)dom];
+        float extra = std::max(target_dom - current_dom, 0.0f);
+        if (extra > 0.0f) {
+            float donor_total = 0.0f;
+            for (int i = 0; i < count; ++i) {
+                if (i == dom) continue;
+                donor_total += std::max(masses[(size_t)i] - kMinFragmentMass, 0.0f);
+            }
+            if (donor_total > 1.0e-12f) {
+                for (int i = 0; i < count; ++i) {
+                    if (i == dom) continue;
+                    float avail = std::max(masses[(size_t)i] - kMinFragmentMass, 0.0f);
+                    float take = extra * (avail / donor_total);
+                    masses[(size_t)i] -= take;
+                    masses[(size_t)dom] += take;
+                }
+            }
+        }
+    }
 
     std::vector<glm::vec3> rel_vels((size_t)count, glm::vec3(0.0f));
     glm::vec3 momentum_bias(0.0f);
@@ -2268,8 +2708,24 @@ void CosmosApp::spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, 
         float z = u01(rng) * 2.0f - 1.0f;
         float r = std::sqrt(std::max(1.0f - z * z, 0.0f));
         glm::vec3 rand_dir(r * std::cos(theta), z, r * std::sin(theta));
-        glm::vec3 dir = glm::normalize(glm::mix(rand_dir, axis, 0.45f + 0.25f * u01(rng)));
-        float speed = base_ejecta * (0.55f + u01(rng) * 0.9f);
+        glm::vec3 dir;
+        float speed = 0.0f;
+        if (energetic_source) {
+            dir = safe_normalize(glm::mix(rand_dir, axis, 0.45f + 0.25f * u01(rng)), axis);
+            speed = base_ejecta * (0.55f + u01(rng) * 0.90f);
+        } else {
+            glm::vec3 planar = rand_dir - axis * glm::dot(rand_dir, axis);
+            if (glm::length(planar) < 1.0e-5f) {
+                planar = glm::cross(axis, glm::vec3(0.0f, 1.0f, 0.0f));
+                if (glm::length(planar) < 1.0e-5f)
+                    planar = glm::cross(axis, glm::vec3(1.0f, 0.0f, 0.0f));
+            }
+            if (glm::length(planar) < 1.0e-5f)
+                planar = glm::vec3(1.0f, 0.0f, 0.0f);
+            dir = safe_normalize(glm::mix(safe_normalize(planar, glm::vec3(1.0f, 0.0f, 0.0f)), axis,
+                                          0.12f + 0.08f * u01(rng)), axis);
+            speed = base_ejecta * (0.65f + u01(rng) * 0.45f);
+        }
         rel_vels[(size_t)i] = dir * speed;
         momentum_bias += rel_vels[(size_t)i] * masses[(size_t)i];
     }
@@ -2277,14 +2733,27 @@ void CosmosApp::spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, 
     for (auto& rv : rel_vels)
         rv -= momentum_bias;
 
+    int attracting_fragments_now = 0;
+    if (cfg.dynamic_budget_enabled) {
+        for (const auto& b : state.bodies) {
+            if (b.marked_for_removal) continue;
+            if (!fragment_like_body(b)) continue;
+            if (!b.non_attracting) ++attracting_fragments_now;
+        }
+    }
+    int max_attracting_fragments = std::max(cfg.dynamic_max_fragments, 0);
+
     for (int i = 0; i < count; i++) {
         float frag_mass = masses[(size_t)i];
         float frag_radius = std::max(1.2f, std::cbrt(std::max(frag_mass, kMinFragmentMass)) * 3.0f);
 
         CelestialBody frag;
-        glm::vec3 dir = glm::normalize(rel_vels[(size_t)i] + axis * 0.1f);
+        glm::vec3 dir = safe_normalize(rel_vels[(size_t)i] + axis * 0.1f, axis);
         frag.pos = pos + dir * (frag_radius * 1.5f + 1.0f);
         frag.vel = vel + rel_vels[(size_t)i];
+        if (!std::isfinite(frag.vel.x) || !std::isfinite(frag.vel.y) || !std::isfinite(frag.vel.z) ||
+            !std::isfinite(frag.pos.x) || !std::isfinite(frag.pos.y) || !std::isfinite(frag.pos.z))
+            continue;
         frag.mass = frag_mass;
         frag.radius = frag_radius;
         frag.temperature = std::clamp(source_temperature +
@@ -2292,7 +2761,7 @@ void CosmosApp::spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, 
                                       (0.55f + u01(rng) * 0.95f),
                                       40.0f, 30000.0f);
         float type_roll = u01(rng);
-        if ((gas_source || normalized_shock > 0.95f) && type_roll < gas_frag_chance) {
+        if (gas_source && type_roll < gas_frag_chance) {
             frag.type = CTYPE_NEBULA;
             frag.radius = std::max(frag_radius * 1.35f, std::cbrt(std::max(frag_mass, kMinFragmentMass)) * 24.0f);
             frag.temperature = std::max(60.0f, frag.temperature * 0.55f);
@@ -2327,6 +2796,16 @@ void CosmosApp::spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, 
         frag.seed = rng();
         frag.frag_generation = parent_generation + 1;
         frag.angular_vel = (u01(rng) * 2.0f - 1.0f) * 0.01f;
+        if (cfg.dynamic_budget_enabled) {
+            if (attracting_fragments_now >= max_attracting_fragments) {
+                frag.non_attracting = true;
+            } else {
+                frag.non_attracting = false;
+                ++attracting_fragments_now;
+            }
+        } else {
+            frag.non_attracting = false;
+        }
         frag.name = generate_body_name(frag.seed, frag.type);
         clear_ring_system(frag);
         clear_impact_signature(frag);

@@ -45,7 +45,7 @@ public:
     double last_mouse_x = 0, last_mouse_y = 0;
     int    selected_body = -1;
     int    spawn_type = CTYPE_PLANET;
-    float  spawn_mass = 1.0f;
+    float  spawn_mass = 3.003e-6f;
 
     // Hit-test: find body under screen coordinates
     int pick_body(float mx, float my, float W, float H) const;
@@ -99,6 +99,8 @@ private:
 
     CosmosRaytracer raytracer_;
     float sim_time_ = 0.0f;
+    float smoothed_fps_ = 60.0f;
+    bool  reverse_time_ = false;
 
     // Splash + menu background particles
     float splash_time_ = 0.0f;

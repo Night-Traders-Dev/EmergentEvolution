@@ -11,7 +11,7 @@ struct alignas(16) CameraUBOData {
     glm::vec4 eye_pos;          // 16 bytes
     glm::vec4 screen_info;      // 16 bytes (w,h,count,time)
     glm::vec4 lighting_params;  // 16 bytes (star,uniform,ambient,fastStar)
-    glm::vec4 quality_params;   // 16 bytes (quality,hq,reserved,reserved)
+    glm::vec4 quality_params;   // 16 bytes (quality,hq,bgPreset,reserved)
     glm::vec4 render_flags;     // 16 bytes (bg,corona,cometTails,bhLensing)
     glm::vec4 fabric_params;    // 16 bytes (enabled,gridSize,warpStrength,G)
     glm::vec4 fabric_center;    // 16 bytes (plane center xyz)
@@ -288,7 +288,7 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     cam.quality_params = glm::vec4(
         (float)cfg.cosmos_quality,
         cfg.cosmos_hq_shading ? 1.0f : 0.0f,
-        0.0f,
+        (float)std::clamp(cfg.cosmos_background_preset, 0, 4),
         0.0f);
     cam.render_flags = glm::vec4(
         cfg.cosmos_background_starfield ? 1.0f : 0.0f,

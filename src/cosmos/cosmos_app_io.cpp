@@ -1,11 +1,12 @@
 #include "cosmos/cosmos_app_internal.h"
 
+#include <algorithm>
 #include <fstream>
 
 namespace {
 
 constexpr uint32_t COSMOS_MAGIC   = 0x534D4F43; // "COSM"
-constexpr uint32_t COSMOS_VERSION = 4;
+constexpr uint32_t COSMOS_VERSION = 6;
 
 #pragma pack(push, 1)
 struct BodyPODV1 {
@@ -75,6 +76,39 @@ struct BodyPODV3 {
     uint32_t name_len;
 };
 
+struct BodyPODV5 {
+    float pos[3];
+    float vel[3];
+    float mass;
+    float radius;
+    float temperature;
+    uint32_t type;
+    int32_t parent;
+    float age;
+    float internal_energy;
+    float luminosity;
+    float fuel;
+    float atmosphere_retention;
+    float phase_intensity;
+    float collapse_progress;
+    float ring_inner_radius;
+    float ring_outer_radius;
+    float ring_density;
+    float ring_ice_fraction;
+    float ring_tilt;
+    float impact_normal[3];
+    float impact_crater_strength;
+    float impact_heat;
+    float impact_radius;
+    float impact_ejecta;
+    float angular_vel;
+    uint32_t stellar_stage;
+    uint32_t material_phase;
+    uint32_t seed;
+    uint32_t frag_generation;
+    uint32_t name_len;
+};
+
 struct BodyPOD {
     float pos[3];
     float vel[3];
@@ -105,6 +139,7 @@ struct BodyPOD {
     uint32_t material_phase;
     uint32_t seed;
     uint32_t frag_generation;
+    uint8_t non_attracting;
     uint32_t name_len;
 };
 #pragma pack(pop)
@@ -138,6 +173,9 @@ bool CosmosApp::save_simulation(const std::string& path) {
     if (cfg.parallel_gravity) flags |= 1024;
     if (cfg.material_phases) flags |= 2048;
     if (cfg.planetary_rings) flags |= 4096;
+    if (cfg.roche_limit_fluid) flags |= 8192;
+    if (cfg.roche_limit_rigid) flags |= 16384;
+    if (cfg.dynamic_budget_enabled) flags |= 32768;
     f.write(reinterpret_cast<const char*>(&flags), sizeof(uint32_t));
 
     f.write(reinterpret_cast<const char*>(&cfg.merge_speed_threshold), sizeof(float));
@@ -150,6 +188,11 @@ bool CosmosApp::save_simulation(const std::string& path) {
     f.write(reinterpret_cast<const char*>(&cfg.ambient_strength), sizeof(float));
     f.write(reinterpret_cast<const char*>(&cfg.min_fragment_mass), sizeof(float));
     f.write(reinterpret_cast<const char*>(&cfg.max_frag_generation), sizeof(int));
+    f.write(reinterpret_cast<const char*>(&cfg.dynamic_max_fragments), sizeof(int));
+    f.write(reinterpret_cast<const char*>(&cfg.dynamic_max_non_attracting), sizeof(int));
+    f.write(reinterpret_cast<const char*>(&cfg.dynamic_explosion_density), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.dynamic_reduction_percent), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.dynamic_target_fps), sizeof(float));
 
     uint32_t body_count = (uint32_t)state.bodies.size();
     f.write(reinterpret_cast<const char*>(&body_count), 4);
@@ -187,6 +230,7 @@ bool CosmosApp::save_simulation(const std::string& path) {
         pod.material_phase = b.material_phase;
         pod.seed = b.seed;
         pod.frag_generation = b.frag_generation;
+        pod.non_attracting = b.non_attracting ? 1u : 0u;
         pod.name_len = (uint32_t)b.name.size();
         f.write(reinterpret_cast<const char*>(&pod), sizeof(BodyPOD));
         if (pod.name_len > 0)
@@ -232,6 +276,15 @@ bool CosmosApp::load_simulation(const std::string& path) {
     cfg.parallel_gravity        = (flags & 1024) != 0;
     cfg.material_phases         = (flags & 2048) != 0;
     cfg.planetary_rings         = (flags & 4096) != 0;
+    if (version >= 5) {
+        cfg.roche_limit_fluid   = (flags & 8192) != 0;
+        cfg.roche_limit_rigid   = (flags & 16384) != 0;
+    } else {
+        cfg.roche_limit_fluid = true;
+        cfg.roche_limit_rigid = true;
+    }
+    if (version >= 6) cfg.dynamic_budget_enabled = (flags & 32768) != 0;
+    else cfg.dynamic_budget_enabled = true;
     if (version < 3) {
         cfg.material_phases = true;
         cfg.planetary_rings = true;
@@ -247,6 +300,33 @@ bool CosmosApp::load_simulation(const std::string& path) {
     f.read(reinterpret_cast<char*>(&cfg.ambient_strength), sizeof(float));
     f.read(reinterpret_cast<char*>(&cfg.min_fragment_mass), sizeof(float));
     f.read(reinterpret_cast<char*>(&cfg.max_frag_generation), sizeof(int));
+    if (version >= 6) {
+        f.read(reinterpret_cast<char*>(&cfg.dynamic_max_fragments), sizeof(int));
+        f.read(reinterpret_cast<char*>(&cfg.dynamic_max_non_attracting), sizeof(int));
+        f.read(reinterpret_cast<char*>(&cfg.dynamic_explosion_density), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.dynamic_reduction_percent), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.dynamic_target_fps), sizeof(float));
+    } else {
+        cfg.dynamic_max_fragments = 300;
+        cfg.dynamic_max_non_attracting = 900;
+        cfg.dynamic_explosion_density = 0.25f;
+        cfg.dynamic_reduction_percent = 0.20f;
+        cfg.dynamic_target_fps = 60.0f;
+    }
+
+    // Clamp legacy/invalid values from old saves to sane runtime ranges.
+    cfg.merge_speed_threshold = std::max(cfg.merge_speed_threshold, 0.1f);
+    cfg.fragment_speed_threshold = std::max(cfg.fragment_speed_threshold, 0.1f);
+    cfg.fragment_count = std::clamp(cfg.fragment_count, 1, 12);
+    cfg.min_fragment_mass = std::clamp(cfg.min_fragment_mass, 1.0e-9f, 10.0f);
+    cfg.max_frag_generation = std::clamp(cfg.max_frag_generation, 0, 8);
+    cfg.dynamic_max_fragments = std::clamp(cfg.dynamic_max_fragments, 0, 10000);
+    cfg.dynamic_max_non_attracting = std::clamp(cfg.dynamic_max_non_attracting, 0, 50000);
+    cfg.dynamic_explosion_density = std::clamp(cfg.dynamic_explosion_density, 0.01f, 1.0f);
+    cfg.dynamic_reduction_percent = std::clamp(cfg.dynamic_reduction_percent, 0.01f, 1.0f);
+    cfg.dynamic_target_fps = std::clamp(cfg.dynamic_target_fps, 1.0f, 1000.0f);
+    if (version <= 4 && cfg.min_fragment_mass >= 0.05f)
+        cfg.min_fragment_mass = 1.0e-8f;
 
     uint32_t body_count = 0;
     f.read(reinterpret_cast<char*>(&body_count), 4);
@@ -258,7 +338,7 @@ bool CosmosApp::load_simulation(const std::string& path) {
     for (uint32_t i = 0; i < body_count; i++) {
         CelestialBody b;
         uint32_t name_len = 0;
-        if (version >= 4) {
+        if (version >= 6) {
             BodyPOD pod{};
             f.read(reinterpret_cast<char*>(&pod), sizeof(BodyPOD));
             b.pos = {pod.pos[0], pod.pos[1], pod.pos[2]};
@@ -290,6 +370,41 @@ bool CosmosApp::load_simulation(const std::string& path) {
             b.material_phase = pod.material_phase;
             b.seed = pod.seed;
             b.frag_generation = pod.frag_generation;
+            b.non_attracting = pod.non_attracting != 0;
+            name_len = pod.name_len;
+        } else if (version >= 4) {
+            BodyPODV5 pod{};
+            f.read(reinterpret_cast<char*>(&pod), sizeof(BodyPODV5));
+            b.pos = {pod.pos[0], pod.pos[1], pod.pos[2]};
+            b.vel = {pod.vel[0], pod.vel[1], pod.vel[2]};
+            b.mass = pod.mass;
+            b.radius = pod.radius;
+            b.temperature = pod.temperature;
+            b.type = pod.type;
+            b.parent = pod.parent;
+            b.age = pod.age;
+            b.internal_energy = pod.internal_energy;
+            b.luminosity = pod.luminosity;
+            b.fuel = pod.fuel;
+            b.atmosphere_retention = pod.atmosphere_retention;
+            b.phase_intensity = pod.phase_intensity;
+            b.collapse_progress = pod.collapse_progress;
+            b.ring_inner_radius = pod.ring_inner_radius;
+            b.ring_outer_radius = pod.ring_outer_radius;
+            b.ring_density = pod.ring_density;
+            b.ring_ice_fraction = pod.ring_ice_fraction;
+            b.ring_tilt = pod.ring_tilt;
+            b.impact_normal = {pod.impact_normal[0], pod.impact_normal[1], pod.impact_normal[2]};
+            b.impact_crater_strength = pod.impact_crater_strength;
+            b.impact_heat = pod.impact_heat;
+            b.impact_radius = pod.impact_radius;
+            b.impact_ejecta = pod.impact_ejecta;
+            b.angular_vel = pod.angular_vel;
+            b.stellar_stage = pod.stellar_stage;
+            b.material_phase = pod.material_phase;
+            b.seed = pod.seed;
+            b.frag_generation = pod.frag_generation;
+            b.non_attracting = false;
             name_len = pod.name_len;
         } else if (version >= 3) {
             BodyPODV3 pod{};
@@ -427,6 +542,7 @@ bool CosmosApp::export_body(int index, const std::string& path) {
     f << "stellar_stage " << b.stellar_stage << "\n";
     f << "parent " << b.parent << "\n";
     f << "frag_generation " << b.frag_generation << "\n";
+    f << "non_attracting " << (b.non_attracting ? 1 : 0) << "\n";
 
     return f.good();
 }
@@ -472,6 +588,11 @@ bool CosmosApp::import_body(const std::string& path) {
         else if (key == "stellar_stage") { f >> b.stellar_stage; }
         else if (key == "parent") { f >> b.parent; }
         else if (key == "frag_generation") { f >> b.frag_generation; }
+        else if (key == "non_attracting") {
+            int v = 0;
+            f >> v;
+            b.non_attracting = (v != 0);
+        }
     }
 
     if (b.name == "Unnamed") b.name.clear();

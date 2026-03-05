@@ -154,6 +154,154 @@ void CosmosApp::render_overlay() {
 
     ImDrawList* fg = ImGui::GetForegroundDrawList();
 
+    if (cfg.show_orbits) {
+        auto resolve_display_parent = [&](int body_idx) -> int {
+            if (body_idx < 0 || body_idx >= (int)state.bodies.size())
+                return -1;
+            const auto& body = state.bodies[body_idx];
+            if (body.marked_for_removal) return -1;
+
+            if (body.parent >= 0 && body.parent < (int)state.bodies.size() && body.parent != body_idx) {
+                const auto& parent = state.bodies[body.parent];
+                if (!parent.marked_for_removal && parent.mass > body.mass * 0.25f)
+                    return body.parent;
+            }
+
+            int best = -1;
+            double best_pull = 0.0;
+            for (int k = 0; k < (int)state.bodies.size(); ++k) {
+                if (k == body_idx) continue;
+                const auto& cand = state.bodies[k];
+                if (cand.marked_for_removal) continue;
+                if (cand.mass <= body.mass * 1.05f && !is_star_type(cand.type) && !is_black_hole_type(cand.type))
+                    continue;
+                glm::dvec3 d = glm::dvec3(cand.pos) - glm::dvec3(body.pos);
+                double dist2 = glm::dot(d, d);
+                if (dist2 < 1.0e-8) continue;
+                double pull = (double)cand.mass / dist2;
+                if (pull > best_pull) {
+                    best_pull = pull;
+                    best = k;
+                }
+            }
+            return best;
+        };
+
+        constexpr double PI = 3.141592653589793;
+        int rendered = 0;
+        const int orbit_cap = std::min(300, (int)state.bodies.size());
+        for (int i = 0; i < (int)state.bodies.size() && rendered < orbit_cap; ++i) {
+            const auto& body = state.bodies[i];
+            if (body.marked_for_removal) continue;
+            if (is_star_type(body.type) || is_black_hole_type(body.type)) continue;
+
+            int parent_idx = resolve_display_parent(i);
+            if (parent_idx < 0 || parent_idx == i) continue;
+            const auto& parent = state.bodies[parent_idx];
+            if (parent.marked_for_removal) continue;
+
+            glm::dvec3 r = glm::dvec3(body.pos) - glm::dvec3(parent.pos);
+            glm::dvec3 v = glm::dvec3(body.vel) - glm::dvec3(parent.vel);
+            double rmag = glm::length(r);
+            if (rmag < 1.0e-6) continue;
+
+            double mu = (double)cfg.G * std::max((double)parent.mass + (double)body.mass, 1.0e-8);
+            if (mu <= 0.0) continue;
+
+            glm::dvec3 h = glm::cross(r, v);
+            double hmag = glm::length(h);
+            if (hmag < 1.0e-10) continue;
+            glm::dvec3 h_hat = h / hmag;
+
+            glm::dvec3 evec = glm::cross(v, h) / mu - (r / rmag);
+            double ecc = glm::length(evec);
+            double energy = 0.5 * glm::dot(v, v) - mu / rmag;
+            if (!std::isfinite(ecc) || !std::isfinite(energy)) continue;
+
+            bool bound = (energy < -1.0e-8 && ecc < 0.9995);
+            bool hyperbolic = (energy > 1.0e-8 && ecc > 1.0005);
+            if (!bound && !hyperbolic) continue;
+
+            glm::dvec3 p_hat = (ecc > 1.0e-5) ? (evec / ecc) : (r / rmag);
+            glm::dvec3 q_hat = glm::cross(h_hat, p_hat);
+            double qmag = glm::length(q_hat);
+            if (qmag < 1.0e-10) continue;
+            q_hat /= qmag;
+
+            ImU32 c = body_color(body);
+            int cr = (c >> IM_COL32_R_SHIFT) & 0xFF;
+            int cg = (c >> IM_COL32_G_SHIFT) & 0xFF;
+            int cb = (c >> IM_COL32_B_SHIFT) & 0xFF;
+            int alpha = (i == selected_body) ? 190 : 72;
+            float width = (i == selected_body) ? 1.9f : 1.0f;
+            ImU32 orbit_col = IM_COL32(cr, cg, cb, alpha);
+
+            glm::vec3 prev_world(0.0f);
+            bool have_prev = false;
+
+            if (bound) {
+                double a = -mu / (2.0 * energy);
+                if (!std::isfinite(a) || a <= 0.0) continue;
+                double p = a * (1.0 - ecc * ecc);
+                if (!std::isfinite(p) || p <= 1.0e-8) continue;
+
+                const int segs = 120;
+                for (int s = 0; s <= segs; ++s) {
+                    double theta = (2.0 * PI * (double)s) / (double)segs;
+                    double denom = 1.0 + ecc * std::cos(theta);
+                    if (std::abs(denom) < 1.0e-8) continue;
+                    double radius = p / denom;
+                    if (!std::isfinite(radius) || radius <= 0.0) continue;
+
+                    glm::dvec3 world_d = glm::dvec3(parent.pos) +
+                        p_hat * (radius * std::cos(theta)) +
+                        q_hat * (radius * std::sin(theta));
+                    glm::vec3 world = glm::vec3(world_d);
+
+                    if (have_prev) {
+                        auto p0 = project(prev_world, vp, W, H);
+                        auto p1 = project(world, vp, W, H);
+                        if (p0.visible && p1.visible)
+                            fg->AddLine(ImVec2(p0.sx, p0.sy), ImVec2(p1.sx, p1.sy), orbit_col, width);
+                    }
+                    prev_world = world;
+                    have_prev = true;
+                }
+            } else {
+                double p = (hmag * hmag) / mu;
+                if (!std::isfinite(p) || p <= 1.0e-8) continue;
+                double theta_max = std::acos(std::clamp(-1.0 / ecc, -1.0, 1.0)) - 0.04;
+                if (!std::isfinite(theta_max) || theta_max <= 0.05) continue;
+
+                const int segs = 72;
+                for (int s = 0; s <= segs; ++s) {
+                    double t = (double)s / (double)segs;
+                    double theta = -theta_max + (2.0 * theta_max) * t;
+                    double denom = 1.0 + ecc * std::cos(theta);
+                    if (std::abs(denom) < 1.0e-8) continue;
+                    double radius = p / denom;
+                    if (!std::isfinite(radius) || radius <= 0.0 || radius > rmag * 14.0) continue;
+
+                    glm::dvec3 world_d = glm::dvec3(parent.pos) +
+                        p_hat * (radius * std::cos(theta)) +
+                        q_hat * (radius * std::sin(theta));
+                    glm::vec3 world = glm::vec3(world_d);
+
+                    if (have_prev) {
+                        auto p0 = project(prev_world, vp, W, H);
+                        auto p1 = project(world, vp, W, H);
+                        if (p0.visible && p1.visible)
+                            fg->AddLine(ImVec2(p0.sx, p0.sy), ImVec2(p1.sx, p1.sy), orbit_col, width);
+                    }
+                    prev_world = world;
+                    have_prev = true;
+                }
+            }
+
+            rendered++;
+        }
+    }
+
     if (cfg.show_trails) {
         for (size_t i = 0; i < state.trails.size() && i < state.bodies.size(); i++) {
             auto& trail = state.trails[i];
@@ -582,11 +730,11 @@ void CosmosApp::draw_spawn_menu() {
 
     if (ImGui::CollapsingHeader("Basic", ImGuiTreeNodeFlags_DefaultOpen)) {
         float bw = 76.0f;
-        type_button(CTYPE_PLANET, bw, 1.0f); ImGui::SameLine();
-        type_button(CTYPE_MOON, bw, 0.05f); ImGui::SameLine();
-        type_button(CTYPE_ASTEROID, bw, 0.02f);
-        type_button(CTYPE_COMET, bw, 0.01f); ImGui::SameLine();
-        type_button(CTYPE_NEBULA, bw, 0.10f);
+        type_button(CTYPE_PLANET, bw, 3.003e-6f); ImGui::SameLine();
+        type_button(CTYPE_MOON, bw, 3.70e-8f); ImGui::SameLine();
+        type_button(CTYPE_ASTEROID, bw, 2.0e-10f);
+        type_button(CTYPE_COMET, bw, 8.0e-11f); ImGui::SameLine();
+        type_button(CTYPE_NEBULA, bw, 0.02f);
     }
 
     if (ImGui::CollapsingHeader("Stars")) {
@@ -617,7 +765,7 @@ void CosmosApp::draw_spawn_menu() {
     ImGui::Separator();
 
     if (ImGui::CollapsingHeader("Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::SliderFloat("Mass", &spawn_mass, 0.001f, 500.0f, "%.3f",
+        ImGui::SliderFloat("Mass", &spawn_mass, 1.0e-10f, 500.0f, "%.3e",
                            ImGuiSliderFlags_Logarithmic);
         ImGui::Checkbox("Orbital velocity", &spawn_in_orbit_);
         if (ImGui::IsItemHovered())
@@ -650,8 +798,8 @@ void CosmosApp::draw_spawn_menu() {
         if (ImGui::Button("Add Solar System", ImVec2(-1, 0))) {
             glm::vec3 offset = camera.target;
             CelestialBody s;
-            s.pos = offset; s.mass = 100.0f; s.radius = 30.0f;
-            s.temperature = 5778.0f; s.type = classify_star_spectral(5778.0f, 100.0f);
+            s.pos = offset; s.mass = 1.0f; s.radius = 30.0f;
+            s.temperature = 5778.0f; s.type = classify_star_spectral(5778.0f, 1.0f);
             s.seed = 42;
             s.fuel = 0.72f;
             s.angular_vel = (2.0f * 3.14159265359f) / (26.0f * 24.0f * 3600.0f);
@@ -662,7 +810,7 @@ void CosmosApp::draw_spawn_menu() {
             refresh_body_render_state(state.bodies.back(), &state);
 
             float radii[] = {80, 140, 210, 300};
-            float masses[] = {0.3f, 0.8f, 0.5f, 1.5f};
+            float masses[] = {1.66e-7f, 3.00e-6f, 3.22e-7f, 9.54e-4f};
             float temps[] = {600.0f, 300.0f, 180.0f, 90.0f};
             for (int i = 0; i < 4; i++) {
                 CelestialBody p;
@@ -715,7 +863,7 @@ void CosmosApp::draw_spawn_menu() {
             auto randf = [&](float lo, float hi) {
                 return std::uniform_real_distribution<float>(lo, hi)(rng);
             };
-            float nearest_mass = 100.0f;
+            float nearest_mass = 1.0f;
             glm::vec3 nearest_pos = camera.target;
             glm::vec3 nearest_vel(0);
             for (auto& b : state.bodies) {
@@ -735,7 +883,7 @@ void CosmosApp::draw_spawn_menu() {
                 a.pos = nearest_pos + glm::vec3(cosf(angle) * r, randf(-10, 10), sinf(angle) * r);
                 float v = std::sqrt(cfg.G * nearest_mass / r) * randf(0.9f, 1.1f);
                 a.vel = nearest_vel + glm::vec3(-sinf(angle) * v, 0, cosf(angle) * v);
-                a.mass = randf(0.01f, 0.05f); a.radius = randf(2, 4);
+                a.mass = randf(5.0e-11f, 3.0e-9f); a.radius = randf(0.4f, 1.6f);
                 a.type = CTYPE_ASTEROID;
                 a.seed = (uint32_t)(rng());
                 a.name = generate_body_name(a.seed, a.type);
@@ -793,138 +941,6 @@ void CosmosApp::render_ui() {
         inspector_visible_ = true;
     }
 
-    if (settings_visible_) {
-        ImGui::SetNextWindowPos({10, 46}, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize({260, 760}, ImGuiCond_FirstUseEver);
-        ImGui::Begin("Cosmos Settings", &settings_visible_);
-        ImGui::SliderFloat("G", &cfg.G, 0.1f, 10.0f);
-        ImGui::SliderFloat("Softening", &cfg.softening, 1.0f, 50.0f);
-        ImGui::Checkbox("Collisions", &cfg.collisions);
-        ImGui::Checkbox("Tidal Forces", &cfg.tidal_forces);
-        ImGui::Checkbox("Show Trails", &cfg.show_trails);
-
-        ImGui::Separator();
-        ImGui::Text("Camera");
-        ImGui::SliderFloat("FOV", &camera.fov, 20.0f, 90.0f);
-        float log_dist = std::log10(camera.distance);
-        if (ImGui::SliderFloat("Distance", &log_dist, 1.0f, 3.7f, "10^%.1f")) {
-            camera.distance = std::pow(10.0f, log_dist);
-        }
-        int trail_len = (int)cfg.trail_length;
-        if (ImGui::SliderInt("Trail Length", &trail_len, 0, 500))
-            cfg.trail_length = (uint32_t)trail_len;
-        if (ImGui::Button("Reset Camera"))
-            camera = OrbitCamera{};
-
-        ImGui::Separator();
-        ImGui::Text("Collision Physics");
-        ImGui::Checkbox("Merging", &cfg.collision_merging);
-        ImGui::Checkbox("Fragmentation", &cfg.collision_fragmentation);
-        ImGui::SliderFloat("Merge Speed", &cfg.merge_speed_threshold, 1.0f, 20.0f);
-        ImGui::SliderFloat("Fragment Speed", &cfg.fragment_speed_threshold, 10.0f, 50.0f);
-        ImGui::SliderInt("Fragment Count", &cfg.fragment_count, 1, 12);
-        ImGui::SliderFloat("Min Frag Mass", &cfg.min_fragment_mass, 0.01f, 1.0f, "%.2f");
-        ImGui::SliderInt("Max Frag Depth", &cfg.max_frag_generation, 0, 5);
-
-        ImGui::Separator();
-        ImGui::Text("Thermal");
-        ImGui::Checkbox("Temperature", &cfg.temperature_system);
-        ImGui::Checkbox("Evaporation", &cfg.evaporation);
-        ImGui::Checkbox("Roche Limit", &cfg.roche_limit);
-        ImGui::Checkbox("Material Phases", &cfg.material_phases);
-        ImGui::Checkbox("Planetary Rings", &cfg.planetary_rings);
-        if (cfg.temperature_system)
-            ImGui::SliderFloat("Cooling", &cfg.radiative_cooling, 0.0f, 0.01f, "%.4f");
-
-        ImGui::Separator();
-        ImGui::Text("Stellar");
-        ImGui::Checkbox("Stellar Evolution", &cfg.stellar_evolution);
-        if (cfg.stellar_evolution)
-            ImGui::SliderFloat("Star Timescale", &cfg.stellar_timescale, 10.0f, 500.0f);
-
-        ImGui::Separator();
-        ImGui::Text("Lighting");
-        ImGui::Checkbox("Star Lighting", &cfg.star_lighting);
-        ImGui::Checkbox("Uniform Lighting", &cfg.uniform_lighting);
-        if (cfg.star_lighting) {
-            ImGui::Checkbox("Fast Star Lighting", &cfg.fast_star_lighting);
-            ImGui::SliderFloat("Ambient", &cfg.ambient_strength, 0.0f, 0.5f);
-        }
-
-        ImGui::Separator();
-        ImGui::Text("Cosmos Rendering");
-        ImGui::Checkbox("HQ Shading", &cfg.cosmos_hq_shading);
-        ImGui::Checkbox("Background Starfield", &cfg.cosmos_background_starfield);
-        ImGui::Checkbox("Star Corona", &cfg.cosmos_star_corona);
-        ImGui::Checkbox("Comet Tails", &cfg.cosmos_comet_tails);
-        ImGui::Checkbox("Black Hole Lensing", &cfg.cosmos_blackhole_lensing);
-        ImGui::Checkbox("Space Fabric Grid", &cfg.cosmos_space_fabric);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Draw a reference plane through the camera focus and warp it by body mass.");
-        if (cfg.cosmos_space_fabric) {
-            ImGui::SliderFloat("Fabric Square Size", &cfg.cosmos_space_fabric_grid_size,
-                               5.0f, 200.0f, "%.1f u", ImGuiSliderFlags_Logarithmic);
-            ImGui::SliderFloat("Fabric Curvature", &cfg.cosmos_space_fabric_strength,
-                               0.1f, 3.0f, "%.2f");
-            if (ImGui::Button("Snap Fabric View Isometric")) {
-                camera.azimuth = glm::radians(45.0f);
-                camera.elevation = glm::radians(35.2643897f);
-                camera.target_distance = camera.distance;
-            }
-            ImGui::Text("Each square spans %.1f simulation units.", cfg.cosmos_space_fabric_grid_size);
-        }
-        ImGui::SliderInt("Cosmos Quality", &cfg.cosmos_quality, 0, 2,
-                         cfg.cosmos_quality == 0 ? "Low" :
-                         (cfg.cosmos_quality == 1 ? "Balanced" : "High"));
-
-        ImGui::Separator();
-        ImGui::Text("Time Control");
-        {
-            float exp_f = (float)cfg.time_exponent;
-            if (ImGui::SliderFloat("Time Rate", &exp_f, -9.0f, 21.0f, "")) {
-                cfg.time_exponent = (double)exp_f;
-            }
-            char rate_buf[64], time_buf[64];
-            double rate = std::pow(10.0, cfg.time_exponent);
-            format_sim_time(rate, rate_buf, sizeof(rate_buf));
-            ImGui::SameLine();
-            ImGui::Text("%s/s", rate_buf);
-
-            format_sim_time(cfg.sim_time_accumulated, time_buf, sizeof(time_buf));
-            ImGui::Text("Sim Time: %s", time_buf);
-
-            struct Preset { const char* label; double exp; };
-            static const Preset presets[] = {
-                {"1 s/s", 0.0}, {"1 min/s", 1.778},
-                {"1 hr/s", 3.556}, {"1 day/s", 4.937},
-                {"1 yr/s", 7.499}, {"1 Myr/s", 13.499},
-                {"1 Gyr/s", 16.499},
-            };
-            for (int i = 0; i < 7; i++) {
-                if (i > 0) ImGui::SameLine();
-                if (ImGui::SmallButton(presets[i].label))
-                    cfg.time_exponent = presets[i].exp;
-            }
-        }
-
-        ImGui::Separator();
-        ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "General Relativity");
-        ImGui::Checkbox("GR Corrections", &cfg.gr_enabled);
-        ImGui::Checkbox("Parallel Gravity", &cfg.parallel_gravity);
-        if (cfg.gr_enabled) {
-            ImGui::SliderFloat("Precession", &cfg.gr_precession_scale, 0.0f, 10.0f);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Perihelion precession (1PN correction)\n1.0 = physical value");
-            ImGui::SliderFloat("Time Dilation", &cfg.gr_time_dilation, 0.0f, 5.0f);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Gravitational time dilation effect");
-            ImGui::SliderFloat("Frame Drag", &cfg.gr_frame_dragging, 0.0f, 5.0f);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Lense-Thirring frame dragging\nfrom spinning bodies");
-            ImGui::SliderFloat("Speed of Light", &cfg.speed_of_light, 50.0f, 1000.0f);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("c in simulation units\n(lower = stronger GR effects)");
-        }
-
-        ImGui::End();
-    }
-
     draw_inspector();
     draw_spawn_menu();
     draw_file_dialog();
@@ -951,22 +967,105 @@ void CosmosApp::render_ui() {
     }
 
     if (body_list_visible_) {
-        ImGui::SetNextWindowPos({io.DisplaySize.x - 280.0f, 320}, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize({270, 300}, ImGuiCond_FirstUseEver);
-        ImGui::Begin("Bodies", &body_list_visible_);
-        for (size_t i = 0; i < state.count(); i++) {
-            const auto& b = state.bodies[i];
-            const char* tn = (b.type < CTYPE_COUNT) ? CTYPE_NAMES[b.type] : "?";
-            bool is_sel = ((int)i == selected_body);
-            if (is_sel) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 0.3f, 1));
+        ImGui::SetNextWindowPos({io.DisplaySize.x - 620.0f, 320}, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize({610, 430}, ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Bodies", &body_list_visible_)) {
+            static std::vector<uint8_t> expanded_rows;
+            if (expanded_rows.size() != state.count())
+                expanded_rows.assign(state.count(), 0u);
 
-            char buf[128];
-            const char* display_name = b.name.empty() ? tn : b.name.c_str();
-            snprintf(buf, sizeof(buf), "%zu. %s (%.1f M)", i, display_name, b.mass);
-            if (ImGui::Selectable(buf, is_sel))
-                selected_body = (int)i;
+            ImGui::Text("Objects: %zu", state.count());
+            ImGui::Separator();
 
-            if (is_sel) ImGui::PopStyleColor();
+            ImGuiTableFlags table_flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                          ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
+            if (ImGui::BeginTable("##BodiesTable", 5, table_flags, ImVec2(0, -4))) {
+                ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 1.9f);
+                ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+                ImGui::TableSetupColumn("Mass", ImGuiTableColumnFlags_WidthFixed, 95.0f);
+                ImGui::TableSetupColumn("Temp", ImGuiTableColumnFlags_WidthFixed, 95.0f);
+                ImGui::TableSetupColumn("Age", ImGuiTableColumnFlags_WidthFixed, 105.0f);
+                ImGui::TableHeadersRow();
+
+                for (size_t i = 0; i < state.count(); i++) {
+                    const auto& b = state.bodies[i];
+                    const char* tn = (b.type < CTYPE_COUNT) ? CTYPE_NAMES[b.type] : "?";
+                    std::string display_name = b.name.empty() ? std::string(tn) : b.name;
+                    bool is_sel = ((int)i == selected_body);
+                    char age_buf[64];
+                    format_sim_time((double)b.age, age_buf, sizeof(age_buf));
+
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    char row_label[256];
+                    snprintf(row_label, sizeof(row_label), "%s %s##body_row_%zu",
+                             expanded_rows[i] ? "v" : ">",
+                             display_name.c_str(), i);
+                    if (ImGui::Selectable(row_label, is_sel, ImGuiSelectableFlags_SpanAllColumns)) {
+                        selected_body = (int)i;
+                        inspector_visible_ = true;
+                        expanded_rows[i] = expanded_rows[i] ? 0u : 1u;
+                    }
+
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextUnformatted(tn);
+
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::Text("%.3e", b.mass);
+
+                    ImGui::TableSetColumnIndex(3);
+                    ImGui::Text("%.0f K", b.temperature);
+
+                    ImGui::TableSetColumnIndex(4);
+                    ImGui::Text("%s", age_buf);
+
+                    if (expanded_rows[i]) {
+                        constexpr float KMH_TO_MPH = 0.6213712f;
+                        float speed_kmh = glm::length(b.vel) * SIM_UNIT_TO_KM * 3600.0f;
+                        float speed_mph = speed_kmh * KMH_TO_MPH;
+
+                        std::string parent_name = "None";
+                        if (b.parent >= 0 && b.parent < (int)state.bodies.size()) {
+                            const auto& p = state.bodies[(size_t)b.parent];
+                            const char* p_type = (p.type < CTYPE_COUNT) ? CTYPE_NAMES[p.type] : "?";
+                            parent_name = p.name.empty() ? std::string(p_type) : p.name;
+                        }
+
+                        std::string children = "None";
+                        int child_count = 0;
+                        for (size_t j = 0; j < state.bodies.size(); ++j) {
+                            const auto& c = state.bodies[j];
+                            if (c.parent != (int)i) continue;
+                            const char* c_type = (c.type < CTYPE_COUNT) ? CTYPE_NAMES[c.type] : "?";
+                            const char* c_name = c.name.empty() ? c_type : c.name.c_str();
+                            if (child_count == 0) children = c_name;
+                            else if (child_count < 5) {
+                                children += ", ";
+                                children += c_name;
+                            }
+                            child_count++;
+                        }
+                        if (child_count > 5) {
+                            children += ", +";
+                            children += std::to_string(child_count - 5);
+                            children += " more";
+                        }
+
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextWrapped("Radius: %.2f km | Velocity: %.1f km/h (%.1f mph)", b.radius, speed_kmh, speed_mph);
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::TextWrapped("Orbits: %s", parent_name.c_str());
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::TextWrapped("Orbited by: %s", children.c_str());
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::Text(" ");
+                        ImGui::TableSetColumnIndex(4);
+                        ImGui::Text(" ");
+                    }
+                }
+                ImGui::EndTable();
+            }
         }
         ImGui::End();
     }
@@ -1637,7 +1736,6 @@ void CosmosApp::draw_bottom_bar() {
 
         struct TBEntry { const char* label; bool* visible; };
         TBEntry entries[] = {
-            {"Settings",  &settings_visible_},
             {"Spawn",     &spawn_menu_visible_},
             {"Bodies",    &body_list_visible_},
             {"Inspector", &inspector_visible_},
@@ -1646,7 +1744,7 @@ void CosmosApp::draw_bottom_bar() {
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 3));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
 
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < 3; i++) {
             bool vis = *entries[i].visible;
             if (vis) {
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.14f, 0.05f, 0.9f));
@@ -1684,8 +1782,8 @@ void CosmosApp::draw_bottom_bar() {
         format_sim_time(std::pow(10.0, cfg.time_exponent), rate_buf, sizeof(rate_buf));
 
         char right_text[256];
-        snprintf(right_text, sizeof(right_text), "T: %s  |  %s/s  |  %zu bodies",
-                 time_buf, rate_buf, state.count());
+        snprintf(right_text, sizeof(right_text), "T: %s  |  %s%s/s  |  %zu bodies",
+                 time_buf, reverse_time_ ? "-" : "", rate_buf, state.count());
         ImVec2 text_size = ImGui::CalcTextSize(right_text);
         ImGui::SameLine(display_w - text_size.x - 16.0f);
         ImGui::TextColored(ImVec4(0.8f, 0.7f, 0.3f, 0.9f), "%s", right_text);
@@ -1695,18 +1793,133 @@ void CosmosApp::draw_bottom_bar() {
     ImGui::PopStyleColor();
 
     if (show_menu_popup_) {
-        float popup_w = 200.0f;
-        float popup_h = 380.0f;
+        float popup_w = 440.0f;
+        float popup_h = std::min(760.0f, display_h - bar_h - 18.0f);
         float popup_x = 12.0f;
         float popup_y = std::max(10.0f, bar_y - popup_h - 4.0f);
         ImGui::SetNextWindowPos(ImVec2(popup_x, popup_y));
         ImGui::SetNextWindowSize(ImVec2(popup_w, popup_h));
 
         ImGuiWindowFlags popup_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
-            | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar;
+            | ImGuiWindowFlags_NoMove;
         ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.06f, 0.02f, 0.95f));
 
         if (ImGui::Begin("##CosmosMenuPopup", &show_menu_popup_, popup_flags)) {
+            auto draw_time_presets = [&]() {
+                struct Preset { const char* label; double exp; };
+                static const Preset presets[] = {
+                    {"1 s/s", 0.0}, {"1 min/s", 1.778},
+                    {"1 hr/s", 3.556}, {"1 day/s", 4.937},
+                    {"1 yr/s", 7.499}, {"1 Myr/s", 13.499},
+                    {"1 Gyr/s", 16.499},
+                };
+                for (int i = 0; i < 7; i++) {
+                    if (i > 0) ImGui::SameLine();
+                    if (ImGui::SmallButton(presets[i].label))
+                        cfg.time_exponent = presets[i].exp;
+                }
+            };
+
+            auto for_each_body = [&](const auto& fn) {
+                for (auto& b : state.bodies) {
+                    if (b.marked_for_removal) continue;
+                    fn(b);
+                }
+            };
+
+            auto system_com = [&]() -> glm::vec3 {
+                double total_m = 0.0;
+                glm::dvec3 weighted_pos(0.0);
+                for (const auto& b : state.bodies) {
+                    if (b.marked_for_removal) continue;
+                    double m = std::max((double)b.mass, 0.0);
+                    weighted_pos += glm::dvec3(b.pos) * m;
+                    total_m += m;
+                }
+                if (total_m <= 1.0e-12) return glm::vec3(0.0f);
+                return glm::vec3(weighted_pos / total_m);
+            };
+
+            auto find_primary_for = [&](int idx) -> int {
+                if (idx < 0 || idx >= (int)state.bodies.size()) return -1;
+                const auto& body = state.bodies[(size_t)idx];
+                double best_score = 0.0;
+                int best = -1;
+                for (int j = 0; j < (int)state.bodies.size(); ++j) {
+                    if (j == idx) continue;
+                    const auto& cand = state.bodies[(size_t)j];
+                    if (cand.marked_for_removal || cand.non_attracting) continue;
+                    if (cand.mass <= body.mass * 1.01f) continue;
+                    glm::dvec3 d = glm::dvec3(cand.pos) - glm::dvec3(body.pos);
+                    double d2 = glm::dot(d, d);
+                    if (d2 <= 1.0e-8) continue;
+                    double score = (double)cand.mass / d2;
+                    if (score > best_score) {
+                        best_score = score;
+                        best = j;
+                    }
+                }
+                return best;
+            };
+
+            auto set_auto_orbit = [&](float eccentricity_scale_radial, float eccentricity_scale_tangent) {
+                for (int i = 0; i < (int)state.bodies.size(); ++i) {
+                    auto& b = state.bodies[(size_t)i];
+                    if (b.marked_for_removal || b.non_attracting) continue;
+                    if (is_star_type(b.type) || is_black_hole_type(b.type)) continue;
+                    int pidx = find_primary_for(i);
+                    if (pidx < 0) continue;
+                    auto& p = state.bodies[(size_t)pidx];
+                    glm::vec3 rel = b.pos - p.pos;
+                    float r = glm::length(rel);
+                    if (r < 1.0e-4f) continue;
+                    glm::vec3 r_hat = rel / r;
+
+                    glm::vec3 rel_v = b.vel - p.vel;
+                    glm::vec3 tangent = glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), r_hat);
+                    if (glm::dot(tangent, tangent) < 1.0e-8f)
+                        tangent = glm::cross(rel_v, r_hat);
+                    if (glm::dot(tangent, tangent) < 1.0e-8f)
+                        tangent = glm::cross(glm::vec3(1.0f, 0.0f, 0.0f), r_hat);
+                    if (glm::dot(tangent, tangent) < 1.0e-8f)
+                        tangent = glm::cross(glm::vec3(0.0f, 0.0f, 1.0f), r_hat);
+                    tangent = glm::normalize(tangent);
+                    if (glm::dot(rel_v, tangent) < 0.0f) tangent *= -1.0f;
+
+                    float v_circ = std::sqrt(std::max(cfg.G * p.mass / std::max(r, 1.0e-6f), 0.0f));
+                    float v_rad = glm::dot(rel_v, r_hat) * eccentricity_scale_radial;
+                    float v_tan = v_circ * eccentricity_scale_tangent;
+                    b.vel = p.vel + r_hat * v_rad + tangent * v_tan;
+                }
+            };
+
+            auto scale_system = [&](float factor) {
+                glm::vec3 center = system_com();
+                float v_scale = std::sqrt(1.0f / std::max(factor, 1.0e-6f));
+                for_each_body([&](CelestialBody& b) {
+                    b.pos = center + (b.pos - center) * factor;
+                    b.vel *= v_scale;
+                });
+            };
+
+            auto adjust_eccentricity = [&](float radial_scale, float tangential_scale) {
+                for (int i = 0; i < (int)state.bodies.size(); ++i) {
+                    auto& b = state.bodies[(size_t)i];
+                    if (b.marked_for_removal || b.non_attracting) continue;
+                    int pidx = find_primary_for(i);
+                    if (pidx < 0) continue;
+                    const auto& p = state.bodies[(size_t)pidx];
+                    glm::vec3 rel = b.pos - p.pos;
+                    float r = glm::length(rel);
+                    if (r < 1.0e-5f) continue;
+                    glm::vec3 r_hat = rel / r;
+                    glm::vec3 rel_v = b.vel - p.vel;
+                    float v_rad = glm::dot(rel_v, r_hat);
+                    glm::vec3 v_tan = rel_v - r_hat * v_rad;
+                    b.vel = p.vel + r_hat * (v_rad * radial_scale) + v_tan * tangential_scale;
+                }
+            };
+
             if (ImGui::TreeNodeEx("Simulation", ImGuiTreeNodeFlags_DefaultOpen)) {
                 if (ImGui::MenuItem(paused ? "Resume (Space)" : "Pause (Space)")) {
                     paused = !paused; show_menu_popup_ = false;
@@ -1736,16 +1949,298 @@ void CosmosApp::draw_bottom_bar() {
                 }
                 ImGui::TreePop();
             }
-            if (ImGui::TreeNodeEx("View", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (ImGui::TreeNodeEx("Panels", ImGuiTreeNodeFlags_DefaultOpen)) {
                 bool tmp;
-                tmp = settings_visible_;
-                if (ImGui::MenuItem("Settings", nullptr, tmp)) { settings_visible_ = !settings_visible_; show_menu_popup_ = false; }
                 tmp = spawn_menu_visible_;
-                if (ImGui::MenuItem("Spawn Menu", nullptr, tmp)) { spawn_menu_visible_ = !spawn_menu_visible_; show_menu_popup_ = false; }
+                if (ImGui::MenuItem("Spawn Menu", nullptr, tmp)) { spawn_menu_visible_ = !spawn_menu_visible_; }
                 tmp = body_list_visible_;
-                if (ImGui::MenuItem("Body List", nullptr, tmp)) { body_list_visible_ = !body_list_visible_; show_menu_popup_ = false; }
+                if (ImGui::MenuItem("Body List", nullptr, tmp)) { body_list_visible_ = !body_list_visible_; }
                 tmp = inspector_visible_;
-                if (ImGui::MenuItem("Inspector", nullptr, tmp)) { inspector_visible_ = !inspector_visible_; show_menu_popup_ = false; }
+                if (ImGui::MenuItem("Inspector", nullptr, tmp)) { inspector_visible_ = !inspector_visible_; }
+                ImGui::Separator();
+                ImGui::MenuItem("Show Orbits", nullptr, &cfg.show_orbits);
+                ImGui::MenuItem("Show Trails", nullptr, &cfg.show_trails);
+                ImGui::TreePop();
+            }
+            if (ImGui::TreeNodeEx("System Management", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (ImGui::MenuItem("Balance System Momentum")) {
+                    glm::dvec3 momentum(0.0);
+                    double total_m = 0.0;
+                    for (const auto& b : state.bodies) {
+                        if (b.marked_for_removal) continue;
+                        double m = std::max((double)b.mass, 0.0);
+                        momentum += glm::dvec3(b.vel) * m;
+                        total_m += m;
+                    }
+                    if (total_m > 1.0e-12) {
+                        glm::vec3 com_vel = glm::vec3(momentum / total_m);
+                        for_each_body([&](CelestialBody& b) { b.vel -= com_vel; });
+                    }
+                }
+                if (ImGui::MenuItem("Auto Orbit")) {
+                    set_auto_orbit(0.0f, 1.0f);
+                }
+                if (ImGui::MenuItem("Expand System")) {
+                    scale_system(1.05f);
+                }
+                if (ImGui::MenuItem("Shrink System")) {
+                    scale_system(0.95f);
+                }
+                if (ImGui::MenuItem("Increase Eccentricity")) {
+                    adjust_eccentricity(1.20f, 0.93f);
+                }
+                if (ImGui::MenuItem("Decrease Eccentricity")) {
+                    adjust_eccentricity(0.80f, 1.05f);
+                }
+                if (ImGui::MenuItem("Make 2D - Zero All Height Values")) {
+                    for_each_body([&](CelestialBody& b) {
+                        b.pos.y = 0.0f;
+                        b.vel.y = 0.0f;
+                    });
+                    camera.target.y = 0.0f;
+                }
+                ImGui::TreePop();
+            }
+            if (ImGui::TreeNodeEx("Motion", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (ImGui::MenuItem("Reverse Time", nullptr, reverse_time_)) {
+                    reverse_time_ = !reverse_time_;
+                }
+                if (ImGui::MenuItem("Reverse All Velocities")) {
+                    for_each_body([&](CelestialBody& b) { b.vel *= -1.0f; });
+                }
+                if (ImGui::MenuItem("Halt All Velocities")) {
+                    for_each_body([&](CelestialBody& b) { b.vel = glm::vec3(0.0f); });
+                }
+                if (ImGui::MenuItem("Halt All Rotations")) {
+                    for_each_body([&](CelestialBody& b) { b.angular_vel = 0.0f; });
+                }
+                if (ImGui::MenuItem("+2% All Speeds")) {
+                    for_each_body([&](CelestialBody& b) { b.vel *= 1.02f; });
+                }
+                if (ImGui::MenuItem("-2% All Speeds")) {
+                    for_each_body([&](CelestialBody& b) { b.vel *= 0.98f; });
+                }
+                if (ImGui::MenuItem("+2% All Rotations")) {
+                    for_each_body([&](CelestialBody& b) { b.angular_vel *= 1.02f; });
+                }
+                if (ImGui::MenuItem("-2% All Rotations")) {
+                    for_each_body([&](CelestialBody& b) { b.angular_vel *= 0.98f; });
+                }
+                float dv_10kms = 10.0f / SIM_UNIT_TO_KM;
+                if (ImGui::MenuItem("Add Velocity of 10 km/s on X")) {
+                    for_each_body([&](CelestialBody& b) { b.vel.x += dv_10kms; });
+                }
+                if (ImGui::MenuItem("Add Velocity of -10 km/s on X")) {
+                    for_each_body([&](CelestialBody& b) { b.vel.x -= dv_10kms; });
+                }
+                if (ImGui::MenuItem("Add Velocity of 10 km/s on Y")) {
+                    for_each_body([&](CelestialBody& b) { b.vel.y += dv_10kms; });
+                }
+                if (ImGui::MenuItem("Add Velocity of -10 km/s on Y")) {
+                    for_each_body([&](CelestialBody& b) { b.vel.y -= dv_10kms; });
+                }
+                if (ImGui::MenuItem("Add Velocity of 10 km/s on Z")) {
+                    for_each_body([&](CelestialBody& b) { b.vel.z += dv_10kms; });
+                }
+                if (ImGui::MenuItem("Add Velocity of -10 km/s on Z")) {
+                    for_each_body([&](CelestialBody& b) { b.vel.z -= dv_10kms; });
+                }
+                ImGui::TreePop();
+            }
+            if (ImGui::TreeNodeEx("Performance Management", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (ImGui::MenuItem("Delete All Particles/Dust")) {
+                    for (auto& b : state.bodies) {
+                        if (b.marked_for_removal) continue;
+                        bool dust_like = b.non_attracting ||
+                            ((b.type == CTYPE_ASTEROID || b.type == CTYPE_COMET || b.type == CTYPE_NEBULA) &&
+                             (int)b.frag_generation > 0);
+                        if (dust_like) b.marked_for_removal = true;
+                    }
+                    cleanup_bodies();
+                }
+                if (ImGui::MenuItem("Delete All Fragments")) {
+                    for (auto& b : state.bodies) {
+                        if (b.marked_for_removal) continue;
+                        if ((int)b.frag_generation > 0) b.marked_for_removal = true;
+                    }
+                    cleanup_bodies();
+                }
+                if (ImGui::MenuItem("Delete All Escaping Bodies")) {
+                    int primary = -1;
+                    float primary_mass = 0.0f;
+                    for (int i = 0; i < (int)state.bodies.size(); ++i) {
+                        const auto& b = state.bodies[(size_t)i];
+                        if (b.marked_for_removal || b.non_attracting) continue;
+                        if (b.mass > primary_mass) {
+                            primary_mass = b.mass;
+                            primary = i;
+                        }
+                    }
+                    if (primary >= 0) {
+                        const auto primary_pos = state.bodies[(size_t)primary].pos;
+                        const auto primary_vel = state.bodies[(size_t)primary].vel;
+                        const float primary_r = state.bodies[(size_t)primary].radius;
+                        const float primary_m = std::max(state.bodies[(size_t)primary].mass, 1.0e-8f);
+                        for (int i = 0; i < (int)state.bodies.size(); ++i) {
+                            if (i == primary) continue;
+                            auto& b = state.bodies[(size_t)i];
+                            if (b.marked_for_removal) continue;
+                            glm::vec3 rel = b.pos - primary_pos;
+                            float dist = glm::length(rel);
+                            if (dist < std::max(primary_r * 8.0f, 1.0f)) continue;
+                            glm::vec3 rel_v = b.vel - primary_vel;
+                            if (dist < 1.0e-5f) continue;
+                            float radial_speed = glm::dot(rel_v, rel / dist);
+                            if (radial_speed <= 0.0f) continue;
+                            float escape_v = std::sqrt(std::max(2.0f * cfg.G * primary_m / std::max(dist, 1.0e-6f), 0.0f));
+                            if (glm::length(rel_v) > escape_v * 1.05f)
+                                b.marked_for_removal = true;
+                        }
+                        cleanup_bodies();
+                    }
+                }
+                ImGui::TreePop();
+            }
+            if (ImGui::TreeNodeEx("Cosmos Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (ImGui::CollapsingHeader("General Physics", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::SliderFloat("G##Menu", &cfg.G, 0.1f, 10.0f);
+                    ImGui::SliderFloat("Softening##Menu", &cfg.softening, 1.0f, 50.0f);
+                    ImGui::Checkbox("Collisions##Menu", &cfg.collisions);
+                    ImGui::Checkbox("Tidal Forces##Menu", &cfg.tidal_forces);
+                    ImGui::Checkbox("Show Orbits##Menu", &cfg.show_orbits);
+                    ImGui::Checkbox("Show Trails##Menu", &cfg.show_trails);
+                    int trail_len = (int)cfg.trail_length;
+                    if (ImGui::SliderInt("Trail Length##Menu", &trail_len, 0, 500))
+                        cfg.trail_length = (uint32_t)trail_len;
+                }
+
+                if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::SliderFloat("FOV##Menu", &camera.fov, 20.0f, 90.0f);
+                    float log_dist = std::log10(std::max(camera.distance, 0.01f));
+                    if (ImGui::SliderFloat("Distance##Menu", &log_dist, 1.0f, 3.7f, "10^%.1f"))
+                        camera.distance = std::pow(10.0f, log_dist);
+                    if (ImGui::Button("Reset Camera##Menu")) camera = OrbitCamera{};
+                }
+
+                if (ImGui::CollapsingHeader("Collision & Fragmentation", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::Checkbox("Merging##Menu", &cfg.collision_merging);
+                    ImGui::Checkbox("Fragmentation##Menu", &cfg.collision_fragmentation);
+                    ImGui::SliderFloat("Merge Speed##Menu", &cfg.merge_speed_threshold, 1.0f, 20.0f);
+                    ImGui::SliderFloat("Fragment Speed##Menu", &cfg.fragment_speed_threshold, 10.0f, 50.0f);
+                    ImGui::SliderInt("Fragment Count##Menu", &cfg.fragment_count, 1, 12);
+                    ImGui::SliderFloat("Min Frag Mass##Menu", &cfg.min_fragment_mass, 1.0e-9f, 1.0f, "%.6f",
+                                       ImGuiSliderFlags_Logarithmic);
+                    ImGui::SliderInt("Max Frag Depth##Menu", &cfg.max_frag_generation, 0, 5);
+                }
+
+                if (ImGui::CollapsingHeader("Thermal & Roche", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::Checkbox("Temperature##Menu", &cfg.temperature_system);
+                    ImGui::Checkbox("Evaporation##Menu", &cfg.evaporation);
+                    ImGui::Checkbox("Roche Limit##Menu", &cfg.roche_limit);
+                    if (cfg.roche_limit) {
+                        ImGui::Checkbox("Fluid Roche Limit##Menu", &cfg.roche_limit_fluid);
+                        ImGui::Checkbox("Rigid Roche Limit##Menu", &cfg.roche_limit_rigid);
+                        if (!cfg.roche_limit_fluid && !cfg.roche_limit_rigid) {
+                            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
+                                               "Enable at least one Roche mode.");
+                        }
+                    }
+                    ImGui::Checkbox("Material Phases##Menu", &cfg.material_phases);
+                    ImGui::Checkbox("Planetary Rings##Menu", &cfg.planetary_rings);
+                    if (cfg.temperature_system)
+                        ImGui::SliderFloat("Cooling##Menu", &cfg.radiative_cooling, 0.0f, 0.01f, "%.4f");
+                }
+
+                if (ImGui::CollapsingHeader("Stellar")) {
+                    ImGui::Checkbox("Stellar Evolution##Menu", &cfg.stellar_evolution);
+                    if (cfg.stellar_evolution)
+                        ImGui::SliderFloat("Star Timescale##Menu", &cfg.stellar_timescale, 10.0f, 500.0f);
+                }
+
+                if (ImGui::CollapsingHeader("Rendering & Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::Checkbox("Star Lighting##Menu", &cfg.star_lighting);
+                    ImGui::Checkbox("Uniform Lighting##Menu", &cfg.uniform_lighting);
+                    if (cfg.star_lighting) {
+                        ImGui::Checkbox("Fast Star Lighting##Menu", &cfg.fast_star_lighting);
+                        ImGui::SliderFloat("Ambient##Menu", &cfg.ambient_strength, 0.0f, 0.5f);
+                    }
+
+                    ImGui::Separator();
+                    ImGui::Checkbox("HQ Shading##Menu", &cfg.cosmos_hq_shading);
+                    ImGui::Checkbox("Background Starfield##Menu", &cfg.cosmos_background_starfield);
+                    static const char* BG_PRESETS[] = {
+                        "Realistic",
+                        "Deep Black",
+                        "Nebula",
+                        "Warm Dust",
+                        "Blue Haze"
+                    };
+                    ImGui::Combo("Background Preset##Menu", &cfg.cosmos_background_preset,
+                                 BG_PRESETS, IM_ARRAYSIZE(BG_PRESETS));
+                    ImGui::Checkbox("Star Corona##Menu", &cfg.cosmos_star_corona);
+                    ImGui::Checkbox("Comet Tails##Menu", &cfg.cosmos_comet_tails);
+                    ImGui::Checkbox("Black Hole Lensing##Menu", &cfg.cosmos_blackhole_lensing);
+                    ImGui::Checkbox("Space Fabric Grid##Menu", &cfg.cosmos_space_fabric);
+                    if (cfg.cosmos_space_fabric) {
+                        ImGui::SliderFloat("Fabric Square Size##Menu", &cfg.cosmos_space_fabric_grid_size,
+                                           5.0f, 200.0f, "%.1f u", ImGuiSliderFlags_Logarithmic);
+                        ImGui::SliderFloat("Fabric Curvature##Menu", &cfg.cosmos_space_fabric_strength,
+                                           0.1f, 3.0f, "%.2f");
+                        if (ImGui::Button("Snap Fabric View Isometric##Menu")) {
+                            camera.azimuth = glm::radians(45.0f);
+                            camera.elevation = glm::radians(35.2643897f);
+                            camera.target_distance = camera.distance;
+                        }
+                    }
+                    ImGui::SliderInt("Cosmos Quality##Menu", &cfg.cosmos_quality, 0, 2,
+                                     cfg.cosmos_quality == 0 ? "Low" :
+                                     (cfg.cosmos_quality == 1 ? "Balanced" : "High"));
+                }
+
+                if (ImGui::CollapsingHeader("Time Control", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    float exp_f = (float)cfg.time_exponent;
+                    if (ImGui::SliderFloat("Time Rate##Menu", &exp_f, -9.0f, 21.0f, ""))
+                        cfg.time_exponent = (double)exp_f;
+                    char rate_buf[64], time_buf[64];
+                    format_sim_time(std::pow(10.0, cfg.time_exponent), rate_buf, sizeof(rate_buf));
+                    format_sim_time(cfg.sim_time_accumulated, time_buf, sizeof(time_buf));
+                    ImGui::Text("Rate: %s/s", rate_buf);
+                    ImGui::Text("Sim Time: %s", time_buf);
+                    draw_time_presets();
+                }
+
+                if (ImGui::CollapsingHeader("General Relativity")) {
+                    ImGui::Checkbox("GR Corrections##Menu", &cfg.gr_enabled);
+                    ImGui::Checkbox("Parallel Gravity##Menu", &cfg.parallel_gravity);
+                    if (cfg.gr_enabled) {
+                        ImGui::SliderFloat("Precession##Menu", &cfg.gr_precession_scale, 0.0f, 10.0f);
+                        ImGui::SliderFloat("Time Dilation##Menu", &cfg.gr_time_dilation, 0.0f, 5.0f);
+                        ImGui::SliderFloat("Frame Drag##Menu", &cfg.gr_frame_dragging, 0.0f, 5.0f);
+                        ImGui::SliderFloat("Speed of Light##Menu", &cfg.speed_of_light, 50.0f, 1000.0f);
+                    }
+                }
+
+                ImGui::TreePop();
+            }
+            if (ImGui::TreeNodeEx("Performance", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (ImGui::TreeNodeEx("Dynamic Budget", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::Checkbox("Object Budget##Perf", &cfg.dynamic_budget_enabled);
+                    ImGui::Text("Current FPS: %.1f", smoothed_fps_);
+                    ImGui::SliderFloat("Target FPS##Perf", &cfg.dynamic_target_fps, 20.0f, 240.0f, "%.0f");
+                    ImGui::SliderInt("Max Fragments##Perf", &cfg.dynamic_max_fragments, 0, 3000);
+                    ImGui::SliderInt("Max Non-Attracting##Perf", &cfg.dynamic_max_non_attracting, 0, 10000);
+                    float explosion_density_pct = cfg.dynamic_explosion_density * 100.0f;
+                    if (ImGui::SliderFloat("Explosion Density##Perf", &explosion_density_pct, 1.0f, 100.0f, "%.0f%%"))
+                        cfg.dynamic_explosion_density = std::clamp(explosion_density_pct / 100.0f, 0.01f, 1.0f);
+                    float reduction_pct = cfg.dynamic_reduction_percent * 100.0f;
+                    if (ImGui::SliderFloat("Reduction Percentage##Perf", &reduction_pct, 1.0f, 100.0f, "%.0f%%"))
+                        cfg.dynamic_reduction_percent = std::clamp(reduction_pct / 100.0f, 0.01f, 1.0f);
+                    if (!cfg.dynamic_budget_enabled) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
+                                           "Budget disabled: fragment growth is uncapped.");
+                    }
+                    ImGui::TreePop();
+                }
                 ImGui::TreePop();
             }
             if (ImGui::TreeNodeEx("Navigation")) {
