@@ -338,6 +338,9 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
             // Keep dust rings visible at normal zoom without changing physics radius.
             render_radius = std::max(render_radius, 0.16f);
             render_radius *= 1.0f + std::clamp(b.phase_intensity, 0.0f, 1.0f) * 0.15f;
+        } else if (b.type == CTYPE_NEBULA) {
+            // Slightly expanded visual shell to read as a diffuse cloud.
+            render_radius *= 1.12f;
         }
         spheres[i].pos_radius = glm::vec4(glm::vec3(glm::dvec3(b.pos) - target_origin), render_radius);
         spheres[i].base_emit = glm::vec4(col, emissive);
@@ -412,6 +415,12 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
                 vp.weather_strength,
                 vp.aurora_strength,
                 vp.volcanic_activity,
+                vp.mie_strength);
+        } else if (vp.render_class == RENDER_NEBULA) {
+            spheres[i].activity_params = glm::vec4(
+                vp.weather_strength,
+                vp.cloud_detail,
+                std::clamp(b.collapse_progress, 0.0f, 1.5f),
                 vp.mie_strength);
         } else if (vp.render_class == RENDER_STAR) {
             spheres[i].activity_params = glm::vec4(

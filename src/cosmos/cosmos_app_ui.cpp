@@ -1006,6 +1006,13 @@ void CosmosApp::draw_spawn_menu() {
             } else {
                 b.material_phase = (type == CTYPE_NEBULA) ? PHASE_GAS : PHASE_SOLID;
                 b.phase_intensity = (type == CTYPE_NEBULA) ? 0.75f : 0.0f;
+                if (type == CTYPE_NEBULA) {
+                    b.custom_material = true;
+                    b.custom_hydrogen = 0.90f;
+                    b.custom_silicate = 0.06f;
+                    b.custom_water = 0.03f;
+                    b.custom_iron = 0.01f;
+                }
             }
             return b;
         };

@@ -122,6 +122,7 @@ enum BodyRenderClass : uint8_t {
     RENDER_ASTEROID = 3,
     RENDER_COMET = 4,
     RENDER_BLACK_HOLE = 5,
+    RENDER_NEBULA = 6,
 };
 
 enum SmallBodyClass : uint8_t {
@@ -1151,23 +1152,23 @@ inline BodyVisualProperties generate_body_visual_properties(const CelestialBody&
     }
 
     if (b.type == CTYPE_NEBULA) {
-        vp.render_class = RENDER_PLANET;
+        vp.render_class = RENDER_NEBULA;
         vp.subtype = SURF_GAS;
         vp.roughness = 1.0f;
         vp.specular = 0.0f;
-        vp.normal_strength = 0.18f;
-        vp.terrain_amp = 0.08f + h0 * 0.18f;
-        vp.terrain_freq = 1.2f + h1 * 2.2f;
-        vp.ridge_amp = 0.02f + h2 * 0.06f;
+        vp.normal_strength = 0.05f;
+        vp.terrain_amp = 0.02f + h0 * 0.08f;
+        vp.terrain_freq = 0.8f + h1 * 1.6f;
+        vp.ridge_amp = 0.01f + h2 * 0.04f;
         vp.rock_frac = 0.01f;
-        vp.ice_frac = (b.temperature < 120.0f) ? (0.18f + h0 * 0.20f) : (0.02f + h0 * 0.06f);
-        vp.metal_frac = 0.01f + h1 * 0.04f + std::clamp(b.collapse_progress, 0.0f, 1.0f) * 0.10f;
-        vp.dust_frac = 0.72f + h2 * 0.18f;
-        vp.haze_density = 0.82f;
-        vp.rayleigh_strength = 0.10f;
-        vp.mie_strength = 1.05f;
-        vp.cloud_detail = 0.90f;
-        vp.weather_strength = 0.78f + std::clamp(b.collapse_progress, 0.0f, 1.0f) * 0.18f;
+        vp.ice_frac = (b.temperature < 120.0f) ? (0.08f + h0 * 0.12f) : (0.01f + h0 * 0.03f);
+        vp.metal_frac = 0.005f + h1 * 0.025f + std::clamp(b.collapse_progress, 0.0f, 1.0f) * 0.06f;
+        vp.dust_frac = 0.55f + h2 * 0.30f;
+        vp.haze_density = 1.10f;
+        vp.rayleigh_strength = 0.22f;
+        vp.mie_strength = 1.30f;
+        vp.cloud_detail = 0.95f;
+        vp.weather_strength = 0.86f + std::clamp(b.collapse_progress, 0.0f, 1.0f) * 0.20f;
         vp.spin_visual = spin_mag;
         return vp;
     }

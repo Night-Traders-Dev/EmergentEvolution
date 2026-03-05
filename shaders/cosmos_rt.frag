@@ -44,6 +44,7 @@ const int RENDER_MOON = 2;
 const int RENDER_ASTEROID = 3;
 const int RENDER_COMET = 4;
 const int RENDER_BLACK_HOLE = 5;
+const int RENDER_NEBULA = 6;
 const int MAX_TRACE_BODIES = 2048;
 
 const int SURF_ROCKY = 0;
@@ -1415,6 +1416,71 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     return col * (0.25 + 0.75 * ndl);
 }
 
+vec3 shade_nebula_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
+                          out float roughness_out, out vec3 surf_normal) {
+    float seed = hit.class_seed_temp.x;
+    float temperature = hit.class_seed_temp.w;
+    float rock_frac = hit.composition_params.x;
+    float ice_frac = hit.composition_params.y;
+    float metal_frac = hit.composition_params.z;
+    float dust_frac = hit.composition_params.w;
+    float cloud_cov = hit.atmosphere_params.x;
+    float pressure = hit.atmosphere_params.y;
+    float haze_density = hit.atmosphere_params.z;
+    float rayleigh = hit.atmosphere_params.w;
+    float flow = hit.activity_params.x;
+    float cloud_detail = hit.activity_params.y;
+    float collapse = hit.activity_params.z;
+
+    float spin_phase = spin_phase_from_rate(hit.impact_axis.w);
+    vec3 spin_axis = ring_axis(max(hit.ring_params.w, 0.02), seed);
+    vec3 sample_normal = (abs(spin_phase) > 1.0e-8)
+        ? rotate_about_axis(normal, spin_axis, spin_phase)
+        : normal;
+
+    vec3 seed_offset = hash31(seed) * 90.0;
+    vec3 drift = vec3(screen_info.w * (0.008 + flow * 0.010),
+                      screen_info.w * 0.006,
+                      -screen_info.w * (0.007 + cloud_detail * 0.008));
+    vec3 np = sample_normal * (1.6 + cloud_detail * 2.2) + seed_offset + drift;
+    vec3 warp = vec3(
+        simplex3D(np + vec3(2.1, 1.7, 0.9)),
+        simplex3D(np + vec3(0.3, 3.9, 1.4)),
+        simplex3D(np + vec3(1.5, 0.6, 4.2)));
+    vec3 wp = domain_warp(np + warp * (0.26 + cloud_detail * 0.24), 0.34 + cloud_detail * 0.28);
+
+    float body = smoothstep(0.24, 0.92, fbm(wp * 1.08, 6));
+    float filaments = smoothstep(0.36, 0.90, ridged_fbm(wp * 1.95 + vec3(6.0, 2.0, 4.0), 5));
+    float wisps = smoothstep(0.40, 0.92, billow_fbm(wp * 2.55 + vec3(-2.0, 5.0, 1.0), 5));
+    float sparkle = pow(white_noise(wp * 110.0 + vec3(screen_info.w * 0.24)), 7.0);
+
+    float hydrogen_like = clamp(1.0 - rock_frac * 2.8 - metal_frac * 3.2, 0.0, 1.0);
+    float cold = clamp((160.0 - temperature) / 180.0, 0.0, 1.0);
+    vec3 hydrogen_col = mix(vec3(0.40, 0.56, 0.98), vec3(0.82, 0.42, 0.96), hash11(seed * 0.073));
+    vec3 dust_col = mix(vec3(0.54, 0.44, 0.34), vec3(0.82, 0.66, 0.42), clamp(dust_frac, 0.0, 1.0));
+    vec3 icy_col = vec3(0.74, 0.88, 1.00);
+
+    vec3 col = mix(dust_col, hydrogen_col, hydrogen_like);
+    col = mix(col, icy_col, clamp(ice_frac * 0.65 + cold * 0.25, 0.0, 1.0));
+    col *= 0.30 + body * (0.78 + cloud_cov * 0.20);
+    col += hydrogen_col * filaments * (0.24 + collapse * 0.32);
+    col += dust_col * wisps * (0.14 + dust_frac * 0.18);
+    col += vec3(1.00, 0.74, 0.42) * filaments * collapse * 0.20;
+
+    float ndl = max(dot(normal, light_dir), 0.0);
+    float edge = pow(clamp(1.0 - max(dot(normal, -rd), 0.0), 0.0, 1.0), 1.55);
+    float backlit = pow(clamp(dot(-light_dir, normal), 0.0, 1.0), 1.35);
+    float glow = edge * (0.30 + cloud_cov * 0.40 + pressure * 0.0025 + haze_density * 0.10);
+    vec3 glow_col = mix(vec3(0.35, 0.52, 0.95), vec3(0.96, 0.58, 0.92), filaments);
+    col += glow_col * glow * (0.55 + backlit * 0.45);
+    col += vec3(0.90, 0.86, 0.76) * sparkle * (0.03 + dust_frac * 0.06);
+    col *= 0.42 + 0.38 * ndl + rayleigh * 0.08;
+
+    roughness_out = 1.0;
+    surf_normal = normal;
+    return max(col, vec3(0.0));
+}
+
 vec3 shade_moon_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
                         out float roughness_out, out vec3 surf_normal) {
     vec3 col = shade_planet_surface(normal, hit, rd, light_dir, roughness_out, surf_normal);
@@ -1729,6 +1795,8 @@ void main() {
         base_color = shade_planet_surface(normal, hit, rd, primary_light_dir, roughness, surf_normal);
     } else if (render_class == RENDER_MOON) {
         base_color = shade_moon_surface(normal, hit, rd, primary_light_dir, roughness, surf_normal);
+    } else if (render_class == RENDER_NEBULA) {
+        base_color = shade_nebula_surface(normal, hit, rd, primary_light_dir, roughness, surf_normal);
     } else if (render_class == RENDER_ASTEROID || render_class == RENDER_COMET) {
         base_color = shade_asteroid_surface(normal, hit, primary_light_dir, render_class == RENDER_COMET, roughness);
     }
@@ -1782,11 +1850,13 @@ void main() {
     if (!use_star_lighting && !use_uniform_lighting)
         final_color = base_color * 0.12;
 
-    if (render_class == RENDER_PLANET || render_class == RENDER_MOON) {
+    if (render_class == RENDER_PLANET || render_class == RENDER_MOON || render_class == RENDER_NEBULA) {
         final_color += atmosphere_scatter(normal, rd, primary_light_dir, base_color,
                                           hit.atmosphere_params.y, hit.atmosphere_params.z,
                                           hit.atmosphere_params.w, hit.activity_params.w,
                                           hit.class_seed_temp.w);
+    }
+    if (render_class == RENDER_PLANET || render_class == RENDER_MOON) {
         vec3 axis = magnetic_axis(hit.magnetosphere_params.z, hit.class_seed_temp.x);
         float storm = hit.gravity_params.y;
         float retention = hit.gravity_params.z;
@@ -1806,7 +1876,7 @@ void main() {
     }
 
     if (render_class == RENDER_PLANET || render_class == RENDER_MOON ||
-        render_class == RENDER_ASTEROID || render_class == RENDER_COMET) {
+        render_class == RENDER_ASTEROID || render_class == RENDER_COMET || render_class == RENDER_NEBULA) {
         float phase_kind = hit.phase_params.x;
         float phase_intensity = hit.phase_params.y;
         vec3 emission = phase_emission_tint(phase_kind, phase_intensity, hit.class_seed_temp.w, base_color);

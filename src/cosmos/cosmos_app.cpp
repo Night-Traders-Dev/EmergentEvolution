@@ -323,6 +323,12 @@ static void randomize_nebula_properties(CelestialBody& body, std::mt19937& rng) 
     body.material_phase = PHASE_GAS;
     body.phase_intensity = 0.65f + u01(rng) * 0.30f;
     body.collapse_progress = std::clamp(body.mass / HYDROGEN_BURNING_MASS_SOLAR, 0.0f, 0.55f) * 0.35f;
+    body.custom_material = true;
+    body.custom_hydrogen = 0.90f;
+    body.custom_silicate = 0.06f;
+    body.custom_water = 0.03f;
+    body.custom_iron = 0.01f;
+    body.forced_surface = -1;
     clear_ring_system(body);
     clear_impact_signature(body);
 }
@@ -1493,6 +1499,20 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
             nb.custom_water = std::max(spawn_draft_.material_ice, 0.0f);
             nb.custom_hydrogen = std::max(spawn_draft_.material_hydrogen, 0.0f);
         }
+        if (nb.type == CTYPE_NEBULA) {
+            // Nebulae are hydrogen-dominated gas/dust clouds, not gas-giant planets.
+            nb.material_phase = PHASE_GAS;
+            nb.phase_intensity = std::max(nb.phase_intensity, 0.70f);
+            nb.custom_material = true;
+            nb.custom_hydrogen = std::max(nb.custom_hydrogen, 0.85f);
+            nb.custom_silicate = std::clamp(nb.custom_silicate, 0.02f, 0.12f);
+            nb.custom_water = std::clamp(nb.custom_water, 0.0f, 0.08f);
+            nb.custom_iron = std::clamp(nb.custom_iron, 0.0f, 0.04f);
+            nb.forced_surface = -1;
+            clear_ring_system(nb);
+            nb.props_valid = false;
+            nb.visuals_valid = false;
+        }
         if ((nb.type == CTYPE_PLANET || nb.type == CTYPE_MOON) && spawn_draft_.planet_look > 0) {
             float mass_earth = nb.mass / std::max(EARTH_MASS_SOLAR, 1.0e-12f);
             bool force_gas = (spawn_draft_.planet_look == 5 && nb.type == CTYPE_PLANET);
@@ -1853,6 +1873,12 @@ void CosmosApp::step_physics(float dt) {
             }
         }
     });
+    std::vector<size_t> source_indices;
+    source_indices.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        if (source_active[i] && source_mass[i] > 0.0f)
+            source_indices.push_back(i);
+    }
 
     float c2 = cfg.speed_of_light * cfg.speed_of_light;
     float soft2 = cfg.softening * cfg.softening;
@@ -1904,52 +1930,21 @@ void CosmosApp::step_physics(float dt) {
                                     const std::vector<glm::vec3>& vel,
                                     std::vector<glm::vec3>& out_accel) {
         std::fill(out_accel.begin(), out_accel.end(), glm::vec3(0.0f));
-
-        constexpr size_t kParallelGravityThreshold = 256;
-        const bool use_parallel_gravity = can_parallel && n >= kParallelGravityThreshold;
-
-        auto accumulate_pair = [&](size_t i, size_t j, std::vector<glm::vec3>& out) {
-            if (bodies[i].marked_for_removal || bodies[j].marked_for_removal) return;
-            if (!source_active[i] && !source_active[j]) return;
-            if (source_active[j]) {
-                apply_source_accel(i, source_mass[j], source_spin_y[j], pos[j], pos[i], vel[i], out[i]);
+        if (source_indices.empty())
+            return;
+        parallel_for(n, 256, [&](size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i) {
+                if (bodies[i].marked_for_removal)
+                    continue;
+                glm::vec3 ai(0.0f);
+                for (size_t src : source_indices) {
+                    if (src == i) continue;
+                    apply_source_accel(i, source_mass[src], source_spin_y[src],
+                                       pos[src], pos[i], vel[i], ai);
+                }
+                out_accel[i] = ai;
             }
-            if (source_active[i]) {
-                apply_source_accel(j, source_mass[i], source_spin_y[i], pos[i], pos[j], vel[j], out[j]);
-            }
-        };
-
-        if (use_parallel_gravity) {
-            const size_t worker_count = std::min(hw_threads, n);
-            std::vector<std::vector<glm::vec3>> local_accel(
-                worker_count, std::vector<glm::vec3>(n, glm::vec3(0.0f)));
-            std::vector<std::thread> workers;
-            workers.reserve(worker_count);
-
-            for (size_t t = 0; t < worker_count; ++t) {
-                const size_t i_begin = (n * t) / worker_count;
-                const size_t i_end = (n * (t + 1)) / worker_count;
-                workers.emplace_back([&, t, i_begin, i_end]() {
-                    auto& thread_accel = local_accel[t];
-                    for (size_t i = i_begin; i < i_end; ++i) {
-                        for (size_t j = i + 1; j < n; ++j)
-                            accumulate_pair(i, j, thread_accel);
-                    }
-                });
-            }
-
-            for (auto& worker : workers) worker.join();
-            for (size_t t = 0; t < worker_count; ++t) {
-                const auto& thread_accel = local_accel[t];
-                for (size_t i = 0; i < n; ++i)
-                    out_accel[i] += thread_accel[i];
-            }
-        } else {
-            for (size_t i = 0; i < n; ++i) {
-                for (size_t j = i + 1; j < n; ++j)
-                    accumulate_pair(i, j, out_accel);
-            }
-        }
+        });
     };
 
     struct BHNode {
@@ -1967,20 +1962,14 @@ void CosmosApp::step_physics(float dt) {
     auto build_barnes_hut_tree = [&](const std::vector<glm::vec3>& pos,
                                      std::vector<BHNode>& nodes,
                                      int& root_out) -> bool {
-        std::vector<size_t> sources;
-        sources.reserve(n);
-        for (size_t i = 0; i < n; ++i) {
-            if (source_active[i] && !bodies[i].marked_for_removal)
-                sources.push_back(i);
-        }
-        if (sources.empty()) {
+        if (source_indices.empty()) {
             root_out = -1;
             return false;
         }
 
         glm::vec3 bmin(std::numeric_limits<float>::max());
         glm::vec3 bmax(std::numeric_limits<float>::lowest());
-        for (size_t idx : sources) {
+        for (size_t idx : source_indices) {
             bmin = glm::min(bmin, pos[idx]);
             bmax = glm::max(bmax, pos[idx]);
         }
@@ -1990,7 +1979,7 @@ void CosmosApp::step_physics(float dt) {
         glm::vec3 root_center = (bmin + bmax) * 0.5f;
 
         nodes.clear();
-        nodes.reserve(sources.size() * 2 + 8);
+        nodes.reserve(source_indices.size() * 2 + 8);
         auto make_node = [&](const glm::vec3& center, float node_half) -> int {
             nodes.push_back(BHNode{});
             BHNode& node = nodes.back();
@@ -2051,7 +2040,7 @@ void CosmosApp::step_physics(float dt) {
             int child_idx = ensure_child(node_idx, oct);
             self(self, child_idx, body_idx, depth + 1);
         };
-        for (size_t idx : sources)
+        for (size_t idx : source_indices)
             insert_body(insert_body, root_out, idx, 0);
 
         auto finalize_mass = [&](auto&& self, int node_idx) -> void {
