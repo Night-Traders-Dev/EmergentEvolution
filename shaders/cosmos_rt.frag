@@ -14,7 +14,8 @@ layout(std140, set = 0, binding = 0) uniform CameraUBO {
     vec4 fabric_center;   // xyz=focus plane center
     vec4 fabric_right;    // xyz=focus plane right axis
     vec4 fabric_up;       // xyz=focus plane up axis
-    vec4 nebula_params;   // x=mode (0/1/2), y=compute active, z=sim time
+    vec4 nebula_params;   // x=mode (0/1/2), y=compute active, z=sim time, w=gravity well count
+    vec4 nebula_gravity_params; // x=advect, y=collapse, z=compress
 };
 
 struct Sphere {
@@ -1575,6 +1576,60 @@ vec4 sample_nebula_voxel(vec3 local, float seed) {
     return a * 0.44 + b * 0.33 + c * 0.23;
 }
 
+mat3 nebula_basis(float seed) {
+    vec3 a = normalize(hash31(seed * 0.173 + 1.31) * 2.0 - 1.0);
+    vec3 b = hash31(seed * 0.289 + 3.71) * 2.0 - 1.0;
+    vec3 c = cross(a, b);
+    if (dot(c, c) < 1.0e-6) c = cross(a, vec3(0.0, 1.0, 0.0));
+    if (dot(c, c) < 1.0e-6) c = cross(a, vec3(1.0, 0.0, 0.0));
+    c = normalize(c);
+    vec3 d = normalize(cross(c, a));
+    return mat3(a, d, c);
+}
+
+vec3 nebula_shape_space(vec3 local, float seed, float expansion) {
+    mat3 basis = nebula_basis(seed);
+    vec3 q = transpose(basis) * local;
+    vec3 axis = vec3(
+        0.64 + hash11(seed * 0.71) * (1.18 + expansion * 0.20),
+        0.52 + hash11(seed * 0.83) * (0.96 + expansion * 0.16),
+        0.68 + hash11(seed * 0.97) * (1.26 + expansion * 0.24));
+    q /= max(axis, vec3(0.15));
+    q.x += 0.20 * sin(q.z * 2.7 + seed * 0.013 + screen_info.w * 0.040);
+    q.y += 0.16 * sin(q.x * 2.3 - seed * 0.017 + screen_info.w * 0.055);
+    q.z += 0.14 * sin(q.y * 2.5 + seed * 0.021 - screen_info.w * 0.035);
+    return q;
+}
+
+void nebula_palette(int palette, out vec3 hydro_a, out vec3 hydro_b, out vec3 dust_a, out vec3 dust_b, out vec3 cold) {
+    int p = palette & 7;
+    if (p == 0) {
+        hydro_a = vec3(0.40, 0.56, 0.98); hydro_b = vec3(0.84, 0.43, 0.96);
+        dust_a = vec3(0.50, 0.40, 0.30);  dust_b = vec3(0.82, 0.66, 0.42); cold = vec3(0.72, 0.88, 1.00);
+    } else if (p == 1) {
+        hydro_a = vec3(0.24, 0.50, 0.92); hydro_b = vec3(0.44, 0.72, 0.98);
+        dust_a = vec3(0.32, 0.34, 0.42);  dust_b = vec3(0.58, 0.60, 0.72); cold = vec3(0.70, 0.86, 1.00);
+    } else if (p == 2) {
+        hydro_a = vec3(0.86, 0.34, 0.90); hydro_b = vec3(0.98, 0.58, 0.64);
+        dust_a = vec3(0.44, 0.26, 0.28);  dust_b = vec3(0.70, 0.38, 0.36); cold = vec3(0.90, 0.78, 0.92);
+    } else if (p == 3) {
+        hydro_a = vec3(0.18, 0.74, 0.66); hydro_b = vec3(0.62, 0.94, 0.72);
+        dust_a = vec3(0.28, 0.40, 0.34);  dust_b = vec3(0.52, 0.66, 0.54); cold = vec3(0.76, 0.94, 0.88);
+    } else if (p == 4) {
+        hydro_a = vec3(0.28, 0.46, 0.88); hydro_b = vec3(0.76, 0.76, 0.96);
+        dust_a = vec3(0.30, 0.30, 0.44);  dust_b = vec3(0.52, 0.54, 0.70); cold = vec3(0.80, 0.88, 1.00);
+    } else if (p == 5) {
+        hydro_a = vec3(0.88, 0.46, 0.26); hydro_b = vec3(0.98, 0.70, 0.46);
+        dust_a = vec3(0.50, 0.30, 0.18);  dust_b = vec3(0.82, 0.56, 0.30); cold = vec3(0.96, 0.86, 0.76);
+    } else if (p == 6) {
+        hydro_a = vec3(0.42, 0.40, 0.96); hydro_b = vec3(0.78, 0.62, 1.00);
+        dust_a = vec3(0.36, 0.30, 0.54);  dust_b = vec3(0.62, 0.52, 0.76); cold = vec3(0.86, 0.80, 1.00);
+    } else {
+        hydro_a = vec3(0.56, 0.62, 0.96); hydro_b = vec3(0.86, 0.90, 1.00);
+        dust_a = vec3(0.42, 0.44, 0.54);  dust_b = vec3(0.66, 0.68, 0.78); cold = vec3(0.90, 0.95, 1.00);
+    }
+}
+
 int nebula_gravity_well_count() {
     return clamp(int(nebula_params.w + 0.5), 0, MAX_GRAVITY_WELLS);
 }
@@ -1621,7 +1676,9 @@ float nebula_density_sample(vec3 local, vec3 world_pos, float seed, float dust_f
     // Semi-Lagrangian backtrace for fluid-like advection.
     vec3 vel = nebula_velocity_field(local, seed, flow, external_flow, turbulence);
     vec3 grav_acc = sample_nebula_gravity(world_pos);
-    vec3 grav_drive = grav_acc * (0.020 + collapse * 0.045);
+    float grav_advect = max(nebula_gravity_params.x, 0.0);
+    float grav_collapse = max(nebula_gravity_params.y, 0.0);
+    vec3 grav_drive = grav_acc * (grav_advect + collapse * grav_collapse);
     float adv_dt = 0.035 + cloud_detail * 0.022;
     vec3 advected_local = local - (vel + grav_drive) * adv_dt;
     float envelope = 0.0;
@@ -1662,7 +1719,7 @@ float nebula_density_sample(vec3 local, vec3 world_pos, float seed, float dust_f
         (0.55 + collapse * 0.35);
     density *= (0.44 + dust_frac * 0.40 + metal_frac * 0.22);
     float grav_compress = clamp(length(grav_acc) * (0.06 + collapse * 0.10), 0.0, 2.2);
-    density *= (1.0 + grav_compress * 0.22);
+    density *= (1.0 + grav_compress * max(nebula_gravity_params.z, 0.0));
     return max(density, 0.0);
 }
 
@@ -1710,9 +1767,11 @@ vec3 raymarch_nebula(vec3 ro, vec3 rd, Sphere hit, int body_index, vec3 light_di
     float jitter = temporal_blue_noise(fragUV * screen_info.xy, nebula_params.z * 0.017 + seed * 0.0007);
     float t_local = t_enter_local + dt_local * jitter;
 
-    vec3 hydrogen_col = mix(vec3(0.40, 0.56, 0.98), vec3(0.84, 0.43, 0.96), hash11(seed * 0.071));
-    vec3 dust_col = mix(vec3(0.50, 0.40, 0.30), vec3(0.82, 0.66, 0.42), dust_frac);
-    vec3 cold_col = vec3(0.72, 0.88, 1.00);
+    int palette = int(hit.class_seed_temp.z + 0.5) & 7;
+    vec3 hydro_a, hydro_b, dust_a, dust_b, cold_col;
+    nebula_palette(palette, hydro_a, hydro_b, dust_a, dust_b, cold_col);
+    vec3 hydrogen_col = mix(hydro_a, hydro_b, hash11(seed * 0.071));
+    vec3 dust_col = mix(dust_a, dust_b, dust_frac);
     float hydrogen_bias = clamp(1.0 - dust_frac * 0.65 - metal_frac * 0.90, 0.0, 1.0);
     vec3 base_col = mix(dust_col, hydrogen_col, hydrogen_bias);
     base_col = mix(base_col, cold_col, clamp(ice_frac * 0.6 + (180.0 - temperature) / 260.0, 0.0, 1.0));
@@ -1726,8 +1785,9 @@ vec3 raymarch_nebula(vec3 ro, vec3 rd, Sphere hit, int body_index, vec3 light_di
     for (int i = 0; i < 128; ++i) {
         if (i >= steps || transmittance < 0.003) break;
 
-        vec3 local = ro_local + rd_local * t_local;
-        vec3 p = hit.pos_radius.xyz + local * march_radius;
+        vec3 local_raw = ro_local + rd_local * t_local;
+        vec3 local = nebula_shape_space(local_raw, seed, expansion);
+        vec3 p = hit.pos_radius.xyz + local_raw * march_radius;
         float density = nebula_density_sample(local, p, seed, dust_frac, metal_frac, pressure, haze,
                                               cloud_detail, collapse, flow, external_flow, turbulence);
         density *= density_scale;
@@ -1794,6 +1854,9 @@ vec3 render_nebula_particles(vec3 ro, vec3 rd, Sphere hit, int body_index, vec3 
     NebulaData nd = nebula_lookup(body_index);
     vec3 flow_bias = nd.flow.xyz;
     float emission_gain = max(nd.optical.w, 1.0);
+    int palette = int(hit.class_seed_temp.z + 0.5) & 7;
+    vec3 hydro_a, hydro_b, dust_a, dust_b, cold_col;
+    nebula_palette(palette, hydro_a, hydro_b, dust_a, dust_b, cold_col);
 
     int quality = int(quality_params.x + 0.5);
     int particle_count = (quality <= 0) ? 220 : (quality == 1 ? 360 : (quality == 2 ? 560 : 760));
@@ -1825,6 +1888,7 @@ vec3 render_nebula_particles(vec3 ro, vec3 rd, Sphere hit, int body_index, vec3 
 
         vec3 swirl = nebula_velocity_field(p_local, seed + fi * 0.11, flow, flow_bias, nd.flow.w);
         p_local += swirl * (0.15 + 0.12 * sin(screen_info.w * (0.35 + h1 * 0.75) + fi * 0.3));
+        p_local = nebula_shape_space(p_local, seed + fi * 0.13, expansion);
 
         vec3 p_world = hit.pos_radius.xyz + p_local * radius;
         float t_proj = dot(p_world - ro, rd);
@@ -1840,7 +1904,8 @@ vec3 render_nebula_particles(vec3 ro, vec3 rd, Sphere hit, int body_index, vec3 
         float step_trans = exp(-extinction * 0.85);
         float weight = 1.0 - step_trans;
         float phase = phase_hg(0.30 + dust_frac * 0.35, dot(rd, light_dir));
-        vec3 col = mix(vec3(0.42, 0.52, 0.88), vec3(0.92, 0.66, 0.46), dust_frac);
+        vec3 col = mix(mix(hydro_a, hydro_b, h0), mix(dust_a, dust_b, h1), dust_frac);
+        col = mix(col, cold_col, 0.08 + 0.14 * h2);
         col *= (0.40 + 0.60 * phase) * emission_gain * (0.65 + envelope * 0.85);
         col *= clamp(light_color, vec3(0.15), vec3(3.0));
         accum += trans * weight * col;

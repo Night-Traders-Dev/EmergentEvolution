@@ -20,7 +20,8 @@ struct alignas(16) CameraUBOData {
     glm::vec4 fabric_right;     // 16 bytes (plane right xyz)
     glm::vec4 fabric_up;        // 16 bytes (plane up xyz)
     glm::vec4 nebula_params;    // 16 bytes (mode, computeActive, simTime, gravityWellCount)
-};                              // Total: 224 bytes
+    glm::vec4 nebula_gravity_params; // 16 bytes (advect, collapse, compress, reserved)
+};                              // Total: 240 bytes
 
 struct SphereGPU {
     glm::vec4 pos_radius;         // xyz = position, w = radius
@@ -429,6 +430,11 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     // Nebula optical/flow payload is consumed by the fragment shader for all modes.
     float compute_active = 1.0f;
     cam.nebula_params = glm::vec4(nebula_mode, compute_active, (float)cfg.sim_time_accumulated, 0.0f);
+    cam.nebula_gravity_params = glm::vec4(
+        std::clamp(cfg.nebula_gravity_advection_scale, 0.0f, 0.25f),
+        std::clamp(cfg.nebula_gravity_collapse_scale, 0.0f, 0.30f),
+        std::clamp(cfg.nebula_gravity_compress_scale, 0.0f, 1.50f),
+        0.0f);
 
     void* mapped = nullptr;
     if (vkMapMemory(vk.device, camera_ubo_.memory, 0, sizeof(CameraUBOData), 0, &mapped) != VK_SUCCESS || !mapped)

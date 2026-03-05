@@ -877,6 +877,14 @@ struct CosmosConfig {
     bool     barnes_hut           = true;    // use Barnes-Hut gravity approximation at scale
     bool     gpu_barnes_hut       = false;   // evaluate Barnes-Hut acceleration with Vulkan compute
     int      nebula_render_mode   = 1;       // 0=raymarch, 1=raymarch+compute, 2=advanced particles
+    float    nebula_gravity_advection_scale = 0.020f; // coupling of gravity acceleration into nebula advection
+    float    nebula_gravity_collapse_scale  = 0.045f; // extra collapse amplification from gravity field
+    float    nebula_gravity_compress_scale  = 0.220f; // density compression response to |gravity|
+    bool     nebula_sink_formation = true;   // allow dense converging nebula cores to spawn protostars
+    float    nebula_sink_threshold = 1.05f;  // collapse metric threshold for sink spawning
+    float    nebula_sink_min_mass  = 2.0e-4f; // minimum sink/star spawn mass
+    float    nebula_sink_spawn_fraction = 0.018f; // nominal host-mass fraction converted to each sink
+    float    nebula_sink_consume_fraction = 0.95f; // fraction of sink mass consumed from host cloud
     float    barnes_hut_theta     = 0.72f;   // opening angle (smaller = more accurate)
     int      barnes_hut_min_bodies = 128;    // body-count threshold before BH engages
 };
@@ -1154,7 +1162,7 @@ inline BodyVisualProperties generate_body_visual_properties(const CelestialBody&
 
     if (b.type == CTYPE_NEBULA) {
         vp.render_class = RENDER_NEBULA;
-        vp.subtype = SURF_GAS;
+        vp.subtype = (uint8_t)(hash_combine(b.seed, 0x4E454255u) & 7u); // random palette index
         vp.roughness = 1.0f;
         vp.specular = 0.0f;
         vp.normal_strength = 0.05f;

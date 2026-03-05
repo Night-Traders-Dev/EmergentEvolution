@@ -2866,13 +2866,13 @@ void CosmosApp::process_stellar_evolution(float dt) {
 
     // Dense nebula sink creation: convert converging cloud cores into attracting
     // protostar/star particles and consume gas mass from the host cloud.
-    for (size_t i = 0; i < bodies.size(); ++i) {
+    if (cfg.nebula_sink_formation) for (size_t i = 0; i < bodies.size(); ++i) {
         CelestialBody& host = bodies[i];
         if (host.marked_for_removal) continue;
         if (is_star_type(host.type) || is_black_hole_type(host.type)) continue;
         if (host.type != CTYPE_NEBULA) continue;
         if (host.non_attracting) continue;
-        if (host.mass < 6.0e-4f) continue;
+        if (host.mass < std::max(cfg.nebula_sink_min_mass * 1.5f, 1.0e-7f)) continue;
 
         float sink_radius = std::max(host.radius * 1.1f, 20.0f);
         float converging = 0.0f;
@@ -2909,11 +2909,12 @@ void CosmosApp::process_stellar_evolution(float dt) {
             gravity_drive * 0.90f +
             host.collapse_progress * 1.10f +
             host.phase_intensity * 0.35f;
-        if (collapse_metric < 1.05f) continue;
+        if (collapse_metric < cfg.nebula_sink_threshold) continue;
 
-        float spawn_mass = std::max(host.mass * 0.018f, local_feed * 0.22f);
-        spawn_mass = std::clamp(spawn_mass, 2.0e-4f, host.mass * 0.28f);
-        if (spawn_mass < 2.0e-4f) continue;
+        float spawn_frac = std::clamp(cfg.nebula_sink_spawn_fraction, 0.001f, 0.50f);
+        float spawn_mass = std::max(host.mass * spawn_frac, local_feed * 0.22f);
+        spawn_mass = std::clamp(spawn_mass, std::max(cfg.nebula_sink_min_mass, 1.0e-7f), host.mass * 0.28f);
+        if (spawn_mass < std::max(cfg.nebula_sink_min_mass, 1.0e-7f)) continue;
 
         CelestialBody sink = host;
         sink.mass = spawn_mass;
@@ -2946,7 +2947,7 @@ void CosmosApp::process_stellar_evolution(float dt) {
         clear_impact_signature(sink);
         sink.name = generate_body_name(hash_combine(host.seed, (uint32_t)(i * 747796405u + 0x53544B52u)), sink.type);
 
-        float consumed = spawn_mass * 0.95f;
+        float consumed = spawn_mass * std::clamp(cfg.nebula_sink_consume_fraction, 0.05f, 1.0f);
         host.mass = std::max(host.mass - consumed, 1.0e-8f);
         host.collapse_progress = std::clamp(host.collapse_progress + 0.12f, 0.0f, 1.35f);
         host.internal_energy += consumed * 8.0f;

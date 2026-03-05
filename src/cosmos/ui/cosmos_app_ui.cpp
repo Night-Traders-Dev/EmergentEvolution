@@ -3227,8 +3227,30 @@ void CosmosApp::draw_bottom_bar() {
 
                 if (ImGui::CollapsingHeader("Stellar")) {
                     ImGui::Checkbox("Stellar Evolution##Menu", &cfg.stellar_evolution);
-                    if (cfg.stellar_evolution)
+                    if (cfg.stellar_evolution) {
                         ImGui::SliderFloat("Star Timescale##Menu", &cfg.stellar_timescale, 10.0f, 500.0f);
+                        ImGui::Separator();
+                        ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Nebula Gravity Coupling");
+                        ImGui::SliderFloat("Nebula Grav Advect##Menu", &cfg.nebula_gravity_advection_scale,
+                                           0.0f, 0.25f, "%.3f");
+                        ImGui::SliderFloat("Nebula Grav Collapse##Menu", &cfg.nebula_gravity_collapse_scale,
+                                           0.0f, 0.30f, "%.3f");
+                        ImGui::SliderFloat("Nebula Grav Compress##Menu", &cfg.nebula_gravity_compress_scale,
+                                           0.0f, 1.50f, "%.3f");
+                        ImGui::Separator();
+                        ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Nebula Sink Formation");
+                        ImGui::Checkbox("Enable Sink Formation##Menu", &cfg.nebula_sink_formation);
+                        if (cfg.nebula_sink_formation) {
+                            ImGui::SliderFloat("Sink Threshold##Menu", &cfg.nebula_sink_threshold,
+                                               0.05f, 8.0f, "%.2f");
+                            ImGui::SliderFloat("Sink Min Mass##Menu", &cfg.nebula_sink_min_mass,
+                                               1.0e-7f, 1.0f, "%.6f", ImGuiSliderFlags_Logarithmic);
+                            ImGui::SliderFloat("Sink Spawn Fraction##Menu", &cfg.nebula_sink_spawn_fraction,
+                                               0.001f, 0.50f, "%.3f");
+                            ImGui::SliderFloat("Sink Consume Fraction##Menu", &cfg.nebula_sink_consume_fraction,
+                                               0.05f, 1.0f, "%.2f");
+                        }
+                    }
                 }
 
                 if (ImGui::CollapsingHeader("Rendering & Lighting")) {

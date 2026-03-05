@@ -8,7 +8,7 @@
 namespace {
 
 constexpr uint32_t COSMOS_MAGIC   = 0x534D4F43; // "COSM"
-constexpr uint32_t COSMOS_VERSION = 10;
+constexpr uint32_t COSMOS_VERSION = 11;
 constexpr uint32_t COSMOS_SETTINGS_MAGIC   = 0x54475343; // "CSGT"
 constexpr uint32_t COSMOS_SETTINGS_VERSION = 2;
 constexpr const char* COSMOS_SETTINGS_PATH = "cosmos_settings.bin";
@@ -285,6 +285,15 @@ bool CosmosApp::save_simulation(const std::string& path) {
     f.write(reinterpret_cast<const char*>(&cfg.adaptive_step_max), sizeof(float));
     f.write(reinterpret_cast<const char*>(&cfg.barnes_hut_theta), sizeof(float));
     f.write(reinterpret_cast<const char*>(&cfg.barnes_hut_min_bodies), sizeof(int));
+    f.write(reinterpret_cast<const char*>(&cfg.nebula_gravity_advection_scale), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.nebula_gravity_collapse_scale), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.nebula_gravity_compress_scale), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.nebula_sink_threshold), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.nebula_sink_min_mass), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.nebula_sink_spawn_fraction), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.nebula_sink_consume_fraction), sizeof(float));
+    uint8_t sink_flag = cfg.nebula_sink_formation ? 1u : 0u;
+    f.write(reinterpret_cast<const char*>(&sink_flag), sizeof(uint8_t));
 
     uint32_t body_count = (uint32_t)state.bodies.size();
     f.write(reinterpret_cast<const char*>(&body_count), 4);
@@ -472,6 +481,34 @@ bool CosmosApp::load_simulation(const std::string& path) {
                                        std::max(cfg.adaptive_step_min, 1.0e-6f), 1.0e8f);
     cfg.barnes_hut_theta = std::clamp(cfg.barnes_hut_theta, 0.2f, 1.6f);
     cfg.barnes_hut_min_bodies = std::clamp(cfg.barnes_hut_min_bodies, 16, 20000);
+    if (version >= 11) {
+        f.read(reinterpret_cast<char*>(&cfg.nebula_gravity_advection_scale), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.nebula_gravity_collapse_scale), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.nebula_gravity_compress_scale), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.nebula_sink_threshold), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.nebula_sink_min_mass), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.nebula_sink_spawn_fraction), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.nebula_sink_consume_fraction), sizeof(float));
+        uint8_t sink_flag = 1u;
+        f.read(reinterpret_cast<char*>(&sink_flag), sizeof(uint8_t));
+        cfg.nebula_sink_formation = (sink_flag != 0);
+    } else {
+        cfg.nebula_gravity_advection_scale = 0.020f;
+        cfg.nebula_gravity_collapse_scale = 0.045f;
+        cfg.nebula_gravity_compress_scale = 0.220f;
+        cfg.nebula_sink_formation = true;
+        cfg.nebula_sink_threshold = 1.05f;
+        cfg.nebula_sink_min_mass = 2.0e-4f;
+        cfg.nebula_sink_spawn_fraction = 0.018f;
+        cfg.nebula_sink_consume_fraction = 0.95f;
+    }
+    cfg.nebula_gravity_advection_scale = std::clamp(cfg.nebula_gravity_advection_scale, 0.0f, 0.25f);
+    cfg.nebula_gravity_collapse_scale = std::clamp(cfg.nebula_gravity_collapse_scale, 0.0f, 0.30f);
+    cfg.nebula_gravity_compress_scale = std::clamp(cfg.nebula_gravity_compress_scale, 0.0f, 1.50f);
+    cfg.nebula_sink_threshold = std::clamp(cfg.nebula_sink_threshold, 0.05f, 8.0f);
+    cfg.nebula_sink_min_mass = std::clamp(cfg.nebula_sink_min_mass, 1.0e-7f, 1.0f);
+    cfg.nebula_sink_spawn_fraction = std::clamp(cfg.nebula_sink_spawn_fraction, 0.001f, 0.50f);
+    cfg.nebula_sink_consume_fraction = std::clamp(cfg.nebula_sink_consume_fraction, 0.05f, 1.0f);
     if (version <= 4 && cfg.min_fragment_mass >= 0.05f)
         cfg.min_fragment_mass = 1.0e-8f;
 
