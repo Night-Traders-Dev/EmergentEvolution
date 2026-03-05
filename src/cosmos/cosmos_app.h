@@ -78,6 +78,10 @@ private:
     bool handle_stellar_collision_supernova(size_t i, size_t j, float rel_speed,
                                             float impact_energy, float escape_speed,
                                             const glm::vec3& impact_axis, float dt);
+    void update_body_tracking_cache();
+    int  dominant_primary_for(int body_index) const;
+    glm::vec3 verlet_auto_orbit_velocity(const CelestialBody& body, const CelestialBody& primary,
+                                         float radial_scale, float tangential_scale) const;
     void cleanup_bodies();
     void spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, int count,
                         uint32_t parent_generation = 0, float source_temperature = 300.0f,
@@ -101,6 +105,9 @@ private:
     float sim_time_ = 0.0f;
     float smoothed_fps_ = 60.0f;
     bool  reverse_time_ = false;
+    std::vector<int> tracked_primary_;
+    std::vector<int> tracked_children_count_;
+    std::vector<float> tracked_eccentricity_;
 
     // Splash + menu background particles
     float splash_time_ = 0.0f;

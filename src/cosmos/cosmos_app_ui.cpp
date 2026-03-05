@@ -941,6 +941,9 @@ void CosmosApp::render_ui() {
         inspector_visible_ = true;
     }
 
+    // Keep relationship tracking fresh while paused or during direct menu edits.
+    update_body_tracking_cache();
+
     draw_inspector();
     draw_spawn_menu();
     draw_file_dialog();
@@ -1024,9 +1027,10 @@ void CosmosApp::render_ui() {
                         float speed_kmh = glm::length(b.vel) * SIM_UNIT_TO_KM * 3600.0f;
                         float speed_mph = speed_kmh * KMH_TO_MPH;
 
+                        int pidx = (i < tracked_primary_.size()) ? tracked_primary_[i] : -1;
                         std::string parent_name = "None";
-                        if (b.parent >= 0 && b.parent < (int)state.bodies.size()) {
-                            const auto& p = state.bodies[(size_t)b.parent];
+                        if (pidx >= 0 && pidx < (int)state.bodies.size()) {
+                            const auto& p = state.bodies[(size_t)pidx];
                             const char* p_type = (p.type < CTYPE_COUNT) ? CTYPE_NAMES[p.type] : "?";
                             parent_name = p.name.empty() ? std::string(p_type) : p.name;
                         }
@@ -1035,7 +1039,7 @@ void CosmosApp::render_ui() {
                         int child_count = 0;
                         for (size_t j = 0; j < state.bodies.size(); ++j) {
                             const auto& c = state.bodies[j];
-                            if (c.parent != (int)i) continue;
+                            if (j >= tracked_primary_.size() || tracked_primary_[j] != (int)i) continue;
                             const char* c_type = (c.type < CTYPE_COUNT) ? CTYPE_NAMES[c.type] : "?";
                             const char* c_name = c.name.empty() ? c_type : c.name.c_str();
                             if (child_count == 0) children = c_name;
@@ -1840,57 +1844,20 @@ void CosmosApp::draw_bottom_bar() {
                 return glm::vec3(weighted_pos / total_m);
             };
 
-            auto find_primary_for = [&](int idx) -> int {
-                if (idx < 0 || idx >= (int)state.bodies.size()) return -1;
-                const auto& body = state.bodies[(size_t)idx];
-                double best_score = 0.0;
-                int best = -1;
-                for (int j = 0; j < (int)state.bodies.size(); ++j) {
-                    if (j == idx) continue;
-                    const auto& cand = state.bodies[(size_t)j];
-                    if (cand.marked_for_removal || cand.non_attracting) continue;
-                    if (cand.mass <= body.mass * 1.01f) continue;
-                    glm::dvec3 d = glm::dvec3(cand.pos) - glm::dvec3(body.pos);
-                    double d2 = glm::dot(d, d);
-                    if (d2 <= 1.0e-8) continue;
-                    double score = (double)cand.mass / d2;
-                    if (score > best_score) {
-                        best_score = score;
-                        best = j;
-                    }
-                }
-                return best;
-            };
-
             auto set_auto_orbit = [&](float eccentricity_scale_radial, float eccentricity_scale_tangent) {
                 for (int i = 0; i < (int)state.bodies.size(); ++i) {
                     auto& b = state.bodies[(size_t)i];
                     if (b.marked_for_removal || b.non_attracting) continue;
                     if (is_star_type(b.type) || is_black_hole_type(b.type)) continue;
-                    int pidx = find_primary_for(i);
+                    int pidx = dominant_primary_for(i);
                     if (pidx < 0) continue;
-                    auto& p = state.bodies[(size_t)pidx];
-                    glm::vec3 rel = b.pos - p.pos;
-                    float r = glm::length(rel);
-                    if (r < 1.0e-4f) continue;
-                    glm::vec3 r_hat = rel / r;
-
-                    glm::vec3 rel_v = b.vel - p.vel;
-                    glm::vec3 tangent = glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), r_hat);
-                    if (glm::dot(tangent, tangent) < 1.0e-8f)
-                        tangent = glm::cross(rel_v, r_hat);
-                    if (glm::dot(tangent, tangent) < 1.0e-8f)
-                        tangent = glm::cross(glm::vec3(1.0f, 0.0f, 0.0f), r_hat);
-                    if (glm::dot(tangent, tangent) < 1.0e-8f)
-                        tangent = glm::cross(glm::vec3(0.0f, 0.0f, 1.0f), r_hat);
-                    tangent = glm::normalize(tangent);
-                    if (glm::dot(rel_v, tangent) < 0.0f) tangent *= -1.0f;
-
-                    float v_circ = std::sqrt(std::max(cfg.G * p.mass / std::max(r, 1.0e-6f), 0.0f));
-                    float v_rad = glm::dot(rel_v, r_hat) * eccentricity_scale_radial;
-                    float v_tan = v_circ * eccentricity_scale_tangent;
-                    b.vel = p.vel + r_hat * v_rad + tangent * v_tan;
+                    const auto& p = state.bodies[(size_t)pidx];
+                    b.vel = verlet_auto_orbit_velocity(b, p,
+                                                       eccentricity_scale_radial,
+                                                       eccentricity_scale_tangent);
+                    b.parent = pidx;
                 }
+                update_body_tracking_cache();
             };
 
             auto scale_system = [&](float factor) {
@@ -1906,7 +1873,7 @@ void CosmosApp::draw_bottom_bar() {
                 for (int i = 0; i < (int)state.bodies.size(); ++i) {
                     auto& b = state.bodies[(size_t)i];
                     if (b.marked_for_removal || b.non_attracting) continue;
-                    int pidx = find_primary_for(i);
+                    int pidx = dominant_primary_for(i);
                     if (pidx < 0) continue;
                     const auto& p = state.bodies[(size_t)pidx];
                     glm::vec3 rel = b.pos - p.pos;
@@ -1918,6 +1885,7 @@ void CosmosApp::draw_bottom_bar() {
                     glm::vec3 v_tan = rel_v - r_hat * v_rad;
                     b.vel = p.vel + r_hat * (v_rad * radial_scale) + v_tan * tangential_scale;
                 }
+                update_body_tracking_cache();
             };
 
             if (ImGui::TreeNodeEx("Simulation", ImGuiTreeNodeFlags_DefaultOpen)) {

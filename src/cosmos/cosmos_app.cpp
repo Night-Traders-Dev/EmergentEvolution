@@ -1294,6 +1294,8 @@ void CosmosApp::step_physics(float dt) {
         refresh_body_visuals(b, &state);
     }
 
+    update_body_tracking_cache();
+
     // Update trails
     n = bodies.size();
     while (state.trails.size() < n)
@@ -1303,6 +1305,149 @@ void CosmosApp::step_physics(float dt) {
         while (state.trails[i].size() > cfg.trail_length)
             state.trails[i].pop_front();
     }
+}
+
+int CosmosApp::dominant_primary_for(int body_index) const {
+    if (body_index < 0 || body_index >= (int)state.bodies.size())
+        return -1;
+    const auto& body = state.bodies[(size_t)body_index];
+    if (body.marked_for_removal) return -1;
+
+    if (body.parent >= 0 && body.parent < (int)state.bodies.size() && body.parent != body_index) {
+        const auto& parent = state.bodies[(size_t)body.parent];
+        if (!parent.marked_for_removal && parent.mass > body.mass * 0.25f)
+            return body.parent;
+    }
+
+    int best = -1;
+    double best_score = 0.0;
+    for (int j = 0; j < (int)state.bodies.size(); ++j) {
+        if (j == body_index) continue;
+        const auto& cand = state.bodies[(size_t)j];
+        if (cand.marked_for_removal) continue;
+        if (cand.non_attracting) continue;
+        if (cand.mass <= body.mass * 1.01f && !is_star_type(cand.type) && !is_black_hole_type(cand.type))
+            continue;
+        glm::dvec3 d = glm::dvec3(cand.pos) - glm::dvec3(body.pos);
+        double d2 = glm::dot(d, d);
+        if (d2 <= 1.0e-8) continue;
+        double score = (double)cand.mass / d2;
+        if (score > best_score) {
+            best_score = score;
+            best = j;
+        }
+    }
+    return best;
+}
+
+void CosmosApp::update_body_tracking_cache() {
+    const size_t n = state.bodies.size();
+    tracked_primary_.assign(n, -1);
+    tracked_children_count_.assign(n, 0);
+    tracked_eccentricity_.assign(n, -1.0f);
+
+    for (size_t i = 0; i < n; ++i) {
+        if (state.bodies[i].marked_for_removal) continue;
+        int primary = dominant_primary_for((int)i);
+        tracked_primary_[i] = primary;
+        if (primary >= 0 && primary < (int)n)
+            tracked_children_count_[(size_t)primary]++;
+    }
+
+    for (size_t i = 0; i < n; ++i) {
+        int pidx = tracked_primary_[i];
+        if (pidx < 0 || pidx >= (int)n) continue;
+        const auto& b = state.bodies[i];
+        const auto& p = state.bodies[(size_t)pidx];
+        if (b.marked_for_removal || p.marked_for_removal) continue;
+
+        glm::dvec3 r = glm::dvec3(b.pos) - glm::dvec3(p.pos);
+        glm::dvec3 v = glm::dvec3(b.vel) - glm::dvec3(p.vel);
+        double rmag = glm::length(r);
+        if (rmag <= 1.0e-8) continue;
+        double mu = (double)cfg.G * std::max((double)b.mass + (double)p.mass, 1.0e-8);
+        if (mu <= 0.0) continue;
+        glm::dvec3 h = glm::cross(r, v);
+        glm::dvec3 evec = glm::cross(v, h) / mu - r / rmag;
+        tracked_eccentricity_[i] = (float)glm::length(evec);
+    }
+}
+
+glm::vec3 CosmosApp::verlet_auto_orbit_velocity(const CelestialBody& body, const CelestialBody& primary,
+                                                float radial_scale, float tangential_scale) const {
+    glm::vec3 rel = body.pos - primary.pos;
+    float r0 = glm::length(rel);
+    if (!std::isfinite(r0) || r0 < 1.0e-5f) return body.vel;
+    glm::vec3 r_hat = rel / r0;
+
+    glm::vec3 rel_v_now = body.vel - primary.vel;
+    glm::vec3 tangent = glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), r_hat);
+    if (glm::dot(tangent, tangent) < 1.0e-8f)
+        tangent = glm::cross(rel_v_now, r_hat);
+    if (glm::dot(tangent, tangent) < 1.0e-8f)
+        tangent = glm::cross(glm::vec3(1.0f, 0.0f, 0.0f), r_hat);
+    if (glm::dot(tangent, tangent) < 1.0e-8f)
+        tangent = glm::cross(glm::vec3(0.0f, 0.0f, 1.0f), r_hat);
+    if (glm::dot(tangent, tangent) < 1.0e-8f)
+        return body.vel;
+    tangent = glm::normalize(tangent);
+    if (glm::dot(rel_v_now, tangent) < 0.0f) tangent *= -1.0f;
+
+    float mu = cfg.G * std::max(primary.mass + body.mass, 1.0e-8f);
+    float v_circ = std::sqrt(std::max(mu / std::max(r0, 1.0e-6f), 0.0f));
+    float v_rad = glm::dot(rel_v_now, r_hat) * radial_scale;
+    float vt_center = std::max(v_circ * tangential_scale, 1.0e-6f);
+
+    float orbital_period = (2.0f * 3.14159265359f * r0) / std::max(v_circ, 1.0e-4f);
+    int steps = std::clamp((int)std::round(orbital_period * 0.18f / 0.01f), 48, 180);
+    float dt_sim = std::clamp(orbital_period * 0.18f / (float)steps, 0.001f, 0.025f);
+
+    auto accel = [&](const glm::vec3& r) {
+        float rmag = glm::length(r);
+        if (rmag < 1.0e-6f) return glm::vec3(0.0f);
+        return -r * (mu / (rmag * rmag * rmag));
+    };
+
+    auto score_candidate = [&](float v_tan) {
+        glm::vec3 r = rel;
+        glm::vec3 v = r_hat * v_rad + tangent * v_tan;
+        float score = 0.0f;
+        for (int s = 0; s < steps; ++s) {
+            glm::vec3 a0 = accel(r);
+            glm::vec3 r1 = r + v * dt_sim + 0.5f * a0 * dt_sim * dt_sim;
+            glm::vec3 a1 = accel(r1);
+            glm::vec3 v1 = v + 0.5f * (a0 + a1) * dt_sim;
+
+            float rr = glm::length(r1);
+            if (!std::isfinite(rr) || rr < 1.0e-6f) return 1.0e9f;
+            float radial_v = glm::dot(v1, r1 / rr);
+            score += std::abs(rr - r0) / std::max(r0, 1.0e-6f);
+            score += std::abs(radial_v) / std::max(v_circ, 1.0e-4f) * 0.40f;
+
+            r = r1;
+            v = v1;
+        }
+        score /= (float)steps;
+        score += std::abs(v_tan - vt_center) / std::max(v_circ, 1.0e-4f) * 0.10f;
+        return score;
+    };
+
+    float best_vt = vt_center;
+    float best_score = score_candidate(best_vt);
+    float lo = vt_center * 0.70f;
+    float hi = vt_center * 1.30f;
+    const int scans = 16;
+    for (int i = 0; i <= scans; ++i) {
+        float t = (float)i / (float)scans;
+        float vt = lo + (hi - lo) * t;
+        float sc = score_candidate(vt);
+        if (sc < best_score) {
+            best_score = sc;
+            best_vt = vt;
+        }
+    }
+
+    return primary.vel + r_hat * v_rad + tangent * best_vt;
 }
 
 // ── Collision Processing ────────────────────────────────────────────────────
