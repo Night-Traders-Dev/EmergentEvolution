@@ -741,6 +741,33 @@ static bool gas_dominated_body(const CelestialBody& b, const MaterialComposition
     return m.hydrogen > 0.40f;
 }
 
+static bool body_is_cloud_feedstock(const CelestialBody& b, const MaterialComposition& m) {
+    if (is_star_type(b.type) || is_black_hole_type(b.type))
+        return false;
+    if (b.type == CTYPE_NEBULA || b.type == CTYPE_DUST || b.type == CTYPE_COMET)
+        return true;
+    if (b.material_phase == PHASE_GAS || b.material_phase == PHASE_COLLAPSING)
+        return true;
+    if ((b.type == CTYPE_PLANET || b.type == CTYPE_MOON) &&
+        b.props_valid &&
+        (b.cached_props.surface == SURF_GAS || b.cached_props.planet_class == PCLASS_GAS_GIANT ||
+         b.cached_props.planet_class == PCLASS_ICE_GIANT))
+        return true;
+    return m.hydrogen > 0.22f;
+}
+
+static float cloud_capture_radius(const CelestialBody& cloud) {
+    float grav_span = std::cbrt(std::max(cloud.mass, 1.0e-10f)) * 320.0f;
+    float pressure_span = std::max(cloud.radius * 2.6f, 20.0f);
+    return std::max(pressure_span, cloud.radius * 1.5f + grav_span);
+}
+
+static float stellar_capture_radius(const CelestialBody& star) {
+    float mass_span = std::sqrt(std::max(star.mass, 0.01f));
+    float base = star.radius * (1.45f + std::min(mass_span * 0.9f, 6.0f));
+    return std::max(base, star.radius * 1.7f);
+}
+
 static MaterialPhase infer_material_phase(const CelestialBody& b, const MaterialComposition& m) {
     if (is_star_type(b.type))
         return PHASE_PLASMA;
@@ -3399,6 +3426,205 @@ void CosmosApp::process_evaporation(float dt) {
 
 void CosmosApp::process_stellar_evolution(float dt) {
     auto& bodies = state.bodies;
+    const float dt_step = std::abs(dt);
+    if (dt_step <= 0.0f)
+        return;
+
+    std::vector<float> recent_star_accretion(bodies.size(), 0.0f);
+
+    // Cloud concentration: dense gas/dust environments collapse toward protostars.
+    for (size_t i = 0; i < bodies.size(); ++i) {
+        CelestialBody& host = bodies[i];
+        if (host.marked_for_removal) continue;
+        if (is_star_type(host.type) || is_black_hole_type(host.type)) continue;
+
+        bool cloud_host = (host.type == CTYPE_NEBULA) ||
+            ((host.type == CTYPE_DUST || host.type == CTYPE_COMET) &&
+             host.mass > 2.0e-4f && !host.non_attracting);
+        if (!cloud_host) continue;
+
+        float host_mass_before = std::max(host.mass, 1.0e-12f);
+        float capture = cloud_capture_radius(host);
+        float mass_gain = 0.0f;
+        float hydrogen_gain = 0.0f;
+        float concentration_gain = 0.0f;
+
+        for (size_t j = 0; j < bodies.size(); ++j) {
+            if (j == i) continue;
+            CelestialBody& donor = bodies[j];
+            if (donor.marked_for_removal) continue;
+            if (is_star_type(donor.type) || is_black_hole_type(donor.type)) continue;
+
+            MaterialComposition donor_m = derive_materials(donor);
+            if (!body_is_cloud_feedstock(donor, donor_m)) continue;
+
+            glm::vec3 delta = donor.pos - host.pos;
+            float dist = glm::length(delta);
+            if (dist > capture + donor.radius * 1.8f) continue;
+
+            glm::vec3 rel_v = donor.vel - host.vel;
+            float rel_speed = glm::length(rel_v);
+            float esc = std::sqrt(std::max(2.0f * cfg.G * (host.mass + donor.mass) /
+                                           std::max(dist, 1.0e-5f), 0.0f));
+            if (rel_speed > esc * 1.85f && dist > host.radius * 1.15f) continue;
+
+            float proximity = 1.0f - std::clamp(dist / std::max(capture + donor.radius, 1.0e-5f), 0.0f, 1.0f);
+            float absorb = (0.06f + proximity * 0.36f +
+                            (donor.non_attracting ? 0.28f : 0.0f) +
+                            std::clamp((esc - rel_speed) / std::max(esc, 1.0e-5f), -0.12f, 0.25f)) * dt_step;
+            if (dist < host.radius * 0.95f)
+                absorb = std::max(absorb, 0.92f);
+            absorb = std::clamp(absorb, 0.0f, 1.0f);
+            if (absorb <= 1.0e-5f) continue;
+
+            float gained = donor.mass * absorb;
+            if (gained <= 1.0e-12f) continue;
+
+            float donor_before = donor.mass;
+            donor.mass = std::max(donor.mass - gained, 0.0f);
+            register_mass_loss(donor, gained, std::max(dt_step, 1.0e-4f));
+            concentration_gain += gained * (0.45f + proximity * 0.55f);
+            mass_gain += gained;
+            hydrogen_gain += gained * donor_m.hydrogen;
+
+            if (donor.mass <= std::max(1.0e-12f, cfg.min_fragment_mass * 0.10f)) {
+                donor.marked_for_removal = true;
+            } else {
+                float mass_scale = std::cbrt(donor.mass / std::max(donor_before, 1.0e-12f));
+                donor.radius = std::max(donor.radius * mass_scale, donor.type == CTYPE_DUST ? 0.06f : 0.1f);
+                donor.props_valid = false;
+                donor.visuals_valid = false;
+            }
+        }
+
+        if (mass_gain <= 0.0f) continue;
+
+        host.mass += mass_gain;
+        float gain_ratio = mass_gain / std::max(host_mass_before, 1.0e-8f);
+        float concentration_ratio = concentration_gain / std::max(host_mass_before, 1.0e-8f);
+        host.temperature = std::clamp(host.temperature +
+            std::min(1800.0f * gain_ratio + concentration_ratio * 340.0f, 9000.0f),
+            15.0f, 60000.0f);
+        host.internal_energy += mass_gain * (12.0f + concentration_ratio * 9.0f);
+        host.collapse_progress = std::clamp(
+            host.collapse_progress + gain_ratio * 0.58f + concentration_ratio * 0.18f + dt_step * 0.00035f,
+            0.0f, 1.35f);
+
+        if (host.type != CTYPE_NEBULA && host.mass > 8.0e-4f) {
+            host.type = CTYPE_NEBULA;
+            host.material_phase = PHASE_GAS;
+            host.phase_intensity = std::max(host.phase_intensity, 0.45f);
+        }
+
+        host.fuel = std::clamp((host.fuel * host_mass_before + hydrogen_gain * 0.90f) /
+                               std::max(host.mass, 1.0e-8f), 0.0f, 1.0f);
+
+        float proto_threshold = HYDROGEN_BURNING_MASS_SOLAR * 0.92f;
+        bool ignite = host.mass >= proto_threshold &&
+            (host.collapse_progress > 0.72f ||
+             host.temperature > 1700.0f ||
+             host.internal_energy > std::max(host.mass * 9.0f, 0.05f));
+        if (ignite) {
+            float proto_temp = std::max(expected_main_sequence_temperature(std::max(host.mass, 0.08f)) * 0.96f, 2200.0f);
+            host.type = classify_star_spectral(std::max(host.temperature, proto_temp), std::max(host.mass, 0.08f));
+            host.stellar_stage = SSTAGE_MAIN_SEQUENCE;
+            host.fuel = std::clamp(std::max(host.fuel, 0.72f), 0.12f, 1.0f);
+            host.temperature = std::clamp(std::max(host.temperature, proto_temp), 2200.0f, 55000.0f);
+            host.radius = expected_star_radius(host);
+            host.luminosity = std::pow(std::max(host.mass, 0.08f), 3.2f) * 0.1f;
+            host.material_phase = PHASE_PLASMA;
+            host.phase_intensity = 1.0f;
+            host.collapse_progress = 1.0f;
+            clear_ring_system(host);
+        } else {
+            float target_radius = std::max(18.0f, std::cbrt(std::max(host.mass, 1.0e-8f)) * 105.0f);
+            host.radius = glm::mix(host.radius, target_radius, std::clamp(0.02f + gain_ratio * 0.22f, 0.02f, 0.30f));
+            host.material_phase = PHASE_COLLAPSING;
+            host.phase_intensity = std::max(host.phase_intensity, std::clamp(host.collapse_progress, 0.2f, 1.0f));
+        }
+
+        host.props_valid = false;
+        host.visuals_valid = false;
+    }
+
+    // Stellar accretion: stars gain mass and hydrogen fuel from nearby feedstock.
+    for (size_t i = 0; i < bodies.size(); ++i) {
+        CelestialBody& star = bodies[i];
+        if (star.marked_for_removal) continue;
+        if (!is_star_type(star.type)) continue;
+
+        float mass_before = std::max(star.mass, 1.0e-8f);
+        float capture = stellar_capture_radius(star);
+        float mass_gain = 0.0f;
+        float hydrogen_gain = 0.0f;
+        float kinetic_gain = 0.0f;
+
+        for (size_t j = 0; j < bodies.size(); ++j) {
+            if (j == i) continue;
+            CelestialBody& donor = bodies[j];
+            if (donor.marked_for_removal) continue;
+            if (is_star_type(donor.type) || is_black_hole_type(donor.type)) continue;
+
+            MaterialComposition donor_m = derive_materials(donor);
+            if (!body_is_cloud_feedstock(donor, donor_m)) continue;
+
+            float donor_reach = capture + donor.radius * (donor.type == CTYPE_DUST ? 6.0f : 2.0f);
+            glm::vec3 delta = donor.pos - star.pos;
+            float dist = glm::length(delta);
+            if (dist > donor_reach) continue;
+
+            glm::vec3 rel_v = donor.vel - star.vel;
+            float rel_speed = glm::length(rel_v);
+            float esc = std::sqrt(std::max(2.0f * cfg.G * star.mass / std::max(dist, 1.0e-5f), 0.0f));
+            if (rel_speed > esc * 2.4f && dist > star.radius * 1.1f) continue;
+
+            float proximity = 1.0f - std::clamp(dist / std::max(donor_reach, 1.0e-5f), 0.0f, 1.0f);
+            float absorb = (0.09f + proximity * 0.78f +
+                            (donor.non_attracting ? 0.25f : 0.0f) +
+                            std::clamp((esc - rel_speed) / std::max(esc, 1.0e-5f), -0.12f, 0.42f)) * dt_step;
+            if (dist <= star.radius * 1.05f)
+                absorb = std::max(absorb, 0.98f);
+            absorb = std::clamp(absorb, 0.0f, 1.0f);
+            if (absorb <= 1.0e-5f) continue;
+
+            float gained = donor.mass * absorb;
+            if (gained <= 1.0e-12f) continue;
+
+            float donor_before = donor.mass;
+            donor.mass = std::max(donor.mass - gained, 0.0f);
+            register_mass_loss(donor, gained, std::max(dt_step, 1.0e-4f));
+            mass_gain += gained;
+            hydrogen_gain += gained * donor_m.hydrogen;
+            kinetic_gain += 0.5f * gained * rel_speed * rel_speed;
+
+            if (donor.mass <= std::max(1.0e-12f, cfg.min_fragment_mass * 0.10f)) {
+                donor.marked_for_removal = true;
+            } else {
+                float mass_scale = std::cbrt(donor.mass / std::max(donor_before, 1.0e-12f));
+                donor.radius = std::max(donor.radius * mass_scale, donor.type == CTYPE_DUST ? 0.06f : 0.1f);
+                donor.props_valid = false;
+                donor.visuals_valid = false;
+            }
+        }
+
+        if (mass_gain <= 0.0f) continue;
+
+        star.mass += mass_gain;
+        float acc_ratio = mass_gain / std::max(mass_before, 1.0e-8f);
+        float fuel_mass = star.fuel * mass_before + hydrogen_gain * 0.92f + mass_gain * 0.03f;
+        star.fuel = std::clamp(fuel_mass / std::max(star.mass, 1.0e-8f) +
+                               std::clamp(acc_ratio * 0.06f, 0.0f, 0.10f), 0.0f, 1.0f);
+        float heating = kinetic_gain / std::max(star.mass, 1.0e-8f) * 0.65f + acc_ratio * 1800.0f;
+        star.temperature = std::clamp(star.temperature + std::min(heating, 22000.0f), 1800.0f, 140000.0f);
+        star.internal_energy += kinetic_gain * 0.18f + mass_gain * 10.0f;
+        star.luminosity = std::max(star.luminosity, std::pow(std::max(star.mass, 0.08f), 3.5f) * 0.1f);
+        star.type = classify_star_spectral(std::max(star.temperature, 2200.0f), std::max(star.mass, 0.08f));
+        star.radius = glm::mix(star.radius, expected_star_radius(star),
+                               std::clamp(0.04f + acc_ratio * 0.55f, 0.04f, 0.32f));
+        star.props_valid = false;
+        star.visuals_valid = false;
+        recent_star_accretion[i] = mass_gain;
+    }
 
     for (size_t i = 0; i < bodies.size(); ++i) {
         auto& b = bodies[i];
@@ -3406,8 +3632,27 @@ void CosmosApp::process_stellar_evolution(float dt) {
         if (!is_star_type(b.type)) continue;
 
         if (b.stellar_stage == SSTAGE_WHITE_DWARF && b.mass >= CHANDRASEKHAR_LIMIT_SOLAR) {
-            trigger_stellar_supernova(i, dt, true);
+            trigger_stellar_supernova(i, dt_step, true);
             continue;
+        }
+
+        float accreted_mass = recent_star_accretion[i];
+        if (accreted_mass > 0.0f) {
+            float pre_mass = std::max(b.mass - accreted_mass, 1.0e-8f);
+            float acc_ratio = accreted_mass / pre_mass;
+            bool runaway_supernova =
+                b.mass >= CORE_COLLAPSE_MIN_MASS_SOLAR &&
+                ((acc_ratio > 0.18f && b.fuel < 0.45f) ||
+                 (b.mass > 40.0f && acc_ratio > 0.08f && b.fuel < 0.30f));
+            bool collapse_to_bh =
+                (b.mass > 85.0f) ||
+                (b.mass > 60.0f && acc_ratio > 0.22f && b.fuel < 0.25f);
+            if (runaway_supernova || collapse_to_bh) {
+                float escape = body_escape_velocity(b, cfg.G);
+                float ejecta_speed = std::max(escape * (collapse_to_bh ? 0.65f : 0.85f), 24.0f);
+                trigger_stellar_supernova(i, dt_step, false, glm::vec3(0.0f, 1.0f, 0.0f), ejecta_speed);
+                continue;
+            }
         }
 
         bool evolved_star =
@@ -3425,17 +3670,17 @@ void CosmosApp::process_stellar_evolution(float dt) {
         float main_sequence_lifetime = lifetime_scale / std::pow(stellar_mass, 2.5f);
         float burn_multiplier = compact_star ? 0.0f : (evolved_star ? 7.5f : 1.0f);
         float burn_rate = (burn_multiplier > 0.0f)
-            ? dt * burn_multiplier / std::max(main_sequence_lifetime, cfg.stellar_timescale * 1200.0f)
+            ? dt_step * burn_multiplier / std::max(main_sequence_lifetime, cfg.stellar_timescale * 1200.0f)
             : 0.0f;
         b.fuel -= burn_rate;
         if (b.fuel < 0.0f) b.fuel = 0.0f;
 
         float wind_factor = compact_star ? 0.0f : (evolved_star ? 2.6f : 1.0f);
-        float wind_loss = std::min(b.mass * wind_factor * (0.00002f + b.luminosity * 0.000002f) * dt,
+        float wind_loss = std::min(b.mass * wind_factor * (0.00002f + b.luminosity * 0.000002f) * dt_step,
                                    b.mass * (compact_star ? 0.0f : 0.005f));
         if (wind_loss > 0.0f) {
             b.mass -= wind_loss;
-            register_mass_loss(b, wind_loss, dt);
+            register_mass_loss(b, wind_loss, dt_step);
         }
 
         // Reclassify spectral type as temperature changes
@@ -3458,7 +3703,7 @@ void CosmosApp::process_stellar_evolution(float dt) {
 
         if (evolved_star && b.fuel < 0.05f) {
             if (b.mass >= CORE_COLLAPSE_MIN_MASS_SOLAR) {
-                trigger_stellar_supernova(i, dt, false);
+                trigger_stellar_supernova(i, dt_step, false);
                 continue;
             }
 
@@ -3467,7 +3712,7 @@ void CosmosApp::process_stellar_evolution(float dt) {
             float lost = std::max(b.mass - std::clamp(0.48f + b.mass * 0.10f, 0.45f, 1.30f), 0.0f);
             if (lost > 0.0f) {
                 b.mass -= lost;
-                register_mass_loss(b, lost, dt);
+                register_mass_loss(b, lost, dt_step);
             }
             b.radius = std::max(1.6f, 1.2f + 1.7f / std::pow(std::max(b.mass, 0.25f), 0.35f));
             b.temperature = std::clamp(22000.0f + b.mass * 4000.0f, 9000.0f, 120000.0f);
