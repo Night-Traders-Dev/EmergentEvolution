@@ -255,8 +255,9 @@ target_link_libraries(pp_launcher PRIVATE pp_common)
 add_executable(particle_cosmos
     src/cosmos/main.cpp
     src/cosmos/cosmos_app.cpp
-    src/cosmos/cosmos_app_io.cpp
-    src/cosmos/cosmos_app_ui.cpp
+    src/cosmos/core/cosmos_body_model.cpp
+    src/cosmos/io/cosmos_app_io.cpp
+    src/cosmos/ui/cosmos_app_ui.cpp
     src/cosmos/cosmos_gravity_compute.cpp
     src/cosmos/cosmos_raytracer.cpp
 )
