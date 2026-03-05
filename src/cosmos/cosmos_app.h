@@ -85,11 +85,16 @@ private:
                                          float radial_scale, float tangential_scale) const;
     bool spawn_dust_ring(int host_index, float total_mass, float inner_radius, float outer_radius,
                          float density, float ice_fraction, uint32_t seed_hint = 0u);
-    void spawn_moons_for_host(int host_index, int moon_count);
+    void spawn_moons_for_host(int host_index, int moon_count,
+                              int orbit_layout = 0,
+                              float inclination_deg = 8.0f,
+                              float spacing_scale = 1.0f);
     void spawn_ring_for_host(int host_index, float inner_mult, float outer_mult,
                              float density, float ice_fraction);
     void apply_dust_debug_mode();
     void cleanup_bodies();
+    bool validate_body_state(const char* context, bool pause_on_invalid = true);
+    void debug_logf(const char* fmt, ...) const;
     void load_persistent_settings();
     void save_persistent_settings() const;
     void spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, int count,
@@ -147,10 +152,14 @@ private:
         float material_silicate = 0.60f;
         float material_ice = 0.20f;
         float material_hydrogen = 0.0f;
-        int planet_look = 0; // 0 auto, 1 rocky, 2 water, 3 ice, 4 earth-like
+        int star_stage_hint = -1; // -1 auto, else StellarStage enum
+        int planet_look = 0; // 0 auto, 1 rocky, 2 water, 3 ice, 4 earth-like, 5 gas giant
         bool spawn_rings = false;
         bool spawn_moons = false;
         int moon_count = 1;
+        int moon_orbit_layout = 0; // 0 prograde disk, 1 compact disk, 2 wide disk, 3 resonant chain, 4 isotropic cloud
+        float moon_inclination_deg = 8.0f;
+        float moon_spacing_scale = 1.0f;
         bool override_ring_layout = false;
         float ring_inner_mult = 1.6f;
         float ring_outer_mult = 3.0f;
@@ -181,5 +190,8 @@ private:
     char  file_path_buf_[512] = {};
     std::string last_save_status_;
     float save_status_timer_   = 0.0f;
+    bool diagnostics_enabled_ = true;
+    bool diagnostics_pause_on_invalid_ = true;
+    uint64_t diagnostics_step_counter_ = 0;
     void  draw_file_dialog();
 };

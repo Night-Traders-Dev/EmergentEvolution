@@ -2,6 +2,7 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 #include <thread>
 #include <glm/gtc/matrix_inverse.hpp>
 
@@ -290,7 +291,7 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     cam.quality_params = glm::vec4(
         (float)cfg.cosmos_quality,
         cfg.cosmos_hq_shading ? 1.0f : 0.0f,
-        (float)std::clamp(cfg.cosmos_background_preset, 0, 4),
+        (float)std::clamp(cfg.cosmos_background_preset, 0, 11),
         (float)cfg.sim_time_accumulated);
     cam.render_flags = glm::vec4(
         cfg.cosmos_background_starfield ? 1.0f : 0.0f,
@@ -310,14 +311,14 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     cam.fabric_up = glm::vec4(-iso_axis, 0.0f, iso_axis, 0.0f);
 
     void* mapped = nullptr;
-    vkMapMemory(vk.device, camera_ubo_.memory, 0, sizeof(CameraUBOData), 0, &mapped);
+    if (vkMapMemory(vk.device, camera_ubo_.memory, 0, sizeof(CameraUBOData), 0, &mapped) != VK_SUCCESS || !mapped)
+        throw std::runtime_error("CosmosRaytracer: failed to map camera UBO memory");
     memcpy(mapped, &cam, sizeof(CameraUBOData));
     vkUnmapMemory(vk.device, camera_ubo_.memory);
 
     // ── Upload sphere SSBO ─────────────────────────────────────────────────
     int n = std::min((int)state.bodies.size(), MAX_SPHERES);
-    static thread_local std::vector<SphereGPU> spheres;
-    spheres.resize(n);
+    std::vector<SphereGPU> spheres((size_t)n);
     const size_t hw_threads = std::thread::hardware_concurrency() > 0
         ? static_cast<size_t>(std::thread::hardware_concurrency())
         : 1;
@@ -493,8 +494,10 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     }
 
     if (n > 0) {
-        vkMapMemory(vk.device, sphere_ssbo_.memory, 0,
-                    n * sizeof(SphereGPU), 0, &mapped);
+        mapped = nullptr;
+        if (vkMapMemory(vk.device, sphere_ssbo_.memory, 0,
+                        n * sizeof(SphereGPU), 0, &mapped) != VK_SUCCESS || !mapped)
+            throw std::runtime_error("CosmosRaytracer: failed to map sphere SSBO memory");
         memcpy(mapped, spheres.data(), n * sizeof(SphereGPU));
         vkUnmapMemory(vk.device, sphere_ssbo_.memory);
     }

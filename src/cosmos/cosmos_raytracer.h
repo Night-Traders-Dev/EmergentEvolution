@@ -28,5 +28,5 @@ private:
     Buffer camera_ubo_;
     Buffer sphere_ssbo_;
 
-    static constexpr int MAX_SPHERES = 512;
+    static constexpr int MAX_SPHERES = 2048;
 };

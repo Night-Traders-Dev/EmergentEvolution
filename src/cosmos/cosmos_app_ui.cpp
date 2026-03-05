@@ -17,8 +17,11 @@ ImVec4 star_tint_ui(const CelestialBody& b) {
         std::clamp(1.25f - t * 0.95f, 0.0f, 1.0f),
         std::clamp(0.45f + t * 0.6f, 0.0f, 1.0f),
         std::clamp(-0.1f + t * 1.25f, 0.0f, 1.0f));
-    float giant = (b.stellar_stage == SSTAGE_RED_GIANT) ? 1.0f
-        : std::clamp((b.radius - 40.0f) / 120.0f, 0.0f, 1.0f);
+    float radius_solar = b.radius / (EARTH_RADIUS_SIM_UNITS * 109.1f);
+    float giant_stage = (b.stellar_stage == SSTAGE_RED_GIANT || b.stellar_stage == SSTAGE_AGB ||
+                         b.stellar_stage == SSTAGE_SUPERGIANT || b.stellar_stage == SSTAGE_HYPERGIANT)
+        ? 1.0f : 0.0f;
+    float giant = std::max(giant_stage, std::clamp((radius_solar - 6.0f) / 24.0f, 0.0f, 1.0f));
     float white_dwarf = (b.stellar_stage == SSTAGE_WHITE_DWARF) ? 1.0f : 0.0f;
     float neutron_star = (b.stellar_stage == SSTAGE_NEUTRON_STAR) ? 1.0f : 0.0f;
     float massive_hot = std::clamp((b.mass - 8.0f) / 32.0f, 0.0f, 1.0f) *
@@ -140,6 +143,211 @@ void draw_radial_glow(ImDrawList* dl, float cx, float cy, float radius,
         int gg = g_c + (int)((g_e - g_c) * blend);
         int bb = b_c + (int)((b_e - b_c) * blend);
         dl->AddCircleFilled(ImVec2(cx, cy), r, IM_COL32(rr, gg, bb, a), 32);
+    }
+}
+
+struct SpawnPreviewStyle {
+    int planet_look = 0; // 0 auto, 1 rocky, 2 water, 3 ice, 4 earth-like, 5 gas giant
+    bool spawn_rings = false;
+    bool spawn_moons = false;
+    int moon_count = 0;
+    int moon_layout = 0;
+    float moon_inclination_deg = 8.0f;
+    float moon_spacing_scale = 1.0f;
+    bool system_preview = false;
+};
+
+void draw_spawn_preview_thumb(const char* thumb_id, int preview_type, float mass_hint,
+                              uint32_t seed, const SpawnPreviewStyle& style) {
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    float side = std::clamp(avail.x, 140.0f, 230.0f);
+    ImGui::InvisibleButton(thumb_id, ImVec2(side, side));
+    ImVec2 p0 = ImGui::GetItemRectMin();
+    ImVec2 p1 = ImGui::GetItemRectMax();
+    ImVec2 c((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f);
+    float r = side * 0.30f;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilledMultiColor(p0, p1,
+        IM_COL32(9, 13, 26, 255), IM_COL32(14, 18, 30, 255),
+        IM_COL32(6, 8, 15, 255), IM_COL32(4, 6, 12, 255));
+    dl->AddRect(p0, p1, IM_COL32(70, 78, 102, 170), 6.0f);
+
+    uint32_t local_seed = seed ^ (uint32_t)(preview_type * 2654435761u) ^
+                          (uint32_t)(std::abs((int)(mass_hint * 1000000.0f)) + 17);
+    std::mt19937 prng(local_seed);
+    auto rf = [&](float lo, float hi) {
+        return std::uniform_real_distribution<float>(lo, hi)(prng);
+    };
+    int stars = 42;
+    for (int i = 0; i < stars; ++i) {
+        ImVec2 sp(rf(p0.x + 6.0f, p1.x - 6.0f), rf(p0.y + 6.0f, p1.y - 6.0f));
+        int a = (int)rf(40.0f, 165.0f);
+        float sz = rf(0.7f, 1.9f);
+        dl->AddCircleFilled(sp, sz, IM_COL32(210, 220, 245, a), 10);
+    }
+
+    if (style.system_preview) {
+        draw_radial_glow(dl, c.x, c.y, r * 1.45f, IM_COL32(255, 240, 180, 80), IM_COL32(255, 230, 120, 0));
+        dl->AddCircleFilled(c, r * 0.42f, IM_COL32(255, 228, 146, 255), 48);
+        for (int i = 0; i < 3; ++i) {
+            float orb = r * (0.90f + (float)i * 0.42f);
+            dl->AddCircle(c, orb, IM_COL32(210, 210, 195, 95), 64, 1.0f);
+            float a = rf(0.0f, 6.2831853f);
+            ImVec2 pc(c.x + std::cos(a) * orb, c.y + std::sin(a) * orb);
+            ImU32 col = i == 0 ? IM_COL32(190, 170, 160, 240) : (i == 1 ? IM_COL32(110, 170, 235, 240) : IM_COL32(210, 200, 165, 240));
+            dl->AddCircleFilled(pc, r * (0.06f + 0.01f * i), col, 24);
+        }
+        return;
+    }
+
+    if (is_star_type((uint32_t)preview_type)) {
+        ImU32 tint = CTYPE_COLORS[std::clamp(preview_type, 0, (int)CTYPE_COUNT - 1)];
+        float glow = r * (1.4f + std::clamp(std::log10(std::max(mass_hint, 1.0e-5f) + 1.0f), 0.0f, 0.9f));
+        draw_radial_glow(dl, c.x, c.y, glow, IM_COL32((tint >> IM_COL32_R_SHIFT) & 0xFF,
+                                                       (tint >> IM_COL32_G_SHIFT) & 0xFF,
+                                                       (tint >> IM_COL32_B_SHIFT) & 0xFF, 120),
+                         IM_COL32((tint >> IM_COL32_R_SHIFT) & 0xFF,
+                                  (tint >> IM_COL32_G_SHIFT) & 0xFF,
+                                  (tint >> IM_COL32_B_SHIFT) & 0xFF, 0));
+        dl->AddCircleFilled(c, r * 0.78f, tint, 72);
+        for (int i = 0; i < 10; ++i) {
+            float a = rf(0.0f, 6.2831853f);
+            float len = r * rf(0.9f, 1.4f);
+            ImVec2 pA(c.x + std::cos(a) * r * 0.8f, c.y + std::sin(a) * r * 0.8f);
+            ImVec2 pB(c.x + std::cos(a) * (r * 0.8f + len), c.y + std::sin(a) * (r * 0.8f + len));
+            dl->AddLine(pA, pB, IM_COL32(255, 220, 140, 120), 1.2f);
+        }
+        return;
+    }
+
+    if (is_black_hole_type((uint32_t)preview_type)) {
+        draw_radial_glow(dl, c.x, c.y, r * 1.45f, IM_COL32(130, 180, 255, 28), IM_COL32(80, 120, 190, 0));
+        dl->AddCircleFilled(c, r * 0.85f, IM_COL32(8, 8, 12, 255), 72);
+        for (int i = 0; i < 6; ++i) {
+            float rr = r * (1.0f + 0.07f * (float)i);
+            ImU32 col = IM_COL32((int)(220 - i * 16), (int)(170 - i * 18), (int)(95 - i * 9), (int)(140 - i * 18));
+            dl->AddCircle(c, rr, col, 96, 1.5f);
+        }
+        dl->AddCircle(c, r * 1.25f, IM_COL32(170, 210, 255, 58), 84, 1.0f);
+        return;
+    }
+
+    int look = style.planet_look;
+    if (preview_type == CTYPE_PLANET || preview_type == CTYPE_MOON) {
+        if (look == 0) {
+            float mass_earth = mass_hint / std::max(EARTH_MASS_SOLAR, 1.0e-12f);
+            if (mass_earth > 18.0f) look = 5;
+            else if (mass_earth > 1.9f) look = 1;
+            else look = 4;
+        }
+        if (preview_type == CTYPE_MOON && look == 5) look = 2;
+    } else if (preview_type == CTYPE_COMET) {
+        look = 3;
+    } else if (preview_type == CTYPE_DUST) {
+        look = 1;
+    } else if (preview_type == CTYPE_ASTEROID) {
+        look = 1;
+    } else if (preview_type == CTYPE_NEBULA) {
+        look = 2;
+    }
+
+    ImVec4 base_a(0.55f, 0.58f, 0.62f, 1.0f), base_b(0.32f, 0.36f, 0.40f, 1.0f);
+    if (look == 2) { base_a = ImVec4(0.20f, 0.45f, 0.82f, 1.0f); base_b = ImVec4(0.10f, 0.24f, 0.54f, 1.0f); }
+    if (look == 3) { base_a = ImVec4(0.78f, 0.86f, 0.95f, 1.0f); base_b = ImVec4(0.48f, 0.62f, 0.78f, 1.0f); }
+    if (look == 4) { base_a = ImVec4(0.30f, 0.55f, 0.30f, 1.0f); base_b = ImVec4(0.18f, 0.30f, 0.62f, 1.0f); }
+    if (look == 5) { base_a = ImVec4(0.84f, 0.64f, 0.36f, 1.0f); base_b = ImVec4(0.62f, 0.42f, 0.23f, 1.0f); }
+
+    if (preview_type == CTYPE_ASTEROID || preview_type == CTYPE_COMET) {
+        ImVec2 poly[16];
+        for (int i = 0; i < 16; ++i) {
+            float a = (float)i / 16.0f * 6.2831853f;
+            float rr = r * (0.62f + rf(-0.16f, 0.12f));
+            poly[i] = ImVec2(c.x + std::cos(a) * rr, c.y + std::sin(a) * rr * 0.92f);
+        }
+        dl->AddConvexPolyFilled(poly, 16, ImColor(base_b));
+        for (int i = 0; i < 9; ++i) {
+            float a = rf(0.0f, 6.2831853f);
+            float d = rf(r * 0.08f, r * 0.5f);
+            ImVec2 cp(c.x + std::cos(a) * d, c.y + std::sin(a) * d * 0.85f);
+            dl->AddCircleFilled(cp, rf(1.4f, 3.3f), IM_COL32(150, 160, 180, 70), 14);
+        }
+        if (preview_type == CTYPE_COMET) {
+            for (int t = 0; t < 28; ++t) {
+                float f = (float)t / 27.0f;
+                ImVec2 pA(c.x - r * (0.45f + f * 1.7f), c.y + r * (0.16f * std::sin(f * 8.0f)));
+                dl->AddCircleFilled(pA, 2.0f * (1.0f - f * 0.85f), IM_COL32(180, 220, 255, (int)(95 * (1.0f - f))), 10);
+            }
+        }
+    } else if (preview_type == CTYPE_DUST) {
+        for (int i = 0; i < 120; ++i) {
+            float a = rf(0.0f, 6.2831853f);
+            float d = r * std::sqrt(rf(0.0f, 1.0f));
+            ImVec2 dp(c.x + std::cos(a) * d, c.y + std::sin(a) * d * 0.85f);
+            dl->AddCircleFilled(dp, rf(0.7f, 1.8f), IM_COL32(215, 195, 168, (int)rf(45.0f, 170.0f)), 8);
+        }
+    } else if (preview_type == CTYPE_NEBULA) {
+        for (int i = 0; i < 36; ++i) {
+            float a = rf(0.0f, 6.2831853f);
+            float d = rf(0.0f, r * 0.9f);
+            ImVec2 np(c.x + std::cos(a) * d, c.y + std::sin(a) * d * 0.72f);
+            float nr = rf(r * 0.13f, r * 0.34f);
+            dl->AddCircleFilled(np, nr, IM_COL32((int)rf(100.0f, 170.0f), (int)rf(80.0f, 140.0f), (int)rf(170.0f, 250.0f), 55), 18);
+        }
+    } else {
+        dl->AddCircleFilled(c, r, ImColor(base_b), 72);
+        for (int i = 0; i < 24; ++i) {
+            float t = (float)i / 23.0f;
+            ImVec2 cc(c.x - r * 0.20f + t * r * 0.35f, c.y - r * 0.55f + t * r * 1.1f);
+            float rr = r * (0.36f + 0.07f * std::sin(t * 6.283f));
+            dl->AddCircleFilled(cc, rr, ImColor(base_a.x * (0.90f + 0.10f * t),
+                                                base_a.y * (0.90f + 0.08f * t),
+                                                base_a.z * (0.90f + 0.06f * t), 1.0f), 40);
+        }
+        if (look == 5) {
+            for (int b = 0; b < 8; ++b) {
+                float y = c.y - r * 0.85f + (float)b * (r * 0.24f);
+                float th = r * (0.06f + rf(0.0f, 0.04f));
+                ImU32 col = IM_COL32((int)(200 + rf(0.0f, 40.0f)), (int)(130 + rf(0.0f, 45.0f)),
+                                     (int)(80 + rf(0.0f, 35.0f)), 180);
+                dl->AddRectFilled(ImVec2(c.x - r * 0.92f, y - th), ImVec2(c.x + r * 0.92f, y + th), col, th * 2.0f);
+            }
+        } else {
+            int blobs = 12;
+            for (int b = 0; b < blobs; ++b) {
+                float a = rf(0.0f, 6.2831853f);
+                float rr = rf(r * 0.12f, r * 0.72f);
+                ImVec2 bc(c.x + std::cos(a) * rr, c.y + std::sin(a) * rr * 0.85f);
+                float br = rf(r * 0.05f, r * 0.16f);
+                ImU32 col = IM_COL32((int)(80 + rf(0.0f, 120.0f)), (int)(90 + rf(0.0f, 130.0f)),
+                                     (int)(100 + rf(0.0f, 140.0f)), 90);
+                dl->AddCircleFilled(bc, br, col, 20);
+            }
+        }
+    }
+
+    dl->AddCircle(c, r, IM_COL32(230, 240, 255, 75), 72, 1.6f);
+    dl->AddCircleFilled(ImVec2(c.x - r * 0.28f, c.y - r * 0.32f), r * 0.32f, IM_COL32(255, 255, 255, 38), 28);
+    if (style.spawn_rings) {
+        dl->AddCircle(ImVec2(c.x, c.y), r * 1.35f, IM_COL32(220, 210, 185, 120), 80, 1.4f);
+        dl->AddCircle(ImVec2(c.x, c.y), r * 1.52f, IM_COL32(200, 190, 170, 90), 80, 1.0f);
+    }
+    if (style.spawn_moons) {
+        int shown = std::min(std::max(style.moon_count, 1), 10);
+        int layout = std::clamp(style.moon_layout, 0, 4);
+        float incl = glm::radians(std::clamp(style.moon_inclination_deg, 0.0f, 85.0f));
+        float spacing = std::clamp(style.moon_spacing_scale, 0.35f, 4.0f);
+        for (int m = 0; m < shown; ++m) {
+            float frac = (float)m / (float)std::max(shown - 1, 1);
+            float a = 0.45f + frac * 5.5f;
+            float base_d = r * (1.45f + (0.04f + 0.05f * spacing) * (float)(m % 6));
+            if (layout == 1) base_d *= 0.83f;
+            if (layout == 2) base_d *= 1.26f;
+            if (layout == 3) base_d = r * (1.35f * std::pow(1.32f, (float)m));
+            if (layout == 4) a = hash_float((uint32_t)m * 9781u + 31u) * 6.2831853f;
+            float y_scale = (layout == 4) ? 0.98f : (0.45f + 0.45f * std::sin(incl));
+            ImVec2 mc(c.x + std::cos(a) * base_d, c.y + std::sin(a) * base_d * y_scale);
+            dl->AddCircleFilled(mc, 2.0f + 0.5f * (float)(m % 3), IM_COL32(205, 210, 220, 220), 12);
+        }
     }
 }
 
@@ -747,6 +955,8 @@ void CosmosApp::draw_spawn_menu() {
         static int known_subtab = 0;
         static int kuiper_count = 450;
         static int oort_count = 900;
+        static int known_preview_choice[4] = {0, 0, 0, 0};
+        static uint32_t known_preview_seed = 0x7A11B55Du;
         const char* known_tabs[] = {"Basic", "Stars", "Black Holes", "System"};
 
         auto hash_name_seed = [](const char* name, uint32_t salt) -> uint32_t {
@@ -774,11 +984,18 @@ void CosmosApp::draw_spawn_menu() {
             clear_ring_system(b);
             clear_impact_signature(b);
             if (is_star_type(type)) {
-                b.type = classify_star_spectral(std::max(temperature_k, 2200.0f), std::max(mass_solar, 0.08f));
+                b.type = classify_star_spectral(std::max(temperature_k, 250.0f), std::max(mass_solar, 0.003f));
                 b.stellar_stage = stage;
                 b.material_phase = PHASE_PLASMA;
                 b.phase_intensity = 1.0f;
-                b.luminosity = std::pow(std::max(b.mass, 0.08f), 3.2f) * 0.1f;
+                float r_solar = std::max(radius_km / 696340.0f, 1.0e-4f);
+                float stefan = r_solar * r_solar * std::pow(std::max(temperature_k, 100.0f) / 5778.0f, 4.0f);
+                float mass_law = (b.mass < 0.43f)
+                    ? 0.23f * std::pow(std::max(b.mass, 0.01f), 2.3f)
+                    : (b.mass < 2.0f ? std::pow(b.mass, 4.0f)
+                                     : (b.mass < 20.0f ? 1.5f * std::pow(b.mass, 3.5f)
+                                                       : 3200.0f * std::pow(std::max(b.mass, 20.0f) / 20.0f, 2.2f)));
+                b.luminosity = std::max(stefan, mass_law);
             } else if (is_black_hole_type(type)) {
                 b.type = classify_black_hole(std::max(mass_solar, 0.01f));
                 b.temperature = 0.0f;
@@ -812,7 +1029,21 @@ void CosmosApp::draw_spawn_menu() {
                 std::cos(inc) * std::sin(phase_rad) * orbit_r);
             body.pos = parent.pos + rel;
             body.parent = parent_idx;
-            body.vel = verlet_auto_orbit_velocity(body, parent, 0.0f, 1.0f);
+            // For extremely distant orbits (Oort-scale), avoid iterative fitting and use
+            // an analytic circular estimate to keep spawn stable and cheap.
+            if (orbit_r > 5.0e6f) {
+                glm::vec3 r_hat = glm::normalize(rel);
+                glm::vec3 up(0.0f, 1.0f, 0.0f);
+                glm::vec3 tangent = glm::cross(up, r_hat);
+                if (glm::dot(tangent, tangent) < 1.0e-8f)
+                    tangent = glm::cross(glm::vec3(1.0f, 0.0f, 0.0f), r_hat);
+                tangent = glm::normalize(tangent);
+                float mu = cfg.G * std::max(parent.mass + body.mass, 1.0e-8f);
+                float v_circ = std::sqrt(std::max(mu / std::max(orbit_r, 1.0e-6f), 0.0f));
+                body.vel = parent.vel + tangent * v_circ;
+            } else {
+                body.vel = verlet_auto_orbit_velocity(body, parent, 0.0f, 1.0f);
+            }
         };
 
         auto find_star_or_create_sun = [&]() -> int {
@@ -830,6 +1061,8 @@ void CosmosApp::draw_spawn_menu() {
 
         auto spawn_kuiper_belt = [&](int sun_idx, int count) {
             if (sun_idx < 0 || sun_idx >= (int)state.bodies.size()) return;
+            debug_logf("spawn/kuiper_belt start sun_idx=%d count=%d bodies_before=%zu",
+                       sun_idx, count, state.bodies.size());
             constexpr float AU_KM = 149597870.7f;
             std::mt19937 rng((uint32_t)(sim_time_ * 1000.0f + 9173.0f));
             std::uniform_real_distribution<float> u01(0.0f, 1.0f);
@@ -851,10 +1084,15 @@ void CosmosApp::draw_spawn_menu() {
                 obj.seed = hash_combine(obj.seed, (uint32_t)i);
                 append_body(std::move(obj));
             }
+            debug_logf("spawn/kuiper_belt end bodies_after=%zu", state.bodies.size());
+            validate_body_state("spawn/kuiper_belt", true);
+            debug_logf("spawn/kuiper_belt validated bodies=%zu", state.bodies.size());
         };
 
         auto spawn_oort_cloud = [&](int sun_idx, int count) {
             if (sun_idx < 0 || sun_idx >= (int)state.bodies.size()) return;
+            debug_logf("spawn/oort_cloud start sun_idx=%d count=%d bodies_before=%zu",
+                       sun_idx, count, state.bodies.size());
             constexpr float AU_KM = 149597870.7f;
             std::mt19937 rng((uint32_t)(sim_time_ * 1300.0f + 29011.0f));
             std::uniform_real_distribution<float> u01(0.0f, 1.0f);
@@ -872,9 +1110,14 @@ void CosmosApp::draw_spawn_menu() {
                 comet.seed = hash_combine(comet.seed, (uint32_t)(i * 19 + 7));
                 append_body(std::move(comet));
             }
+            debug_logf("spawn/oort_cloud end bodies_after=%zu", state.bodies.size());
+            validate_body_state("spawn/oort_cloud", true);
+            debug_logf("spawn/oort_cloud validated bodies=%zu", state.bodies.size());
         };
 
         auto spawn_solar_system = [&](bool with_structures) {
+            debug_logf("spawn/solar_system start with_structures=%d bodies_before=%zu",
+                       with_structures ? 1 : 0, state.bodies.size());
             constexpr float AU_KM = 149597870.7f;
             struct PlanetDef {
                 const char* name;
@@ -959,6 +1202,9 @@ void CosmosApp::draw_spawn_menu() {
                 spawn_kuiper_belt(sun_idx, kuiper_count);
                 spawn_oort_cloud(sun_idx, oort_count);
             }
+            debug_logf("spawn/solar_system end bodies_after=%zu", state.bodies.size());
+            validate_body_state("spawn/solar_system", true);
+            debug_logf("spawn/solar_system validated bodies=%zu", state.bodies.size());
         };
 
         auto find_body_by_name = [&](const char* name) -> int {
@@ -1054,6 +1300,80 @@ void CosmosApp::draw_spawn_menu() {
         }
 
         if (ImGui::BeginChild("##known_objects", ImVec2(0, 0), true)) {
+            struct KnownPreviewOption {
+                const char* label;
+                int type;
+                float mass;
+                bool system_preview;
+                int planet_look;
+                bool rings;
+                bool moons;
+                int moon_count;
+            };
+            static const KnownPreviewOption PREV_BASIC[] = {
+                {"Sun (Sol)", CTYPE_STAR_G, 1.0f, false, 0, false, false, 0},
+                {"Earth-like Planet", CTYPE_PLANET, 3.003e-6f, false, 4, false, true, 1},
+                {"Moon", CTYPE_MOON, 3.70e-8f, false, 2, false, false, 0},
+                {"Asteroid", CTYPE_ASTEROID, 2.0e-10f, false, 1, false, false, 0},
+                {"Comet", CTYPE_COMET, 8.0e-11f, false, 3, false, false, 0},
+                {"Dust", CTYPE_DUST, 5.0e-12f, false, 1, false, false, 0},
+                {"Our Solar System", CTYPE_PLANET, 3.003e-6f, true, 4, true, true, 4},
+            };
+            static const KnownPreviewOption PREV_STARS[] = {
+                {"Sirius A", CTYPE_STAR_A, 2.063f, false, 0, false, false, 0},
+                {"Proxima Centauri", CTYPE_STAR_M, 0.122f, false, 0, false, false, 0},
+                {"Betelgeuse", CTYPE_STAR_M, 16.5f, false, 0, false, false, 0},
+                {"Vega", CTYPE_STAR_A, 2.135f, false, 0, false, false, 0},
+            };
+            static const KnownPreviewOption PREV_BH[] = {
+                {"Cygnus X-1", CTYPE_BH_STELLAR, 21.0f, false, 0, false, false, 0},
+                {"Sagittarius A*", CTYPE_BH_SUPERMASSIVE, 4.297e6f, false, 0, false, false, 0},
+                {"M87*", CTYPE_BH_SUPERMASSIVE, 6.5e9f, false, 0, false, false, 0},
+                {"TON 618", CTYPE_BH_SUPERMASSIVE, 6.6e10f, false, 0, false, false, 0},
+            };
+            static const KnownPreviewOption PREV_SYSTEM[] = {
+                {"Our Solar System", CTYPE_PLANET, 3.003e-6f, true, 4, true, true, 5},
+                {"Jupiter System", CTYPE_PLANET, 9.5458e-4f, true, 5, true, true, 4},
+                {"Saturn System", CTYPE_PLANET, 2.858e-4f, true, 5, true, true, 3},
+                {"Neptune System", CTYPE_PLANET, 5.151e-5f, true, 5, false, true, 2},
+            };
+            const KnownPreviewOption* preview_list = PREV_BASIC;
+            int preview_count = (int)IM_ARRAYSIZE(PREV_BASIC);
+            if (known_subtab == 1) {
+                preview_list = PREV_STARS;
+                preview_count = (int)IM_ARRAYSIZE(PREV_STARS);
+            } else if (known_subtab == 2) {
+                preview_list = PREV_BH;
+                preview_count = (int)IM_ARRAYSIZE(PREV_BH);
+            } else if (known_subtab == 3) {
+                preview_list = PREV_SYSTEM;
+                preview_count = (int)IM_ARRAYSIZE(PREV_SYSTEM);
+            }
+            int& kp = known_preview_choice[std::clamp(known_subtab, 0, 3)];
+            kp = std::clamp(kp, 0, std::max(preview_count - 1, 0));
+            ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Known Object Preview");
+            ImGui::Combo("Preview Target##Known", &kp,
+                         [](void* data, int idx, const char** out_text) {
+                             auto* arr = static_cast<const KnownPreviewOption*>(data);
+                             *out_text = arr[idx].label;
+                             return true;
+                         },
+                         (void*)preview_list, preview_count);
+            if (ImGui::Button("Regenerate Preview##Known", ImVec2(-1, 0)))
+                known_preview_seed = hash_combine(known_preview_seed, (uint32_t)(sim_time_ * 1000.0f) + 0xA511E9B3u);
+            SpawnPreviewStyle known_pv{};
+            known_pv.system_preview = preview_list[kp].system_preview;
+            known_pv.planet_look = preview_list[kp].planet_look;
+            known_pv.spawn_rings = preview_list[kp].rings;
+            known_pv.spawn_moons = preview_list[kp].moons;
+            known_pv.moon_count = preview_list[kp].moon_count;
+            known_pv.moon_layout = 0;
+            known_pv.moon_inclination_deg = 8.0f;
+            known_pv.moon_spacing_scale = 1.0f;
+            draw_spawn_preview_thumb("##known_preview_thumb", preview_list[kp].type,
+                                     preview_list[kp].mass, known_preview_seed, known_pv);
+            ImGui::Separator();
+
             if (known_subtab == 0) {
                 ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Known Objects - Basic");
                 ImGui::TextWrapped("Physical mass/radius values are based on real-world references; "
@@ -1172,10 +1492,14 @@ void CosmosApp::draw_spawn_menu() {
     if (catalog_tab == 4) {
         static int attach_host = -1;
         static int attach_moon_count = 2;
+        static int attach_moon_layout = 0;
+        static float attach_moon_incl = 8.0f;
+        static float attach_moon_spacing = 1.0f;
         static float attach_ring_inner = 1.6f;
         static float attach_ring_outer = 3.2f;
         static float attach_ring_density = 0.35f;
         static float attach_ring_ice = 0.55f;
+        static uint32_t existing_preview_seed = 0x51A8E22Du;
 
         std::vector<int> host_indices;
         std::vector<std::string> host_labels;
@@ -1232,11 +1556,33 @@ void CosmosApp::draw_spawn_menu() {
                     (host->type == CTYPE_PLANET || host->type == CTYPE_MOON || host->type == CTYPE_NEBULA));
 
                 ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Existing Object Preview");
+                if (ImGui::Button("Regenerate Preview##Existing", ImVec2(-1, 0)))
+                    existing_preview_seed = hash_combine(existing_preview_seed, (uint32_t)(sim_time_ * 1000.0f) + 0x6D2B79F5u);
+                SpawnPreviewStyle existing_pv{};
+                existing_pv.planet_look = 0;
+                existing_pv.spawn_moons = can_add_moons;
+                existing_pv.moon_count = attach_moon_count;
+                existing_pv.moon_layout = attach_moon_layout;
+                existing_pv.moon_inclination_deg = attach_moon_incl;
+                existing_pv.moon_spacing_scale = attach_moon_spacing;
+                existing_pv.spawn_rings = can_add_ring;
+                int preview_type = host ? (int)host->type : CTYPE_PLANET;
+                float preview_mass = host ? host->mass : 3.003e-6f;
+                draw_spawn_preview_thumb("##existing_preview_thumb", preview_type,
+                                         preview_mass, existing_preview_seed, existing_pv);
+
+                ImGui::Separator();
                 ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Moons");
-                ImGui::SliderInt("Moon Count", &attach_moon_count, 1, 12);
+                ImGui::SliderInt("Moon Count", &attach_moon_count, 1, 100);
+                const char* moon_layouts[] = {"Prograde Disk", "Compact Disk", "Wide Disk", "Resonant Chain", "Isotropic Cloud"};
+                ImGui::Combo("Orbit Layout", &attach_moon_layout, moon_layouts, IM_ARRAYSIZE(moon_layouts));
+                ImGui::SliderFloat("Inclination Deg", &attach_moon_incl, 0.0f, 85.0f, "%.1f");
+                ImGui::SliderFloat("Spacing Scale", &attach_moon_spacing, 0.35f, 4.0f, "%.2f");
                 if (!can_add_moons) ImGui::BeginDisabled();
                 if (ImGui::Button("Spawn Moons on Host", ImVec2(-1, 28))) {
-                    spawn_moons_for_host(attach_host, attach_moon_count);
+                    spawn_moons_for_host(attach_host, attach_moon_count, attach_moon_layout,
+                                         attach_moon_incl, attach_moon_spacing);
                 }
                 if (!can_add_moons) {
                     ImGui::EndDisabled();
@@ -1328,11 +1674,16 @@ void CosmosApp::draw_spawn_menu() {
     if (ImGui::BeginChild("##spawn_visuals", ImVec2(0, 0), true)) {
         ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Appearance & System");
         if (spawn_type == CTYPE_PLANET || spawn_type == CTYPE_MOON) {
-            const char* looks[] = {"Auto", "Rocky", "Water", "Ice", "Earth-like"};
+            const char* looks[] = {"Auto", "Rocky", "Water", "Ice", "Earth-like", "Gas Giant"};
             ImGui::Combo("Planet Look", &spawn_draft_.planet_look, looks, IM_ARRAYSIZE(looks));
             ImGui::Checkbox("Add Moons", &spawn_draft_.spawn_moons);
-            if (spawn_draft_.spawn_moons)
-                ImGui::SliderInt("Moon Count", &spawn_draft_.moon_count, 1, 8);
+            if (spawn_draft_.spawn_moons) {
+                ImGui::SliderInt("Moon Count", &spawn_draft_.moon_count, 1, 100);
+                const char* moon_layouts[] = {"Prograde Disk", "Compact Disk", "Wide Disk", "Resonant Chain", "Isotropic Cloud"};
+                ImGui::Combo("Moon Orbit Layout", &spawn_draft_.moon_orbit_layout, moon_layouts, IM_ARRAYSIZE(moon_layouts));
+                ImGui::SliderFloat("Moon Inclination", &spawn_draft_.moon_inclination_deg, 0.0f, 85.0f, "%.1f deg");
+                ImGui::SliderFloat("Moon Spacing", &spawn_draft_.moon_spacing_scale, 0.35f, 4.0f, "%.2f");
+            }
             ImGui::Checkbox("Add Rings", &spawn_draft_.spawn_rings);
             if (spawn_draft_.spawn_rings) {
                 ImGui::Checkbox("Override Ring Layout", &spawn_draft_.override_ring_layout);
@@ -1347,7 +1698,46 @@ void CosmosApp::draw_spawn_menu() {
             spawn_draft_.planet_look = 0;
             spawn_draft_.spawn_moons = false;
             spawn_draft_.spawn_rings = false;
+            spawn_draft_.moon_orbit_layout = 0;
+            spawn_draft_.moon_inclination_deg = 8.0f;
+            spawn_draft_.moon_spacing_scale = 1.0f;
         }
+
+        if (is_star_type((uint32_t)spawn_type)) {
+            const char* stage_modes[] = {
+                "Auto",
+                "Main Sequence",
+                "Subgiant",
+                "Red Giant",
+                "Horizontal Branch",
+                "AGB",
+                "Supergiant",
+                "Hypergiant",
+                "White Dwarf",
+                "Neutron Star"
+            };
+            int stage_ui = std::clamp(spawn_draft_.star_stage_hint + 1, 0, (int)IM_ARRAYSIZE(stage_modes) - 1);
+            if (ImGui::Combo("Star Variant", &stage_ui, stage_modes, IM_ARRAYSIZE(stage_modes)))
+                spawn_draft_.star_stage_hint = stage_ui - 1;
+        } else {
+            spawn_draft_.star_stage_hint = -1;
+        }
+
+        static uint32_t preview_seed = 0xC05109ADu;
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Body Preview");
+        if (ImGui::Button("Regenerate Preview", ImVec2(-1, 0))) {
+            preview_seed = hash_combine(preview_seed, (uint32_t)(sim_time_ * 1000.0f) + 0x9E3779B9u);
+        }
+        SpawnPreviewStyle pv{};
+        pv.planet_look = spawn_draft_.planet_look;
+        pv.spawn_rings = spawn_draft_.spawn_rings && (spawn_type == CTYPE_PLANET || spawn_type == CTYPE_MOON);
+        pv.spawn_moons = spawn_draft_.spawn_moons && (spawn_type == CTYPE_PLANET || spawn_type == CTYPE_MOON);
+        pv.moon_count = spawn_draft_.moon_count;
+        pv.moon_layout = spawn_draft_.moon_orbit_layout;
+        pv.moon_inclination_deg = spawn_draft_.moon_inclination_deg;
+        pv.moon_spacing_scale = spawn_draft_.moon_spacing_scale;
+        draw_spawn_preview_thumb("##spawn_preview_thumb", spawn_type, spawn_mass, preview_seed, pv);
 
         ImGui::Separator();
         ImGui::Checkbox("Override Material Composition", &spawn_draft_.override_material);
@@ -1370,15 +1760,26 @@ void CosmosApp::draw_spawn_menu() {
         }
 
         if (ImGui::CollapsingHeader("Quick Presets")) {
+            auto star_luminosity = [&](float mass, float radius_sim, float temperature_k) {
+                float r_solar = std::max(radius_sim / (EARTH_RADIUS_SIM_UNITS * 109.1f), 1.0e-4f);
+                float stefan = r_solar * r_solar * std::pow(std::max(temperature_k, 100.0f) / 5778.0f, 4.0f);
+                float mass_law = (mass < 0.43f)
+                    ? 0.23f * std::pow(std::max(mass, 0.01f), 2.3f)
+                    : (mass < 2.0f ? std::pow(mass, 4.0f)
+                                   : (mass < 20.0f ? 1.5f * std::pow(mass, 3.5f)
+                                                   : 3200.0f * std::pow(std::max(mass, 20.0f) / 20.0f, 2.2f)));
+                return std::max(stefan, mass_law);
+            };
+
             if (ImGui::Button("Add Solar System", ImVec2(-1, 0))) {
                 glm::vec3 offset = camera.target;
                 CelestialBody s;
-                s.pos = offset; s.mass = 1.0f; s.radius = 30.0f;
+                s.pos = offset; s.mass = 1.0f; s.radius = 696340.0f / SIM_UNIT_TO_KM;
                 s.temperature = 5778.0f; s.type = classify_star_spectral(5778.0f, 1.0f);
                 s.seed = 42;
                 s.fuel = 0.72f;
                 s.angular_vel = (2.0f * 3.14159265359f) / (26.0f * 24.0f * 3600.0f);
-                s.luminosity = std::pow(std::max(s.mass, 0.08f), 3.2f) * 0.1f;
+                s.luminosity = star_luminosity(s.mass, s.radius, s.temperature);
                 s.name = generate_body_name(s.seed, s.type);
                 int star_idx = (int)state.bodies.size();
                 state.bodies.push_back(s); state.trails.emplace_back();
@@ -1415,7 +1816,7 @@ void CosmosApp::draw_spawn_menu() {
                 s1.type = classify_star_spectral(8000.0f, 50.0f); s1.seed = 111;
                 s1.fuel = 0.68f;
                 s1.angular_vel = (2.0f * 3.14159265359f) / (38.0f * 3600.0f);
-                s1.luminosity = std::pow(std::max(s1.mass, 0.08f), 3.2f) * 0.1f;
+                s1.luminosity = star_luminosity(s1.mass, s1.radius, s1.temperature);
                 s1.name = generate_body_name(s1.seed, s1.type);
                 state.bodies.push_back(s1); state.trails.emplace_back();
                 refresh_body_render_state(state.bodies.back(), &state);
@@ -1427,7 +1828,7 @@ void CosmosApp::draw_spawn_menu() {
                 s2.type = classify_star_spectral(3500.0f, 50.0f); s2.seed = 222;
                 s2.fuel = 0.62f;
                 s2.angular_vel = (2.0f * 3.14159265359f) / (84.0f * 3600.0f);
-                s2.luminosity = std::pow(std::max(s2.mass, 0.08f), 3.2f) * 0.1f;
+                s2.luminosity = star_luminosity(s2.mass, s2.radius, s2.temperature);
                 s2.name = generate_body_name(s2.seed, s2.type);
                 state.bodies.push_back(s2); state.trails.emplace_back();
                 refresh_body_render_state(state.bodies.back(), &state);
@@ -2824,7 +3225,14 @@ void CosmosApp::draw_bottom_bar() {
                         "Deep Black",
                         "Nebula",
                         "Warm Dust",
-                        "Blue Haze"
+                        "Blue Haze",
+                        "Aurora Veil",
+                        "Crimson Rift",
+                        "Galactic Core",
+                        "Monochrome",
+                        "Emerald Sea",
+                        "Infrared Dust",
+                        "Deep Field"
                     };
                     ImGui::Combo("Background Preset##Menu", &cfg.cosmos_background_preset,
                                  BG_PRESETS, IM_ARRAYSIZE(BG_PRESETS));
@@ -2843,9 +3251,10 @@ void CosmosApp::draw_bottom_bar() {
                             camera.target_distance = camera.distance;
                         }
                     }
-                    ImGui::SliderInt("Cosmos Quality##Menu", &cfg.cosmos_quality, 0, 2,
+                    ImGui::SliderInt("Cosmos Quality##Menu", &cfg.cosmos_quality, 0, 3,
                                      cfg.cosmos_quality == 0 ? "Low" :
-                                     (cfg.cosmos_quality == 1 ? "Balanced" : "High"));
+                                     (cfg.cosmos_quality == 1 ? "Balanced" :
+                                      (cfg.cosmos_quality == 2 ? "High" : "Ultra")));
                 }
 
                 if (ImGui::CollapsingHeader("Time Control")) {
@@ -2903,6 +3312,28 @@ void CosmosApp::draw_bottom_bar() {
                     if (!cfg.dynamic_budget_enabled) {
                         ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
                                            "Budget disabled: fragment growth is uncapped.");
+                    }
+                    ImGui::TreePop();
+                }
+                if (ImGui::TreeNodeEx("Diagnostics")) {
+                    ImGui::Checkbox("Enable Runtime Diagnostics##PerfDiag", &diagnostics_enabled_);
+                    ImGui::Checkbox("Pause on Invalid State##PerfDiag", &diagnostics_pause_on_invalid_);
+                    ImGui::Text("Step Counter: %llu", (unsigned long long)diagnostics_step_counter_);
+                    ImGui::TextWrapped("Logs: cosmos_debug.log and /tmp/cosmos_debug.log");
+                    ImGui::TextWrapped("Crash dump: /tmp/cosmos_crash.log");
+                    if (ImGui::Button("Validate Now##PerfDiag", ImVec2(-1, 0))) {
+                        validate_body_state("ui/manual_validate", true);
+                    }
+                    if (ImGui::Button("Dump Snapshot##PerfDiag", ImVec2(-1, 0))) {
+                        int attracting = 0;
+                        int non_attracting = 0;
+                        for (const auto& b : state.bodies) {
+                            if (b.marked_for_removal) continue;
+                            if (b.non_attracting) ++non_attracting;
+                            else ++attracting;
+                        }
+                        debug_logf("snapshot bodies=%zu attracting=%d non_attracting=%d fps=%.2f sim_time=%.6g",
+                                   state.bodies.size(), attracting, non_attracting, smoothed_fps_, sim_time_);
                     }
                     ImGui::TreePop();
                 }

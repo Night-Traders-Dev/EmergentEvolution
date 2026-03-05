@@ -666,7 +666,7 @@ struct CelestialBody {
     bool        non_attracting = false;     // affected by gravity but does not source gravity
     uint32_t    seed           = 0;         // procedural generation seed
     uint32_t    frag_generation = 0;        // how many times this body has been fragmented (0 = original)
-    int32_t     forced_surface = -1;        // -1 auto, 0 rocky, 1 water, 2 ice, 3 earth-like
+    int32_t     forced_surface = -1;        // -1 auto, 0 rocky, 1 water, 2 ice, 3 earth-like, 4 gas giant
     bool        custom_material = false;    // use manually specified composition fractions
     float       custom_iron = 0.0f;
     float       custom_silicate = 0.0f;
@@ -754,6 +754,22 @@ inline void refresh_planet_props(CelestialBody& b) {
             b.cached_props.has_weather = true;
             b.cached_props.weather_type = (b.cached_props.cloud_coverage > 62.0f) ? WEATHER_STORMS : WEATHER_RAIN;
             break;
+        case 4: // gas giant
+            b.cached_props.surface = SURF_GAS;
+            b.cached_props.planet_class = (mass_earth > 45.0f) ? PCLASS_GAS_GIANT : PCLASS_ICE_GIANT;
+            b.cached_props.ocean_type = OCEAN_NONE;
+            b.cached_props.ocean_coverage = 0.0f;
+            b.cached_props.vegetation_coverage = 0.0f;
+            b.cached_props.ice_sheet_coverage = (b.cached_props.planet_class == PCLASS_ICE_GIANT)
+                ? std::clamp(b.cached_props.ice_sheet_coverage, 18.0f, 65.0f)
+                : std::clamp(b.cached_props.ice_sheet_coverage, 0.0f, 28.0f);
+            b.cached_props.atmosphere.pressure = std::max(b.cached_props.atmosphere.pressure, 15.0f);
+            b.cached_props.cloud_coverage = std::max(b.cached_props.cloud_coverage, 58.0f);
+            b.cached_props.atmosphere.h2_frac = std::max(b.cached_props.atmosphere.h2_frac, 0.68f);
+            b.cached_props.atmosphere.he_frac = std::max(b.cached_props.atmosphere.he_frac, 0.18f);
+            b.cached_props.has_weather = true;
+            b.cached_props.weather_type = WEATHER_STORMS;
+            break;
         default:
             break;
         }
@@ -840,8 +856,10 @@ struct CosmosConfig {
     bool     cosmos_comet_tails = true;
     bool     cosmos_blackhole_lensing = true;
     bool     cosmos_space_fabric = false;
-    int      cosmos_background_preset = 0; // 0=realistic, 1=deep black, 2=nebula, 3=warm dust, 4=blue haze
-    int      cosmos_quality = 1;        // 0=low, 1=balanced, 2=high
+    int      cosmos_background_preset = 0; // 0=realistic, 1=deep black, 2=nebula, 3=warm dust, 4=blue haze,
+                                            // 5=aurora veil, 6=crimson rift, 7=galactic core, 8=monochrome,
+                                            // 9=emerald sea, 10=infrared dust, 11=deep field
+    int      cosmos_quality = 3;        // 0=low, 1=balanced, 2=high, 3=ultra
     float    cosmos_space_fabric_grid_size = 40.0f;
     float    cosmos_space_fabric_strength = 1.0f;
 
@@ -926,17 +944,41 @@ inline MagneticSignature estimate_magnetic_signature(const CelestialBody& b, flo
     ms.axis_angle = hash_float(hash_combine(b.seed, 700u)) * 1.57079632679f;
 
     if (is_star_type(b.type)) {
-        float activity = (0.28f + std::clamp(b.luminosity, 0.0f, 5000.0f) * 0.0025f +
-                          spin * 420.0f + (1.0f - std::clamp(b.fuel, 0.0f, 1.0f)) * 0.35f);
+        constexpr float TAU = 6.28318530718f;
+        constexpr float SOLAR_SPIN = TAU / (26.0f * 24.0f * 3600.0f);
+        constexpr float SOLAR_RADIUS_SIM = 872.8f; // 109.1 Earth radii at 8 units / R_earth
+        float solar_volume = (4.0f / 3.0f) * 3.14159265359f *
+                             SOLAR_RADIUS_SIM * SOLAR_RADIUS_SIM * SOLAR_RADIUS_SIM;
+        float solar_density = 1.0f / std::max(solar_volume, 1.0e-6f);
+        float density_rel = density / std::max(solar_density, 1.0e-12f);
+        float spin_norm = std::clamp(spin / std::max(SOLAR_SPIN, 1.0e-8f), 0.0f, 2000.0f);
+        float convective = std::clamp((6500.0f - b.temperature) / 4300.0f, 0.0f, 1.0f);
+        float hot_wind = std::clamp((b.temperature - 9000.0f) / 26000.0f, 0.0f, 1.0f);
+        float luminosity_term = std::clamp(std::log2(std::max(b.luminosity + 1.0f, 1.0f)) / 9.0f, 0.0f, 2.0f);
+        float giant = (b.stellar_stage == SSTAGE_RED_GIANT || b.stellar_stage == SSTAGE_AGB ||
+                       b.stellar_stage == SSTAGE_SUPERGIANT || b.stellar_stage == SSTAGE_HYPERGIANT) ? 1.0f : 0.0f;
         float compact = (b.stellar_stage == SSTAGE_WHITE_DWARF || b.stellar_stage == SSTAGE_NEUTRON_STAR) ? 1.0f : 0.0f;
-        ms.magnetic_field = std::clamp(activity * (0.8f + density * 4.0f + compact * 1.4f), 0.0f, 18.0f);
-        ms.magnetosphere_size = b.radius * std::clamp(3.2f + ms.magnetic_field * 0.28f, 3.5f, 12.0f);
+        float compact_boost = (b.stellar_stage == SSTAGE_NEUTRON_STAR) ? 46.0f :
+                              (b.stellar_stage == SSTAGE_WHITE_DWARF ? 8.0f : 1.0f);
+        float dyn = (0.08f + convective * 0.95f + hot_wind * 0.35f) *
+                    std::pow(std::max(spin_norm, 0.08f), 0.44f) *
+                    std::pow(std::max(density_rel, 0.02f), 0.22f);
+        dyn *= compact_boost;
+        dyn *= (giant > 0.5f) ? 0.45f : 1.0f;
+        dyn += luminosity_term * 0.25f + (1.0f - std::clamp(b.fuel, 0.0f, 1.0f)) * 0.20f;
+
+        ms.magnetic_field = std::clamp(dyn, 0.0f, compact > 0.5f ? 120.0f : 24.0f);
+        float extent_mult = 4.5f + std::pow(std::max(ms.magnetic_field, 0.01f), 0.52f) *
+                            (compact > 0.5f ? 1.45f : 1.08f);
+        float max_mult = compact > 0.5f ? 180.0f : 28.0f;
+        ms.magnetosphere_size = b.radius * std::clamp(extent_mult, 3.5f, max_mult);
         ms.has_magnetosphere = true;
         ms.show_axis = true;
-        ms.particle_trapping = std::clamp(ms.magnetic_field * 0.12f, 0.0f, 1.5f);
+        ms.particle_trapping = std::clamp(ms.magnetic_field * (compact > 0.5f ? 0.045f : 0.09f),
+                                          0.0f, compact > 0.5f ? 2.2f : 1.6f);
         if (b.stellar_stage == SSTAGE_NEUTRON_STAR || b.stellar_stage == SSTAGE_WHITE_DWARF) {
-            ms.particle_jets = ms.magnetic_field > 2.0f;
-            ms.pulsar = (b.stellar_stage == SSTAGE_NEUTRON_STAR) && ms.particle_jets && spin > 0.002f;
+            ms.particle_jets = ms.magnetic_field > (b.stellar_stage == SSTAGE_NEUTRON_STAR ? 15.0f : 6.0f);
+            ms.pulsar = (b.stellar_stage == SSTAGE_NEUTRON_STAR) && ms.particle_jets && spin > 0.01f;
         }
         return ms;
     }
@@ -968,10 +1010,15 @@ inline MagneticSignature estimate_magnetic_signature(const CelestialBody& b, flo
 
 inline float estimate_stellar_luminosity_units(const CelestialBody& b) {
     if (!is_star_type(b.type)) return 0.0f;
-    float mass_lum = std::pow(std::max(b.mass, 0.05f), 3.5f);
-    float thermal_lum = std::pow(std::max(b.temperature, 100.0f) / 5778.0f, 4.0f) *
-                        std::max(b.radius * b.radius / (30.0f * 30.0f), 0.02f);
-    return std::max(b.luminosity, 0.0f) + mass_lum * 0.1f + thermal_lum;
+    constexpr float SOLAR_RADIUS_SIM = 872.8f;
+    float r_solar = std::max(b.radius / SOLAR_RADIUS_SIM, 1.0e-4f);
+    float stefan = r_solar * r_solar * std::pow(std::max(b.temperature, 100.0f) / 5778.0f, 4.0f);
+    float mass_lum;
+    if (b.mass < 0.43f) mass_lum = 0.23f * std::pow(std::max(b.mass, 0.01f), 2.3f);
+    else if (b.mass < 2.0f) mass_lum = std::pow(b.mass, 4.0f);
+    else if (b.mass < 20.0f) mass_lum = 1.5f * std::pow(b.mass, 3.5f);
+    else mass_lum = 3200.0f * std::pow(std::max(b.mass, 20.0f) / 20.0f, 2.2f);
+    return std::max(std::max(stefan, mass_lum), std::max(b.luminosity, 0.0f));
 }
 
 inline glm::vec3 estimate_magnetic_axis_dir(uint32_t seed) {
@@ -1046,26 +1093,40 @@ inline BodyVisualProperties generate_body_visual_properties(const CelestialBody&
             ? 1.0f : 0.0f;
         float compact_factor = (b.stellar_stage == SSTAGE_WHITE_DWARF || b.stellar_stage == SSTAGE_NEUTRON_STAR)
             ? 1.0f : 0.0f;
+        float giant_factor = (b.stellar_stage == SSTAGE_SUPERGIANT || b.stellar_stage == SSTAGE_HYPERGIANT)
+            ? 1.0f : 0.0f;
         float spent_fuel = 1.0f - std::clamp(b.fuel, 0.0f, 1.0f);
+        float hot_factor = std::clamp((b.temperature - 9000.0f) / 26000.0f, 0.0f, 1.0f);
+        float subtype_wr = (b.type == CTYPE_STAR_WR) ? 1.0f : 0.0f;
+        float subtype_cool = (b.type == CTYPE_STAR_M || b.type == CTYPE_STAR_K || b.type == CTYPE_STAR_G)
+            ? 1.0f : 0.0f;
+        float subtype_hot = (b.type == CTYPE_STAR_O || b.type == CTYPE_STAR_B || b.type == CTYPE_STAR_WR)
+            ? 1.0f : 0.0f;
         vp.roughness = 0.92f;
         vp.specular = 0.0f;
-        vp.normal_strength = 0.28f + h0 * 0.50f + evolved_factor * 0.18f;
-        vp.terrain_amp = 0.10f + (1.0f - temp_n) * 0.16f + evolved_factor * 0.10f;
-        vp.terrain_freq = 5.0f + h1 * 24.0f + compact_factor * 10.0f;
-        vp.ridge_amp = (b.type == CTYPE_STAR_G || b.type == CTYPE_STAR_K || b.type == CTYPE_STAR_M)
-            ? (0.20f + h2 * 0.60f) : (0.03f + h2 * 0.18f);
+        vp.normal_strength = 0.22f + h0 * 0.46f + evolved_factor * 0.18f + giant_factor * 0.10f;
+        vp.terrain_amp = 0.06f + (1.0f - temp_n) * 0.16f + evolved_factor * 0.12f + giant_factor * 0.14f;
+        vp.terrain_freq = 4.0f + h1 * 22.0f + compact_factor * 12.0f + subtype_wr * 7.0f;
+        vp.ridge_amp = subtype_cool > 0.5f
+            ? (0.24f + h2 * 0.58f)
+            : (0.03f + h2 * 0.16f + subtype_wr * 0.22f);
         vp.rock_frac = 0.02f + h0 * 0.18f;
-        vp.star_spot_coverage = std::clamp(0.08f + cool_factor * 0.28f + spin_mag * 0.14f +
-            spent_fuel * 0.12f + h1 * 0.12f, 0.05f, 0.58f);
-        vp.star_flare_frequency = 0.75f + spin_mag * 1.9f + h2 * 1.0f + compact_factor * 1.8f;
-        vp.star_pulsation = std::clamp(evolved_factor * (0.22f + h0 * 0.32f) +
-            compact_factor * (0.18f + h1 * 0.22f) + spent_fuel * 0.10f, 0.0f, 0.75f);
-        vp.star_differential_rotation = std::clamp(0.18f + h2 * 0.48f + spin_mag * 0.30f, 0.10f, 0.95f);
-        vp.flare_activity = std::clamp(0.26f + b.mass * 0.030f + spin_mag * 0.58f +
-            spent_fuel * 0.22f + h0 * 0.16f, 0.10f, 1.45f);
-        vp.corona_strength = std::clamp(0.38f + temp_n * 0.88f +
-            evolved_factor * 0.20f + compact_factor * 0.30f + spent_fuel * 0.10f,
-            0.15f, 1.55f);
+        vp.star_spot_coverage = std::clamp(0.06f + cool_factor * 0.34f + spin_mag * 0.15f +
+            spent_fuel * 0.10f + h1 * 0.12f - subtype_hot * 0.08f, 0.01f, 0.66f);
+        vp.star_flare_frequency = 0.60f + spin_mag * 1.9f + h2 * 0.9f + compact_factor * 2.6f +
+                                  subtype_wr * 1.3f + subtype_hot * 0.45f;
+        vp.star_pulsation = std::clamp(evolved_factor * (0.24f + h0 * 0.36f) +
+            giant_factor * (0.20f + h2 * 0.20f) +
+            compact_factor * (0.24f + h1 * 0.28f) +
+            subtype_wr * 0.22f + spent_fuel * 0.08f, 0.0f, 1.0f);
+        vp.star_differential_rotation = std::clamp(0.14f + h2 * 0.42f + spin_mag * 0.32f +
+            subtype_hot * 0.12f - giant_factor * 0.10f, 0.05f, 1.0f);
+        vp.flare_activity = std::clamp(0.20f + b.mass * 0.022f + spin_mag * 0.62f +
+            hot_factor * 0.35f + subtype_wr * 0.45f + spent_fuel * 0.18f +
+            compact_factor * 0.22f + h0 * 0.14f, 0.08f, 2.0f);
+        vp.corona_strength = std::clamp(0.30f + temp_n * 0.95f + subtype_hot * 0.28f +
+            evolved_factor * 0.28f + giant_factor * 0.22f + compact_factor * 0.35f +
+            spent_fuel * 0.10f, 0.12f, 2.1f);
         vp.spin_visual = spin_mag;
         return vp;
     }

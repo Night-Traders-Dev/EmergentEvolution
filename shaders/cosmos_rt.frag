@@ -44,6 +44,7 @@ const int RENDER_MOON = 2;
 const int RENDER_ASTEROID = 3;
 const int RENDER_COMET = 4;
 const int RENDER_BLACK_HOLE = 5;
+const int MAX_TRACE_BODIES = 2048;
 
 const int SURF_ROCKY = 0;
 const int SURF_LIQUID = 1;
@@ -60,7 +61,12 @@ const int PHASE_PLASMA = 5;
 const int PHASE_COLLAPSING = 6;
 
 const int SSTAGE_MAIN_SEQUENCE = 0;
+const int SSTAGE_SUBGIANT = 1;
 const int SSTAGE_RED_GIANT = 2;
+const int SSTAGE_HORIZONTAL = 3;
+const int SSTAGE_AGB = 4;
+const int SSTAGE_SUPERGIANT = 5;
+const int SSTAGE_HYPERGIANT = 6;
 const int SSTAGE_WHITE_DWARF = 7;
 const int SSTAGE_NEUTRON_STAR = 8;
 
@@ -269,7 +275,8 @@ int adjusted_octaves(int base_octaves) {
     int quality = int(quality_params.x + 0.5);
     if (quality <= 0) return max(1, base_octaves - 2);
     if (quality == 1) return max(1, base_octaves - 1);
-    return base_octaves;
+    if (quality == 2) return min(base_octaves + 1, 12);
+    return min(base_octaves + 2, 14);
 }
 
 vec3 gerstner_lobes(vec2 uv, float t, float seed, float scale) {
@@ -334,7 +341,12 @@ vec3 blackbody_tint(float temperature) {
 
 vec3 star_surface_tint(float temperature, float mass, float radius, float stage_f, float luminosity) {
     vec3 tint = blackbody_tint(temperature);
-    float giant = (abs(stage_f - float(SSTAGE_RED_GIANT)) < 0.5) ? 1.0 : clamp((radius - 40.0) / 120.0, 0.0, 1.0);
+    float radius_solar = radius / 872.8;
+    float giant_stage = (abs(stage_f - float(SSTAGE_RED_GIANT)) < 0.5 ||
+                         abs(stage_f - float(SSTAGE_AGB)) < 0.5 ||
+                         abs(stage_f - float(SSTAGE_SUPERGIANT)) < 0.5 ||
+                         abs(stage_f - float(SSTAGE_HYPERGIANT)) < 0.5) ? 1.0 : 0.0;
+    float giant = max(giant_stage, clamp((radius_solar - 6.0) / 24.0, 0.0, 1.0));
     float white_dwarf = (abs(stage_f - float(SSTAGE_WHITE_DWARF)) < 0.5) ? 1.0 : 0.0;
     float neutron_star = (abs(stage_f - float(SSTAGE_NEUTRON_STAR)) < 0.5) ? 1.0 : 0.0;
     float massive_hot = clamp((mass - 8.0) / 32.0, 0.0, 1.0) * clamp((temperature - 9000.0) / 26000.0, 0.0, 1.0);
@@ -507,6 +519,10 @@ vec3 sample_starfield(vec3 rd) {
     float stars_faint = starfield_layer(rd, 64.0, 0.84, 2.0);
     float stars_mid = starfield_layer(rd * 1.7 + 0.3, 138.0, 0.90, 3.5);
     float stars_bright = starfield_layer(rd * 2.8 - 0.4, 240.0, 0.965, 9.0);
+    float stars_micro = 0.0;
+    if (quality_params.x >= 3.0) {
+        stars_micro = starfield_layer(rd * 4.2 + vec3(0.3, -0.2, 0.5), 420.0, 0.985, 12.0) * 0.55;
+    }
     float twinkle = 0.96 + 0.04 * sin(screen_info.w * 0.16 + rd.x * 133.0 + rd.z * 91.0);
 
     float tint_seed = hash11(rd.x * 71.0 + rd.y * 39.0 + rd.z * 113.0);
@@ -517,7 +533,7 @@ vec3 sample_starfield(vec3 rd) {
 
     float dense = stars_faint * 0.95 + stars_mid * 0.85;
     float bright = stars_bright * (1.2 + 0.6 * hash11(tint_seed * 91.0));
-    return tint * (dense + bright) * twinkle;
+    return tint * (dense + bright + stars_micro) * twinkle;
 }
 
 vec3 background(vec3 rd) {
@@ -558,6 +574,61 @@ vec3 background(vec3 rd) {
         bg += haze * (0.22 + 0.60 * galactic_band);
         bg += vec3(0.007, 0.010, 0.016) * pow(galactic_band, 2.2);
         bg += sample_starfield(rd) * 0.95;
+    } else if (preset == 5) { // Aurora veil
+        float aurora_n = fbm(rd * 9.5 + vec3(-0.6, 2.8, 1.4), 5);
+        float curtain = pow(clamp(1.0 - abs(rd.y + 0.12 + aurora_n * 0.18), 0.0, 1.0), 4.2);
+        vec3 aurora = mix(vec3(0.04, 0.36, 0.22), vec3(0.12, 0.58, 0.84), aurora_n);
+        bg = vec3(0.00012, 0.00016, 0.00024);
+        bg += aurora * curtain * (0.12 + 0.28 * galactic_band);
+        bg += vec3(0.008, 0.010, 0.012) * pow(galactic_band, 1.9);
+        bg += sample_starfield(rd) * 0.94;
+    } else if (preset == 6) { // Crimson rift
+        float rift = fbm(rd * 7.2 + vec3(3.8, -1.3, 0.4), 5);
+        float ribbons = smoothstep(0.42, 0.88, rift) * smoothstep(0.1, 1.0, galactic_band + 0.2);
+        vec3 red = mix(vec3(0.12, 0.02, 0.03), vec3(0.36, 0.06, 0.10), rift);
+        bg = vec3(0.00015, 0.00007, 0.00010);
+        bg += red * (0.25 + ribbons * 0.60);
+        bg += vec3(0.016, 0.006, 0.009) * pow(galactic_band, 2.0);
+        bg += sample_starfield(rd) * 0.90;
+    } else if (preset == 7) { // Galactic core
+        float core = pow(clamp(1.0 - abs(rd.y * 0.55), 0.0, 1.0), 7.0);
+        float core_noise = fbm(rd * 4.5 + vec3(0.4, -0.9, 2.6), 5);
+        vec3 core_col = mix(vec3(0.28, 0.20, 0.12), vec3(0.82, 0.66, 0.40), core_noise);
+        bg = vec3(0.0002, 0.00016, 0.00012);
+        bg += core_col * core * (0.22 + 0.55 * (1.0 - dust * 0.7));
+        bg += vec3(0.020, 0.015, 0.010) * pow(galactic_band, 2.3);
+        bg += sample_starfield(rd) * 1.05;
+    } else if (preset == 8) { // Monochrome
+        float mono_neb = fbm(rd * 6.0 + vec3(1.1, 2.0, -0.7), 4);
+        float glow = pow(galactic_band, 2.1) * (0.45 + mono_neb * 0.55);
+        bg = vec3(0.00010, 0.00010, 0.00012);
+        bg += vec3(glow) * 0.045;
+        vec3 stars = sample_starfield(rd);
+        float lum = dot(stars, vec3(0.299, 0.587, 0.114));
+        bg += vec3(lum) * 0.92;
+    } else if (preset == 9) { // Emerald sea
+        float em = fbm(rd * 6.9 + vec3(-2.2, 1.1, 0.3), 5);
+        float arc = pow(clamp(1.0 - abs(rd.y * 0.75 + em * 0.16), 0.0, 1.0), 4.8);
+        vec3 em_col = mix(vec3(0.01, 0.20, 0.13), vec3(0.06, 0.40, 0.30), em);
+        bg = vec3(0.00010, 0.00018, 0.00016);
+        bg += em_col * (0.22 + 0.56 * arc);
+        bg += vec3(0.006, 0.014, 0.012) * pow(galactic_band, 2.1);
+        bg += sample_starfield(rd) * 0.94;
+    } else if (preset == 10) { // Infrared dust
+        float ir = fbm(rd * 5.3 + vec3(4.4, -1.5, 0.9), 5);
+        float plume = smoothstep(0.35, 0.92, ir) * (0.35 + 0.65 * galactic_band);
+        vec3 ir_col = mix(vec3(0.16, 0.05, 0.03), vec3(0.42, 0.11, 0.06), ir);
+        bg = vec3(0.00012, 0.00005, 0.00004);
+        bg += ir_col * plume * 0.72;
+        bg += vec3(0.014, 0.006, 0.004) * pow(galactic_band, 1.9);
+        bg += sample_starfield(rd) * 0.88;
+    } else if (preset == 11) { // Deep field
+        float hubble = fbm(rd * 11.0 + vec3(-3.0, 0.7, 2.5), 6);
+        float haze = smoothstep(0.55, 0.96, hubble) * 0.08;
+        vec3 faint = mix(vec3(0.10, 0.12, 0.18), vec3(0.18, 0.10, 0.14), hubble);
+        bg = vec3(0.00003, 0.00004, 0.00007);
+        bg += faint * haze;
+        bg += sample_starfield(rd) * 1.12;
     } else { // Realistic
         bg += sample_starfield(rd);
     }
@@ -585,7 +656,7 @@ void sample_fabric_field(vec3 world_pos, int body_count, out vec2 warped_local,
     float gravity_scale = max(fabric_params.w, 0.001);
     well = 0.0;
 
-    for (int i = 0; i < body_count && i < 512; i++) {
+    for (int i = 0; i < body_count && i < MAX_TRACE_BODIES; i++) {
         float mass = max(spheres[i].gravity_params.x, 0.0);
         float display_mass = log2(1.0 + mass * gravity_scale * 12.0);
         if (display_mass < 0.03) continue;
@@ -725,7 +796,7 @@ void accumulate_rings(vec3 ro, vec3 rd, int body_count, float scene_t,
     ring_col = vec3(0.0);
     ring_alpha = 0.0;
 
-    for (int i = 0; i < body_count && i < 512; i++) {
+    for (int i = 0; i < body_count && i < MAX_TRACE_BODIES; i++) {
         Sphere body = spheres[i];
         float inner = body.ring_params.x;
         float outer = body.ring_params.y;
@@ -790,7 +861,7 @@ void accumulate_magnetospheres(vec3 ro, vec3 rd, int body_count, float scene_t,
     magnet_col = vec3(0.0);
     magnet_alpha = 0.0;
 
-    for (int i = 0; i < body_count && i < 512; i++) {
+    for (int i = 0; i < body_count && i < MAX_TRACE_BODIES; i++) {
         Sphere body = spheres[i];
         int render_class = int(body.class_seed_temp.y + 0.5);
         if (render_class != RENDER_PLANET && render_class != RENDER_MOON && render_class != RENDER_STAR)
@@ -1451,7 +1522,7 @@ bool compute_primary_light(vec3 hit_pos, int body_count, int skip_idx,
     light_dir = normalize(vec3(0.5, 0.8, 0.3));
     light_color = vec3(1.0);
 
-    for (int i = 0; i < body_count && i < 512; i++) {
+    for (int i = 0; i < body_count && i < MAX_TRACE_BODIES; i++) {
         if (i == skip_idx) continue;
         if (spheres[i].base_emit.a <= 0.0) continue;
         vec3 to_light = spheres[i].pos_radius.xyz - hit_pos;
@@ -1468,7 +1539,7 @@ bool compute_primary_light(vec3 hit_pos, int body_count, int skip_idx,
 }
 
 bool in_shadow(vec3 origin, vec3 light_dir, float light_dist, int body_count, int self_idx, int light_idx) {
-    for (int j = 0; j < body_count && j < 512; j++) {
+    for (int j = 0; j < body_count && j < MAX_TRACE_BODIES; j++) {
         if (j == self_idx || j == light_idx) continue;
         float st = intersect_sphere(origin, light_dir, spheres[j].pos_radius.xyz, spheres[j].pos_radius.w);
         if (st > 0.0 && st < light_dist) return true;
@@ -1559,7 +1630,7 @@ void main() {
     float closest_t = 1.0e30;
     int closest_idx = -1;
 
-    for (int i = 0; i < body_count && i < 512; i++) {
+    for (int i = 0; i < body_count && i < MAX_TRACE_BODIES; i++) {
         int render_class = int(spheres[i].class_seed_temp.y + 0.5);
         float t = -1.0;
         if (render_class == RENDER_ASTEROID || render_class == RENDER_COMET) {
@@ -1594,7 +1665,7 @@ void main() {
         accumulate_magnetospheres(ro, rd, body_count, -1.0, magnet_col, magnet_alpha);
         if (magnet_alpha > 0.0)
             miss_col = mix(miss_col, miss_col + magnet_col, magnet_alpha);
-        for (int i = 0; i < body_count && i < 512; i++) {
+        for (int i = 0; i < body_count && i < MAX_TRACE_BODIES; i++) {
             if (int(spheres[i].class_seed_temp.y + 0.5) != RENDER_BLACK_HOLE) continue;
             float effect_alpha = 0.0;
             vec3 effect = black_hole_effect(ro, rd, spheres[i], body_count, false, effect_alpha);
@@ -1692,7 +1763,7 @@ void main() {
                                              primary_light_color) * atten;
             }
         } else if (!use_fast_star_lighting && quality_params.x >= 2.0) {
-            for (int i = 0; i < body_count && i < 512; i++) {
+            for (int i = 0; i < body_count && i < MAX_TRACE_BODIES; i++) {
                 if (spheres[i].base_emit.a <= 0.0 || i == closest_idx) continue;
                 vec3 to_light = spheres[i].pos_radius.xyz - hit_pos;
                 float light_dist = length(to_light);

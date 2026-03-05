@@ -3,13 +3,27 @@
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
+#include <csignal>
+#include <cstdarg>
+#include <cstdio>
+#include <cstring>
 #include <cmath>
+#include <exception>
+#include <functional>
 #include <limits>
 #include <mutex>
 #include <numeric>
 #include <random>
 #include <thread>
+#include <ctime>
+
+#if !defined(_WIN32)
+#include <execinfo.h>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 template <typename Fn>
 static void run_parallel_chunks(size_t count, size_t workers, Fn&& fn) {
@@ -31,19 +45,91 @@ static void run_parallel_chunks(size_t count, size_t workers, Fn&& fn) {
     for (auto& worker : pool) worker.join();
 }
 
+namespace {
+
+#if !defined(_WIN32)
+std::atomic<int> g_crash_log_fd{-1};
+
+void crash_log_write(const char* msg) {
+    if (!msg) return;
+    int fd = g_crash_log_fd.load();
+    if (fd < 0) return;
+    size_t len = std::strlen(msg);
+    while (len > 0) {
+        ssize_t written = ::write(fd, msg, len);
+        if (written <= 0) break;
+        msg += written;
+        len -= (size_t)written;
+    }
+}
+
+void cosmos_signal_handler(int signum, siginfo_t* info, void* /*ucontext*/) {
+    char line[256];
+    int code = info ? info->si_code : 0;
+    int pid = info ? info->si_pid : 0;
+    std::snprintf(line, sizeof(line),
+                  "\n=== Cosmos crash signal %d code=%d pid=%d ===\n",
+                  signum, code, pid);
+    crash_log_write(line);
+
+    void* bt[64];
+    int count = backtrace(bt, 64);
+    int fd = g_crash_log_fd.load();
+    if (fd >= 0 && count > 0)
+        backtrace_symbols_fd(bt, count, fd);
+    crash_log_write("=== end crash ===\n");
+    _exit(128 + signum);
+}
+#endif
+
+void install_crash_handlers_once() {
+    static std::once_flag once;
+    std::call_once(once, []() {
+#if !defined(_WIN32)
+        int fd = ::open("/tmp/cosmos_crash.log", O_CREAT | O_WRONLY | O_APPEND, 0644);
+        g_crash_log_fd.store(fd);
+        crash_log_write("\n=== Cosmos crash handler installed ===\n");
+
+        struct sigaction sa{};
+        sa.sa_sigaction = cosmos_signal_handler;
+        sa.sa_flags = SA_SIGINFO | SA_RESETHAND;
+        sigemptyset(&sa.sa_mask);
+        const int signals[] = {SIGSEGV, SIGABRT, SIGFPE, SIGILL, SIGBUS};
+        for (int sig : signals)
+            sigaction(sig, &sa, nullptr);
+#endif
+        std::set_terminate([]() {
+#if !defined(_WIN32)
+            crash_log_write("\n=== std::terminate() called ===\n");
+            void* bt[64];
+            int count = backtrace(bt, 64);
+            int fd = g_crash_log_fd.load();
+            if (fd >= 0 && count > 0)
+                backtrace_symbols_fd(bt, count, fd);
+            crash_log_write("=== end terminate ===\n");
+#endif
+            std::_Exit(1);
+        });
+    });
+}
+
+} // namespace
+
 // ── Star / BH classification helpers ────────────────────────────────────────
 
 uint32_t classify_star_spectral(float temperature, float mass) {
-    if (temperature > 40000.0f && mass > 16.0f)  return CTYPE_STAR_WR;
-    if (temperature > 30000.0f && mass > 16.0f)  return CTYPE_STAR_O;
-    if (temperature > 10000.0f && mass > 2.1f)   return CTYPE_STAR_B;
-    if (temperature > 7500.0f  && mass > 1.4f)   return CTYPE_STAR_A;
-    if (temperature > 6000.0f  && mass > 1.04f)  return CTYPE_STAR_F;
-    if (temperature > 5200.0f  && mass > 0.8f)   return CTYPE_STAR_G;
-    if (temperature > 3700.0f  && mass > 0.45f)  return CTYPE_STAR_K;
-    if (temperature > 2400.0f  && mass > 0.08f)  return CTYPE_STAR_M;
-    if (temperature > 1300.0f)                    return CTYPE_STAR_L;
-    if (temperature > 500.0f)                     return CTYPE_STAR_T;
+    // Spectral class is primarily temperature-driven; mass is used to
+    // distinguish extreme hot-massive WR/O stars.
+    if (temperature >= 45000.0f && mass >= 22.0f) return CTYPE_STAR_WR;
+    if (temperature >= 30000.0f)                  return CTYPE_STAR_O;
+    if (temperature >= 10000.0f)                  return CTYPE_STAR_B;
+    if (temperature >= 7500.0f)                   return CTYPE_STAR_A;
+    if (temperature >= 6000.0f)                   return CTYPE_STAR_F;
+    if (temperature >= 5200.0f)                   return CTYPE_STAR_G;
+    if (temperature >= 3700.0f)                   return CTYPE_STAR_K;
+    if (temperature >= 2400.0f)                   return CTYPE_STAR_M;
+    if (temperature >= 1300.0f)                   return CTYPE_STAR_L;
+    if (temperature >= 700.0f)                    return CTYPE_STAR_T;
     return CTYPE_STAR_Y;
 }
 
@@ -119,43 +205,55 @@ uint32_t classify_black_hole(float mass) {
 static void star_spectral_bounds(uint32_t type, float& min_mass, float& max_mass,
                                  float& min_temp, float& max_temp) {
     switch (type) {
-    case CTYPE_STAR_O:  min_mass = 16.0f; max_mass = 80.0f;  min_temp = 30000.0f; max_temp = 52000.0f; break;
-    case CTYPE_STAR_B:  min_mass = 2.1f;  max_mass = 16.0f;  min_temp = 10000.0f; max_temp = 30000.0f; break;
-    case CTYPE_STAR_A:  min_mass = 1.4f;  max_mass = 2.1f;   min_temp = 7500.0f;  max_temp = 10000.0f; break;
-    case CTYPE_STAR_F:  min_mass = 1.04f; max_mass = 1.4f;   min_temp = 6000.0f;  max_temp = 7500.0f; break;
-    case CTYPE_STAR_G:  min_mass = 0.8f;  max_mass = 1.04f;  min_temp = 5200.0f;  max_temp = 6000.0f; break;
-    case CTYPE_STAR_K:  min_mass = 0.45f; max_mass = 0.8f;   min_temp = 3700.0f;  max_temp = 5200.0f; break;
-    case CTYPE_STAR_M:  min_mass = 0.08f; max_mass = 0.45f;  min_temp = 2400.0f;  max_temp = 3700.0f; break;
-    case CTYPE_STAR_L:  min_mass = 0.04f; max_mass = 0.08f;  min_temp = 1300.0f;  max_temp = 2400.0f; break;
-    case CTYPE_STAR_T:  min_mass = 0.02f; max_mass = 0.06f;  min_temp = 500.0f;   max_temp = 1300.0f; break;
-    case CTYPE_STAR_Y:  min_mass = 0.01f; max_mass = 0.04f;  min_temp = 250.0f;   max_temp = 500.0f; break;
-    case CTYPE_STAR_WR: min_mass = 20.0f; max_mass = 120.0f; min_temp = 35000.0f; max_temp = 60000.0f; break;
-    default:            min_mass = 0.08f; max_mass = 60.0f;  min_temp = 2400.0f;  max_temp = 40000.0f; break;
+    case CTYPE_STAR_O:  min_mass = 16.0f;  max_mass = 150.0f; min_temp = 30000.0f; max_temp = 52000.0f; break;
+    case CTYPE_STAR_B:  min_mass = 2.1f;   max_mass = 16.0f;  min_temp = 10000.0f; max_temp = 30000.0f; break;
+    case CTYPE_STAR_A:  min_mass = 1.4f;   max_mass = 2.5f;   min_temp = 7500.0f;  max_temp = 10000.0f; break;
+    case CTYPE_STAR_F:  min_mass = 1.04f;  max_mass = 1.4f;   min_temp = 6000.0f;  max_temp = 7500.0f; break;
+    case CTYPE_STAR_G:  min_mass = 0.8f;   max_mass = 1.04f;  min_temp = 5200.0f;  max_temp = 6000.0f; break;
+    case CTYPE_STAR_K:  min_mass = 0.45f;  max_mass = 0.8f;   min_temp = 3700.0f;  max_temp = 5200.0f; break;
+    case CTYPE_STAR_M:  min_mass = 0.08f;  max_mass = 0.45f;  min_temp = 2400.0f;  max_temp = 3700.0f; break;
+    case CTYPE_STAR_L:  min_mass = 0.013f; max_mass = 0.08f;  min_temp = 1300.0f;  max_temp = 2400.0f; break;
+    case CTYPE_STAR_T:  min_mass = 0.007f; max_mass = 0.05f;  min_temp = 700.0f;   max_temp = 1300.0f; break;
+    case CTYPE_STAR_Y:  min_mass = 0.003f; max_mass = 0.03f;  min_temp = 250.0f;   max_temp = 700.0f; break;
+    case CTYPE_STAR_WR: min_mass = 20.0f;  max_mass = 150.0f; min_temp = 45000.0f; max_temp = 120000.0f; break;
+    default:            min_mass = 0.075f; max_mass = 120.0f; min_temp = 2200.0f;  max_temp = 45000.0f; break;
     }
 }
 
 static float expected_main_sequence_temperature(float mass) {
-    if (mass < 0.08f) return 1800.0f;
-    if (mass < 0.45f) return 2500.0f + (mass - 0.08f) / 0.37f * 1200.0f;
+    if (mass < 0.013f) return 350.0f;
+    if (mass < 0.08f) return 1400.0f + (mass - 0.013f) / 0.067f * 1000.0f;
+    if (mass < 0.45f) return 2400.0f + (mass - 0.08f) / 0.37f * 1300.0f;
     if (mass < 0.8f)  return 3700.0f + (mass - 0.45f) / 0.35f * 1500.0f;
     if (mass < 1.04f) return 5200.0f + (mass - 0.8f) / 0.24f * 600.0f;
-    if (mass < 1.4f)  return 6000.0f + (mass - 1.04f) / 0.36f * 1500.0f;
-    if (mass < 2.1f)  return 7500.0f + (mass - 1.4f) / 0.7f * 2500.0f;
-    if (mass < 16.0f) return 10000.0f + (mass - 2.1f) / 13.9f * 20000.0f;
-    return 30000.0f + std::clamp((mass - 16.0f) / 64.0f, 0.0f, 1.0f) * 22000.0f;
+    if (mass < 1.4f)  return 5800.0f + (mass - 1.04f) / 0.36f * 1700.0f;
+    if (mass < 2.5f)  return 7500.0f + (mass - 1.4f) / 1.1f * 2500.0f;
+    if (mass < 16.0f) return 10000.0f + (mass - 2.5f) / 13.5f * 20000.0f;
+    return 30000.0f + std::clamp((mass - 16.0f) / 134.0f, 0.0f, 1.0f) * 22000.0f;
 }
 
-static float stellar_rotation_period_hours(float mass, uint32_t type, std::mt19937& rng) {
+static float stellar_rotation_period_hours(float mass, uint32_t type, uint32_t stage,
+                                           std::mt19937& rng) {
+    if (stage == SSTAGE_NEUTRON_STAR)
+        return std::uniform_real_distribution<float>(0.0004f, 0.08f)(rng);
+    if (stage == SSTAGE_WHITE_DWARF)
+        return std::uniform_real_distribution<float>(0.12f, 48.0f)(rng);
+    if (stage == SSTAGE_RED_GIANT || stage == SSTAGE_AGB)
+        return std::uniform_real_distribution<float>(1200.0f, 16000.0f)(rng);
+    if (stage == SSTAGE_SUPERGIANT || stage == SSTAGE_HYPERGIANT)
+        return std::uniform_real_distribution<float>(400.0f, 7000.0f)(rng);
     if (type == CTYPE_STAR_WR || mass > 16.0f)
-        return std::uniform_real_distribution<float>(8.0f, 60.0f)(rng);
+        return std::uniform_real_distribution<float>(6.0f, 52.0f)(rng);
     if (mass > 2.0f)
-        return std::uniform_real_distribution<float>(12.0f, 180.0f)(rng);
+        return std::uniform_real_distribution<float>(10.0f, 140.0f)(rng);
     if (mass > 0.8f)
-        return std::uniform_real_distribution<float>(120.0f, 720.0f)(rng);
-    return std::uniform_real_distribution<float>(240.0f, 1800.0f)(rng);
+        return std::uniform_real_distribution<float>(90.0f, 650.0f)(rng);
+    return std::uniform_real_distribution<float>(180.0f, 2200.0f)(rng);
 }
 
 float expected_star_radius(const CelestialBody& b);
+static float expected_stellar_luminosity(float mass, float temperature, float radius,
+                                         uint32_t stage, float fuel);
 
 static void randomize_small_body_properties(CelestialBody& body, std::mt19937& rng,
                                             bool is_comet) {
@@ -237,7 +335,7 @@ static void randomize_star_properties(CelestialBody& body, std::mt19937& rng,
 
     if (requested_type != CTYPE_STAR)
         body.mass = std::max(body.mass, min_mass);
-    body.mass = std::clamp(body.mass, 0.01f, MAX_MAIN_SEQUENCE_MASS_SOLAR);
+    body.mass = std::clamp(body.mass, 0.003f, MAX_MAIN_SEQUENCE_MASS_SOLAR);
 
     if (requested_type != CTYPE_STAR) {
         body.temperature = std::clamp(
@@ -253,17 +351,52 @@ static void randomize_star_properties(CelestialBody& body, std::mt19937& rng,
 
     body.type = classify_star_spectral(body.temperature, body.mass);
     body.stellar_stage = SSTAGE_MAIN_SEQUENCE;
+    if (requested_type == CTYPE_STAR) {
+        float v = std::uniform_real_distribution<float>(0.0f, 1.0f)(rng);
+        if (body.mass < 8.0f) {
+            if (v < 0.10f) body.stellar_stage = SSTAGE_SUBGIANT;
+            else if (v < 0.16f) body.stellar_stage = SSTAGE_RED_GIANT;
+            else if (v < 0.18f) body.stellar_stage = SSTAGE_AGB;
+            else if (v < 0.20f) body.stellar_stage = SSTAGE_WHITE_DWARF;
+        } else {
+            if (v < 0.08f) body.stellar_stage = SSTAGE_SUPERGIANT;
+            else if (v < 0.12f) body.stellar_stage = SSTAGE_HYPERGIANT;
+            else if (v < 0.14f) body.stellar_stage = SSTAGE_NEUTRON_STAR;
+        }
+    }
+
     body.fuel = std::clamp(std::uniform_real_distribution<float>(0.55f, 1.0f)(rng) -
                            std::clamp((body.mass - 8.0f) / 80.0f, 0.0f, 0.18f),
                            0.25f, 1.0f);
-    body.radius = expected_star_radius(body) *
-                  std::uniform_real_distribution<float>(0.82f, 1.22f)(rng);
-    float period_h = stellar_rotation_period_hours(body.mass, body.type, rng);
+    if (body.stellar_stage == SSTAGE_WHITE_DWARF || body.stellar_stage == SSTAGE_NEUTRON_STAR)
+        body.fuel = 0.0f;
+
+    if (body.stellar_stage == SSTAGE_WHITE_DWARF) {
+        body.temperature = std::uniform_real_distribution<float>(9000.0f, 110000.0f)(rng);
+    } else if (body.stellar_stage == SSTAGE_NEUTRON_STAR) {
+        body.temperature = std::uniform_real_distribution<float>(70000.0f, 220000.0f)(rng);
+    } else if (body.stellar_stage == SSTAGE_RED_GIANT || body.stellar_stage == SSTAGE_AGB) {
+        body.temperature = std::uniform_real_distribution<float>(2800.0f, 5200.0f)(rng);
+    } else if (body.stellar_stage == SSTAGE_SUBGIANT) {
+        body.temperature = std::uniform_real_distribution<float>(4200.0f, 7600.0f)(rng);
+    } else if (body.stellar_stage == SSTAGE_SUPERGIANT || body.stellar_stage == SSTAGE_HYPERGIANT) {
+        float base_t = expected_main_sequence_temperature(std::max(body.mass, 8.0f));
+        body.temperature = std::clamp(base_t * std::uniform_real_distribution<float>(0.52f, 1.20f)(rng),
+                                      3200.0f, 52000.0f);
+    }
+    body.type = classify_star_spectral(std::max(body.temperature, 250.0f), std::max(body.mass, 0.003f));
+
+    float radius_jitter = (body.stellar_stage == SSTAGE_WHITE_DWARF || body.stellar_stage == SSTAGE_NEUTRON_STAR)
+        ? std::uniform_real_distribution<float>(0.92f, 1.10f)(rng)
+        : std::uniform_real_distribution<float>(0.88f, 1.15f)(rng);
+    body.radius = expected_star_radius(body) * radius_jitter;
+    float period_h = stellar_rotation_period_hours(body.mass, body.type, body.stellar_stage, rng);
     body.angular_vel = (2.0f * PI) / (period_h * 3600.0f);
     if (std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) < 0.08f)
         body.angular_vel *= -1.0f;
-    body.luminosity = std::pow(std::max(body.mass, 0.08f), 3.2f) * 0.1f *
-                      std::uniform_real_distribution<float>(0.75f, 1.35f)(rng);
+    body.luminosity = expected_stellar_luminosity(body.mass, body.temperature, body.radius,
+                                                  body.stellar_stage, body.fuel) *
+                      std::uniform_real_distribution<float>(0.88f, 1.12f)(rng);
 }
 
 static float merged_star_fuel(const CelestialBody& a, const CelestialBody& b, float total_mass) {
@@ -639,19 +772,75 @@ float expected_planet_radius(float mass_solar) {
     return radius_earth * EARTH_RADIUS_SIM_UNITS;
 }
 
+static float solar_radius_sim_units() {
+    // 1 R_sun ~= 109.1 R_earth
+    return EARTH_RADIUS_SIM_UNITS * 109.1f;
+}
+
+static float expected_main_sequence_radius_solar(float mass) {
+    float m = std::max(mass, 0.003f);
+    if (m < 0.08f) {
+        // Brown dwarfs stay near Jupiter-size (roughly flat radius).
+        return 0.095f + 0.020f * std::exp(-std::pow((m - 0.04f) / 0.03f, 2.0f));
+    }
+    if (m < 1.0f)
+        return std::pow(m, 0.80f);
+    if (m < 1.7f)
+        return std::pow(m, 0.57f);
+    if (m < 20.0f)
+        return 1.25f * std::pow(m, 0.50f);
+    return 1.85f * std::pow(m, 0.44f);
+}
+
+static float expected_stellar_luminosity(float mass, float temperature, float radius,
+                                         uint32_t stage, float fuel) {
+    float r_solar = std::max(radius / std::max(solar_radius_sim_units(), 1.0f), 1.0e-4f);
+    float t_term = std::pow(std::max(temperature, 100.0f) / 5778.0f, 4.0f);
+    float stefan = r_solar * r_solar * t_term;
+    float mass_law;
+    if (mass < 0.43f) mass_law = 0.23f * std::pow(std::max(mass, 0.01f), 2.3f);
+    else if (mass < 2.0f) mass_law = std::pow(mass, 4.0f);
+    else if (mass < 20.0f) mass_law = 1.5f * std::pow(mass, 3.5f);
+    else mass_law = 3200.0f * std::pow(mass / 20.0f, 2.2f);
+
+    float stage_boost = 1.0f;
+    if (stage == SSTAGE_SUBGIANT) stage_boost = 1.6f;
+    else if (stage == SSTAGE_RED_GIANT || stage == SSTAGE_AGB) stage_boost = 60.0f;
+    else if (stage == SSTAGE_SUPERGIANT) stage_boost = 350.0f;
+    else if (stage == SSTAGE_HYPERGIANT) stage_boost = 900.0f;
+    else if (stage == SSTAGE_WHITE_DWARF) stage_boost = 0.004f;
+    else if (stage == SSTAGE_NEUTRON_STAR) stage_boost = 0.02f;
+
+    float fuel_term = (stage == SSTAGE_WHITE_DWARF || stage == SSTAGE_NEUTRON_STAR)
+        ? 1.0f
+        : std::clamp(0.35f + std::max(fuel, 0.0f) * 0.90f, 0.25f, 1.35f);
+    return std::max(stefan, mass_law) * stage_boost * fuel_term;
+}
+
 float expected_star_radius(const CelestialBody& b) {
-    float mass = std::clamp(b.mass, 0.02f, MAX_MAIN_SEQUENCE_MASS_SOLAR);
-    if (b.stellar_stage == SSTAGE_WHITE_DWARF)
-        return std::clamp(1.6f + 1.8f / std::pow(std::max(mass, 0.2f), 0.33f), 1.5f, 4.0f);
-    if (b.stellar_stage == SSTAGE_NEUTRON_STAR)
-        return 2.5f;
-    if (b.stellar_stage == SSTAGE_HYPERGIANT)
-        return std::clamp(70.0f * std::pow(mass, 0.58f), 60.0f, 320.0f);
-    if (b.stellar_stage == SSTAGE_SUPERGIANT)
-        return std::clamp(48.0f * std::pow(mass, 0.54f), 40.0f, 260.0f);
-    if (b.stellar_stage == SSTAGE_RED_GIANT)
-        return std::clamp(35.0f * std::pow(mass, 0.6f), 30.0f, 220.0f);
-    return std::clamp(10.0f + 20.0f * std::pow(mass, 0.8f), 6.0f, 120.0f);
+    float mass = std::clamp(b.mass, 0.003f, MAX_MAIN_SEQUENCE_MASS_SOLAR);
+    float ms_r_solar = expected_main_sequence_radius_solar(mass);
+    float r_solar = ms_r_solar;
+
+    if (b.stellar_stage == SSTAGE_WHITE_DWARF) {
+        float inv = std::pow(std::max(mass, 0.2f), -0.35f);
+        r_solar = std::clamp(0.010f * inv, 0.006f, 0.022f);
+    } else if (b.stellar_stage == SSTAGE_NEUTRON_STAR) {
+        r_solar = std::clamp(12.0f / 696340.0f, 8.0e-6f, 2.4e-5f);
+    } else if (b.stellar_stage == SSTAGE_SUBGIANT) {
+        r_solar = std::clamp(ms_r_solar * (1.8f + std::pow(std::clamp(mass, 0.6f, 5.0f), 0.25f)),
+                             1.7f, 8.0f);
+    } else if (b.stellar_stage == SSTAGE_RED_GIANT || b.stellar_stage == SSTAGE_AGB) {
+        float giant = 20.0f + 85.0f * std::pow(std::clamp((mass - 0.8f) / 7.2f, 0.0f, 1.0f), 0.65f);
+        r_solar = std::clamp(giant, 12.0f, 180.0f);
+    } else if (b.stellar_stage == SSTAGE_SUPERGIANT) {
+        float sg = 80.0f + 320.0f * std::pow(std::clamp((mass - 8.0f) / 42.0f, 0.0f, 1.0f), 0.60f);
+        r_solar = std::clamp(sg, 70.0f, 420.0f);
+    } else if (b.stellar_stage == SSTAGE_HYPERGIANT) {
+        float hg = 180.0f + 620.0f * std::pow(std::clamp((mass - 20.0f) / 80.0f, 0.0f, 1.0f), 0.55f);
+        r_solar = std::clamp(hg, 160.0f, 900.0f);
+    }
+    return std::max(r_solar * solar_radius_sim_units(), 0.006f);
 }
 
 static float stellar_luminosity_units(const CelestialBody& b);
@@ -909,11 +1098,19 @@ static void enforce_body_physical_limits(CelestialBody& b) {
     }
 
     if (is_star_type(b.type)) {
-        b.mass = std::clamp(b.mass, 0.01f, MAX_MAIN_SEQUENCE_MASS_SOLAR);
+        b.mass = std::clamp(b.mass, 0.003f, MAX_MAIN_SEQUENCE_MASS_SOLAR);
         float target_r = expected_star_radius(b);
-        b.radius = std::clamp(b.radius, target_r * 0.75f, target_r * 1.25f);
+        float low = (b.stellar_stage == SSTAGE_WHITE_DWARF || b.stellar_stage == SSTAGE_NEUTRON_STAR)
+            ? 0.85f : 0.70f;
+        float high = (b.stellar_stage == SSTAGE_WHITE_DWARF || b.stellar_stage == SSTAGE_NEUTRON_STAR)
+            ? 1.20f : 1.35f;
+        b.radius = std::clamp(b.radius, target_r * low, target_r * high);
         if (b.stellar_stage == SSTAGE_MAIN_SEQUENCE)
-            b.temperature = std::clamp(b.temperature, 1800.0f, 55000.0f);
+            b.temperature = std::clamp(b.temperature, 250.0f, 60000.0f);
+        else if (b.stellar_stage == SSTAGE_WHITE_DWARF)
+            b.temperature = std::clamp(b.temperature, 7000.0f, 140000.0f);
+        else if (b.stellar_stage == SSTAGE_NEUTRON_STAR)
+            b.temperature = std::clamp(b.temperature, 30000.0f, 250000.0f);
         return;
     }
 
@@ -951,10 +1148,9 @@ static void enforce_body_physical_limits(CelestialBody& b) {
 
 static float stellar_luminosity_units(const CelestialBody& b) {
     if (!is_star_type(b.type)) return 0.0f;
-    float mass_lum = std::pow(std::max(b.mass, 0.05f), 3.5f);
-    float thermal_lum = std::pow(std::max(b.temperature, 100.0f) / 5778.0f, 4.0f) *
-                        std::max(b.radius * b.radius / (30.0f * 30.0f), 0.02f);
-    return std::max(b.luminosity, 0.0f) + mass_lum * 0.1f + thermal_lum;
+    float physical = expected_stellar_luminosity(std::max(b.mass, 0.003f), b.temperature, b.radius,
+                                                 b.stellar_stage, b.fuel);
+    return std::max(b.luminosity, physical);
 }
 
 float equilibrium_temperature_from_star(const CelestialBody& body,
@@ -979,19 +1175,25 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
     sun.pos  = {0.0f, 0.0f, 0.0f};
     sun.vel  = {0.0f, 0.0f, 0.0f};
     sun.mass = 1.0f;
-    sun.radius = 30.0f;
+    sun.radius = solar_radius_sim_units();
     sun.temperature = 5778.0f;
     sun.type = CTYPE_STAR;
     sun.seed = 42;
     sun.fuel = 0.72f;
     sun.angular_vel = (2.0f * 3.14159265359f) / (26.0f * 24.0f * 3600.0f);
-    sun.luminosity = std::pow(std::max(sun.mass, 0.08f), 3.2f) * 0.1f;
+    sun.luminosity = expected_stellar_luminosity(sun.mass, sun.temperature, sun.radius,
+                                                 SSTAGE_MAIN_SEQUENCE, sun.fuel);
     sun.type = classify_star_spectral(sun.temperature, sun.mass);
     sun.name = generate_body_name(sun.seed, sun.type);
     state.bodies.push_back(sun);
 
     // Planets in circular orbits in the XZ plane
-    const float orbit_radii[] = {100.0f, 170.0f, 250.0f, 350.0f};
+    const float orbit_radii[] = {
+        sun.radius * 6.0f,
+        sun.radius * 9.5f,
+        sun.radius * 14.0f,
+        sun.radius * 22.0f
+    };
     // Solar-mass units: roughly Mercury, Earth, Mars, Jupiter class worlds.
     const float planet_mass[] = {1.66e-7f, 3.00e-6f, 3.22e-7f, 9.54e-4f};
     const float planet_temp[] = {700.0f, 300.0f, 200.0f, 120.0f};
@@ -1057,6 +1259,7 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
 }
 
 void CosmosApp::init(GLFWwindow* window) {
+    install_crash_handlers_once();
     vk.init(window);
     renderer.init(vk, window);
     raytracer_.init(vk, renderer.render_pass());
@@ -1072,6 +1275,9 @@ void CosmosApp::init(GLFWwindow* window) {
     camera.azimuth = 0.0f;
 
     load_persistent_settings();
+    debug_logf("init complete diagnostics=%d pause_on_invalid=%d bh=%d gpu_bh=%d verlet=%d",
+               diagnostics_enabled_ ? 1 : 0, diagnostics_pause_on_invalid_ ? 1 : 0,
+               cfg.barnes_hut ? 1 : 0, cfg.gpu_barnes_hut ? 1 : 0, cfg.velocity_verlet ? 1 : 0);
 }
 
 // ── Body picking (screen-space hit test) ─────────────────────────────────────
@@ -1222,6 +1428,29 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
 
         if (is_star_type((uint32_t)spawn_type)) {
             randomize_star_properties(nb, rng, (uint32_t)spawn_type);
+            if (spawn_draft_.star_stage_hint >= 0 &&
+                spawn_draft_.star_stage_hint < (int)SSTAGE_COUNT) {
+                nb.stellar_stage = (uint32_t)spawn_draft_.star_stage_hint;
+                if (nb.stellar_stage == SSTAGE_WHITE_DWARF) {
+                    nb.mass = std::clamp(nb.mass, 0.17f, 1.44f);
+                    nb.fuel = 0.0f;
+                    nb.temperature = std::clamp(nb.temperature, 9000.0f, 140000.0f);
+                } else if (nb.stellar_stage == SSTAGE_NEUTRON_STAR) {
+                    nb.mass = std::clamp(nb.mass, 1.10f, 2.50f);
+                    nb.fuel = 0.0f;
+                    nb.temperature = std::clamp(std::max(nb.temperature, 70000.0f), 70000.0f, 250000.0f);
+                } else if (nb.stellar_stage == SSTAGE_RED_GIANT || nb.stellar_stage == SSTAGE_AGB) {
+                    nb.mass = std::max(nb.mass, 0.8f);
+                    nb.temperature = std::clamp(nb.temperature * 0.62f, 2800.0f, 5600.0f);
+                } else if (nb.stellar_stage == SSTAGE_SUPERGIANT || nb.stellar_stage == SSTAGE_HYPERGIANT) {
+                    nb.mass = std::max(nb.mass, CORE_COLLAPSE_MIN_MASS_SOLAR);
+                    nb.temperature = std::clamp(nb.temperature * 0.72f, 3200.0f, 52000.0f);
+                }
+                nb.radius = expected_star_radius(nb);
+                nb.type = classify_star_spectral(std::max(nb.temperature, 250.0f), std::max(nb.mass, 0.003f));
+                nb.luminosity = expected_stellar_luminosity(nb.mass, nb.temperature, nb.radius,
+                                                            nb.stellar_stage, nb.fuel);
+            }
             nb.material_phase = PHASE_PLASMA;
             nb.phase_intensity = 1.0f;
         } else if (is_black_hole_type((uint32_t)spawn_type)) {
@@ -1266,8 +1495,18 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
         }
         if ((nb.type == CTYPE_PLANET || nb.type == CTYPE_MOON) && spawn_draft_.planet_look > 0) {
             float mass_earth = nb.mass / std::max(EARTH_MASS_SOLAR, 1.0e-12f);
+            bool force_gas = (spawn_draft_.planet_look == 5 && nb.type == CTYPE_PLANET);
             bool likely_gas = mass_earth > 10.0f;
-            if (!likely_gas) {
+            if (force_gas) {
+                nb.forced_surface = 4; // gas giant
+                nb.custom_material = true;
+                nb.custom_hydrogen = std::max(nb.custom_hydrogen, 0.70f);
+                nb.custom_silicate = std::min(nb.custom_silicate, 0.20f);
+                nb.custom_iron = std::min(nb.custom_iron, 0.08f);
+                nb.custom_water = std::max(nb.custom_water, 0.02f);
+                nb.props_valid = false;
+                nb.visuals_valid = false;
+            } else if (!likely_gas) {
                 switch (spawn_draft_.planet_look) {
                 case 1: nb.forced_surface = 0; break; // rocky
                 case 2: nb.forced_surface = 1; break; // water
@@ -1345,8 +1584,13 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
                 clear_ring_system(state.bodies[(size_t)host_idx]);
         }
 
-        if (spawn_draft_.spawn_moons && host_idx >= 0 && host_idx < (int)state.bodies.size())
-            spawn_moons_for_host(host_idx, std::clamp(spawn_draft_.moon_count, 1, 8));
+        if (spawn_draft_.spawn_moons && host_idx >= 0 && host_idx < (int)state.bodies.size()) {
+            spawn_moons_for_host(host_idx,
+                                 std::clamp(spawn_draft_.moon_count, 1, 100),
+                                 std::clamp(spawn_draft_.moon_orbit_layout, 0, 4),
+                                 std::clamp(spawn_draft_.moon_inclination_deg, 0.0f, 85.0f),
+                                 std::clamp(spawn_draft_.moon_spacing_scale, 0.35f, 4.0f));
+        }
         return host_idx;
     };
 
@@ -1354,6 +1598,9 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
         glm::vec3 offset = layout_offset(i);
         spawn_single(pos + offset, i);
     }
+
+    if (diagnostics_enabled_)
+        validate_body_state("spawn/manual", true);
 }
 
 // ── Tick ─────────────────────────────────────────────────────────────────────
@@ -1393,14 +1640,30 @@ void CosmosApp::tick(GLFWwindow* window, float dt) {
     camera.update(dt);
 
     if (!paused && !show_splash) {
-        step_physics(dt);
-        sim_time_ += dt;
+        try {
+            step_physics(dt);
+            sim_time_ += dt;
+        } catch (const std::exception& e) {
+            debug_logf("step_physics exception: %s", e.what());
+            paused = true;
+        } catch (...) {
+            debug_logf("step_physics exception: unknown");
+            paused = true;
+        }
     }
 
     // GPU raytraced scene (draws within the active render pass)
     ImGuiIO& io = ImGui::GetIO();
-    raytracer_.update_and_draw(vk, renderer.current_cmd(), state, camera, cfg,
-                                io.DisplaySize.x, io.DisplaySize.y, sim_time_);
+    try {
+        raytracer_.update_and_draw(vk, renderer.current_cmd(), state, camera, cfg,
+                                   io.DisplaySize.x, io.DisplaySize.y, sim_time_);
+    } catch (const std::exception& e) {
+        debug_logf("raytracer exception: %s", e.what());
+        paused = true;
+    } catch (...) {
+        debug_logf("raytracer exception: unknown");
+        paused = true;
+    }
 
     // DrawList overlays (trails, selection, focus indicator)
     if (!show_splash && !show_pause_menu)
@@ -1414,7 +1677,139 @@ void CosmosApp::tick(GLFWwindow* window, float dt) {
 
 // ── Physics (CPU N-body, 3D) ────────────────────────────────────────────────
 
+void CosmosApp::debug_logf(const char* fmt, ...) const {
+    if (!fmt) return;
+    static std::mutex log_mutex;
+    std::lock_guard<std::mutex> lock(log_mutex);
+
+    auto now = std::chrono::system_clock::now();
+    std::time_t raw_time = std::chrono::system_clock::to_time_t(now);
+    std::tm local_tm{};
+#if defined(_WIN32)
+    localtime_s(&local_tm, &raw_time);
+#else
+    localtime_r(&raw_time, &local_tm);
+#endif
+    char time_buf[64];
+    std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", &local_tm);
+
+    char msg_buf[2048];
+    va_list args;
+    va_start(args, fmt);
+    std::vsnprintf(msg_buf, sizeof(msg_buf), fmt, args);
+    va_end(args);
+
+    auto append_log = [&](const char* path) {
+        if (!path) return;
+        FILE* fp = std::fopen(path, "a");
+        if (!fp) return;
+        std::fprintf(fp, "[%s][step=%llu] %s\n", time_buf,
+                     (unsigned long long)diagnostics_step_counter_, msg_buf);
+        std::fflush(fp);
+        std::fclose(fp);
+    };
+
+    append_log("cosmos_debug.log");
+#if !defined(_WIN32)
+    append_log("/tmp/cosmos_debug.log");
+#endif
+}
+
+bool CosmosApp::validate_body_state(const char* context, bool pause_on_invalid) {
+    if (!diagnostics_enabled_) return true;
+
+    const char* ctx = context ? context : "unknown";
+    auto finite_vec3 = [](const glm::vec3& v) {
+        return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+    };
+
+    if (!std::isfinite(sim_time_)) {
+        debug_logf("Invalid sim_time detected in %s; resetting to 0", ctx);
+        sim_time_ = 0.0f;
+    }
+    if (!std::isfinite(cfg.sim_time_accumulated)) {
+        debug_logf("Invalid sim_time_accumulated detected in %s; resetting to 0", ctx);
+        cfg.sim_time_accumulated = 0.0;
+    }
+
+    size_t parent_fixes = 0;
+    size_t invalid_count = 0;
+    int sample_logs = 0;
+    const size_t body_count_before = state.bodies.size();
+
+    for (size_t i = 0; i < state.bodies.size(); ++i) {
+        auto& b = state.bodies[i];
+        if (b.marked_for_removal) continue;
+
+        bool invalid = false;
+        std::string reasons;
+        auto add_reason = [&](const char* tag) {
+            if (!reasons.empty()) reasons += ",";
+            reasons += tag;
+        };
+
+        if (!finite_vec3(b.pos)) { invalid = true; add_reason("pos"); }
+        if (!finite_vec3(b.vel)) { invalid = true; add_reason("vel"); }
+        if (!std::isfinite(b.mass) || b.mass <= 0.0f) { invalid = true; add_reason("mass"); }
+        if (!std::isfinite(b.radius) || b.radius <= 0.0f) { invalid = true; add_reason("radius"); }
+        if (!std::isfinite(b.temperature)) { invalid = true; add_reason("temperature"); }
+        if (!std::isfinite(b.internal_energy)) { invalid = true; add_reason("internal_energy"); }
+        if (!std::isfinite(b.angular_vel)) { invalid = true; add_reason("angular_vel"); }
+        if (!std::isfinite(b.age)) { invalid = true; add_reason("age"); }
+
+        bool parent_invalid = (b.parent < -1 || b.parent >= (int)state.bodies.size() || b.parent == (int)i);
+        if (parent_invalid) {
+            b.parent = -1;
+            ++parent_fixes;
+        }
+
+        if (!invalid) continue;
+
+        b.marked_for_removal = true;
+        ++invalid_count;
+        if (sample_logs < 12) {
+            debug_logf("%s invalid body idx=%zu type=%u mass=%.9g radius=%.9g pos=(%.9g,%.9g,%.9g) "
+                       "vel=(%.9g,%.9g,%.9g) reasons=%s",
+                       ctx, i, b.type, b.mass, b.radius,
+                       b.pos.x, b.pos.y, b.pos.z,
+                       b.vel.x, b.vel.y, b.vel.z, reasons.c_str());
+            ++sample_logs;
+        }
+    }
+
+    if (parent_fixes > 0) {
+        debug_logf("%s fixed %zu invalid parent links", ctx, parent_fixes);
+    }
+
+    if (invalid_count > 0) {
+        debug_logf("%s flagged %zu invalid bodies out of %zu; cleaning up",
+                   ctx, invalid_count, body_count_before);
+        cleanup_bodies();
+        cfg.body_count = (uint32_t)state.bodies.size();
+        if (pause_on_invalid && diagnostics_pause_on_invalid_) {
+            paused = true;
+            debug_logf("%s paused simulation after invalid-state cleanup", ctx);
+        }
+        return false;
+    }
+
+    if (state.trails.size() != state.bodies.size()) {
+        debug_logf("%s corrected trail/body count mismatch trails=%zu bodies=%zu",
+                   ctx, state.trails.size(), state.bodies.size());
+        state.trails.resize(state.bodies.size());
+    }
+    return true;
+}
+
 void CosmosApp::step_physics(float dt) {
+    ++diagnostics_step_counter_;
+    if (diagnostics_enabled_ && !validate_body_state("step_physics/pre", true))
+        return;
+    if (diagnostics_enabled_ && (diagnostics_step_counter_ % 600ull) == 0ull) {
+        debug_logf("heartbeat bodies=%zu fps=%.2f sim_time=%.6g",
+                   state.bodies.size(), smoothed_fps_, sim_time_);
+    }
+
     float frame_dt = std::max(dt, 1.0e-4f);
     float instant_fps = 1.0f / frame_dt;
     if (!std::isfinite(smoothed_fps_))
@@ -1931,6 +2326,9 @@ void CosmosApp::step_physics(float dt) {
                 state.trails[i].pop_front();
         }
     });
+
+    if (diagnostics_enabled_)
+        validate_body_state("step_physics/post", true);
 }
 
 int CosmosApp::dominant_primary_for(int body_index) const {
@@ -2047,7 +2445,12 @@ glm::vec3 CosmosApp::verlet_auto_orbit_velocity(const CelestialBody& body, const
     float vt_center = std::max(v_circ * tangential_scale, 1.0e-6f);
 
     float orbital_period = (2.0f * 3.14159265359f * r0) / std::max(v_circ, 1.0e-4f);
-    int steps = std::clamp((int)std::round(orbital_period * 0.18f / 0.01f), 48, 180);
+    // Guard large-radius edge cases (e.g. Oort cloud distances) against float->int overflow.
+    double raw_steps = (double)orbital_period * 0.18 / 0.01;
+    if (!std::isfinite(raw_steps))
+        raw_steps = 180.0;
+    raw_steps = std::clamp(raw_steps, 48.0, 180.0);
+    int steps = (int)std::lround(raw_steps);
     float dt_sim = std::clamp(orbital_period * 0.18f / (float)steps, 0.001f, 0.025f);
 
     auto accel = [&](const glm::vec3& r) {
@@ -2227,7 +2630,9 @@ bool CosmosApp::spawn_dust_ring(int host_index, float total_mass, float inner_ra
     return spawned_any;
 }
 
-void CosmosApp::spawn_moons_for_host(int host_index, int moon_count) {
+void CosmosApp::spawn_moons_for_host(int host_index, int moon_count,
+                                     int orbit_layout, float inclination_deg,
+                                     float spacing_scale) {
     if (host_index < 0 || host_index >= (int)state.bodies.size())
         return;
     const CelestialBody host_snapshot = state.bodies[(size_t)host_index];
@@ -2235,26 +2640,64 @@ void CosmosApp::spawn_moons_for_host(int host_index, int moon_count) {
         is_star_type(host_snapshot.type) || is_black_hole_type(host_snapshot.type))
         return;
 
-    int count = std::clamp(moon_count, 1, 12);
+    int count = std::clamp(moon_count, 1, 100);
+    int layout = std::clamp(orbit_layout, 0, 4);
+    float inc_deg = std::clamp(inclination_deg, 0.0f, 85.0f);
+    float spacing = std::clamp(spacing_scale, 0.35f, 4.0f);
     uint32_t base_seed = host_snapshot.seed ^ (uint32_t)(std::abs((int)(sim_time_ * 1000.0f))) ^ 0xA11CE55u;
     std::mt19937 moon_rng(base_seed);
     std::uniform_real_distribution<float> u01(0.0f, 1.0f);
+    const float two_pi = 6.28318530718f;
+    const float inc_rad_base = glm::radians(inc_deg);
+    const float compact_scale = (layout == 1) ? 0.74f : (layout == 2 ? 1.35f : 1.0f);
+    const float spacing_step = 0.28f + 0.92f * spacing * compact_scale;
+
+    auto random_unit = [&]() -> glm::vec3 {
+        float z = u01(moon_rng) * 2.0f - 1.0f;
+        float t = u01(moon_rng) * two_pi;
+        float r = std::sqrt(std::max(1.0f - z * z, 0.0f));
+        return glm::vec3(std::cos(t) * r, z, std::sin(t) * r);
+    };
+
+    float base_phase = u01(moon_rng) * two_pi;
     for (int mi = 0; mi < count; ++mi) {
         CelestialBody moon;
         moon.type = CTYPE_MOON;
-        moon.mass = std::clamp(host_snapshot.mass * (0.0002f + u01(moon_rng) * 0.008f),
+        float mass_scale = 1.0f / std::sqrt(std::max((float)count, 1.0f));
+        moon.mass = std::clamp(host_snapshot.mass * (0.00008f + u01(moon_rng) * 0.0045f) * mass_scale,
                                1.0e-9f, host_snapshot.mass * 0.15f);
         moon.seed = hash_combine(base_seed, (uint32_t)(mi * 7919 + 17));
         randomize_moon_properties(moon, state, moon_rng);
         moon.parent = host_index;
-        float orbit_r = host_snapshot.radius * (2.3f + 0.85f * (float)mi + u01(moon_rng) * 1.7f);
-        float theta = u01(moon_rng) * 6.28318530718f;
-        float y = (u01(moon_rng) * 2.0f - 1.0f) * host_snapshot.radius * 0.15f;
-        glm::vec3 rel(std::cos(theta) * orbit_r, y, std::sin(theta) * orbit_r);
+        float orbit_r = host_snapshot.radius * (2.2f + spacing_step * (float)mi + u01(moon_rng) * (1.2f + 0.9f * spacing));
+        if (layout == 3) { // resonant chain
+            orbit_r = host_snapshot.radius * (2.3f * std::pow(1.58f, (float)mi));
+        }
+        float theta = base_phase + (layout == 3 ? (float)mi * 2.0943951f : (float)mi * 0.43f) + u01(moon_rng) * 0.35f;
+        float inc_use = inc_rad_base;
+        if (layout == 4) inc_use = glm::radians(70.0f);
+        if (layout == 1) inc_use *= 0.45f;
+        if (layout == 2) inc_use *= 1.35f;
+        float inc_jitter = (u01(moon_rng) * 2.0f - 1.0f) * inc_use;
+
+        glm::vec3 rel(0.0f);
+        if (layout == 4) { // isotropic cloud
+            rel = random_unit() * orbit_r;
+        } else {
+            rel = glm::vec3(
+                std::cos(theta) * orbit_r,
+                std::sin(inc_jitter) * orbit_r * (0.15f + 0.85f * u01(moon_rng)),
+                std::sin(theta) * orbit_r);
+        }
         moon.pos = host_snapshot.pos + rel;
-        glm::vec3 tangent = glm::normalize(glm::cross(glm::normalize(rel), glm::vec3(0.0f, 1.0f, 0.0f)));
+        glm::vec3 r_hat = glm::normalize(rel);
+        glm::vec3 orbit_normal = (layout == 4) ? random_unit() : glm::vec3(0.0f, 1.0f, 0.0f);
+        glm::vec3 tangent = glm::cross(orbit_normal, r_hat);
         if (glm::dot(tangent, tangent) < 1.0e-8f)
-            tangent = glm::vec3(1.0f, 0.0f, 0.0f);
+            tangent = glm::cross(glm::vec3(1.0f, 0.0f, 0.0f), r_hat);
+        if (glm::dot(tangent, tangent) < 1.0e-8f)
+            tangent = glm::cross(glm::vec3(0.0f, 0.0f, 1.0f), r_hat);
+        tangent = glm::normalize(tangent);
         float v = std::sqrt(std::max(cfg.G * host_snapshot.mass / std::max(glm::length(rel), 1.0e-4f), 0.0f));
         moon.vel = host_snapshot.vel + tangent * v;
         moon.name = generate_body_name(moon.seed, moon.type);
@@ -2363,17 +2806,19 @@ void CosmosApp::trigger_stellar_supernova(size_t index, float dt, bool thermonuc
     if (remnant == REMNANT_WHITE_DWARF) {
         b.stellar_stage = SSTAGE_WHITE_DWARF;
         b.temperature = std::clamp(22000.0f + progenitor_mass * 1800.0f, 9000.0f, 120000.0f);
-        b.radius = std::max(1.6f, 1.2f + 1.7f / std::pow(std::max(b.mass, 0.25f), 0.35f));
-        b.luminosity = 0.002f + progenitor_mass * 0.0004f;
-        b.type = classify_star_spectral(std::max(b.temperature, 2200.0f), std::max(b.mass, 0.1f));
+        b.radius = expected_star_radius(b);
+        b.luminosity = expected_stellar_luminosity(b.mass, b.temperature, b.radius,
+                                                   b.stellar_stage, b.fuel);
+        b.type = classify_star_spectral(std::max(b.temperature, 250.0f), std::max(b.mass, 0.003f));
         b.material_phase = PHASE_PLASMA;
         b.phase_intensity = 1.0f;
     } else if (remnant == REMNANT_NEUTRON_STAR) {
         b.stellar_stage = SSTAGE_NEUTRON_STAR;
         b.temperature = 120000.0f;
-        b.radius = 3.0f;
-        b.luminosity = 0.02f;
-        b.type = classify_star_spectral(std::max(b.temperature, 2200.0f), std::max(b.mass, 0.1f));
+        b.radius = expected_star_radius(b);
+        b.luminosity = expected_stellar_luminosity(b.mass, b.temperature, b.radius,
+                                                   b.stellar_stage, b.fuel);
+        b.type = classify_star_spectral(std::max(b.temperature, 250.0f), std::max(b.mass, 0.003f));
         float spin_sign = (b.angular_vel < 0.0f) ? -1.0f : 1.0f;
         b.angular_vel = spin_sign * std::clamp(std::abs(b.angular_vel) * 4.0f + 0.002f, 0.002f, 0.05f);
         b.material_phase = PHASE_PLASMA;
@@ -2428,7 +2873,7 @@ bool CosmosApp::handle_stellar_collision_supernova(size_t i, size_t j, float rel
     merged.internal_energy = a.internal_energy + b.internal_energy + impact_energy * 0.15f;
     merged.angular_vel = (a.angular_vel * a.mass + b.angular_vel * b.mass) /
                          std::max(total_mass, 1.0e-6f);
-    merged.type = classify_star_spectral(std::max(merged.temperature, 2200.0f), std::max(merged.mass, 0.1f));
+    merged.type = classify_star_spectral(std::max(merged.temperature, 250.0f), std::max(merged.mass, 0.003f));
     merged.stellar_stage = thermonuclear ? SSTAGE_WHITE_DWARF :
         ((a.stellar_stage == SSTAGE_RED_GIANT || b.stellar_stage == SSTAGE_RED_GIANT)
             ? SSTAGE_RED_GIANT : SSTAGE_MAIN_SEQUENCE);
@@ -2632,9 +3077,11 @@ void CosmosApp::process_collisions(float dt) {
 
                 if (is_star_type(pre_big.type) && is_star_type(pre_small.type)) {
                     bodies[big].fuel = merged_star_fuel(pre_big, pre_small, total_mass);
-                    bodies[big].luminosity = std::pow(std::max(bodies[big].mass, 0.08f), 3.2f) * 0.1f;
-                    bodies[big].type = classify_star_spectral(std::max(bodies[big].temperature, 2200.0f),
-                                                              std::max(bodies[big].mass, 0.1f));
+                    bodies[big].luminosity = expected_stellar_luminosity(
+                        bodies[big].mass, bodies[big].temperature, bodies[big].radius,
+                        bodies[big].stellar_stage, bodies[big].fuel);
+                    bodies[big].type = classify_star_spectral(std::max(bodies[big].temperature, 250.0f),
+                                                              std::max(bodies[big].mass, 0.003f));
                     if (bodies[big].mass >= CORE_COLLAPSE_MIN_MASS_SOLAR &&
                         (pre_big.stellar_stage == SSTAGE_RED_GIANT ||
                          pre_small.stellar_stage == SSTAGE_RED_GIANT ||
@@ -3068,7 +3515,8 @@ void CosmosApp::process_temperature(float dt) {
     for (auto& b : bodies) {
         if (b.marked_for_removal) continue;
         if (is_star_type(b.type) && b.fuel > 0.05f) {
-            b.luminosity = std::pow(std::max(b.mass, 0.05f), 3.5f) * 0.1f;
+            b.luminosity = expected_stellar_luminosity(b.mass, b.temperature, b.radius,
+                                                       b.stellar_stage, b.fuel);
             continue;
         }
         b.temperature -= cfg.radiative_cooling * (b.temperature - background) * dt;
@@ -3256,24 +3704,25 @@ void CosmosApp::process_material_phases(float dt) {
                     next_phase = PHASE_COLLAPSING;
                     next_intensity = std::max(next_intensity, std::clamp(b.collapse_progress, 0.15f, 1.0f));
 
-                    float proto_temp = std::max(2200.0f,
-                        expected_main_sequence_temperature(std::max(b.mass, 0.08f)) * 0.88f);
+                    float proto_temp = std::max(250.0f,
+                        expected_main_sequence_temperature(std::max(b.mass, 0.003f)) * 0.88f);
                     b.temperature += (proto_temp - b.temperature) * std::min(0.18f * dt, 0.30f);
 
                     CelestialBody proto = b;
-                    proto.type = classify_star_spectral(proto_temp, std::max(proto.mass, 0.08f));
+                    proto.type = classify_star_spectral(proto_temp, std::max(proto.mass, 0.003f));
                     proto.stellar_stage = SSTAGE_MAIN_SEQUENCE;
                     float target_radius = expected_star_radius(proto) * 1.35f;
                     b.radius = glm::mix(b.radius, target_radius, std::min(0.10f * dt, 0.22f));
                     b.internal_energy += collapse_drive * dt * 2.8f;
 
                     if (b.collapse_progress >= 1.0f || b.temperature >= 2200.0f) {
-                        b.type = classify_star_spectral(std::max(b.temperature, proto_temp), std::max(b.mass, 0.08f));
+                        b.type = classify_star_spectral(std::max(b.temperature, proto_temp), std::max(b.mass, 0.003f));
                         b.stellar_stage = SSTAGE_MAIN_SEQUENCE;
                         b.fuel = std::max(b.fuel, 0.92f);
-                        b.temperature = std::clamp(std::max(b.temperature, proto_temp), 2200.0f, 55000.0f);
+                        b.temperature = std::clamp(std::max(b.temperature, proto_temp), 250.0f, 60000.0f);
                         b.radius = expected_star_radius(b);
-                        b.luminosity = std::pow(std::max(b.mass, 0.08f), 3.2f) * 0.1f;
+                        b.luminosity = expected_stellar_luminosity(b.mass, b.temperature, b.radius,
+                                                                   b.stellar_stage, b.fuel);
                         b.material_phase = PHASE_PLASMA;
                         b.phase_intensity = 1.0f;
                         b.collapse_progress = 1.0f;
@@ -3525,13 +3974,14 @@ void CosmosApp::process_stellar_evolution(float dt) {
              host.temperature > 1700.0f ||
              host.internal_energy > std::max(host.mass * 9.0f, 0.05f));
         if (ignite) {
-            float proto_temp = std::max(expected_main_sequence_temperature(std::max(host.mass, 0.08f)) * 0.96f, 2200.0f);
-            host.type = classify_star_spectral(std::max(host.temperature, proto_temp), std::max(host.mass, 0.08f));
+            float proto_temp = std::max(expected_main_sequence_temperature(std::max(host.mass, 0.003f)) * 0.96f, 250.0f);
+            host.type = classify_star_spectral(std::max(host.temperature, proto_temp), std::max(host.mass, 0.003f));
             host.stellar_stage = SSTAGE_MAIN_SEQUENCE;
             host.fuel = std::clamp(std::max(host.fuel, 0.72f), 0.12f, 1.0f);
-            host.temperature = std::clamp(std::max(host.temperature, proto_temp), 2200.0f, 55000.0f);
+            host.temperature = std::clamp(std::max(host.temperature, proto_temp), 250.0f, 60000.0f);
             host.radius = expected_star_radius(host);
-            host.luminosity = std::pow(std::max(host.mass, 0.08f), 3.2f) * 0.1f;
+            host.luminosity = expected_stellar_luminosity(host.mass, host.temperature, host.radius,
+                                                          host.stellar_stage, host.fuel);
             host.material_phase = PHASE_PLASMA;
             host.phase_intensity = 1.0f;
             host.collapse_progress = 1.0f;
@@ -3617,10 +4067,11 @@ void CosmosApp::process_stellar_evolution(float dt) {
         float heating = kinetic_gain / std::max(star.mass, 1.0e-8f) * 0.65f + acc_ratio * 1800.0f;
         star.temperature = std::clamp(star.temperature + std::min(heating, 22000.0f), 1800.0f, 140000.0f);
         star.internal_energy += kinetic_gain * 0.18f + mass_gain * 10.0f;
-        star.luminosity = std::max(star.luminosity, std::pow(std::max(star.mass, 0.08f), 3.5f) * 0.1f);
-        star.type = classify_star_spectral(std::max(star.temperature, 2200.0f), std::max(star.mass, 0.08f));
+        star.type = classify_star_spectral(std::max(star.temperature, 250.0f), std::max(star.mass, 0.003f));
         star.radius = glm::mix(star.radius, expected_star_radius(star),
                                std::clamp(0.04f + acc_ratio * 0.55f, 0.04f, 0.32f));
+        star.luminosity = expected_stellar_luminosity(star.mass, star.temperature, star.radius,
+                                                      star.stellar_stage, star.fuel);
         star.props_valid = false;
         star.visuals_valid = false;
         recent_star_accretion[i] = mass_gain;
@@ -3695,10 +4146,11 @@ void CosmosApp::process_stellar_evolution(float dt) {
                 b.stellar_stage = SSTAGE_SUPERGIANT;
             else
                 b.stellar_stage = SSTAGE_RED_GIANT;
-            b.radius *= (b.mass >= CORE_COLLAPSE_MIN_MASS_SOLAR) ? 6.0f : 5.0f;
-            b.temperature *= (b.mass >= CORE_COLLAPSE_MIN_MASS_SOLAR) ? 0.62f : 0.5f;
-            b.luminosity = std::max(b.luminosity * (b.mass >= CORE_COLLAPSE_MIN_MASS_SOLAR ? 180.0f : 100.0f),
-                                    std::pow(std::max(b.mass, 0.1f), 3.5f) * 0.25f);
+            b.radius = expected_star_radius(b);
+            b.temperature = std::clamp(b.temperature *
+                ((b.mass >= CORE_COLLAPSE_MIN_MASS_SOLAR) ? 0.66f : 0.54f), 2800.0f, 32000.0f);
+            b.luminosity = expected_stellar_luminosity(b.mass, b.temperature, b.radius,
+                                                       b.stellar_stage, b.fuel);
         }
 
         if (evolved_star && b.fuel < 0.05f) {
@@ -3714,11 +4166,15 @@ void CosmosApp::process_stellar_evolution(float dt) {
                 b.mass -= lost;
                 register_mass_loss(b, lost, dt_step);
             }
-            b.radius = std::max(1.6f, 1.2f + 1.7f / std::pow(std::max(b.mass, 0.25f), 0.35f));
             b.temperature = std::clamp(22000.0f + b.mass * 4000.0f, 9000.0f, 120000.0f);
-            b.luminosity = 0.002f + b.mass * 0.0004f;
-            b.type = classify_star_spectral(std::max(b.temperature, 2200.0f), std::max(b.mass, 0.1f));
+            b.radius = expected_star_radius(b);
+            b.luminosity = expected_stellar_luminosity(b.mass, b.temperature, b.radius,
+                                                       b.stellar_stage, b.fuel);
+            b.type = classify_star_spectral(std::max(b.temperature, 250.0f), std::max(b.mass, 0.003f));
         }
+
+        b.luminosity = expected_stellar_luminosity(b.mass, b.temperature, b.radius,
+                                                   b.stellar_stage, b.fuel);
     }
 }
 
@@ -4909,9 +5365,10 @@ void CosmosApp::render_ui() {
         }
         ImGui::Text("Each square spans %.1f simulation units.", cfg.cosmos_space_fabric_grid_size);
     }
-    ImGui::SliderInt("Cosmos Quality", &cfg.cosmos_quality, 0, 2,
+    ImGui::SliderInt("Cosmos Quality", &cfg.cosmos_quality, 0, 3,
                      cfg.cosmos_quality == 0 ? "Low" :
-                     (cfg.cosmos_quality == 1 ? "Balanced" : "High"));
+                     (cfg.cosmos_quality == 1 ? "Balanced" :
+                      (cfg.cosmos_quality == 2 ? "High" : "Ultra")));
 
     ImGui::Separator();
     ImGui::Text("Time Control");
