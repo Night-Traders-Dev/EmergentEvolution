@@ -2,7 +2,9 @@
 #include "imgui.h"
 #include <GLFW/glfw3.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include <random>
 #include <thread>
@@ -265,7 +267,7 @@ static StellarRemnantKind stellar_remnant_kind(float progenitor_mass, bool therm
 
 
 static void randomize_planet_properties(CelestialBody& body, const CosmosState& state,
-                                        std::mt19937& rng) {
+                                        const CosmosConfig& cfg, std::mt19937& rng) {
     // Sample from broad observed exoplanet-like ranges.
     // Internal mass unit is solar masses; 1 Earth mass ~= 3.003e-6 solar masses.
     constexpr float EARTH_MASS_TO_SOLAR = 3.003e-6f;
@@ -453,8 +455,11 @@ static void randomize_planet_properties(CelestialBody& body, const CosmosState& 
                      : std::uniform_real_distribution<float>(0.05f, 0.32f)(rng));
         float tilt = giant ? std::uniform_real_distribution<float>(0.04f, 0.25f)(rng)
                            : std::uniform_real_distribution<float>(0.06f, 0.45f)(rng);
-        set_ring_system(body, body.radius * inner_mult, body.radius * outer_mult,
-                        density, ice_fraction, tilt);
+        set_ring_system(body,
+                        body.radius * inner_mult * std::clamp(cfg.ring_inner_scale, 0.6f, 3.0f),
+                        body.radius * outer_mult * std::clamp(cfg.ring_outer_scale, 0.6f, 3.0f),
+                        density * std::clamp(cfg.ring_density_scale, 0.2f, 3.0f),
+                        ice_fraction, tilt);
     }
 
     body.phase_intensity = 0.0f;
@@ -631,6 +636,22 @@ static float stellar_luminosity_units(const CelestialBody& b);
 
 MaterialComposition derive_materials(const CelestialBody& b) {
     MaterialComposition m{};
+    if (b.custom_material) {
+        m.iron = std::max(b.custom_iron, 0.0f);
+        m.silicate = std::max(b.custom_silicate, 0.0f);
+        m.water = std::max(b.custom_water, 0.0f);
+        m.hydrogen = std::max(b.custom_hydrogen, 0.0f);
+        float custom_total = m.iron + m.silicate + m.water + m.hydrogen;
+        if (custom_total > 1.0e-6f) {
+            m.iron /= custom_total;
+            m.silicate /= custom_total;
+            m.water /= custom_total;
+            m.hydrogen /= custom_total;
+        } else {
+            m.silicate = 1.0f;
+        }
+        return m;
+    }
     if (is_star_type(b.type)) {
         m.hydrogen = 1.0f;
         return m;
@@ -754,7 +775,8 @@ static float phase_intensity_for_body(const CelestialBody& b, MaterialPhase phas
 }
 
 static void add_ring_material(CelestialBody& primary, const CelestialBody& source,
-                              float deposited_mass, float orbital_radius_hint) {
+                              float deposited_mass, float orbital_radius_hint,
+                              const CosmosConfig& cfg) {
     if (!body_can_host_rings(primary) || deposited_mass <= 0.0f)
         return;
 
@@ -774,7 +796,11 @@ static void add_ring_material(CelestialBody& primary, const CelestialBody& sourc
         ice_fraction = glm::mix(primary.ring_ice_fraction, ice_fraction, 0.35f);
     }
 
-    set_ring_system(primary, inner, outer, density_boost, ice_fraction, tilt);
+    set_ring_system(primary,
+                    inner * std::clamp(cfg.ring_inner_scale, 0.6f, 3.0f),
+                    outer * std::clamp(cfg.ring_outer_scale, 0.6f, 3.0f),
+                    density_boost * std::clamp(cfg.ring_density_scale, 0.2f, 3.0f),
+                    ice_fraction, tilt);
 }
 
 ComparisonMetrics derive_comparisons(const CelestialBody& b) {
@@ -825,7 +851,7 @@ static float magnetic_shielding_score(const CelestialBody& b, float G) {
 
 static void enforce_body_physical_limits(CelestialBody& b) {
     b.mass = std::max(b.mass, 1.0e-12f);
-    float min_radius = (b.type == CTYPE_DUST) ? 0.04f : 0.1f;
+    float min_radius = (b.type == CTYPE_DUST) ? 0.06f : 0.1f;
     b.radius = std::max(b.radius, min_radius);
 
     if (is_black_hole_type(b.type)) {
@@ -860,9 +886,9 @@ static void enforce_body_physical_limits(CelestialBody& b) {
         MaterialComposition mat = derive_materials(b);
         float density_factor = mat.iron * 5.0f + mat.silicate * 3.0f + mat.water * 1.4f + mat.hydrogen * 0.2f;
         density_factor = std::max(density_factor, 0.5f);
-        float target_r = std::cbrt(b.mass / density_factor) * (b.type == CTYPE_DUST ? 8.5f : 18.0f);
+        float target_r = std::cbrt(b.mass / density_factor) * (b.type == CTYPE_DUST ? 10.5f : 18.0f);
         if (b.type == CTYPE_DUST) {
-            b.radius = std::clamp(b.radius, std::max(target_r * 0.65f, 0.04f), std::max(target_r * 1.4f, 0.30f));
+            b.radius = std::clamp(b.radius, std::max(target_r * 0.65f, 0.06f), std::max(target_r * 1.5f, 0.45f));
         } else {
             b.radius = std::clamp(b.radius, std::max(target_r * 0.7f, 0.3f), std::max(target_r * 1.3f, 0.6f));
         }
@@ -1064,6 +1090,8 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
     nb.phase_intensity = 0.0f;
     nb.collapse_progress = 0.0f;
     clear_impact_signature(nb);
+    nb.forced_surface = -1;
+    nb.custom_material = false;
 
     if (is_star_type((uint32_t)spawn_type)) {
         randomize_star_properties(nb, rng, (uint32_t)spawn_type);
@@ -1079,7 +1107,7 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
     } else {
         nb.temperature = 300.0f;
         if (spawn_type == CTYPE_PLANET) {
-            randomize_planet_properties(nb, state, rng);
+            randomize_planet_properties(nb, state, cfg, rng);
         } else if (spawn_type == CTYPE_MOON) {
             randomize_moon_properties(nb, state, rng);
         } else if (spawn_type == CTYPE_ASTEROID) {
@@ -1091,6 +1119,56 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
         } else if (spawn_type == CTYPE_NEBULA) {
             randomize_nebula_properties(nb, rng);
         }
+    }
+
+    if (spawn_draft_.override_temperature)
+        nb.temperature = std::clamp(spawn_draft_.temperature, 2.7f, 120000.0f);
+    if (spawn_draft_.override_radius)
+        nb.radius = std::max(0.04f, spawn_draft_.radius);
+    if (spawn_draft_.override_rotation) {
+        float hours = std::max(spawn_draft_.rotation_hours, 0.1f);
+        float sign = (nb.angular_vel < 0.0f) ? -1.0f : 1.0f;
+        nb.angular_vel = sign * (2.0f * 3.14159265359f) / (hours * 3600.0f);
+    }
+    if (spawn_draft_.override_material) {
+        nb.custom_material = true;
+        nb.custom_iron = std::max(spawn_draft_.material_iron, 0.0f);
+        nb.custom_silicate = std::max(spawn_draft_.material_silicate, 0.0f);
+        nb.custom_water = std::max(spawn_draft_.material_ice, 0.0f);
+        nb.custom_hydrogen = std::max(spawn_draft_.material_hydrogen, 0.0f);
+    }
+    if ((nb.type == CTYPE_PLANET || nb.type == CTYPE_MOON) && spawn_draft_.planet_look > 0) {
+        float mass_earth = nb.mass / std::max(EARTH_MASS_SOLAR, 1.0e-12f);
+        bool likely_gas = mass_earth > 10.0f;
+        if (!likely_gas) {
+            switch (spawn_draft_.planet_look) {
+            case 1: nb.forced_surface = 0; break; // rocky
+            case 2: nb.forced_surface = 1; break; // water
+            case 3: nb.forced_surface = 2; break; // ice
+            case 4: nb.forced_surface = 3; break; // earth-like
+            default: nb.forced_surface = -1; break;
+            }
+            nb.props_valid = false;
+            nb.visuals_valid = false;
+        }
+    }
+    if (body_can_host_rings(nb)) {
+        if (spawn_draft_.spawn_rings) {
+            if (spawn_draft_.override_ring_layout) {
+                set_ring_system(nb,
+                    nb.radius * std::max(spawn_draft_.ring_inner_mult, 1.15f),
+                    nb.radius * std::max(spawn_draft_.ring_outer_mult, spawn_draft_.ring_inner_mult + 0.25f),
+                    std::clamp(spawn_draft_.ring_density, 0.01f, 1.0f),
+                    std::clamp(spawn_draft_.ring_ice_fraction, 0.0f, 1.0f),
+                    std::clamp(std::abs(nb.angular_vel) * 150.0f, 0.02f, 0.45f));
+            } else if (nb.ring_density <= 0.001f) {
+                set_ring_system(nb, nb.radius * 1.5f, nb.radius * 3.0f, 0.32f, 0.55f, 0.12f);
+            }
+        } else {
+            clear_ring_system(nb);
+        }
+    } else {
+        clear_ring_system(nb);
     }
 
 
@@ -1116,6 +1194,9 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
             }
         }
     }
+    if (spawn_draft_.override_velocity) {
+        nb.vel += spawn_draft_.velocity_kms / SIM_UNIT_TO_KM;
+    }
 
     nb.name = generate_body_name(nb.seed, nb.type);
     nb.non_attracting = (nb.type == CTYPE_DUST) ? cfg.dust_debug_non_attracting : nb.non_attracting;
@@ -1137,6 +1218,9 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
         if (host_idx >= 0 && host_idx < (int)state.bodies.size())
             clear_ring_system(state.bodies[(size_t)host_idx]);
     }
+
+    if (spawn_draft_.spawn_moons && host_idx >= 0 && host_idx < (int)state.bodies.size())
+        spawn_moons_for_host(host_idx, std::clamp(spawn_draft_.moon_count, 1, 8));
 }
 
 // ── Tick ─────────────────────────────────────────────────────────────────────
@@ -1206,124 +1290,376 @@ void CosmosApp::step_physics(float dt) {
 
     cfg.dt_scale = (float)std::pow(10.0, cfg.time_exponent);
     float time_sign = reverse_time_ ? -1.0f : 1.0f;
-    float scaled_dt = dt * cfg.dt_scale * time_sign;
-    cfg.sim_time_accumulated += (double)scaled_dt;
+    float scaled_dt_nominal = dt * cfg.dt_scale * time_sign;
     auto& bodies = state.bodies;
     size_t n = bodies.size();
     if (n == 0) return;
     apply_dust_debug_mode();
 
-    // Compute gravitational acceleration (Newtonian + GR corrections)
-    std::vector<glm::vec3> accel(n, glm::vec3(0.0f));
+    std::vector<glm::vec3> pos0(n, glm::vec3(0.0f));
+    std::vector<glm::vec3> vel0(n, glm::vec3(0.0f));
+    std::vector<uint8_t> source_active(n, 0u);
+    std::vector<float> source_mass(n, 0.0f);
+    std::vector<float> source_spin_y(n, 0.0f);
+    for (size_t i = 0; i < n; ++i) {
+        const auto& b = bodies[i];
+        pos0[i] = b.pos;
+        vel0[i] = b.vel;
+        if (!b.marked_for_removal && !b.non_attracting && b.mass > 0.0f) {
+            source_active[i] = 1u;
+            source_mass[i] = b.mass;
+            float r = std::max(b.radius, 1.0e-4f);
+            source_spin_y[i] = b.mass * r * r * b.angular_vel;
+        }
+    }
+
     float c2 = cfg.speed_of_light * cfg.speed_of_light;
+    float soft2 = cfg.softening * cfg.softening;
+    constexpr float kMinDist = 1.0e-6f;
 
-    auto accumulate_gravity_pair = [&](size_t i, size_t j, std::vector<glm::vec3>& out_accel) {
-            bool source_i = !bodies[i].non_attracting;
-            bool source_j = !bodies[j].non_attracting;
-            if (!source_i && !source_j) return;
+    auto apply_source_accel = [&](size_t target,
+                                  float src_mass,
+                                  float src_spin_y,
+                                  const glm::vec3& src_pos,
+                                  const glm::vec3& tgt_pos,
+                                  const glm::vec3& tgt_vel,
+                                  glm::vec3& out_accel) {
+        if (src_mass <= 0.0f) return;
+        glm::vec3 diff = src_pos - tgt_pos;
+        float dist2 = glm::dot(diff, diff) + soft2;
+        float dist = std::sqrt(dist2);
+        if (dist <= kMinDist) return;
+        glm::vec3 r_hat = diff / dist;
+        float GM = cfg.G * src_mass;
+        glm::vec3 acc = r_hat * (GM / dist2);
 
-            glm::vec3 diff = bodies[j].pos - bodies[i].pos;
-            float dist2 = glm::dot(diff, diff) + cfg.softening * cfg.softening;
-            float dist  = std::sqrt(dist2);
-            if (dist <= 1.0e-6f) return;
-            glm::vec3 dir = diff / dist;
-
-            auto apply_source_accel = [&](size_t target, size_t source, const glm::vec3& r_hat) {
-                float GM = cfg.G * bodies[source].mass;
-                glm::vec3 acc = r_hat * (GM / dist2);
-
-                if (cfg.gr_enabled && c2 > 0.0f) {
-                    if (cfg.gr_precession_scale > 0.0f) {
-                        glm::vec3 v_t = bodies[target].vel;
-                        float v2 = glm::dot(v_t, v_t);
-                        float vr = glm::dot(v_t, r_hat);
-                        float pn_scale = GM / (dist * c2) * cfg.gr_precession_scale;
-                        acc += pn_scale * ((4.0f * GM / dist - v2) * r_hat + 4.0f * vr * v_t);
-                    }
-
-                    if (cfg.gr_time_dilation > 0.0f) {
-                        float phi = -GM / dist;
-                        float td = 1.0f + cfg.gr_time_dilation * phi / c2;
-                        acc *= td;
-                    }
-
-                    if (cfg.gr_frame_dragging > 0.0f &&
-                        std::abs(bodies[source].angular_vel) > 1e-6f) {
-                        float J = bodies[source].mass * bodies[source].radius * bodies[source].radius *
-                                  bodies[source].angular_vel;
-                        glm::vec3 J_hat(0, 1, 0);
-                        float coeff = cfg.gr_frame_dragging * cfg.G * J / (c2 * dist * dist * dist);
-                        glm::vec3 v_t = bodies[target].vel;
-                        glm::vec3 vxJ = glm::cross(v_t, J_hat);
-                        float rdotJ = glm::dot(r_hat, J_hat);
-                        glm::vec3 vxr = glm::cross(v_t, r_hat);
-                        acc += coeff * (vxJ - 3.0f * rdotJ * vxr);
-                    }
-                }
-
-                out_accel[target] += acc;
-            };
-
-            if (source_j) apply_source_accel(i, j, dir);
-            if (source_i) apply_source_accel(j, i, -dir);
-    };
-
-    constexpr size_t kParallelGravityThreshold = 256;
-    const size_t hw_threads = std::thread::hardware_concurrency() > 0
-                                ? static_cast<size_t>(std::thread::hardware_concurrency())
-                                : 1;
-    const bool use_parallel_gravity =
-        cfg.parallel_gravity && n >= kParallelGravityThreshold && hw_threads > 1;
-
-    if (use_parallel_gravity) {
-        const size_t worker_count = std::min(hw_threads, n);
-        std::vector<std::vector<glm::vec3>> local_accel(
-            worker_count, std::vector<glm::vec3>(n, glm::vec3(0.0f)));
-        std::vector<std::thread> workers;
-        workers.reserve(worker_count);
-
-        for (size_t t = 0; t < worker_count; ++t) {
-            const size_t i_begin = (n * t) / worker_count;
-            const size_t i_end = (n * (t + 1)) / worker_count;
-
-            workers.emplace_back([&, t, i_begin, i_end]() {
-                auto& thread_accel = local_accel[t];
-                for (size_t i = i_begin; i < i_end; ++i) {
-                    if (bodies[i].marked_for_removal) continue;
-                    for (size_t j = i + 1; j < n; ++j) {
-                        if (bodies[j].marked_for_removal) continue;
-                        accumulate_gravity_pair(i, j, thread_accel);
-                    }
-                }
-            });
+        if (cfg.gr_enabled && c2 > 0.0f) {
+            if (cfg.gr_precession_scale > 0.0f) {
+                float v2 = glm::dot(tgt_vel, tgt_vel);
+                float vr = glm::dot(tgt_vel, r_hat);
+                float pn_scale = GM / (dist * c2) * cfg.gr_precession_scale;
+                acc += pn_scale * ((4.0f * GM / dist - v2) * r_hat + 4.0f * vr * tgt_vel);
+            }
+            if (cfg.gr_time_dilation > 0.0f) {
+                float phi = -GM / dist;
+                float td = 1.0f + cfg.gr_time_dilation * phi / c2;
+                acc *= td;
+            }
+            if (cfg.gr_frame_dragging > 0.0f && std::abs(src_spin_y) > 1.0e-9f) {
+                float coeff = cfg.gr_frame_dragging * cfg.G * src_spin_y /
+                              (c2 * dist * dist * dist);
+                glm::vec3 J_hat(0.0f, 1.0f, 0.0f);
+                glm::vec3 vxJ = glm::cross(tgt_vel, J_hat);
+                float rdotJ = glm::dot(r_hat, J_hat);
+                glm::vec3 vxr = glm::cross(tgt_vel, r_hat);
+                acc += coeff * (vxJ - 3.0f * rdotJ * vxr);
+            }
         }
 
-        for (auto& worker : workers)
-            worker.join();
+        out_accel += acc;
+    };
 
-        for (size_t t = 0; t < worker_count; ++t) {
-            const auto& thread_accel = local_accel[t];
-            for (size_t i = 0; i < n; ++i)
-                accel[i] += thread_accel[i];
+    auto compute_accel_direct = [&](const std::vector<glm::vec3>& pos,
+                                    const std::vector<glm::vec3>& vel,
+                                    std::vector<glm::vec3>& out_accel) {
+        std::fill(out_accel.begin(), out_accel.end(), glm::vec3(0.0f));
+
+        constexpr size_t kParallelGravityThreshold = 256;
+        const size_t hw_threads = std::thread::hardware_concurrency() > 0
+            ? static_cast<size_t>(std::thread::hardware_concurrency())
+            : 1;
+        const bool use_parallel_gravity =
+            cfg.parallel_gravity && n >= kParallelGravityThreshold && hw_threads > 1;
+
+        auto accumulate_pair = [&](size_t i, size_t j, std::vector<glm::vec3>& out) {
+            if (bodies[i].marked_for_removal || bodies[j].marked_for_removal) return;
+            if (!source_active[i] && !source_active[j]) return;
+            if (source_active[j]) {
+                apply_source_accel(i, source_mass[j], source_spin_y[j], pos[j], pos[i], vel[i], out[i]);
+            }
+            if (source_active[i]) {
+                apply_source_accel(j, source_mass[i], source_spin_y[i], pos[i], pos[j], vel[j], out[j]);
+            }
+        };
+
+        if (use_parallel_gravity) {
+            const size_t worker_count = std::min(hw_threads, n);
+            std::vector<std::vector<glm::vec3>> local_accel(
+                worker_count, std::vector<glm::vec3>(n, glm::vec3(0.0f)));
+            std::vector<std::thread> workers;
+            workers.reserve(worker_count);
+
+            for (size_t t = 0; t < worker_count; ++t) {
+                const size_t i_begin = (n * t) / worker_count;
+                const size_t i_end = (n * (t + 1)) / worker_count;
+                workers.emplace_back([&, t, i_begin, i_end]() {
+                    auto& thread_accel = local_accel[t];
+                    for (size_t i = i_begin; i < i_end; ++i) {
+                        for (size_t j = i + 1; j < n; ++j)
+                            accumulate_pair(i, j, thread_accel);
+                    }
+                });
+            }
+
+            for (auto& worker : workers) worker.join();
+            for (size_t t = 0; t < worker_count; ++t) {
+                const auto& thread_accel = local_accel[t];
+                for (size_t i = 0; i < n; ++i)
+                    out_accel[i] += thread_accel[i];
+            }
+        } else {
+            for (size_t i = 0; i < n; ++i) {
+                for (size_t j = i + 1; j < n; ++j)
+                    accumulate_pair(i, j, out_accel);
+            }
+        }
+    };
+
+    struct BHNode {
+        glm::vec3 center{0.0f};
+        float half = 0.0f;
+        std::array<int, 8> child{{-1, -1, -1, -1, -1, -1, -1, -1}};
+        std::array<size_t, 4> leaf{};
+        int leaf_count = 0;
+        bool is_leaf = true;
+        float mass = 0.0f;
+        glm::vec3 com{0.0f};
+        float spin_y = 0.0f;
+    };
+
+    auto compute_accel_barnes_hut = [&](const std::vector<glm::vec3>& pos,
+                                        const std::vector<glm::vec3>& vel,
+                                        std::vector<glm::vec3>& out_accel) {
+        std::fill(out_accel.begin(), out_accel.end(), glm::vec3(0.0f));
+
+        std::vector<size_t> sources;
+        sources.reserve(n);
+        for (size_t i = 0; i < n; ++i) {
+            if (source_active[i] && !bodies[i].marked_for_removal)
+                sources.push_back(i);
+        }
+        if (sources.empty())
+            return;
+
+        glm::vec3 bmin(std::numeric_limits<float>::max());
+        glm::vec3 bmax(std::numeric_limits<float>::lowest());
+        for (size_t idx : sources) {
+            bmin = glm::min(bmin, pos[idx]);
+            bmax = glm::max(bmax, pos[idx]);
+        }
+        glm::vec3 span = bmax - bmin;
+        float half = std::max(std::max(span.x, span.y), span.z) * 0.5f;
+        half = std::max(half + std::max(cfg.softening * 2.0f, 1.0f), 1.0e-3f);
+        glm::vec3 root_center = (bmin + bmax) * 0.5f;
+
+        std::vector<BHNode> nodes;
+        nodes.reserve(sources.size() * 2 + 8);
+        auto make_node = [&](const glm::vec3& center, float node_half) -> int {
+            nodes.push_back(BHNode{});
+            BHNode& node = nodes.back();
+            node.center = center;
+            node.half = node_half;
+            return (int)nodes.size() - 1;
+        };
+        auto child_index_for = [](const glm::vec3& p, const glm::vec3& c) {
+            int idx = 0;
+            if (p.x >= c.x) idx |= 1;
+            if (p.y >= c.y) idx |= 2;
+            if (p.z >= c.z) idx |= 4;
+            return idx;
+        };
+        auto child_center_for = [](const glm::vec3& c, float parent_half, int oct) {
+            float h = parent_half * 0.5f;
+            return glm::vec3(
+                c.x + ((oct & 1) ? h : -h),
+                c.y + ((oct & 2) ? h : -h),
+                c.z + ((oct & 4) ? h : -h));
+        };
+        auto ensure_child = [&](int parent_idx, int oct) -> int {
+            int child_idx = nodes[(size_t)parent_idx].child[(size_t)oct];
+            if (child_idx >= 0)
+                return child_idx;
+            glm::vec3 cc = child_center_for(nodes[(size_t)parent_idx].center,
+                                            nodes[(size_t)parent_idx].half, oct);
+            child_idx = make_node(cc, nodes[(size_t)parent_idx].half * 0.5f);
+            nodes[(size_t)parent_idx].child[(size_t)oct] = child_idx;
+            return child_idx;
+        };
+
+        constexpr int kLeafCap = 4;
+        constexpr int kMaxDepth = 20;
+        constexpr float kMinHalf = 1.0e-4f;
+        int root = make_node(root_center, half);
+        auto insert_body = [&](auto&& self, int node_idx, size_t body_idx, int depth) -> void {
+            if (node_idx < 0) return;
+            BHNode& node = nodes[(size_t)node_idx];
+            if (node.is_leaf) {
+                if (node.leaf_count < kLeafCap || depth >= kMaxDepth || node.half <= kMinHalf) {
+                    node.leaf[(size_t)node.leaf_count++] = body_idx;
+                    return;
+                }
+                std::array<size_t, kLeafCap> reinserts{};
+                int rein_count = node.leaf_count;
+                for (int i = 0; i < rein_count; ++i)
+                    reinserts[(size_t)i] = node.leaf[(size_t)i];
+                node.leaf_count = 0;
+                node.is_leaf = false;
+                for (int i = 0; i < rein_count; ++i) {
+                    int oct = child_index_for(pos[reinserts[(size_t)i]], nodes[(size_t)node_idx].center);
+                    int child_idx = ensure_child(node_idx, oct);
+                    self(self, child_idx, reinserts[(size_t)i], depth + 1);
+                }
+            }
+            int oct = child_index_for(pos[body_idx], nodes[(size_t)node_idx].center);
+            int child_idx = ensure_child(node_idx, oct);
+            self(self, child_idx, body_idx, depth + 1);
+        };
+        for (size_t idx : sources)
+            insert_body(insert_body, root, idx, 0);
+
+        auto finalize_mass = [&](auto&& self, int node_idx) -> void {
+            BHNode& node = nodes[(size_t)node_idx];
+            node.mass = 0.0f;
+            node.com = glm::vec3(0.0f);
+            node.spin_y = 0.0f;
+            if (node.is_leaf) {
+                for (int i = 0; i < node.leaf_count; ++i) {
+                    size_t bidx = node.leaf[(size_t)i];
+                    float m = std::max(source_mass[bidx], 0.0f);
+                    if (m <= 0.0f) continue;
+                    node.mass += m;
+                    node.com += pos[bidx] * m;
+                    node.spin_y += source_spin_y[bidx];
+                }
+            } else {
+                for (int c = 0; c < 8; ++c) {
+                    int child_idx = node.child[(size_t)c];
+                    if (child_idx < 0) continue;
+                    self(self, child_idx);
+                    const BHNode& child = nodes[(size_t)child_idx];
+                    if (child.mass <= 0.0f) continue;
+                    node.mass += child.mass;
+                    node.com += child.com * child.mass;
+                    node.spin_y += child.spin_y;
+                }
+            }
+            if (node.mass > 0.0f)
+                node.com /= node.mass;
+            else
+                node.com = node.center;
+        };
+        finalize_mass(finalize_mass, root);
+
+        float theta = std::clamp(cfg.barnes_hut_theta, 0.2f, 1.6f);
+        auto traverse = [&](auto&& self, size_t target, int node_idx) -> void {
+            const BHNode& node = nodes[(size_t)node_idx];
+            if (node.mass <= 0.0f) return;
+            if (node.is_leaf) {
+                for (int i = 0; i < node.leaf_count; ++i) {
+                    size_t src = node.leaf[(size_t)i];
+                    if (src == target) continue;
+                    apply_source_accel(target, source_mass[src], source_spin_y[src],
+                                       pos[src], pos[target], vel[target], out_accel[target]);
+                }
+                return;
+            }
+
+            bool target_inside =
+                std::abs(pos[target].x - node.center.x) <= node.half &&
+                std::abs(pos[target].y - node.center.y) <= node.half &&
+                std::abs(pos[target].z - node.center.z) <= node.half;
+            glm::vec3 delta = node.com - pos[target];
+            float dist2 = glm::dot(delta, delta) + soft2;
+            float dist = std::sqrt(dist2);
+            float size = node.half * 2.0f;
+            if (!target_inside && dist > kMinDist && (size / dist) < theta) {
+                apply_source_accel(target, node.mass, node.spin_y,
+                                   node.com, pos[target], vel[target], out_accel[target]);
+                return;
+            }
+            for (int c = 0; c < 8; ++c) {
+                int child_idx = node.child[(size_t)c];
+                if (child_idx >= 0)
+                    self(self, target, child_idx);
+            }
+        };
+
+        for (size_t i = 0; i < n; ++i) {
+            if (bodies[i].marked_for_removal) continue;
+            traverse(traverse, i, root);
+        }
+    };
+
+    auto compute_accel = [&](const std::vector<glm::vec3>& pos,
+                             const std::vector<glm::vec3>& vel,
+                             std::vector<glm::vec3>& out_accel) {
+        bool use_bh = cfg.barnes_hut && (int)n >= std::max(cfg.barnes_hut_min_bodies, 16);
+        if (use_bh)
+            compute_accel_barnes_hut(pos, vel, out_accel);
+        else
+            compute_accel_direct(pos, vel, out_accel);
+    };
+
+    std::vector<glm::vec3> accel0(n, glm::vec3(0.0f));
+    compute_accel(pos0, vel0, accel0);
+
+    float scaled_dt = scaled_dt_nominal;
+    if (cfg.adaptive_time_step) {
+        float max_speed = 0.0f;
+        float max_acc = 0.0f;
+        for (size_t i = 0; i < n; ++i) {
+            if (bodies[i].marked_for_removal) continue;
+            max_speed = std::max(max_speed, glm::length(vel0[i]));
+            max_acc = std::max(max_acc, glm::length(accel0[i]));
+        }
+
+        float abs_nominal = std::abs(scaled_dt_nominal);
+        float safety = std::clamp(cfg.adaptive_step_safety, 0.01f, 1.0f);
+        float char_len = std::max(cfg.softening, 0.25f);
+        float dt_vel = (max_speed > 1.0e-6f) ? (safety * char_len / max_speed) : abs_nominal;
+        float dt_acc = (max_acc > 1.0e-9f) ? (safety * std::sqrt(char_len / max_acc)) : abs_nominal;
+        float dt_min = std::max(cfg.adaptive_step_min, 1.0e-6f);
+        float dt_max = std::max(cfg.adaptive_step_max, dt_min);
+        float dt_limit = std::clamp(std::min(dt_vel, dt_acc), dt_min, dt_max);
+        scaled_dt = time_sign * std::min(abs_nominal, dt_limit);
+    }
+    if (!std::isfinite(scaled_dt))
+        scaled_dt = 0.0f;
+    cfg.sim_time_accumulated += (double)scaled_dt;
+
+    std::vector<glm::vec3> pos1(n, glm::vec3(0.0f));
+    std::vector<glm::vec3> vel_half(n, glm::vec3(0.0f));
+
+    if (cfg.velocity_verlet) {
+        float dt2 = scaled_dt * scaled_dt;
+        for (size_t i = 0; i < n; ++i) {
+            if (bodies[i].marked_for_removal) {
+                pos1[i] = pos0[i];
+                vel_half[i] = vel0[i];
+                continue;
+            }
+            pos1[i] = pos0[i] + vel0[i] * scaled_dt + 0.5f * accel0[i] * dt2;
+            vel_half[i] = vel0[i] + 0.5f * accel0[i] * scaled_dt;
+        }
+
+        std::vector<glm::vec3> accel1(n, glm::vec3(0.0f));
+        compute_accel(pos1, vel_half, accel1);
+        for (size_t i = 0; i < n; ++i) {
+            if (bodies[i].marked_for_removal) continue;
+            bodies[i].mass_loss_rate = 0.0f;
+            glm::vec3 v1 = vel0[i] + 0.5f * (accel0[i] + accel1[i]) * scaled_dt;
+            bodies[i].vel = v1 * cfg.damping;
+            bodies[i].pos = pos1[i];
+            bodies[i].age += scaled_dt;
         }
     } else {
         for (size_t i = 0; i < n; ++i) {
             if (bodies[i].marked_for_removal) continue;
-            for (size_t j = i + 1; j < n; ++j) {
-                if (bodies[j].marked_for_removal) continue;
-                accumulate_gravity_pair(i, j, accel);
-            }
+            bodies[i].mass_loss_rate = 0.0f;
+            bodies[i].vel = (vel0[i] + accel0[i] * scaled_dt) * cfg.damping;
+            bodies[i].pos = pos0[i] + bodies[i].vel * scaled_dt;
+            bodies[i].age += scaled_dt;
         }
-    }
-
-    // Integrate (symplectic Euler)
-    for (size_t i = 0; i < n; i++) {
-        if (bodies[i].marked_for_removal) continue;
-        bodies[i].mass_loss_rate = 0.0f;
-        bodies[i].vel += accel[i] * scaled_dt;
-        bodies[i].vel *= cfg.damping;
-        bodies[i].pos += bodies[i].vel * scaled_dt;
-        bodies[i].age += scaled_dt;
     }
 
     // Physics subsystems
@@ -1512,16 +1848,20 @@ bool CosmosApp::spawn_dust_ring(int host_index, float total_mass, float inner_ra
     if (host.marked_for_removal || is_star_type(host.type) || is_black_hole_type(host.type))
         return false;
 
-    float inner = std::max(inner_radius, host.radius * 1.15f);
-    float outer = std::max(outer_radius, inner + host.radius * 0.18f);
+    float ring_mass = total_mass * std::clamp(cfg.ring_mass_scale, 0.1f, 5.0f);
+    float density_scaled = density * std::clamp(cfg.ring_density_scale, 0.2f, 3.0f);
+    float inner = std::max(inner_radius * std::clamp(cfg.ring_inner_scale, 0.6f, 3.0f), host.radius * 1.15f);
+    float outer = std::max(outer_radius * std::clamp(cfg.ring_outer_scale, 0.6f, 3.0f), inner + host.radius * 0.18f);
     float width = outer - inner;
     if (!std::isfinite(inner) || !std::isfinite(outer) || width <= 1.0e-4f)
         return false;
 
     float safe_min_mass = std::max(1.0e-13f, std::min(cfg.min_fragment_mass * 0.08f, 1.0e-10f));
-    int count = std::clamp((int)std::round(8.0f + density * 56.0f +
-                                           std::sqrt(total_mass / std::max(safe_min_mass, 1.0e-13f)) * 0.16f),
-                           8, 140);
+    float annulus_span = std::sqrt(std::max(width / std::max(host.radius, 0.1f), 0.1f));
+    int count = std::clamp((int)std::round((24.0f + density_scaled * 82.0f + annulus_span * 26.0f +
+                                           std::sqrt(ring_mass / std::max(safe_min_mass, 1.0e-13f)) * 0.18f) *
+                                           std::clamp(cfg.ring_particle_scale, 0.2f, 5.0f)),
+                           24, 420);
 
     if (cfg.dynamic_budget_enabled) {
         int attract_cap = std::max(cfg.dynamic_max_fragments, 0);
@@ -1545,7 +1885,7 @@ bool CosmosApp::spawn_dust_ring(int host_index, float total_mass, float inner_ra
     if (count < 1)
         return false;
 
-    count = std::min(count, std::max(1, (int)std::floor(total_mass / safe_min_mass)));
+    count = std::min(count, std::max(1, (int)std::floor(ring_mass / safe_min_mass)));
     if (count < 1)
         return false;
 
@@ -1572,14 +1912,15 @@ bool CosmosApp::spawn_dust_ring(int host_index, float total_mass, float inner_ra
     }
 
     std::vector<float> masses((size_t)count, safe_min_mass);
-    float rem_mass = std::max(0.0f, total_mass - safe_min_mass * (float)count);
+    float rem_mass = std::max(0.0f, ring_mass - safe_min_mass * (float)count);
     for (int i = 0; i < count; ++i)
         masses[(size_t)i] += rem_mass * (weights[(size_t)i] / std::max(wsum, 1.0e-6f));
-    masses.back() += total_mass - std::accumulate(masses.begin(), masses.end(), 0.0f);
+    masses.back() += ring_mass - std::accumulate(masses.begin(), masses.end(), 0.0f);
 
-    float max_vertical = std::max(host.radius * (0.006f + density * 0.02f), 0.01f);
-    float base_temp = std::clamp(host.temperature * (0.35f + (1.0f - ice_fraction) * 0.35f),
-                                 35.0f, 1800.0f);
+    float max_vertical = std::max(host.radius * (0.006f + density_scaled * 0.02f) *
+                                  std::clamp(cfg.ring_thickness_scale, 0.3f, 4.0f), 0.01f);
+    float base_temp = std::clamp(host.temperature * (0.14f + (1.0f - ice_fraction) * 0.12f),
+                                 30.0f, 900.0f);
     bool spawned_any = false;
 
     for (int i = 0; i < count; ++i) {
@@ -1595,7 +1936,7 @@ bool CosmosApp::spawn_dust_ring(int host_index, float total_mass, float inner_ra
         dust.parent = host_index;
         dust.mass = std::max(masses[(size_t)i], safe_min_mass);
         float density_factor = 1.3f + (1.0f - ice_fraction) * 1.2f;
-        dust.radius = std::max(0.04f, std::cbrt(dust.mass / std::max(density_factor, 0.1f)) * 8.0f);
+        dust.radius = std::max(0.07f, std::cbrt(dust.mass / std::max(density_factor, 0.1f)) * 11.0f);
         dust.pos = host.pos + rel;
         dust.vel = host.vel;
         dust.temperature = std::clamp(base_temp * (0.88f + u01(rng) * 0.24f), 25.0f, 5000.0f);
@@ -1623,6 +1964,74 @@ bool CosmosApp::spawn_dust_ring(int host_index, float total_mass, float inner_ra
     }
 
     return spawned_any;
+}
+
+void CosmosApp::spawn_moons_for_host(int host_index, int moon_count) {
+    if (host_index < 0 || host_index >= (int)state.bodies.size())
+        return;
+    const CelestialBody host_snapshot = state.bodies[(size_t)host_index];
+    if (host_snapshot.marked_for_removal || host_snapshot.type != CTYPE_PLANET ||
+        is_star_type(host_snapshot.type) || is_black_hole_type(host_snapshot.type))
+        return;
+
+    int count = std::clamp(moon_count, 1, 12);
+    uint32_t base_seed = host_snapshot.seed ^ (uint32_t)(std::abs((int)(sim_time_ * 1000.0f))) ^ 0xA11CE55u;
+    std::mt19937 moon_rng(base_seed);
+    std::uniform_real_distribution<float> u01(0.0f, 1.0f);
+    for (int mi = 0; mi < count; ++mi) {
+        CelestialBody moon;
+        moon.type = CTYPE_MOON;
+        moon.mass = std::clamp(host_snapshot.mass * (0.0002f + u01(moon_rng) * 0.008f),
+                               1.0e-9f, host_snapshot.mass * 0.15f);
+        moon.seed = hash_combine(base_seed, (uint32_t)(mi * 7919 + 17));
+        randomize_moon_properties(moon, state, moon_rng);
+        moon.parent = host_index;
+        float orbit_r = host_snapshot.radius * (2.3f + 0.85f * (float)mi + u01(moon_rng) * 1.7f);
+        float theta = u01(moon_rng) * 6.28318530718f;
+        float y = (u01(moon_rng) * 2.0f - 1.0f) * host_snapshot.radius * 0.15f;
+        glm::vec3 rel(std::cos(theta) * orbit_r, y, std::sin(theta) * orbit_r);
+        moon.pos = host_snapshot.pos + rel;
+        glm::vec3 tangent = glm::normalize(glm::cross(glm::normalize(rel), glm::vec3(0.0f, 1.0f, 0.0f)));
+        if (glm::dot(tangent, tangent) < 1.0e-8f)
+            tangent = glm::vec3(1.0f, 0.0f, 0.0f);
+        float v = std::sqrt(std::max(cfg.G * host_snapshot.mass / std::max(glm::length(rel), 1.0e-4f), 0.0f));
+        moon.vel = host_snapshot.vel + tangent * v;
+        moon.name = generate_body_name(moon.seed, moon.type);
+        refresh_body_render_state(moon, &state);
+        state.bodies.push_back(moon);
+        state.trails.emplace_back();
+    }
+}
+
+void CosmosApp::spawn_ring_for_host(int host_index, float inner_mult, float outer_mult,
+                                    float density, float ice_fraction) {
+    if (host_index < 0 || host_index >= (int)state.bodies.size())
+        return;
+    CelestialBody& host = state.bodies[(size_t)host_index];
+    if (host.marked_for_removal || is_star_type(host.type) || is_black_hole_type(host.type))
+        return;
+    if (!(host.type == CTYPE_PLANET || host.type == CTYPE_MOON || host.type == CTYPE_NEBULA))
+        return;
+
+    float inner = std::max(host.radius * std::max(inner_mult, 1.15f), host.radius * 1.15f);
+    float outer = std::max(host.radius * std::max(outer_mult, inner_mult + 0.2f), inner + host.radius * 0.20f);
+    host.ring_inner_radius = inner;
+    host.ring_outer_radius = outer;
+    host.ring_density = std::clamp(density, 0.01f, 1.0f);
+    host.ring_ice_fraction = std::clamp(ice_fraction, 0.0f, 1.0f);
+    host.ring_tilt = std::clamp(std::max(std::abs(host.angular_vel) * 150.0f, 0.02f), 0.02f, 1.30f);
+
+    float annulus = std::max(host.ring_outer_radius * host.ring_outer_radius -
+                             host.ring_inner_radius * host.ring_inner_radius, 1.0f);
+    float mass_hint = std::max(host.mass * host.ring_density * 0.0000025f *
+                               (annulus / std::max(host.radius * host.radius, 1.0e-5f)),
+                               std::max(cfg.min_fragment_mass, 1.0e-12f) * 2.0f);
+    spawn_dust_ring(host_index, mass_hint, host.ring_inner_radius, host.ring_outer_radius,
+                    host.ring_density, host.ring_ice_fraction,
+                    hash_combine(host.seed, 0xA77A11u));
+    clear_ring_system(host);
+    host.props_valid = false;
+    host.visuals_valid = false;
 }
 
 void CosmosApp::apply_dust_debug_mode() {
@@ -2335,7 +2744,7 @@ void CosmosApp::process_roche_limit(float dt) {
                 : 0.0f;
             float ring_mass = stripped_mass * ring_fraction;
             if (ring_mass > 0.0f) {
-                add_ring_material(bodies[i], bodies[j], ring_mass, disruption_limit);
+                add_ring_material(bodies[i], bodies[j], ring_mass, disruption_limit, cfg);
                 pending_rings.push_back(PendingDustRing{
                     (int)i,
                     ring_mass,
@@ -2731,20 +3140,22 @@ void CosmosApp::process_evaporation(float dt) {
         if (b.type != CTYPE_ASTEROID && b.type != CTYPE_COMET &&
             b.type != CTYPE_NEBULA && b.type != CTYPE_DUST) continue;
 
-        float vapor_threshold = (b.type == CTYPE_COMET || b.type == CTYPE_DUST) ? 220.0f : 700.0f;
+        float vapor_threshold = (b.type == CTYPE_DUST) ? 520.0f :
+                                ((b.type == CTYPE_COMET) ? 220.0f : 700.0f);
         if (b.temperature <= vapor_threshold) continue;
 
         float heat_factor = (b.temperature - vapor_threshold) / std::max(vapor_threshold, 1.0f);
         float loss = cfg.evaporation_rate * heat_factor * dt *
-            (b.type == CTYPE_NEBULA ? 0.12f : (b.type == CTYPE_COMET ? 0.07f : (b.type == CTYPE_DUST ? 0.10f : 0.05f)));
-        loss = std::min(loss, b.mass * 0.08f);
+            (b.type == CTYPE_NEBULA ? 0.12f : (b.type == CTYPE_COMET ? 0.07f : (b.type == CTYPE_DUST ? 0.018f : 0.05f)));
+        loss = std::min(loss, b.mass * (b.type == CTYPE_DUST ? 0.03f : 0.08f));
         if (loss <= 0.0f) continue;
 
         b.mass -= loss;
-        b.radius = std::max(b.radius * 0.9996f, 0.05f);
+        b.radius = std::max(b.radius * (b.type == CTYPE_DUST ? 0.99985f : 0.9996f),
+                            b.type == CTYPE_DUST ? 0.06f : 0.05f);
         register_mass_loss(b, loss, dt);
 
-        if (b.mass < 5.0e-11f) {
+        if (b.mass < (b.type == CTYPE_DUST ? 8.0e-12f : 5.0e-11f)) {
             b.marked_for_removal = true;
         }
     }
@@ -3769,7 +4180,7 @@ void CosmosApp::draw_spawn_menu() {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(r * 0.6f, g * 0.6f, b * 0.6f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(r * 0.7f, g * 0.7f, b * 0.7f, 1.0f));
 
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "Middle-click in viewport to place");
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "Left-click empty space in viewport to place");
 
         char label[64];
         snprintf(label, sizeof(label), "Spawn %s at Origin", CTYPE_NAMES[spawn_type % CTYPE_COUNT]);

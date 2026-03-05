@@ -666,6 +666,12 @@ struct CelestialBody {
     bool        non_attracting = false;     // affected by gravity but does not source gravity
     uint32_t    seed           = 0;         // procedural generation seed
     uint32_t    frag_generation = 0;        // how many times this body has been fragmented (0 = original)
+    int32_t     forced_surface = -1;        // -1 auto, 0 rocky, 1 water, 2 ice, 3 earth-like
+    bool        custom_material = false;    // use manually specified composition fractions
+    float       custom_iron = 0.0f;
+    float       custom_silicate = 0.0f;
+    float       custom_water = 0.0f;
+    float       custom_hydrogen = 0.0f;
     std::string name;                       // procedural or user-given name
 
     // Cached planet properties (computed once, refreshed only on major temp band changes)
@@ -704,6 +710,43 @@ inline void refresh_planet_props(CelestialBody& b) {
         b.cached_props.atmosphere.has_clouds =
             (b.cached_props.atmosphere.pressure > 0.05f && b.cached_props.cloud_coverage > 2.0f);
     }
+
+    if (b.forced_surface >= 0) {
+        switch (b.forced_surface) {
+        case 0: // rocky
+            b.cached_props.surface = SURF_ROCKY;
+            b.cached_props.ocean_type = OCEAN_NONE;
+            b.cached_props.ocean_coverage = 0.0f;
+            b.cached_props.cloud_coverage = std::min(b.cached_props.cloud_coverage, 25.0f);
+            break;
+        case 1: // water
+            b.cached_props.surface = SURF_LIQUID;
+            b.cached_props.ocean_type = OCEAN_WATER;
+            b.cached_props.ocean_coverage = std::max(b.cached_props.ocean_coverage, 55.0f);
+            b.cached_props.cloud_coverage = std::max(b.cached_props.cloud_coverage, 35.0f);
+            break;
+        case 2: // ice
+            b.cached_props.surface = SURF_FROZEN;
+            b.cached_props.ocean_type = OCEAN_NONE;
+            b.cached_props.ocean_coverage = std::min(b.cached_props.ocean_coverage, 15.0f);
+            b.cached_props.ice_sheet_coverage = std::max(b.cached_props.ice_sheet_coverage, 70.0f);
+            break;
+        case 3: // earth-like
+            b.cached_props.surface = SURF_ROCKY;
+            b.cached_props.ocean_type = OCEAN_WATER;
+            b.cached_props.ocean_coverage = std::clamp(b.cached_props.ocean_coverage, 40.0f, 75.0f);
+            b.cached_props.atmosphere.n2_frac = 0.78f;
+            b.cached_props.atmosphere.o2_frac = 0.21f;
+            b.cached_props.atmosphere.co2_frac = std::clamp(b.cached_props.atmosphere.co2_frac, 0.0001f, 0.02f);
+            b.cached_props.atmosphere.pressure = std::clamp(b.cached_props.atmosphere.pressure, 0.6f, 2.2f);
+            b.cached_props.cloud_coverage = std::clamp(b.cached_props.cloud_coverage, 20.0f, 80.0f);
+            b.cached_props.vegetation_coverage = std::max(b.cached_props.vegetation_coverage, 18.0f);
+            break;
+        default:
+            break;
+        }
+    }
+
     b.cached_temp_band = band;
     b.props_valid = true;
 }
@@ -725,6 +768,10 @@ struct CosmosConfig {
     // Timestep system
     double   time_exponent        = 1.0;   // log10(sim seconds per real second), range [-9, 21]
     double   sim_time_accumulated = 0.0;   // total simulation time in seconds
+    bool     adaptive_time_step   = false; // dynamically clamp simulation dt for stability
+    float    adaptive_step_safety = 0.22f; // lower = safer, slower
+    float    adaptive_step_min    = 1.0e-4f; // absolute sim-seconds lower bound
+    float    adaptive_step_max    = 500000.0f; // absolute sim-seconds upper bound
 
     // Collision physics
     bool     collision_merging       = true;
@@ -750,6 +797,12 @@ struct CosmosConfig {
     float    dynamic_reduction_percent   = 0.20f; // cull percent when reducing (0-1)
     float    dynamic_target_fps          = 60.0f; // target framerate
     bool     dust_debug_non_attracting   = true;  // debug: dust sources gravity when false
+    float    ring_inner_scale            = 1.0f;  // global ring inner radius multiplier
+    float    ring_outer_scale            = 1.0f;  // global ring outer radius multiplier
+    float    ring_density_scale          = 1.0f;  // global ring density multiplier
+    float    ring_thickness_scale        = 1.0f;  // global vertical thickness multiplier
+    float    ring_particle_scale         = 1.0f;  // global spawned dust-count multiplier
+    float    ring_mass_scale             = 1.0f;  // global ring mass-to-dust multiplier
 
     // Temperature system
     bool     temperature_system = true;
@@ -789,6 +842,10 @@ struct CosmosConfig {
 
     // Physics parallelization
     bool     parallel_gravity     = true;    // parallelize pairwise gravity accumulation
+    bool     velocity_verlet      = true;    // use Velocity Verlet integration
+    bool     barnes_hut           = true;    // use Barnes-Hut gravity approximation at scale
+    float    barnes_hut_theta     = 0.72f;   // opening angle (smaller = more accurate)
+    int      barnes_hut_min_bodies = 128;    // body-count threshold before BH engages
 };
 
 // ── Body collection ─────────────────────────────────────────────────────────

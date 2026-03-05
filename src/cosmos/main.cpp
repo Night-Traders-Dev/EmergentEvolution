@@ -18,6 +18,36 @@
 
 // ── GLFW input callbacks ───────────────────────────────────────────────────
 
+static glm::vec3 viewport_spawn_position(CosmosApp* app, GLFWwindow* window, double mx, double my) {
+    int fb_w, fb_h;
+    glfwGetFramebufferSize(window, &fb_w, &fb_h);
+    float W = (float)fb_w, H = (float)fb_h;
+    float aspect = W / H;
+
+    // Unproject screen point to a ray, then intersect with a plane through
+    // camera target and perpendicular to the camera view direction.
+    glm::dmat4 inv_vp = glm::inverse(app->camera.proj_matrix_d(aspect) * app->camera.view_matrix_d());
+    float ndc_x = ((float)mx / W) * 2.0f - 1.0f;
+    float ndc_y = 1.0f - ((float)my / H) * 2.0f;
+
+    glm::dvec4 near_clip = inv_vp * glm::dvec4(ndc_x, ndc_y, -1.0, 1.0);
+    glm::dvec4 far_clip  = inv_vp * glm::dvec4(ndc_x, ndc_y,  1.0, 1.0);
+    glm::dvec3 near_pt_d = glm::dvec3(near_clip) / near_clip.w;
+    glm::dvec3 far_pt_d  = glm::dvec3(far_clip) / far_clip.w;
+    glm::dvec3 ray_dir_d = glm::normalize(far_pt_d - near_pt_d);
+
+    glm::dvec3 eye = app->camera.eye_position_d();
+    glm::dvec3 plane_normal = glm::normalize(glm::dvec3(app->camera.target) - eye);
+    double denom = glm::dot(ray_dir_d, plane_normal);
+    glm::vec3 spawn_pos = app->camera.target;
+    if (std::abs(denom) > 1e-9) {
+        double t = glm::dot(glm::dvec3(app->camera.target) - near_pt_d, plane_normal) / denom;
+        if (t > 0.0)
+            spawn_pos = glm::vec3(near_pt_d + ray_dir_d * t);
+    }
+    return spawn_pos;
+}
+
 static void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
     auto* app = static_cast<CosmosApp*>(glfwGetWindowUserPointer(window));
     if (!app) return;
@@ -83,11 +113,13 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
                     // Zoom to a comfortable distance based on body radius
                     app->camera.target_distance = b.radius * 8.0f;
                 } else {
-                    // Single click → select/deselect
+                    // Single click on body → select. Empty space → spawn.
                     if (app->click_candidate_ >= 0) {
                         app->selected_body = app->click_candidate_;
                     } else {
                         app->selected_body = -1;
+                        glm::vec3 spawn_pos = viewport_spawn_position(app, window, mx, my);
+                        app->spawn_at(spawn_pos);
                     }
                 }
 
@@ -113,38 +145,6 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
         }
     }
 
-    // ── Middle-click: spawn entity at clicked 3D position ──
-    if (button == GLFW_MOUSE_BUTTON_MIDDLE && action == GLFW_PRESS) {
-        int fb_w, fb_h;
-        glfwGetFramebufferSize(window, &fb_w, &fb_h);
-        float W = (float)fb_w, H = (float)fb_h;
-        float aspect = W / H;
-
-        // Unproject screen point to a ray, then intersect with the plane
-        // through camera.target perpendicular to the view direction
-        glm::dmat4 inv_vp = glm::inverse(app->camera.proj_matrix_d(aspect) * app->camera.view_matrix_d());
-        float ndc_x = ((float)mx / W) * 2.0f - 1.0f;
-        float ndc_y = 1.0f - ((float)my / H) * 2.0f;
-
-        glm::dvec4 near_clip = inv_vp * glm::dvec4(ndc_x, ndc_y, -1.0, 1.0);
-        glm::dvec4 far_clip  = inv_vp * glm::dvec4(ndc_x, ndc_y,  1.0, 1.0);
-        glm::dvec3 near_pt_d = glm::dvec3(near_clip) / near_clip.w;
-        glm::dvec3 far_pt_d  = glm::dvec3(far_clip) / far_clip.w;
-        glm::dvec3 ray_dir_d = glm::normalize(far_pt_d - near_pt_d);
-
-        // Plane through camera.target, normal = view direction (eye → target)
-        glm::dvec3 eye = app->camera.eye_position_d();
-        glm::dvec3 plane_normal = glm::normalize(glm::dvec3(app->camera.target) - eye);
-        double denom = glm::dot(ray_dir_d, plane_normal);
-        glm::vec3 spawn_pos = app->camera.target;
-        if (std::abs(denom) > 1e-9) {
-            double t = glm::dot(glm::dvec3(app->camera.target) - near_pt_d, plane_normal) / denom;
-            if (t > 0.0)
-                spawn_pos = glm::vec3(near_pt_d + ray_dir_d * t);
-        }
-
-        app->spawn_at(spawn_pos);
-    }
 }
 
 static void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {

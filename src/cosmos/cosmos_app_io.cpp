@@ -6,7 +6,7 @@
 namespace {
 
 constexpr uint32_t COSMOS_MAGIC   = 0x534D4F43; // "COSM"
-constexpr uint32_t COSMOS_VERSION = 7;
+constexpr uint32_t COSMOS_VERSION = 9;
 
 #pragma pack(push, 1)
 struct BodyPODV1 {
@@ -177,6 +177,9 @@ bool CosmosApp::save_simulation(const std::string& path) {
     if (cfg.roche_limit_rigid) flags |= 16384;
     if (cfg.dynamic_budget_enabled) flags |= 32768;
     if (cfg.dust_debug_non_attracting) flags |= 65536;
+    if (cfg.adaptive_time_step) flags |= 131072;
+    if (cfg.barnes_hut) flags |= 262144;
+    if (cfg.velocity_verlet) flags |= 524288;
     f.write(reinterpret_cast<const char*>(&flags), sizeof(uint32_t));
 
     f.write(reinterpret_cast<const char*>(&cfg.merge_speed_threshold), sizeof(float));
@@ -194,6 +197,17 @@ bool CosmosApp::save_simulation(const std::string& path) {
     f.write(reinterpret_cast<const char*>(&cfg.dynamic_explosion_density), sizeof(float));
     f.write(reinterpret_cast<const char*>(&cfg.dynamic_reduction_percent), sizeof(float));
     f.write(reinterpret_cast<const char*>(&cfg.dynamic_target_fps), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.ring_inner_scale), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.ring_outer_scale), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.ring_density_scale), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.ring_thickness_scale), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.ring_particle_scale), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.ring_mass_scale), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.adaptive_step_safety), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.adaptive_step_min), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.adaptive_step_max), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.barnes_hut_theta), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.barnes_hut_min_bodies), sizeof(int));
 
     uint32_t body_count = (uint32_t)state.bodies.size();
     f.write(reinterpret_cast<const char*>(&body_count), 4);
@@ -288,6 +302,12 @@ bool CosmosApp::load_simulation(const std::string& path) {
     else cfg.dynamic_budget_enabled = true;
     if (version >= 7) cfg.dust_debug_non_attracting = (flags & 65536) != 0;
     else cfg.dust_debug_non_attracting = true;
+    if (version >= 9) cfg.adaptive_time_step = (flags & 131072) != 0;
+    else cfg.adaptive_time_step = false;
+    if (version >= 9) cfg.barnes_hut = (flags & 262144) != 0;
+    else cfg.barnes_hut = true;
+    if (version >= 9) cfg.velocity_verlet = (flags & 524288) != 0;
+    else cfg.velocity_verlet = true;
     if (version < 3) {
         cfg.material_phases = true;
         cfg.planetary_rings = true;
@@ -316,6 +336,39 @@ bool CosmosApp::load_simulation(const std::string& path) {
         cfg.dynamic_reduction_percent = 0.20f;
         cfg.dynamic_target_fps = 60.0f;
     }
+    if (version >= 8) {
+        f.read(reinterpret_cast<char*>(&cfg.ring_inner_scale), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.ring_outer_scale), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.ring_density_scale), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.ring_thickness_scale), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.ring_particle_scale), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.ring_mass_scale), sizeof(float));
+        if (version >= 9) {
+            f.read(reinterpret_cast<char*>(&cfg.adaptive_step_safety), sizeof(float));
+            f.read(reinterpret_cast<char*>(&cfg.adaptive_step_min), sizeof(float));
+            f.read(reinterpret_cast<char*>(&cfg.adaptive_step_max), sizeof(float));
+            f.read(reinterpret_cast<char*>(&cfg.barnes_hut_theta), sizeof(float));
+            f.read(reinterpret_cast<char*>(&cfg.barnes_hut_min_bodies), sizeof(int));
+        } else {
+            cfg.adaptive_step_safety = 0.22f;
+            cfg.adaptive_step_min = 1.0e-4f;
+            cfg.adaptive_step_max = 500000.0f;
+            cfg.barnes_hut_theta = 0.72f;
+            cfg.barnes_hut_min_bodies = 128;
+        }
+    } else {
+        cfg.ring_inner_scale = 1.0f;
+        cfg.ring_outer_scale = 1.0f;
+        cfg.ring_density_scale = 1.0f;
+        cfg.ring_thickness_scale = 1.0f;
+        cfg.ring_particle_scale = 1.0f;
+        cfg.ring_mass_scale = 1.0f;
+        cfg.adaptive_step_safety = 0.22f;
+        cfg.adaptive_step_min = 1.0e-4f;
+        cfg.adaptive_step_max = 500000.0f;
+        cfg.barnes_hut_theta = 0.72f;
+        cfg.barnes_hut_min_bodies = 128;
+    }
 
     // Clamp legacy/invalid values from old saves to sane runtime ranges.
     cfg.merge_speed_threshold = std::max(cfg.merge_speed_threshold, 0.1f);
@@ -328,6 +381,18 @@ bool CosmosApp::load_simulation(const std::string& path) {
     cfg.dynamic_explosion_density = std::clamp(cfg.dynamic_explosion_density, 0.01f, 1.0f);
     cfg.dynamic_reduction_percent = std::clamp(cfg.dynamic_reduction_percent, 0.01f, 1.0f);
     cfg.dynamic_target_fps = std::clamp(cfg.dynamic_target_fps, 1.0f, 1000.0f);
+    cfg.ring_inner_scale = std::clamp(cfg.ring_inner_scale, 0.6f, 3.0f);
+    cfg.ring_outer_scale = std::clamp(cfg.ring_outer_scale, 0.6f, 3.0f);
+    cfg.ring_density_scale = std::clamp(cfg.ring_density_scale, 0.2f, 3.0f);
+    cfg.ring_thickness_scale = std::clamp(cfg.ring_thickness_scale, 0.3f, 4.0f);
+    cfg.ring_particle_scale = std::clamp(cfg.ring_particle_scale, 0.2f, 5.0f);
+    cfg.ring_mass_scale = std::clamp(cfg.ring_mass_scale, 0.1f, 5.0f);
+    cfg.adaptive_step_safety = std::clamp(cfg.adaptive_step_safety, 0.01f, 1.0f);
+    cfg.adaptive_step_min = std::clamp(cfg.adaptive_step_min, 1.0e-6f, 1.0e6f);
+    cfg.adaptive_step_max = std::clamp(cfg.adaptive_step_max,
+                                       std::max(cfg.adaptive_step_min, 1.0e-6f), 1.0e8f);
+    cfg.barnes_hut_theta = std::clamp(cfg.barnes_hut_theta, 0.2f, 1.6f);
+    cfg.barnes_hut_min_bodies = std::clamp(cfg.barnes_hut_min_bodies, 16, 20000);
     if (version <= 4 && cfg.min_fragment_mass >= 0.05f)
         cfg.min_fragment_mass = 1.0e-8f;
 

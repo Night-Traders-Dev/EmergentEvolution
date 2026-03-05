@@ -326,7 +326,13 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
         if (is_black_hole_type(b.type))
             emissive = -1.0f;
 
-        spheres[i].pos_radius = glm::vec4(glm::vec3(glm::dvec3(b.pos) - target_origin), b.radius);
+        float render_radius = b.radius;
+        if (b.type == CTYPE_DUST) {
+            // Keep dust rings visible at normal zoom without changing physics radius.
+            render_radius = std::max(render_radius, 0.16f);
+            render_radius *= 1.0f + std::clamp(b.phase_intensity, 0.0f, 1.0f) * 0.15f;
+        }
+        spheres[i].pos_radius = glm::vec4(glm::vec3(glm::dvec3(b.pos) - target_origin), render_radius);
         spheres[i].base_emit = glm::vec4(col, emissive);
 
         // Normalize seed to shader-friendly range: raw uint32 can be ~4 billion,

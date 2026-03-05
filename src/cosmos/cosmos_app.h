@@ -84,6 +84,9 @@ private:
                                          float radial_scale, float tangential_scale) const;
     bool spawn_dust_ring(int host_index, float total_mass, float inner_radius, float outer_radius,
                          float density, float ice_fraction, uint32_t seed_hint = 0u);
+    void spawn_moons_for_host(int host_index, int moon_count);
+    void spawn_ring_for_host(int host_index, float inner_mult, float outer_mult,
+                             float density, float ice_fraction);
     void apply_dust_debug_mode();
     void cleanup_bodies();
     void spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, int count,
@@ -126,9 +129,35 @@ private:
     // Spawn menu
     bool spawn_menu_visible_ = true;
     bool spawn_in_orbit_ = false;
+    struct SpawnDraftSettings {
+        bool override_temperature = false;
+        float temperature = 300.0f;
+        bool override_radius = false;
+        float radius = 8.0f;
+        bool override_rotation = false;
+        float rotation_hours = 24.0f;
+        bool override_velocity = false;
+        glm::vec3 velocity_kms{0.0f};
+        bool override_material = false;
+        float material_iron = 0.20f;
+        float material_silicate = 0.60f;
+        float material_ice = 0.20f;
+        float material_hydrogen = 0.0f;
+        int planet_look = 0; // 0 auto, 1 rocky, 2 water, 3 ice, 4 earth-like
+        bool spawn_rings = false;
+        bool spawn_moons = false;
+        int moon_count = 1;
+        bool override_ring_layout = false;
+        float ring_inner_mult = 1.6f;
+        float ring_outer_mult = 3.0f;
+        float ring_density = 0.35f;
+        float ring_ice_fraction = 0.55f;
+    };
+    SpawnDraftSettings spawn_draft_;
 
     // Bottom bar
     float bottom_bar_offset_ = 1.0f;  // 0=visible, 1=hidden (start hidden)
+    bool  bottom_bar_autohide_ = true;
     bool  show_menu_popup_   = false;
     bool  settings_visible_  = true;
     bool  body_list_visible_ = true;
