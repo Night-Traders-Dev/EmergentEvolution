@@ -40,6 +40,7 @@ enum CelestialType : uint32_t {
     CTYPE_BH_INTERMEDIATE = 19,  // 100-100000 solar masses
     CTYPE_BH_SUPERMASSIVE = 20,  // 10^6-10^10 solar masses
     CTYPE_BH_PRIMORDIAL   = 21,  // Sub-stellar mass, tiny
+    CTYPE_DUST            = 22,  // Ring/disk dust grain aggregate
 
     CTYPE_COUNT
 };
@@ -748,6 +749,7 @@ struct CosmosConfig {
     float    dynamic_explosion_density   = 0.25f; // per-event share of non-attracting budget (0-1)
     float    dynamic_reduction_percent   = 0.20f; // cull percent when reducing (0-1)
     float    dynamic_target_fps          = 60.0f; // target framerate
+    bool     dust_debug_non_attracting   = true;  // debug: dust sources gravity when false
 
     // Temperature system
     bool     temperature_system = true;
@@ -1039,25 +1041,26 @@ inline BodyVisualProperties generate_body_visual_properties(const CelestialBody&
         return vp;
     }
 
-    if (b.type == CTYPE_ASTEROID || b.type == CTYPE_COMET) {
+    if (b.type == CTYPE_ASTEROID || b.type == CTYPE_COMET || b.type == CTYPE_DUST) {
         bool is_comet = b.type == CTYPE_COMET;
+        bool is_dust = b.type == CTYPE_DUST;
         float impact_damage = std::clamp(b.impact_crater_strength, 0.0f, 1.0f);
         float impact_heat = std::clamp(b.impact_heat, 0.0f, 1.0f);
         vp.render_class = is_comet ? RENDER_COMET : RENDER_ASTEROID;
         vp.subtype = is_comet ? (uint8_t)SMALLBODY_ICY : (uint8_t)(hash_combine(h, 9) % 4u);
-        vp.terrain_amp = is_comet ? 0.32f + h0 * 0.18f : 0.22f + h0 * 0.22f;
-        vp.terrain_freq = 2.5f + h1 * 5.5f;
-        vp.ridge_amp = 0.2f + h2 * 0.45f;
-        vp.crater_density = is_comet ? 0.25f + h1 * 0.25f : 0.55f + h1 * 0.35f;
-        vp.normal_strength = is_comet ? 1.2f : 1.0f;
-        vp.roughness = 0.78f;
-        vp.specular = 0.05f;
-        vp.rock_frac = 0.4f;
-        vp.ice_frac = 0.0f;
-        vp.metal_frac = 0.05f;
-        vp.dust_frac = 0.55f;
+        vp.terrain_amp = is_dust ? 0.05f + h0 * 0.08f : (is_comet ? 0.32f + h0 * 0.18f : 0.22f + h0 * 0.22f);
+        vp.terrain_freq = is_dust ? (8.0f + h1 * 9.0f) : (2.5f + h1 * 5.5f);
+        vp.ridge_amp = is_dust ? (0.03f + h2 * 0.08f) : (0.2f + h2 * 0.45f);
+        vp.crater_density = is_dust ? (0.15f + h1 * 0.20f) : (is_comet ? 0.25f + h1 * 0.25f : 0.55f + h1 * 0.35f);
+        vp.normal_strength = is_dust ? 0.65f : (is_comet ? 1.2f : 1.0f);
+        vp.roughness = is_dust ? 0.95f : 0.78f;
+        vp.specular = is_dust ? 0.02f : 0.05f;
+        vp.rock_frac = is_dust ? 0.45f : 0.4f;
+        vp.ice_frac = is_dust ? 0.35f : 0.0f;
+        vp.metal_frac = is_dust ? 0.20f : 0.05f;
+        vp.dust_frac = is_dust ? 0.85f : 0.55f;
 
-        if (!is_comet) {
+        if (!is_comet && !is_dust) {
             switch ((SmallBodyClass)vp.subtype) {
             case SMALLBODY_C:
                 vp.rock_frac = 0.35f; vp.metal_frac = 0.05f; vp.dust_frac = 0.60f; vp.roughness = 0.92f; break;

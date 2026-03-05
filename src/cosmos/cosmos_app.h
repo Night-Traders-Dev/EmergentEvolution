@@ -82,6 +82,9 @@ private:
     int  dominant_primary_for(int body_index) const;
     glm::vec3 verlet_auto_orbit_velocity(const CelestialBody& body, const CelestialBody& primary,
                                          float radial_scale, float tangential_scale) const;
+    bool spawn_dust_ring(int host_index, float total_mass, float inner_radius, float outer_radius,
+                         float density, float ice_fraction, uint32_t seed_hint = 0u);
+    void apply_dust_debug_mode();
     void cleanup_bodies();
     void spawn_fragments(glm::vec3 pos, glm::vec3 vel, float total_mass, int count,
                         uint32_t parent_generation = 0, float source_temperature = 300.0f,

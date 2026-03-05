@@ -169,6 +169,28 @@ static void randomize_small_body_properties(CelestialBody& body, std::mt19937& r
         body.angular_vel *= -1.0f;
 }
 
+static void randomize_dust_properties(CelestialBody& body, std::mt19937& rng) {
+    float radius_km = std::uniform_real_distribution<float>(0.08f, 2.0f)(rng);
+    float density_kg_m3 = std::uniform_real_distribution<float>(900.0f, 2600.0f)(rng);
+    body.temperature = std::uniform_real_distribution<float>(35.0f, 260.0f)(rng);
+
+    body.radius = std::max(0.05f, radius_km / SIM_UNIT_TO_KM);
+
+    constexpr double SOLAR_MASS_KG = 1.98847e30;
+    double radius_m = (double)radius_km * 1000.0;
+    double volume_m3 = (4.0 / 3.0) * 3.141592653589793 * radius_m * radius_m * radius_m;
+    double mass_kg = volume_m3 * (double)density_kg_m3;
+    body.mass = std::max((float)(mass_kg / SOLAR_MASS_KG), 1.0e-13f);
+
+    float period_h = std::uniform_real_distribution<float>(1.0f, 18.0f)(rng);
+    body.angular_vel = (2.0f * 3.14159265359f) / (period_h * 3600.0f);
+    if (std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) < 0.35f)
+        body.angular_vel *= -1.0f;
+    body.atmosphere_retention = 0.0f;
+    body.material_phase = (body.temperature < 170.0f) ? PHASE_ICE : PHASE_SOLID;
+    body.phase_intensity = std::clamp(0.25f + std::uniform_real_distribution<float>(0.0f, 0.45f)(rng), 0.1f, 1.0f);
+}
+
 static void randomize_nebula_properties(CelestialBody& body, std::mt19937& rng) {
     std::uniform_real_distribution<float> u01(0.0f, 1.0f);
     body.type = CTYPE_NEBULA;
@@ -629,6 +651,11 @@ MaterialComposition derive_materials(const CelestialBody& b) {
         m.iron = std::clamp(b.cached_visuals.metal_frac, 0.0f, 1.0f);
         m.silicate = std::clamp(1.0f - m.iron - b.cached_visuals.ice_frac, 0.0f, 1.0f);
         m.water = std::clamp(b.cached_visuals.ice_frac, 0.0f, 1.0f);
+    } else if (b.type == CTYPE_DUST) {
+        float cold = std::clamp((220.0f - b.temperature) / 220.0f, 0.0f, 1.0f);
+        m.water = 0.22f + 0.28f * cold;
+        m.iron = 0.18f;
+        m.silicate = std::clamp(1.0f - m.water - m.iron, 0.2f, 0.7f);
     } else if (b.type == CTYPE_COMET) {
         m.water = 0.65f;
         m.silicate = 0.25f;
@@ -798,7 +825,8 @@ static float magnetic_shielding_score(const CelestialBody& b, float G) {
 
 static void enforce_body_physical_limits(CelestialBody& b) {
     b.mass = std::max(b.mass, 1.0e-12f);
-    b.radius = std::max(b.radius, 0.1f);
+    float min_radius = (b.type == CTYPE_DUST) ? 0.04f : 0.1f;
+    b.radius = std::max(b.radius, min_radius);
 
     if (is_black_hole_type(b.type)) {
         b.radius = std::max(0.5f, 2.0f * b.mass);
@@ -828,12 +856,16 @@ static void enforce_body_physical_limits(CelestialBody& b) {
         b.radius = std::clamp(b.radius, target_r * 0.65f, target_r * 1.20f);
         if (b.type == CTYPE_MOON)
             b.radius = std::min(b.radius, expected_planet_radius(std::max(b.mass, 1.0e-6f)) * 0.7f);
-    } else if (b.type == CTYPE_ASTEROID || b.type == CTYPE_COMET) {
+    } else if (b.type == CTYPE_ASTEROID || b.type == CTYPE_COMET || b.type == CTYPE_DUST) {
         MaterialComposition mat = derive_materials(b);
         float density_factor = mat.iron * 5.0f + mat.silicate * 3.0f + mat.water * 1.4f + mat.hydrogen * 0.2f;
         density_factor = std::max(density_factor, 0.5f);
-        float target_r = std::cbrt(b.mass / density_factor) * 18.0f;
-        b.radius = std::clamp(b.radius, std::max(target_r * 0.7f, 0.3f), std::max(target_r * 1.3f, 0.6f));
+        float target_r = std::cbrt(b.mass / density_factor) * (b.type == CTYPE_DUST ? 8.5f : 18.0f);
+        if (b.type == CTYPE_DUST) {
+            b.radius = std::clamp(b.radius, std::max(target_r * 0.65f, 0.04f), std::max(target_r * 1.4f, 0.30f));
+        } else {
+            b.radius = std::clamp(b.radius, std::max(target_r * 0.7f, 0.3f), std::max(target_r * 1.3f, 0.6f));
+        }
     }
 
     if (b.ring_density > 0.0f) {
@@ -1054,6 +1086,8 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
             randomize_small_body_properties(nb, rng, false);
         } else if (spawn_type == CTYPE_COMET) {
             randomize_small_body_properties(nb, rng, true);
+        } else if (spawn_type == CTYPE_DUST) {
+            randomize_dust_properties(nb, rng);
         } else if (spawn_type == CTYPE_NEBULA) {
             randomize_nebula_properties(nb, rng);
         }
@@ -1084,9 +1118,25 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
     }
 
     nb.name = generate_body_name(nb.seed, nb.type);
+    nb.non_attracting = (nb.type == CTYPE_DUST) ? cfg.dust_debug_non_attracting : nb.non_attracting;
     refresh_body_render_state(nb, &state);
     state.bodies.push_back(nb);
     state.trails.emplace_back();
+
+    int host_idx = (int)state.bodies.size() - 1;
+    const auto spawned = state.bodies[(size_t)host_idx];
+    if (cfg.planetary_rings && spawned.ring_density > 0.001f &&
+        (spawned.type == CTYPE_PLANET || spawned.type == CTYPE_MOON)) {
+        float annulus = std::max(spawned.ring_outer_radius * spawned.ring_outer_radius -
+                                 spawned.ring_inner_radius * spawned.ring_inner_radius, 1.0f);
+        float mass_hint = std::max(spawned.mass * spawned.ring_density * 0.0000025f *
+                                   (annulus / std::max(spawned.radius * spawned.radius, 1.0e-5f)),
+                                   std::max(cfg.min_fragment_mass, 1.0e-12f) * 2.0f);
+        spawn_dust_ring(host_idx, mass_hint, spawned.ring_inner_radius, spawned.ring_outer_radius,
+                        spawned.ring_density, spawned.ring_ice_fraction, spawned.seed ^ 0xD05751EDu);
+        if (host_idx >= 0 && host_idx < (int)state.bodies.size())
+            clear_ring_system(state.bodies[(size_t)host_idx]);
+    }
 }
 
 // ── Tick ─────────────────────────────────────────────────────────────────────
@@ -1161,6 +1211,7 @@ void CosmosApp::step_physics(float dt) {
     auto& bodies = state.bodies;
     size_t n = bodies.size();
     if (n == 0) return;
+    apply_dust_debug_mode();
 
     // Compute gravitational acceleration (Newtonian + GR corrections)
     std::vector<glm::vec3> accel(n, glm::vec3(0.0f));
@@ -1448,6 +1499,138 @@ glm::vec3 CosmosApp::verlet_auto_orbit_velocity(const CelestialBody& body, const
     }
 
     return primary.vel + r_hat * v_rad + tangent * best_vt;
+}
+
+bool CosmosApp::spawn_dust_ring(int host_index, float total_mass, float inner_radius, float outer_radius,
+                                float density, float ice_fraction, uint32_t seed_hint) {
+    if (!cfg.planetary_rings || host_index < 0 || host_index >= (int)state.bodies.size())
+        return false;
+    if (total_mass <= 0.0f || !std::isfinite(total_mass))
+        return false;
+
+    const CelestialBody host = state.bodies[(size_t)host_index];
+    if (host.marked_for_removal || is_star_type(host.type) || is_black_hole_type(host.type))
+        return false;
+
+    float inner = std::max(inner_radius, host.radius * 1.15f);
+    float outer = std::max(outer_radius, inner + host.radius * 0.18f);
+    float width = outer - inner;
+    if (!std::isfinite(inner) || !std::isfinite(outer) || width <= 1.0e-4f)
+        return false;
+
+    float safe_min_mass = std::max(1.0e-13f, std::min(cfg.min_fragment_mass * 0.08f, 1.0e-10f));
+    int count = std::clamp((int)std::round(8.0f + density * 56.0f +
+                                           std::sqrt(total_mass / std::max(safe_min_mass, 1.0e-13f)) * 0.16f),
+                           8, 140);
+
+    if (cfg.dynamic_budget_enabled) {
+        int attract_cap = std::max(cfg.dynamic_max_fragments, 0);
+        int non_attract_cap = std::max(cfg.dynamic_max_non_attracting, 0);
+        int total_budget_cap = std::max(attract_cap + non_attract_cap + 256, 1);
+        count = std::min(count, std::max(0, total_budget_cap - (int)state.bodies.size()));
+
+        int cap = cfg.dust_debug_non_attracting ? std::max(cfg.dynamic_max_non_attracting, 0)
+                                                : std::max(cfg.dynamic_max_fragments, 0);
+        int current = 0;
+        for (const auto& b : state.bodies) {
+            if (b.marked_for_removal) continue;
+            if (cfg.dust_debug_non_attracting) {
+                if (b.non_attracting) ++current;
+            } else {
+                if (fragment_like_body(b) && !b.non_attracting) ++current;
+            }
+        }
+        count = std::min(count, std::max(0, cap - current));
+    }
+    if (count < 1)
+        return false;
+
+    count = std::min(count, std::max(1, (int)std::floor(total_mass / safe_min_mass)));
+    if (count < 1)
+        return false;
+
+    uint32_t seed = hash_combine(host.seed, seed_hint == 0u ? 0xD057CAFEu : seed_hint);
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> u01(0.0f, 1.0f);
+
+    float tilt = std::clamp(std::max(host.ring_tilt, 0.02f), 0.02f, 1.30f);
+    float yaw = u01(rng) * 6.28318530718f;
+    glm::vec3 axis(std::sin(tilt) * std::cos(yaw), std::cos(tilt), std::sin(tilt) * std::sin(yaw));
+    if (glm::dot(axis, axis) < 1.0e-8f) axis = glm::vec3(0.0f, 1.0f, 0.0f);
+    axis = glm::normalize(axis);
+    glm::vec3 basis_u = glm::cross(axis, glm::vec3(0.0f, 1.0f, 0.0f));
+    if (glm::dot(basis_u, basis_u) < 1.0e-8f)
+        basis_u = glm::cross(axis, glm::vec3(1.0f, 0.0f, 0.0f));
+    basis_u = glm::normalize(basis_u);
+    glm::vec3 basis_v = glm::normalize(glm::cross(axis, basis_u));
+
+    std::vector<float> weights((size_t)count, 0.0f);
+    float wsum = 0.0f;
+    for (int i = 0; i < count; ++i) {
+        weights[(size_t)i] = 0.55f + u01(rng);
+        wsum += weights[(size_t)i];
+    }
+
+    std::vector<float> masses((size_t)count, safe_min_mass);
+    float rem_mass = std::max(0.0f, total_mass - safe_min_mass * (float)count);
+    for (int i = 0; i < count; ++i)
+        masses[(size_t)i] += rem_mass * (weights[(size_t)i] / std::max(wsum, 1.0e-6f));
+    masses.back() += total_mass - std::accumulate(masses.begin(), masses.end(), 0.0f);
+
+    float max_vertical = std::max(host.radius * (0.006f + density * 0.02f), 0.01f);
+    float base_temp = std::clamp(host.temperature * (0.35f + (1.0f - ice_fraction) * 0.35f),
+                                 35.0f, 1800.0f);
+    bool spawned_any = false;
+
+    for (int i = 0; i < count; ++i) {
+        float radial_t = std::pow(u01(rng), 0.75f);
+        float radial = inner + width * radial_t;
+        float theta = u01(rng) * 6.28318530718f;
+        float vertical = (u01(rng) * 2.0f - 1.0f) * max_vertical;
+        glm::vec3 ring_dir = basis_u * std::cos(theta) + basis_v * std::sin(theta);
+        glm::vec3 rel = ring_dir * radial + axis * vertical;
+
+        CelestialBody dust;
+        dust.type = CTYPE_DUST;
+        dust.parent = host_index;
+        dust.mass = std::max(masses[(size_t)i], safe_min_mass);
+        float density_factor = 1.3f + (1.0f - ice_fraction) * 1.2f;
+        dust.radius = std::max(0.04f, std::cbrt(dust.mass / std::max(density_factor, 0.1f)) * 8.0f);
+        dust.pos = host.pos + rel;
+        dust.vel = host.vel;
+        dust.temperature = std::clamp(base_temp * (0.88f + u01(rng) * 0.24f), 25.0f, 5000.0f);
+        dust.atmosphere_retention = 0.0f;
+        dust.material_phase = (dust.temperature < 170.0f) ? PHASE_ICE : PHASE_SOLID;
+        dust.phase_intensity = std::clamp(0.25f + ice_fraction * 0.50f + u01(rng) * 0.15f, 0.10f, 1.0f);
+        dust.seed = hash_combine(seed, (uint32_t)(i * 2654435761u + 9719u));
+        dust.frag_generation = std::max<uint32_t>(1u, host.frag_generation + 1u);
+        dust.angular_vel = (u01(rng) * 2.0f - 1.0f) * 0.03f;
+        dust.non_attracting = cfg.dust_debug_non_attracting;
+        dust.name = generate_body_name(dust.seed, dust.type);
+        clear_ring_system(dust);
+        clear_impact_signature(dust);
+
+        // Initialize ring dynamics with a velocity-Verlet tuned orbital velocity.
+        dust.vel = verlet_auto_orbit_velocity(dust, host, 0.0f, 1.0f + (u01(rng) * 2.0f - 1.0f) * 0.04f);
+        dust.vel += axis * ((u01(rng) * 2.0f - 1.0f) * 0.00018f);
+        if (!std::isfinite(dust.vel.x) || !std::isfinite(dust.vel.y) || !std::isfinite(dust.vel.z))
+            continue;
+
+        refresh_body_render_state(dust, &state);
+        state.bodies.push_back(dust);
+        state.trails.emplace_back();
+        spawned_any = true;
+    }
+
+    return spawned_any;
+}
+
+void CosmosApp::apply_dust_debug_mode() {
+    for (auto& b : state.bodies) {
+        if (b.marked_for_removal || b.type != CTYPE_DUST)
+            continue;
+        b.non_attracting = cfg.dust_debug_non_attracting;
+    }
 }
 
 // ── Collision Processing ────────────────────────────────────────────────────
@@ -2034,6 +2217,16 @@ void CosmosApp::process_roche_limit(float dt) {
     auto& bodies = state.bodies;
     size_t n = bodies.size();
     bool allow_disruption = cfg.roche_limit && (cfg.roche_limit_fluid || cfg.roche_limit_rigid);
+    struct PendingDustRing {
+        int host_index = -1;
+        float total_mass = 0.0f;
+        float inner = 0.0f;
+        float outer = 0.0f;
+        float density = 0.0f;
+        float ice_fraction = 0.0f;
+        uint32_t seed_hint = 0u;
+    };
+    std::vector<PendingDustRing> pending_rings;
 
     for (size_t i = 0; i < n; ++i) {
         if (bodies[i].marked_for_removal) continue;
@@ -2142,10 +2335,17 @@ void CosmosApp::process_roche_limit(float dt) {
                 : 0.0f;
             float ring_mass = stripped_mass * ring_fraction;
             if (ring_mass > 0.0f) {
-                bodies[i].mass += ring_mass;
                 add_ring_material(bodies[i], bodies[j], ring_mass, disruption_limit);
-                bodies[i].props_valid = false;
-                bodies[i].visuals_valid = false;
+                pending_rings.push_back(PendingDustRing{
+                    (int)i,
+                    ring_mass,
+                    bodies[i].ring_inner_radius,
+                    bodies[i].ring_outer_radius,
+                    bodies[i].ring_density,
+                    bodies[i].ring_ice_fraction,
+                    hash_combine(bodies[i].seed, bodies[j].seed)
+                });
+                clear_ring_system(bodies[i]);
             }
 
             float fragment_mass = std::max(stripped_mass - ring_mass, 0.0f);
@@ -2181,6 +2381,11 @@ void CosmosApp::process_roche_limit(float dt) {
                 std::clamp(tidal_work / std::max(bodies[j].mass, 1.0e-8f), 0.0f, 1.0f),
                 std::clamp(0.18f + disruption_overflow * 0.45f, 0.08f, 0.92f));
         }
+    }
+
+    for (const auto& ring : pending_rings) {
+        spawn_dust_ring(ring.host_index, ring.total_mass, ring.inner, ring.outer,
+                        ring.density, ring.ice_fraction, ring.seed_hint);
     }
 }
 
@@ -2308,8 +2513,19 @@ void CosmosApp::process_temperature(float dt) {
 
 void CosmosApp::process_material_phases(float dt) {
     auto& bodies = state.bodies;
+    struct PendingDustRing {
+        int host_index = -1;
+        float total_mass = 0.0f;
+        float inner = 0.0f;
+        float outer = 0.0f;
+        float density = 0.0f;
+        float ice_fraction = 0.0f;
+        uint32_t seed_hint = 0u;
+    };
+    std::vector<PendingDustRing> pending_rings;
 
-    for (auto& b : bodies) {
+    for (size_t idx = 0; idx < bodies.size(); ++idx) {
+        auto& b = bodies[idx];
         if (b.marked_for_removal) continue;
 
         MaterialComposition materials = derive_materials(b);
@@ -2321,25 +2537,28 @@ void CosmosApp::process_material_phases(float dt) {
             if (!body_can_host_rings(b) || is_star_type(b.type) || is_black_hole_type(b.type)) {
                 clear_ring_system(b);
             } else {
-                float hot_sublimation = std::clamp((b.temperature - 260.0f) / 1600.0f, 0.0f, 1.0f);
-                float spread = std::min(0.06f, dt * (0.0008f + b.ring_density * 0.0024f +
-                                                     std::abs(b.angular_vel) * 8.0f));
-                b.ring_inner_radius = std::max(b.radius * 1.15f, b.ring_inner_radius - b.radius * spread * 0.08f);
-                b.ring_outer_radius = std::max(b.ring_inner_radius + b.radius * 0.20f,
-                                               b.ring_outer_radius + b.radius * spread * 0.45f);
-                b.ring_density = std::max(0.0f, b.ring_density -
-                    dt * (0.00008f + hot_sublimation * 0.0014f));
-                b.ring_ice_fraction = std::clamp(b.ring_ice_fraction -
-                    hot_sublimation * dt * 0.0016f, 0.0f, 1.0f);
-                if (b.ring_density < 0.015f || b.ring_outer_radius <= b.ring_inner_radius + b.radius * 0.06f)
-                    clear_ring_system(b);
+                float annulus = std::max(b.ring_outer_radius * b.ring_outer_radius -
+                                         b.ring_inner_radius * b.ring_inner_radius, 1.0f);
+                float mass_hint = std::max(b.mass * b.ring_density * 0.0000020f *
+                                           (annulus / std::max(b.radius * b.radius, 1.0e-5f)),
+                                           std::max(cfg.min_fragment_mass, 1.0e-12f) * 2.0f);
+                pending_rings.push_back(PendingDustRing{
+                    (int)idx,
+                    mass_hint,
+                    b.ring_inner_radius,
+                    b.ring_outer_radius,
+                    b.ring_density,
+                    b.ring_ice_fraction,
+                    hash_combine(b.seed, (uint32_t)(idx + 0xD057u))
+                });
+                clear_ring_system(b);
             }
         }
 
         if (!is_star_type(b.type) && !is_black_hole_type(b.type)) {
             if ((next_phase == PHASE_MOLTEN || next_phase == PHASE_PLASMA) &&
                 (b.type == CTYPE_PLANET || b.type == CTYPE_MOON ||
-                 b.type == CTYPE_ASTEROID || b.type == CTYPE_COMET)) {
+                 b.type == CTYPE_ASTEROID || b.type == CTYPE_COMET || b.type == CTYPE_DUST)) {
                 float boiloff = std::clamp((b.temperature - 900.0f) / 1800.0f, 0.0f, 1.0f);
                 b.internal_energy += boiloff * dt * 1.8f;
                 if (b.type == CTYPE_PLANET || b.type == CTYPE_MOON) {
@@ -2414,6 +2633,11 @@ void CosmosApp::process_material_phases(float dt) {
         }
         b.material_phase = next_phase;
         b.phase_intensity = next_intensity;
+    }
+
+    for (const auto& ring : pending_rings) {
+        spawn_dust_ring(ring.host_index, ring.total_mass, ring.inner, ring.outer,
+                        ring.density, ring.ice_fraction, ring.seed_hint);
     }
 }
 
@@ -2504,14 +2728,15 @@ void CosmosApp::process_evaporation(float dt) {
             continue;
         }
 
-        if (b.type != CTYPE_ASTEROID && b.type != CTYPE_COMET && b.type != CTYPE_NEBULA) continue;
+        if (b.type != CTYPE_ASTEROID && b.type != CTYPE_COMET &&
+            b.type != CTYPE_NEBULA && b.type != CTYPE_DUST) continue;
 
-        float vapor_threshold = (b.type == CTYPE_COMET) ? 220.0f : 700.0f;
+        float vapor_threshold = (b.type == CTYPE_COMET || b.type == CTYPE_DUST) ? 220.0f : 700.0f;
         if (b.temperature <= vapor_threshold) continue;
 
         float heat_factor = (b.temperature - vapor_threshold) / std::max(vapor_threshold, 1.0f);
         float loss = cfg.evaporation_rate * heat_factor * dt *
-            (b.type == CTYPE_NEBULA ? 0.12f : (b.type == CTYPE_COMET ? 0.07f : 0.05f));
+            (b.type == CTYPE_NEBULA ? 0.12f : (b.type == CTYPE_COMET ? 0.07f : (b.type == CTYPE_DUST ? 0.10f : 0.05f)));
         loss = std::min(loss, b.mass * 0.08f);
         if (loss <= 0.0f) continue;
 

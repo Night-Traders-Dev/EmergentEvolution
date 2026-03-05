@@ -46,6 +46,7 @@ ImU32 body_color(const CelestialBody& b) {
     case CTYPE_ASTEROID:   return IM_COL32(140, 130, 110, 255);
     case CTYPE_COMET:      return IM_COL32(160, 220, 255, 255);
     case CTYPE_NEBULA:     return IM_COL32(120, 60, 180, 255);
+    case CTYPE_DUST:       return IM_COL32(205, 185, 160, 255);
     default:               return IM_COL32(200, 200, 200, 255);
     }
 }
@@ -55,6 +56,7 @@ const char* const CTYPE_NAMES[] = {
     "O Star", "B Star", "A Star", "F Star", "G Star", "K Star", "M Star",
     "L Dwarf", "T Dwarf", "Y Dwarf", "Wolf-Rayet",
     "Stellar BH", "Intermediate BH", "Supermassive BH", "Primordial BH",
+    "Dust",
 };
 
 const char* const PLANET_CLASS_NAMES[] = {
@@ -88,6 +90,7 @@ const ImU32 CTYPE_COLORS[] = {
     IM_COL32(18, 18, 24, 255),     // Intermediate BH
     IM_COL32(12, 12, 18, 255),     // Supermassive BH
     IM_COL32(32, 32, 40, 255),     // Primordial BH
+    IM_COL32(205, 185, 160, 255),  // Dust
 };
 
 const char* format_sim_time(double seconds, char* buf, size_t buf_size) {
@@ -734,6 +737,7 @@ void CosmosApp::draw_spawn_menu() {
         type_button(CTYPE_MOON, bw, 3.70e-8f); ImGui::SameLine();
         type_button(CTYPE_ASTEROID, bw, 2.0e-10f);
         type_button(CTYPE_COMET, bw, 8.0e-11f); ImGui::SameLine();
+        type_button(CTYPE_DUST, bw, 5.0e-12f); ImGui::SameLine();
         type_button(CTYPE_NEBULA, bw, 0.02f);
     }
 
@@ -765,7 +769,7 @@ void CosmosApp::draw_spawn_menu() {
     ImGui::Separator();
 
     if (ImGui::CollapsingHeader("Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::SliderFloat("Mass", &spawn_mass, 1.0e-10f, 500.0f, "%.3e",
+        ImGui::SliderFloat("Mass", &spawn_mass, 1.0e-13f, 500.0f, "%.3e",
                            ImGuiSliderFlags_Logarithmic);
         ImGui::Checkbox("Orbital velocity", &spawn_in_orbit_);
         if (ImGui::IsItemHovered())
@@ -1640,7 +1644,7 @@ void CosmosApp::draw_inspector() {
         ImGui::Columns(1);
     }
 
-    if ((b.type == CTYPE_ASTEROID || b.type == CTYPE_COMET) && b.visuals_valid) {
+    if ((b.type == CTYPE_ASTEROID || b.type == CTYPE_COMET || b.type == CTYPE_DUST) && b.visuals_valid) {
         ImGui::Separator();
         ImGui::TextColored(ImVec4(0.85f, 0.80f, 0.72f, 1.0f), "Small Body Visuals");
 
@@ -1648,7 +1652,9 @@ void CosmosApp::draw_inspector() {
         ImGui::SetColumnWidth(0, 110);
 
         const char* small_body_class = "Icy";
-        if (b.type == CTYPE_ASTEROID) {
+        if (b.type == CTYPE_DUST) {
+            small_body_class = "Dust Aggregate";
+        } else if (b.type == CTYPE_ASTEROID) {
             switch ((SmallBodyClass)vp.subtype) {
             case SMALLBODY_C: small_body_class = "Carbonaceous"; break;
             case SMALLBODY_S: small_body_class = "Silicate"; break;
@@ -2020,6 +2026,7 @@ void CosmosApp::draw_bottom_bar() {
                     for (auto& b : state.bodies) {
                         if (b.marked_for_removal) continue;
                         bool dust_like = b.non_attracting ||
+                            (b.type == CTYPE_DUST) ||
                             ((b.type == CTYPE_ASTEROID || b.type == CTYPE_COMET || b.type == CTYPE_NEBULA) &&
                              (int)b.frag_generation > 0);
                         if (dust_like) b.marked_for_removal = true;
@@ -2203,6 +2210,12 @@ void CosmosApp::draw_bottom_bar() {
                     float reduction_pct = cfg.dynamic_reduction_percent * 100.0f;
                     if (ImGui::SliderFloat("Reduction Percentage##Perf", &reduction_pct, 1.0f, 100.0f, "%.0f%%"))
                         cfg.dynamic_reduction_percent = std::clamp(reduction_pct / 100.0f, 0.01f, 1.0f);
+                    int dust_mode = cfg.dust_debug_non_attracting ? 1 : 0;
+                    const char* dust_modes[] = {"Standard", "Non-attracting"};
+                    if (ImGui::Combo("Dust Mode##Perf", &dust_mode, dust_modes, IM_ARRAYSIZE(dust_modes))) {
+                        cfg.dust_debug_non_attracting = (dust_mode == 1);
+                        apply_dust_debug_mode();
+                    }
                     if (!cfg.dynamic_budget_enabled) {
                         ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
                                            "Budget disabled: fragment growth is uncapped.");

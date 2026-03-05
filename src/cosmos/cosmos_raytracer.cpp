@@ -74,6 +74,7 @@ static glm::vec3 body_color_vec3(const CelestialBody& b) {
     case CTYPE_ASTEROID:   return {0.549f, 0.510f, 0.431f};
     case CTYPE_COMET:      return {0.627f, 0.863f, 1.0f};
     case CTYPE_NEBULA:     return {0.471f, 0.235f, 0.706f};
+    case CTYPE_DUST:       return {0.804f, 0.725f, 0.627f};
     default:               return {0.784f, 0.784f, 0.784f};
     }
 }

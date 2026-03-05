@@ -6,7 +6,7 @@
 namespace {
 
 constexpr uint32_t COSMOS_MAGIC   = 0x534D4F43; // "COSM"
-constexpr uint32_t COSMOS_VERSION = 6;
+constexpr uint32_t COSMOS_VERSION = 7;
 
 #pragma pack(push, 1)
 struct BodyPODV1 {
@@ -176,6 +176,7 @@ bool CosmosApp::save_simulation(const std::string& path) {
     if (cfg.roche_limit_fluid) flags |= 8192;
     if (cfg.roche_limit_rigid) flags |= 16384;
     if (cfg.dynamic_budget_enabled) flags |= 32768;
+    if (cfg.dust_debug_non_attracting) flags |= 65536;
     f.write(reinterpret_cast<const char*>(&flags), sizeof(uint32_t));
 
     f.write(reinterpret_cast<const char*>(&cfg.merge_speed_threshold), sizeof(float));
@@ -285,6 +286,8 @@ bool CosmosApp::load_simulation(const std::string& path) {
     }
     if (version >= 6) cfg.dynamic_budget_enabled = (flags & 32768) != 0;
     else cfg.dynamic_budget_enabled = true;
+    if (version >= 7) cfg.dust_debug_non_attracting = (flags & 65536) != 0;
+    else cfg.dust_debug_non_attracting = true;
     if (version < 3) {
         cfg.material_phases = true;
         cfg.planetary_rings = true;
