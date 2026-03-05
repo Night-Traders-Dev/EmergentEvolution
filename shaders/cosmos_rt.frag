@@ -8,7 +8,7 @@ layout(std140, set = 0, binding = 0) uniform CameraUBO {
     vec4 eye_pos;
     vec4 screen_info;
     vec4 lighting_params; // x=star, y=uniform, z=ambient, w=fastStar
-    vec4 quality_params;  // x=quality, y=hq, z=bg preset
+    vec4 quality_params;  // x=quality, y=hq, z=bg preset, w=sim time
     vec4 render_flags;    // x=background, y=corona, z=comet tails, w=bh lensing
     vec4 fabric_params;   // x=enabled, y=grid size, z=warp strength, w=gravity scale
     vec4 fabric_center;   // xyz=focus plane center
@@ -360,6 +360,18 @@ void build_basis(vec3 n, out vec3 t, out vec3 b) {
     b = normalize(cross(n, t));
 }
 
+vec3 rotate_about_axis(vec3 v, vec3 axis, float angle) {
+    float s = sin(angle);
+    float c = cos(angle);
+    vec3 a = normalize(axis);
+    return v * c + cross(a, v) * s + a * dot(a, v) * (1.0 - c);
+}
+
+float spin_phase_from_rate(float angular_vel) {
+    const float tau = 6.28318530718;
+    return mod(quality_params.w * angular_vel, tau);
+}
+
 float intersect_sphere(vec3 ro, vec3 rd, vec3 center, float radius) {
     vec3 oc = ro - center;
     float b = dot(oc, rd);
@@ -408,8 +420,11 @@ float rubble_pile_sdf(vec3 local, float base_radius, float seed, float roughness
     return (hull + disp) * base_radius;
 }
 
-float irregular_sdf(vec3 p, vec3 center, float base_radius, float seed, float roughness) {
+float irregular_sdf(vec3 p, vec3 center, float base_radius, float seed, float roughness,
+                    float spin_phase, vec3 spin_axis) {
     vec3 local = p - center;
+    if (abs(spin_phase) > 1.0e-8)
+        local = rotate_about_axis(local, spin_axis, -spin_phase);
     bool rubble_mode = roughness < 0.30;
     if (rubble_mode) {
         return rubble_pile_sdf(local, base_radius, seed, roughness * 1.8);
@@ -420,7 +435,7 @@ float irregular_sdf(vec3 p, vec3 center, float base_radius, float seed, float ro
 }
 
 float intersect_irregular_body(vec3 ro, vec3 rd, vec3 center, float base_radius,
-                               float seed, float roughness) {
+                               float seed, float roughness, float spin_phase, vec3 spin_axis) {
     float bound_r = base_radius * (1.0 + roughness * 2.1);
     float t0 = intersect_sphere(ro, rd, center, bound_r);
     if (t0 < 0.0) return -1.0;
@@ -428,7 +443,7 @@ float intersect_irregular_body(vec3 ro, vec3 rd, vec3 center, float base_radius,
     float t = max(t0 - base_radius * roughness, 0.001);
     for (int i = 0; i < 28; i++) {
         vec3 p = ro + rd * t;
-        float d = irregular_sdf(p, center, base_radius, seed, roughness);
+        float d = irregular_sdf(p, center, base_radius, seed, roughness, spin_phase, spin_axis);
         if (d < 0.001) return t;
         t += max(d * 0.65, 0.002);
         if (t > t0 + base_radius * (2.0 + roughness * 3.0)) break;
@@ -436,15 +451,16 @@ float intersect_irregular_body(vec3 ro, vec3 rd, vec3 center, float base_radius,
     return -1.0;
 }
 
-vec3 irregular_normal(vec3 p, vec3 center, float base_radius, float seed, float roughness) {
+vec3 irregular_normal(vec3 p, vec3 center, float base_radius, float seed, float roughness,
+                      float spin_phase, vec3 spin_axis) {
     float e = max(base_radius * 0.008, 0.02);
     vec2 h = vec2(e, 0.0);
-    float dx = irregular_sdf(p + vec3(h.x, h.y, h.y), center, base_radius, seed, roughness)
-             - irregular_sdf(p - vec3(h.x, h.y, h.y), center, base_radius, seed, roughness);
-    float dy = irregular_sdf(p + vec3(h.y, h.x, h.y), center, base_radius, seed, roughness)
-             - irregular_sdf(p - vec3(h.y, h.x, h.y), center, base_radius, seed, roughness);
-    float dz = irregular_sdf(p + vec3(h.y, h.y, h.x), center, base_radius, seed, roughness)
-             - irregular_sdf(p - vec3(h.y, h.y, h.x), center, base_radius, seed, roughness);
+    float dx = irregular_sdf(p + vec3(h.x, h.y, h.y), center, base_radius, seed, roughness, spin_phase, spin_axis)
+             - irregular_sdf(p - vec3(h.x, h.y, h.y), center, base_radius, seed, roughness, spin_phase, spin_axis);
+    float dy = irregular_sdf(p + vec3(h.y, h.x, h.y), center, base_radius, seed, roughness, spin_phase, spin_axis)
+             - irregular_sdf(p - vec3(h.y, h.x, h.y), center, base_radius, seed, roughness, spin_phase, spin_axis);
+    float dz = irregular_sdf(p + vec3(h.y, h.y, h.x), center, base_radius, seed, roughness, spin_phase, spin_axis)
+             - irregular_sdf(p - vec3(h.y, h.y, h.x), center, base_radius, seed, roughness, spin_phase, spin_axis);
     return normalize(vec3(dx, dy, dz));
 }
 
@@ -867,7 +883,7 @@ vec3 shade_star(vec3 normal, vec3 rd, Sphere hit) {
     vec3 tint = star_surface_tint(temperature, mass, hit.pos_radius.w, stage, luminosity);
     float lon = atan(normal.z, normal.x);
     float lat = asin(clamp(normal.y, -1.0, 1.0));
-    float spin_phase = screen_info.w * (0.35 + spin_visual * (1.8 + differential_rotation));
+    float spin_phase = spin_phase_from_rate(hit.impact_axis.w);
     vec3 nwarp = vec3(
         lon * (gran_freq * (1.8 + differential_rotation * 0.8)) + spin_phase,
         lat * (gran_freq * 3.0),
@@ -923,11 +939,16 @@ vec3 shade_gas_giant(vec3 normal, Sphere hit, vec3 light_dir, vec3 view_dir) {
     float mass = hit.gravity_params.x;
     float band_freq = 5.0 + hit.terrain_params.y * 0.85;
     vec3 seed_offset = hash31(seed) * 80.0;
-    float lon = atan(normal.z, normal.x);
-    float lat = asin(clamp(normal.y, -1.0, 1.0));
+    float spin_phase = spin_phase_from_rate(hit.impact_axis.w);
+    vec3 spin_axis = ring_axis(max(hit.ring_params.w, 0.02), seed);
+    vec3 sample_normal = (abs(spin_phase) > 1.0e-8)
+        ? rotate_about_axis(normal, spin_axis, spin_phase)
+        : normal;
+    float lon = atan(sample_normal.z, sample_normal.x);
+    float lat = asin(clamp(sample_normal.y, -1.0, 1.0));
     float storms = hit.activity_params.x;
     bool ice_giant = temperature < 170.0 || mass < 2.5e-4;
-    float lat_abs = abs(normal.y);
+    float lat_abs = abs(sample_normal.y);
     float zonal_speed = mix(1.90, 0.35, pow(lat_abs, 1.55));
     float wind_speed = screen_info.w * (0.08 + storms * 0.22 + hash11(seed * 0.031) * 0.10) * zonal_speed;
     vec3 flow_uv = vec3(lon * 2.6, lat * 5.0, seed * 0.07 + screen_info.w * 0.02);
@@ -967,7 +988,7 @@ vec3 shade_gas_giant(vec3 normal, Sphere hit, vec3 light_dir, vec3 view_dir) {
     vec3 storm_col = ice_giant ? vec3(0.92, 0.98, 1.0) : vec3(1.0, 0.74, 0.52);
     col = mix(col, storm_col, giant_storm * (0.22 + storms * 0.35));
 
-    float haze = smoothstep(0.58, 0.94, abs(normal.y));
+    float haze = smoothstep(0.58, 0.94, abs(sample_normal.y));
     col = mix(col, mix(col, vec3(0.95, 0.98, 1.0), 0.60), haze * (ice_giant ? 0.34 : 0.16));
     float fresnel = pow(clamp(1.0 - max(dot(normal, -view_dir), 0.0), 0.0, 1.0), 2.8);
     vec3 rim_tint = ice_giant ? vec3(0.70, 0.82, 0.96) : vec3(0.92, 0.88, 0.74);
@@ -1040,11 +1061,16 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     bool water_world = (surface_type > 0.5 && surface_type < 1.5);
     bool earth_like_world = mixed_world && ocean_cov > 0.20 && ocean_cov < 0.80 &&
                             temperature >= 240.0 && temperature <= 330.0;
+    float spin_phase = spin_phase_from_rate(hit.impact_axis.w);
+    vec3 spin_axis = ring_axis(max(hit.ring_params.w, 0.02), seed);
+    vec3 sample_normal = (abs(spin_phase) > 1.0e-8)
+        ? rotate_about_axis(normal, spin_axis, spin_phase)
+        : normal;
 
     vec3 seed_offset = hash31(seed) * 120.0;
-    float lon = atan(normal.z, normal.x);
-    float lat = asin(clamp(normal.y, -1.0, 1.0));
-    vec3 cube_np = cube_sphere_coords(normal) * max(terrain_freq, 1.0) + seed_offset;
+    float lon = atan(sample_normal.z, sample_normal.x);
+    float lat = asin(clamp(sample_normal.y, -1.0, 1.0));
+    vec3 cube_np = cube_sphere_coords(sample_normal) * max(terrain_freq, 1.0) + seed_offset;
     vec3 np = cube_np;
     vec3 warp = vec3(
         simplex3D(np + vec3(0.0, 5.2, 1.3)),
@@ -1059,7 +1085,7 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     float elev = clamp(mix(base_fbm, simplex_elev, 0.35) +
                        rigid_detail * 0.18 + billow_mtn * 0.12 * ridge_amp, 0.0, 1.0);
     if (!gas_world && surface_type < 0.5) {
-        float crater_field = crater_mask(normal, seed * 1.17, clamp(hit.terrain_params.w + 0.18, 0.0, 1.0));
+        float crater_field = crater_mask(sample_normal, seed * 1.17, clamp(hit.terrain_params.w + 0.18, 0.0, 1.0));
         elev = clamp(elev - crater_field * 0.10 + rigid_detail * 0.05, 0.0, 1.0);
     }
     if (frozen_world) {
@@ -1068,9 +1094,9 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
         float basin = smoothstep(0.20, 0.54, cell.x);
         elev = clamp(elev + cracks * 0.06 - basin * 0.08, 0.0, 1.0);
     }
-    vec3 macro_np = normal * max(terrain_freq * 0.36, 0.9) + seed_offset * 0.12;
+    vec3 macro_np = sample_normal * max(terrain_freq * 0.36, 0.9) + seed_offset * 0.12;
     float continent_noise = fbm(macro_np + warp * 0.32, 5);
-    float island_noise = fbm(normal * (terrain_freq * 1.65 + 2.0) + seed_offset * 0.26 + warp * 0.18, 4);
+    float island_noise = fbm(sample_normal * (terrain_freq * 1.65 + 2.0) + seed_offset * 0.26 + warp * 0.18, 4);
     float continent_mask = smoothstep(0.58 - continent_cov * 0.40, 0.88 - continent_cov * 0.18, continent_noise);
     float island_mask = smoothstep(0.80 - island_cov * 0.42, 0.96, island_noise) * (1.0 - continent_mask * 0.72);
     float land_mask = clamp(continent_mask + island_mask * 0.72, 0.0, 1.0);
@@ -1093,12 +1119,15 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
 
     vec3 tangent;
     vec3 bitangent;
-    build_basis(normal, tangent, bitangent);
+    build_basis(sample_normal, tangent, bitangent);
     float eps = 0.004;
-    float e_du = fbm((normal + tangent * eps) * terrain_freq + seed_offset, 4) - elev;
-    float e_dv = fbm((normal + bitangent * eps) * terrain_freq + seed_offset, 4) - elev;
-    surf_normal = normalize(normal + (tangent * e_du + bitangent * e_dv) * hit.material_params.w * 10.0);
-    float slope = clamp(1.0 - max(dot(surf_normal, normal), 0.0), 0.0, 1.0);
+    float e_du = fbm((sample_normal + tangent * eps) * terrain_freq + seed_offset, 4) - elev;
+    float e_dv = fbm((sample_normal + bitangent * eps) * terrain_freq + seed_offset, 4) - elev;
+    vec3 surf_normal_local = normalize(sample_normal + (tangent * e_du + bitangent * e_dv) * hit.material_params.w * 10.0);
+    float slope = clamp(1.0 - max(dot(surf_normal_local, sample_normal), 0.0), 0.0, 1.0);
+    surf_normal = (abs(spin_phase) > 1.0e-8)
+        ? rotate_about_axis(surf_normal_local, spin_axis, -spin_phase)
+        : surf_normal_local;
 
     if (surface_type > 2.5 && surface_type < 3.5)
         return shade_gas_giant(normal, hit, light_dir, rd);
@@ -1167,10 +1196,10 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
         col = mix(col, land_col, 0.18 + humidity * 0.10);
 
     if (temperature < 240.0)
-        col = mix(col, ice_col, smoothstep(0.55, 0.92, abs(normal.y)) * clamp(ice_frac + 0.25, 0.0, 1.0));
+        col = mix(col, ice_col, smoothstep(0.55, 0.92, abs(sample_normal.y)) * clamp(ice_frac + 0.25, 0.0, 1.0));
 
     float ice_sheet_mask = max(
-        smoothstep(0.40 - ice_sheet_cov * 0.14, 0.98, abs(normal.y)),
+        smoothstep(0.40 - ice_sheet_cov * 0.14, 0.98, abs(sample_normal.y)),
         smoothstep(0.76, 0.95, elev) * (0.35 + ice_sheet_cov * 0.65));
     col = mix(col, ice_col, ice_sheet_mask * clamp(ice_sheet_cov + (temperature < 245.0 ? 0.25 : 0.0), 0.0, 1.0));
 
@@ -1213,7 +1242,7 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     }
 
     if (!is_ocean && river_density > 0.02) {
-        vec3 river_np = vec3(normal.x * 18.0, normal.y * 8.0, normal.z * 18.0) +
+        vec3 river_np = vec3(sample_normal.x * 18.0, sample_normal.y * 8.0, sample_normal.z * 18.0) +
                         seed_offset * 0.06 + warp * 0.9;
         float river_field = ridged_fbm(river_np + vec3(screen_info.w * 0.003, 0.0, -screen_info.w * 0.002), 4);
         float river_pref = smoothstep(sea_level + 0.02, sea_level + 0.28, elev) * land_mask * (1.0 - mountain_mask * 0.55);
@@ -1274,7 +1303,7 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
         float basin;
         float rim;
         float ejecta;
-        impact_masks(normal, hit, basin, rim, ejecta);
+        impact_masks(sample_normal, hit, basin, rim, ejecta);
         vec3 ejecta_col = mix(vec3(0.58, 0.54, 0.50), vec3(0.90, 0.84, 0.74), clamp(ice_frac + 0.2, 0.0, 1.0));
         vec3 melt_col = mix(vec3(0.44, 0.10, 0.03), vec3(1.00, 0.62, 0.14), clamp((temperature - 850.0) / 1800.0 + impact_heat * 0.8, 0.0, 1.0));
         col = mix(col, col * 0.42, basin * (0.55 + hit.impact_params.x * 0.25));
@@ -1292,14 +1321,19 @@ vec3 shade_moon_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
                         out float roughness_out, out vec3 surf_normal) {
     vec3 col = shade_planet_surface(normal, hit, rd, light_dir, roughness_out, surf_normal);
     float seed = hit.class_seed_temp.x;
-    float crater = crater_mask(normal, seed, hit.terrain_params.w);
+    float spin_phase = spin_phase_from_rate(hit.impact_axis.w);
+    vec3 spin_axis = ring_axis(max(hit.ring_params.w, 0.02), seed);
+    vec3 sample_normal = (abs(spin_phase) > 1.0e-8)
+        ? rotate_about_axis(normal, spin_axis, spin_phase)
+        : normal;
+    float crater = crater_mask(sample_normal, seed, hit.terrain_params.w);
     vec3 regolith = mix(vec3(0.18, 0.18, 0.20), vec3(0.70, 0.72, 0.78), hit.composition_params.y);
     col = mix(col, regolith, crater * 0.55);
     col *= 0.92 - crater * 0.12;
     if (hit.composition_params.y > 0.35) {
-        float fractures = ridged_fbm(normal * 18.0 + hash31(seed) * 8.0, 4);
+        float fractures = ridged_fbm(sample_normal * 18.0 + hash31(seed) * 8.0, 4);
         col += vec3(0.10, 0.14, 0.18) * smoothstep(0.35, 0.65, fractures) * 0.35;
-        vec2 ice_cells = voronoi_f1_f2(normal * 16.0 + vec3(seed * 0.05));
+        vec2 ice_cells = voronoi_f1_f2(sample_normal * 16.0 + vec3(seed * 0.05));
         float crack_lines = smoothstep(0.02, 0.14, ice_cells.y - ice_cells.x);
         col += vec3(0.26, 0.34, 0.44) * crack_lines * 0.20;
         float ice_sss = pow(clamp(dot(-light_dir, surf_normal), 0.0, 1.0), 1.3) *
@@ -1311,7 +1345,7 @@ vec3 shade_moon_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
         float basin;
         float rim;
         float ejecta;
-        impact_masks(normal, hit, basin, rim, ejecta);
+        impact_masks(sample_normal, hit, basin, rim, ejecta);
         col = mix(col, col * 0.32, basin * 0.42);
         col = mix(col, vec3(0.84, 0.82, 0.78), ejecta * 0.22 + rim * 0.16);
     }
@@ -1321,8 +1355,13 @@ vec3 shade_moon_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
 vec3 shade_asteroid_surface(vec3 normal, Sphere hit, vec3 light_dir, bool is_comet_body, out float roughness_out) {
     float seed = hit.class_seed_temp.x;
     float subtype = hit.class_seed_temp.z;
-    float crater = crater_mask(normal, seed, hit.terrain_params.w);
-    vec3 rubble_np = normal * (6.0 + hit.terrain_params.y * 1.4) + hash31(seed) * 5.0;
+    float spin_phase = spin_phase_from_rate(hit.impact_axis.w);
+    vec3 spin_axis = ring_axis(max(hit.ring_params.w, 0.02), seed);
+    vec3 sample_normal = (abs(spin_phase) > 1.0e-8)
+        ? rotate_about_axis(normal, spin_axis, spin_phase)
+        : normal;
+    float crater = crater_mask(sample_normal, seed, hit.terrain_params.w);
+    vec3 rubble_np = sample_normal * (6.0 + hit.terrain_params.y * 1.4) + hash31(seed) * 5.0;
     float simplex = simplex3D(rubble_np * 1.6 + vec3(seed * 0.09)) * 0.5 + 0.5;
     float rigid = rigid_multifractal(rubble_np * 1.3 + vec3(seed * 0.07), 4);
     vec2 vor = voronoi_f1_f2(rubble_np * 2.5 + vec3(seed * 0.11));
@@ -1355,13 +1394,13 @@ vec3 shade_asteroid_surface(vec3 normal, Sphere hit, vec3 light_dir, bool is_com
     col = mix(col, col * 0.54, jagged * 0.48);
     col = mix(col, col + vec3(0.10, 0.09, 0.08), shard_faces * 0.22);
     col = mix(col, col * 0.55, crater * 0.5);
-    float weathering = 0.5 + 0.5 * dot(normal, normalize(vec3(0.7, 0.2, -0.4)));
+    float weathering = 0.5 + 0.5 * dot(sample_normal, normalize(vec3(0.7, 0.2, -0.4)));
     col *= mix(0.88, 1.06, weathering);
     if (hit.impact_params.x > 0.001) {
         float basin;
         float rim;
         float ejecta;
-        impact_masks(normal, hit, basin, rim, ejecta);
+        impact_masks(sample_normal, hit, basin, rim, ejecta);
         vec3 hot = mix(vec3(0.40, 0.10, 0.03), vec3(1.00, 0.62, 0.18), clamp(hit.impact_params.y * 1.2, 0.0, 1.0));
         col = mix(col, col * 0.34, basin * 0.55);
         col += hot * basin * hit.impact_params.y * 0.35;
@@ -1498,8 +1537,10 @@ void main() {
         float t = -1.0;
         if (render_class == RENDER_ASTEROID || render_class == RENDER_COMET) {
             float roughness = (render_class == RENDER_COMET) ? 0.34 : 0.22;
+            float spin_phase = spin_phase_from_rate(spheres[i].impact_axis.w);
+            vec3 spin_axis = ring_axis(max(spheres[i].ring_params.w, 0.02), spheres[i].class_seed_temp.x);
             t = intersect_irregular_body(ro, rd, spheres[i].pos_radius.xyz, spheres[i].pos_radius.w,
-                                         spheres[i].class_seed_temp.x, roughness);
+                                         spheres[i].class_seed_temp.x, roughness, spin_phase, spin_axis);
         } else {
             t = intersect_sphere(ro, rd, spheres[i].pos_radius.xyz, spheres[i].pos_radius.w);
         }
@@ -1542,7 +1583,10 @@ void main() {
     vec3 normal = normalize(hit_pos - hit.pos_radius.xyz);
     if (render_class == RENDER_ASTEROID || render_class == RENDER_COMET) {
         float irregularity = (render_class == RENDER_COMET) ? 0.34 : 0.22;
-        normal = irregular_normal(hit_pos, hit.pos_radius.xyz, hit.pos_radius.w, hit.class_seed_temp.x, irregularity);
+        float spin_phase = spin_phase_from_rate(hit.impact_axis.w);
+        vec3 spin_axis = ring_axis(max(hit.ring_params.w, 0.02), hit.class_seed_temp.x);
+        normal = irregular_normal(hit_pos, hit.pos_radius.xyz, hit.pos_radius.w,
+                                  hit.class_seed_temp.x, irregularity, spin_phase, spin_axis);
     }
 
     if (render_class == RENDER_BLACK_HOLE || hit.base_emit.a < -0.5) {

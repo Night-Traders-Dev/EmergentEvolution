@@ -11,7 +11,7 @@ struct alignas(16) CameraUBOData {
     glm::vec4 eye_pos;          // 16 bytes
     glm::vec4 screen_info;      // 16 bytes (w,h,count,time)
     glm::vec4 lighting_params;  // 16 bytes (star,uniform,ambient,fastStar)
-    glm::vec4 quality_params;   // 16 bytes (quality,hq,bgPreset,reserved)
+    glm::vec4 quality_params;   // 16 bytes (quality,hq,bgPreset,simTime)
     glm::vec4 render_flags;     // 16 bytes (bg,corona,cometTails,bhLensing)
     glm::vec4 fabric_params;    // 16 bytes (enabled,gridSize,warpStrength,G)
     glm::vec4 fabric_center;    // 16 bytes (plane center xyz)
@@ -290,7 +290,7 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
         (float)cfg.cosmos_quality,
         cfg.cosmos_hq_shading ? 1.0f : 0.0f,
         (float)std::clamp(cfg.cosmos_background_preset, 0, 4),
-        0.0f);
+        (float)cfg.sim_time_accumulated);
     cam.render_flags = glm::vec4(
         cfg.cosmos_background_starfield ? 1.0f : 0.0f,
         cfg.cosmos_star_corona ? 1.0f : 0.0f,
@@ -462,7 +462,8 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
         glm::vec3 impact_axis = glm::length(b.impact_normal) > 1.0e-4f
             ? glm::normalize(b.impact_normal)
             : glm::vec3(0.0f, 1.0f, 0.0f);
-        spheres[i].impact_axis = glm::vec4(impact_axis, 0.0f);
+        float spin_rate = std::isfinite(b.angular_vel) ? b.angular_vel : 0.0f;
+        spheres[i].impact_axis = glm::vec4(impact_axis, spin_rate);
         spheres[i].impact_params = glm::vec4(
             std::clamp(b.impact_crater_strength, 0.0f, 1.0f),
             std::clamp(b.impact_heat, 0.0f, 1.0f),

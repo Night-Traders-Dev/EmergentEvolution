@@ -1985,12 +1985,29 @@ void CosmosApp::draw_bottom_bar() {
         snprintf(rate_text, sizeof(rate_text), "%s%s/s", reverse_time_ ? "-" : "", rate_buf);
         char bodies_text[64];
         snprintf(bodies_text, sizeof(bodies_text), "%zu bodies", state.count());
+        int attracting_fragments = 0;
+        int non_attracting_fragments = 0;
+        for (const auto& b : state.bodies) {
+            if (b.marked_for_removal) continue;
+            bool is_fragment = ((int)b.frag_generation > 0) &&
+                               !is_star_type(b.type) &&
+                               !is_black_hole_type(b.type);
+            if (!is_fragment) continue;
+            if (b.non_attracting) ++non_attracting_fragments;
+            else ++attracting_fragments;
+        }
+        char budget_text[160];
+        snprintf(budget_text, sizeof(budget_text), "Object Budget  FPS %.1f  A %d  N %d",
+                 smoothed_fps_, attracting_fragments, non_attracting_fragments);
 
         float time_btn_w = ImGui::CalcTextSize(time_visible).x + 14.0f;
         float rate_w = ImGui::CalcTextSize(rate_text).x;
         float bodies_w = ImGui::CalcTextSize(bodies_text).x;
+        float budget_w = ImGui::CalcTextSize(budget_text).x;
         float sep_w = ImGui::CalcTextSize("|").x;
-        float total_w = time_btn_w + 8.0f + sep_w + 8.0f + rate_w + 8.0f + sep_w + 8.0f + bodies_w;
+        float total_w = time_btn_w + 8.0f + sep_w + 8.0f + rate_w +
+                        8.0f + sep_w + 8.0f + bodies_w +
+                        8.0f + sep_w + 8.0f + budget_w;
 
         ImGui::SameLine(std::max(8.0f, display_w - total_w - 16.0f));
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.14f, 0.11f, 0.05f, 0.78f));
@@ -2008,6 +2025,10 @@ void CosmosApp::draw_bottom_bar() {
         ImGui::TextColored(ImVec4(0.45f, 0.40f, 0.26f, 0.85f), "|");
         ImGui::SameLine(0, 8);
         ImGui::TextColored(ImVec4(0.8f, 0.7f, 0.3f, 0.9f), "%s", bodies_text);
+        ImGui::SameLine(0, 8);
+        ImGui::TextColored(ImVec4(0.45f, 0.40f, 0.26f, 0.85f), "|");
+        ImGui::SameLine(0, 8);
+        ImGui::TextColored(ImVec4(0.74f, 0.78f, 0.82f, 0.95f), "%s", budget_text);
 
         if (ImGui::BeginPopup("##BottomTimeStepPopup")) {
             ImGui::TextColored(ImVec4(0.92f, 0.82f, 0.56f, 1.0f), "Time Control");
