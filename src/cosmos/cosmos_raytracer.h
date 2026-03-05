@@ -29,7 +29,12 @@ private:
     Buffer camera_ubo_;
     Buffer sphere_ssbo_;
     Buffer nebula_ssbo_;
+    Image  nebula_volume_a_;
+    Image  nebula_volume_b_;
+    VkSampler nebula_volume_sampler_ = VK_NULL_HANDLE;
+    bool   nebula_volume_flip_ = false;
     CosmosNebulaCompute nebula_compute_;
+    static constexpr uint32_t NEBULA_VOLUME_DIM = 64;
 
     static constexpr int MAX_SPHERES = 2048;
 };

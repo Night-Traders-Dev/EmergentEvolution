@@ -94,10 +94,19 @@ public:
                        VkFormat              format,
                        VkImageUsageFlags     usage,
                        VkMemoryPropertyFlags props);
+    Image create_image_3d(uint32_t           w,
+                          uint32_t           h,
+                          uint32_t           d,
+                          VkFormat           format,
+                          VkImageUsageFlags  usage,
+                          VkMemoryPropertyFlags props);
 
     VkImageView create_image_view(VkImage      image,
                                   VkFormat     format,
                                   VkImageAspectFlags aspect);
+    VkImageView create_image_view_3d(VkImage image,
+                                     VkFormat format,
+                                     VkImageAspectFlags aspect);
 
     void transition_image_layout(VkImage       image,
                                  VkImageLayout old_layout,

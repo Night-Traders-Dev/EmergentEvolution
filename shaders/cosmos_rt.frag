@@ -48,6 +48,8 @@ layout(std430, set = 0, binding = 2) readonly buffer NebulaBuffer {
     NebulaData nebula_data[];
 };
 
+layout(set = 0, binding = 3) uniform sampler3D nebula_volume_tex;
+
 const int RENDER_STAR = 0;
 const int RENDER_PLANET = 1;
 const int RENDER_MOON = 2;
@@ -1548,6 +1550,14 @@ float temporal_blue_noise(vec2 uv, float frame_time) {
     return fract(n + frame_time * 0.61803398875);
 }
 
+vec4 sample_nebula_voxel(vec3 local, float seed) {
+    vec3 uv = local * 0.5 + 0.5;
+    vec3 jitter = hash31(seed) * 0.173;
+    vec3 drift = vec3(screen_info.w * 0.010, -screen_info.w * 0.006, screen_info.w * 0.008);
+    uv = fract(uv + jitter + drift);
+    return texture(nebula_volume_tex, uv);
+}
+
 vec3 nebula_velocity_field(vec3 p, float seed, float flow, vec3 external_flow, float turbulence) {
     vec3 q = p + vec3(seed * 0.013, seed * 0.007, seed * 0.019);
     vec3 la = vec3(
@@ -1559,8 +1569,10 @@ vec3 nebula_velocity_field(vec3 p, float seed, float flow, vec3 external_flow, f
         perlin3D(q * 2.2 + vec3(1.7, 5.0, 2.1) + vec3(screen_info.w * 0.05)),
         perlin3D(q * 2.9 + vec3(0.9, 0.6, 6.2) + vec3(-screen_info.w * 0.03)));
     vec3 curlish = la * 0.68 + lb * 0.46;
+    vec4 voxel = sample_nebula_voxel(p * 0.85, seed);
+    vec3 voxel_vel = voxel.yzw;
     float mag = 0.20 + flow * 0.55 + turbulence * 0.20;
-    return curlish * mag + external_flow;
+    return curlish * mag + external_flow + voxel_vel * 0.35;
 }
 
 float nebula_density_sample(vec3 local, float seed, float dust_frac, float metal_frac, float pressure,
@@ -1594,7 +1606,9 @@ float nebula_density_sample(vec3 local, float seed, float dust_frac, float metal
     float additive = clamp(d_a * 0.70 + d_b * 0.55 + filaments * 0.30 + wisps * 0.20, 0.0, 1.0);
     float condensed = 1.0 - smooth_min(1.0 - d_a, 1.0 - d_b, 0.30);
     float condense_exp = mix(1.1, 3.6, clamp(collapse + (1.0 - adv_r2) * 0.35, 0.0, 1.0));
+    vec4 voxel = sample_nebula_voxel(advected_local * (1.0 + cloud_detail * 0.35), seed);
     float clump = pow(clamp(additive * 0.62 + condensed * 0.58, 0.0, 1.0), condense_exp);
+    clump *= (0.28 + voxel.x * 1.45);
 
     float density = radial * clump *
         (0.30 + haze * 0.50 + pressure * 0.0028) *
@@ -1721,22 +1735,33 @@ vec3 render_nebula_particles(vec3 ro, vec3 rd, Sphere hit, int body_index, vec3 
         float h0 = hash11(seed * 0.013 + fi * 3.17);
         float h1 = hash11(seed * 0.031 + fi * 5.91);
         float h2 = hash11(seed * 0.047 + fi * 7.43);
-        vec3 dir = normalize(vec3(h0 * 2.0 - 1.0, h1 * 2.0 - 1.0, h2 * 2.0 - 1.0));
-        float rr = pow(max(hash11(seed * 0.071 + fi * 11.17), 1.0e-4), 0.3333);
-        vec3 p_local = dir * rr;
+        vec3 p_local = vec3(h0 * 2.0 - 1.0, h1 * 2.0 - 1.0, h2 * 2.0 - 1.0) * 1.35;
+
+        // Multi-cluster envelope to avoid planet-like spherical particle clouds.
+        float envelope = 0.0;
+        for (int c = 0; c < 6; ++c) {
+            float cf = float(c);
+            vec3 center = (hash31(seed * (0.011 + cf * 0.007) + cf * 19.37) * 2.0 - 1.0) * 0.95;
+            float cr = 0.28 + hash11(seed * 0.071 + cf * 3.71) * 0.40;
+            float d2 = dot(p_local - center, p_local - center);
+            envelope += exp(-d2 / max(cr * cr, 1.0e-4));
+        }
+        envelope /= 6.0;
+        envelope += sample_nebula_voxel(p_local * 0.75, seed).x * 0.95;
+        if (envelope < 0.10) continue;
 
         vec3 swirl = nebula_velocity_field(p_local, seed + fi * 0.11, flow, flow_bias, nd.flow.w);
         p_local += swirl * (0.15 + 0.12 * sin(screen_info.w * (0.35 + h1 * 0.75) + fi * 0.3));
-        if (dot(p_local, p_local) >= 1.0) continue;
 
         vec3 p_world = hit.pos_radius.xyz + p_local * radius;
         float t_proj = dot(p_world - ro, rd);
         if (t_proj < t_enter || t_proj > t_exit) continue;
         vec3 closest = ro + rd * t_proj;
         float dist = length(closest - p_world) * inv_radius;
-        float size = mix(0.010, 0.045, h2) * (1.0 + dust_frac * 0.5);
+        float size = mix(0.010, 0.055, h2) * (1.0 + dust_frac * 0.6 + envelope * 0.45);
         float kernel = exp(-dist * dist / max(size * size, 1.0e-5));
         if (kernel < 0.01) continue;
+        kernel *= clamp(envelope, 0.0, 2.0);
 
         float extinction = (0.20 + dust_frac * 0.65 + collapse * 0.35) * kernel;
         float step_trans = exp(-extinction * 0.85);

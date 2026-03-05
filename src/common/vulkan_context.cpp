@@ -460,6 +460,40 @@ Image VulkanContext::create_image(uint32_t w, uint32_t h,
     return img;
 }
 
+Image VulkanContext::create_image_3d(uint32_t w, uint32_t h, uint32_t d,
+                                     VkFormat format,
+                                     VkImageUsageFlags usage,
+                                     VkMemoryPropertyFlags props)
+{
+    Image img;
+
+    VkImageCreateInfo ci{};
+    ci.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ci.imageType     = VK_IMAGE_TYPE_3D;
+    ci.format        = format;
+    ci.extent        = { w, h, d };
+    ci.mipLevels     = 1;
+    ci.arrayLayers   = 1;
+    ci.samples       = VK_SAMPLE_COUNT_1_BIT;
+    ci.tiling        = VK_IMAGE_TILING_OPTIMAL;
+    ci.usage         = usage;
+    ci.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+    ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VK_CHECK(vkCreateImage(device, &ci, nullptr, &img.handle));
+
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(device, img.handle, &req);
+
+    VkMemoryAllocateInfo alloc{};
+    alloc.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize  = req.size;
+    alloc.memoryTypeIndex = find_memory_type(req.memoryTypeBits, props);
+    VK_CHECK(vkAllocateMemory(device, &alloc, nullptr, &img.memory));
+
+    vkBindImageMemory(device, img.handle, img.memory, 0);
+    return img;
+}
+
 VkImageView VulkanContext::create_image_view(VkImage image, VkFormat format,
                                              VkImageAspectFlags aspect)
 {
@@ -467,6 +501,28 @@ VkImageView VulkanContext::create_image_view(VkImage image, VkFormat format,
     ci.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     ci.image                           = image;
     ci.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
+    ci.format                          = format;
+    ci.components                      = { VK_COMPONENT_SWIZZLE_IDENTITY,
+                                           VK_COMPONENT_SWIZZLE_IDENTITY,
+                                           VK_COMPONENT_SWIZZLE_IDENTITY,
+                                           VK_COMPONENT_SWIZZLE_IDENTITY };
+    ci.subresourceRange.aspectMask     = aspect;
+    ci.subresourceRange.baseMipLevel   = 0;
+    ci.subresourceRange.levelCount     = 1;
+    ci.subresourceRange.baseArrayLayer = 0;
+    ci.subresourceRange.layerCount     = 1;
+    VkImageView view;
+    VK_CHECK(vkCreateImageView(device, &ci, nullptr, &view));
+    return view;
+}
+
+VkImageView VulkanContext::create_image_view_3d(VkImage image, VkFormat format,
+                                                 VkImageAspectFlags aspect)
+{
+    VkImageViewCreateInfo ci{};
+    ci.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    ci.image                           = image;
+    ci.viewType                        = VK_IMAGE_VIEW_TYPE_3D;
     ci.format                          = format;
     ci.components                      = { VK_COMPONENT_SWIZZLE_IDENTITY,
                                            VK_COMPONENT_SWIZZLE_IDENTITY,

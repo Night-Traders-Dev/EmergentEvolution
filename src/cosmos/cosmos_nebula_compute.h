@@ -11,33 +11,32 @@ struct alignas(16) NebulaComputeInput {
     glm::vec4 composition{0.0f};     // x=rock, y=ice, z=metal, w=dust
 };
 
-struct alignas(16) NebulaComputeOutput {
-    glm::vec4 flow{0.0f};    // xyz=advection flow, w=turbulence
-    glm::vec4 optical{0.0f}; // x=density scale, y=absorption, z=scatter anisotropy, w=emission gain
-};
-
 class CosmosNebulaCompute {
 public:
     void init(VulkanContext& vk);
     void destroy(VulkanContext& vk);
     bool is_ready() const { return pipeline_ != VK_NULL_HANDLE; }
 
-    bool compute_to_buffer(VulkanContext& vk,
-                           const std::vector<NebulaComputeInput>& in,
-                           float sim_time,
-                           const Buffer& dst_buffer,
-                           size_t dst_capacity_elems);
+    bool compute_volume(VulkanContext& vk,
+                        const std::vector<NebulaComputeInput>& in,
+                        float sim_time,
+                        float dt_hint,
+                        VkImageView src_volume_view,
+                        VkImageView dst_volume_view,
+                        uint32_t volume_dim);
 
 private:
     struct alignas(16) PushConstants {
         uint32_t body_count = 0;
         float sim_time = 0.0f;
         float dt_hint = 0.0f;
-        float pad = 0.0f;
+        uint32_t volume_dim = 64u;
     };
 
     void ensure_capacity(VulkanContext& vk, size_t required);
-    void write_descriptor_set(VulkanContext& vk);
+    void write_descriptor_set(VulkanContext& vk,
+                              VkImageView src_volume_view,
+                              VkImageView dst_volume_view);
     static size_t next_capacity(size_t current, size_t required);
 
     VkDescriptorSetLayout desc_set_layout_ = VK_NULL_HANDLE;
@@ -47,6 +46,5 @@ private:
     VkDescriptorSet desc_set_ = VK_NULL_HANDLE;
 
     Buffer input_buffer_{};
-    Buffer output_buffer_{};
     size_t capacity_ = 0;
 };

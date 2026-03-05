@@ -91,7 +91,7 @@ static glm::vec3 body_color_vec3(const CelestialBody& b) {
 
 void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     // ── Descriptor set layout ──────────────────────────────────────────────
-    VkDescriptorSetLayoutBinding bindings[3]{};
+    VkDescriptorSetLayoutBinding bindings[4]{};
     // Binding 0: Camera UBO
     bindings[0].binding         = 0;
     bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -107,9 +107,14 @@ void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     bindings[2].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[2].descriptorCount = 1;
     bindings[2].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // Binding 3: Nebula voxel field (sampled 3D image)
+    bindings[3].binding         = 3;
+    bindings[3].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[3].descriptorCount = 1;
+    bindings[3].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutCreateInfo layout_ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layout_ci.bindingCount = 3;
+    layout_ci.bindingCount = 4;
     layout_ci.pBindings    = bindings;
     vkCreateDescriptorSetLayout(vk.device, &layout_ci, nullptr, &desc_layout_);
 
@@ -210,6 +215,38 @@ void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
+    constexpr VkFormat kNebulaVolumeFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    VkImageUsageFlags volume_usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                     VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    nebula_volume_a_ = vk.create_image_3d(NEBULA_VOLUME_DIM, NEBULA_VOLUME_DIM, NEBULA_VOLUME_DIM,
+                                          kNebulaVolumeFormat, volume_usage,
+                                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    nebula_volume_a_.view = vk.create_image_view_3d(nebula_volume_a_.handle, kNebulaVolumeFormat,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT);
+    nebula_volume_b_ = vk.create_image_3d(NEBULA_VOLUME_DIM, NEBULA_VOLUME_DIM, NEBULA_VOLUME_DIM,
+                                          kNebulaVolumeFormat, volume_usage,
+                                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    nebula_volume_b_.view = vk.create_image_view_3d(nebula_volume_b_.handle, kNebulaVolumeFormat,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT);
+    vk.transition_image_layout(nebula_volume_a_.handle, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+    vk.transition_image_layout(nebula_volume_b_.handle, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+    nebula_volume_sampler_ = vk.create_sampler_linear();
+
+    // Zero initialize both voxel fields.
+    {
+        VkCommandBuffer clear_cmd = vk.begin_single_command();
+        VkImageSubresourceRange range{};
+        range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        range.baseMipLevel = 0;
+        range.levelCount = 1;
+        range.baseArrayLayer = 0;
+        range.layerCount = 1;
+        VkClearColorValue zero{};
+        vkCmdClearColorImage(clear_cmd, nebula_volume_a_.handle, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
+        vkCmdClearColorImage(clear_cmd, nebula_volume_b_.handle, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
+        vk.end_single_command(clear_cmd);
+    }
+
     nebula_compute_.init(vk);
 
     // ── Descriptor pool + set ──────────────────────────────────────────────
@@ -217,10 +254,11 @@ void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,  1},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,  1},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,  1},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
     };
     VkDescriptorPoolCreateInfo dp_ci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     dp_ci.maxSets       = 1;
-    dp_ci.poolSizeCount = 3;
+    dp_ci.poolSizeCount = 4;
     dp_ci.pPoolSizes    = pool_sizes;
     vkCreateDescriptorPool(vk.device, &dp_ci, nullptr, &desc_pool_);
 
@@ -246,7 +284,12 @@ void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     nebula_info.offset = 0;
     nebula_info.range  = MAX_SPHERES * sizeof(NebulaGPU);
 
-    VkWriteDescriptorSet writes[3]{};
+    VkDescriptorImageInfo volume_info{};
+    volume_info.sampler = nebula_volume_sampler_;
+    volume_info.imageView = nebula_volume_a_.view;
+    volume_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    VkWriteDescriptorSet writes[4]{};
     writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet          = desc_set_;
     writes[0].dstBinding      = 0;
@@ -268,13 +311,26 @@ void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     writes[2].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[2].pBufferInfo     = &nebula_info;
 
-    vkUpdateDescriptorSets(vk.device, 3, writes, 0, nullptr);
+    writes[3].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[3].dstSet          = desc_set_;
+    writes[3].dstBinding      = 3;
+    writes[3].descriptorCount = 1;
+    writes[3].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[3].pImageInfo      = &volume_info;
+
+    vkUpdateDescriptorSets(vk.device, 4, writes, 0, nullptr);
 }
 
 // ── Destroy ─────────────────────────────────────────────────────────────────
 
 void CosmosRaytracer::destroy(VulkanContext& vk) {
     nebula_compute_.destroy(vk);
+    if (nebula_volume_sampler_ != VK_NULL_HANDLE) {
+        vkDestroySampler(vk.device, nebula_volume_sampler_, nullptr);
+        nebula_volume_sampler_ = VK_NULL_HANDLE;
+    }
+    vk.destroy_image(nebula_volume_a_);
+    vk.destroy_image(nebula_volume_b_);
     vkDestroyPipeline(vk.device, pipeline_, nullptr);
     vkDestroyPipelineLayout(vk.device, pipe_layout_, nullptr);
     vkDestroyDescriptorPool(vk.device, desc_pool_, nullptr);
@@ -343,8 +399,9 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     cam.fabric_right = glm::vec4(iso_axis, 0.0f, iso_axis, 0.0f);
     cam.fabric_up = glm::vec4(-iso_axis, 0.0f, iso_axis, 0.0f);
     float nebula_mode = (float)std::clamp(cfg.nebula_render_mode, 0, 2);
-    float compute_active = (cfg.nebula_render_mode == 1 && nebula_compute_.is_ready()) ? 1.0f : 0.0f;
-    cam.nebula_params = glm::vec4(nebula_mode, compute_active, (float)cfg.sim_time_accumulated, 0.0f);
+    float compute_active = 0.0f; // SSBO nebula modifiers disabled; voxel field drives compute mode.
+    cam.nebula_params = glm::vec4(nebula_mode, compute_active, (float)cfg.sim_time_accumulated,
+                                  (float)NEBULA_VOLUME_DIM);
 
     void* mapped = nullptr;
     if (vkMapMemory(vk.device, camera_ubo_.memory, 0, sizeof(CameraUBOData), 0, &mapped) != VK_SUCCESS || !mapped)
@@ -375,8 +432,12 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
             render_radius = std::max(render_radius, 0.16f);
             render_radius *= 1.0f + std::clamp(b.phase_intensity, 0.0f, 1.0f) * 0.15f;
         } else if (b.type == CTYPE_NEBULA) {
-            // Slightly expanded visual shell to read as a diffuse cloud.
-            render_radius *= 1.12f;
+            // Nebulae render as diffuse cloud fields, not hard planet-like spheres.
+            float cloud_scale = 1.75f +
+                                std::clamp(b.cached_visuals.cloud_detail, 0.0f, 1.8f) * 0.55f +
+                                std::clamp(b.collapse_progress, 0.0f, 1.0f) * 0.25f;
+            if (cfg.nebula_render_mode == 2) cloud_scale += 0.55f; // particle mode needs wider bounds
+            render_radius *= cloud_scale;
         }
         spheres[i].pos_radius = glm::vec4(glm::vec3(glm::dvec3(b.pos) - target_origin), render_radius);
         spheres[i].base_emit = glm::vec4(col, emissive);
@@ -555,15 +616,27 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     }
 
     bool used_nebula_compute = false;
-    if (n > 0 && cfg.nebula_render_mode == 1 && nebula_compute_.is_ready()) {
-        std::vector<NebulaComputeInput> nebula_in((size_t)n);
+    if (n > 0 && (cfg.nebula_render_mode == 1 || cfg.nebula_render_mode == 2) && nebula_compute_.is_ready()) {
+        std::vector<NebulaComputeInput> nebula_in;
+        nebula_in.reserve((size_t)n);
         for (int i = 0; i < n; ++i) {
-            nebula_in[(size_t)i].seed_class_temp = spheres[(size_t)i].class_seed_temp;
-            nebula_in[(size_t)i].atmosphere = spheres[(size_t)i].atmosphere_params;
-            nebula_in[(size_t)i].activity = spheres[(size_t)i].activity_params;
-            nebula_in[(size_t)i].composition = spheres[(size_t)i].composition_params;
+            if ((int)(spheres[(size_t)i].class_seed_temp.y + 0.5f) != RENDER_NEBULA)
+                continue;
+            NebulaComputeInput in{};
+            in.seed_class_temp = spheres[(size_t)i].class_seed_temp;
+            in.atmosphere = spheres[(size_t)i].atmosphere_params;
+            in.activity = spheres[(size_t)i].activity_params;
+            in.composition = spheres[(size_t)i].composition_params;
+            nebula_in.push_back(in);
         }
-        used_nebula_compute = nebula_compute_.compute_to_buffer(vk, nebula_in, time, nebula_ssbo_, (size_t)MAX_SPHERES);
+        if (!nebula_in.empty()) {
+            VkImageView src_view = nebula_volume_flip_ ? nebula_volume_b_.view : nebula_volume_a_.view;
+            VkImageView dst_view = nebula_volume_flip_ ? nebula_volume_a_.view : nebula_volume_b_.view;
+            used_nebula_compute = nebula_compute_.compute_volume(
+                vk, nebula_in, time, 1.0f / 60.0f, src_view, dst_view, NEBULA_VOLUME_DIM);
+            if (used_nebula_compute)
+                nebula_volume_flip_ = !nebula_volume_flip_;
+        }
     }
     if (!used_nebula_compute) {
         for (int i = 0; i < n; ++i) {
@@ -598,6 +671,20 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
         memcpy(mapped, nebula_data.data(), n * sizeof(NebulaGPU));
         vkUnmapMemory(vk.device, nebula_ssbo_.memory);
     }
+
+    // Always bind the currently active voxel volume for fragment sampling.
+    VkImageView active_volume_view = nebula_volume_flip_ ? nebula_volume_b_.view : nebula_volume_a_.view;
+    VkDescriptorImageInfo volume_info{};
+    volume_info.sampler = nebula_volume_sampler_;
+    volume_info.imageView = active_volume_view;
+    volume_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkWriteDescriptorSet volume_write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    volume_write.dstSet = desc_set_;
+    volume_write.dstBinding = 3;
+    volume_write.descriptorCount = 1;
+    volume_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    volume_write.pImageInfo = &volume_info;
+    vkUpdateDescriptorSets(vk.device, 1, &volume_write, 0, nullptr);
 
     // ── Draw fullscreen triangle ───────────────────────────────────────────
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
