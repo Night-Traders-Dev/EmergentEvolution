@@ -2858,6 +2858,106 @@ void CosmosApp::process_stellar_evolution(float dt) {
     if (dt_step <= 0.0f)
         return;
 
+    struct PendingSinkStar {
+        CelestialBody body;
+    };
+    std::vector<PendingSinkStar> pending_sink_stars;
+    pending_sink_stars.reserve(16);
+
+    // Dense nebula sink creation: convert converging cloud cores into attracting
+    // protostar/star particles and consume gas mass from the host cloud.
+    for (size_t i = 0; i < bodies.size(); ++i) {
+        CelestialBody& host = bodies[i];
+        if (host.marked_for_removal) continue;
+        if (is_star_type(host.type) || is_black_hole_type(host.type)) continue;
+        if (host.type != CTYPE_NEBULA) continue;
+        if (host.non_attracting) continue;
+        if (host.mass < 6.0e-4f) continue;
+
+        float sink_radius = std::max(host.radius * 1.1f, 20.0f);
+        float converging = 0.0f;
+        float local_feed = 0.0f;
+        glm::vec3 mean_flow(0.0f);
+
+        for (size_t j = 0; j < bodies.size(); ++j) {
+            if (j == i) continue;
+            const CelestialBody& donor = bodies[j];
+            if (donor.marked_for_removal) continue;
+            if (is_star_type(donor.type) || is_black_hole_type(donor.type)) continue;
+            MaterialComposition dm = derive_materials(donor);
+            if (!body_is_cloud_feedstock(donor, dm)) continue;
+
+            glm::vec3 delta = donor.pos - host.pos;
+            float dist = glm::length(delta);
+            if (dist > sink_radius + donor.radius * 2.0f) continue;
+            glm::vec3 rel_v = donor.vel - host.vel;
+            float weight = 1.0f - std::clamp(dist / std::max(sink_radius, 1.0e-5f), 0.0f, 1.0f);
+            if (weight <= 0.0f) continue;
+            local_feed += donor.mass * weight;
+            mean_flow += rel_v * weight;
+            if (dist > 1.0e-5f) {
+                float inward = -glm::dot(rel_v, delta) / std::max(dist, 1.0e-5f);
+                if (inward > 0.0f) converging += inward * weight;
+            }
+        }
+
+        float density = body_density(host);
+        float gravity_drive = cfg.G * host.mass / std::max(host.radius * host.radius, 1.0e-6f);
+        float collapse_metric =
+            density * 8.0e6f +
+            converging * 0.12f +
+            gravity_drive * 0.90f +
+            host.collapse_progress * 1.10f +
+            host.phase_intensity * 0.35f;
+        if (collapse_metric < 1.05f) continue;
+
+        float spawn_mass = std::max(host.mass * 0.018f, local_feed * 0.22f);
+        spawn_mass = std::clamp(spawn_mass, 2.0e-4f, host.mass * 0.28f);
+        if (spawn_mass < 2.0e-4f) continue;
+
+        CelestialBody sink = host;
+        sink.mass = spawn_mass;
+        float seed_phase = hash_float(hash_combine(host.seed, (uint32_t)(i * 2654435761u + 17u)));
+        float seed_phi = hash_float(hash_combine(host.seed, (uint32_t)(i * 2246822519u + 29u))) * 6.28318530718f;
+        float z = seed_phase * 2.0f - 1.0f;
+        float rxy = std::sqrt(std::max(0.0f, 1.0f - z * z));
+        glm::vec3 dir(std::cos(seed_phi) * rxy, z, std::sin(seed_phi) * rxy);
+        sink.pos = host.pos + dir * std::max(host.radius * 0.22f, 8.0f);
+        if (glm::length(mean_flow) > 1.0e-6f)
+            sink.vel = host.vel + glm::normalize(mean_flow) * std::min(0.35f * glm::length(mean_flow), 2.5f);
+        else
+            sink.vel = host.vel;
+
+        sink.stellar_stage = SSTAGE_MAIN_SEQUENCE;
+        float proto_temp = std::max(220.0f, expected_main_sequence_temperature(std::max(sink.mass, 0.003f)) * 0.54f);
+        sink.temperature = std::clamp(std::max(host.temperature, proto_temp), 120.0f, 26000.0f);
+        sink.type = classify_star_spectral(std::max(sink.temperature, 250.0f), std::max(sink.mass, 0.003f));
+        sink.radius = std::max(expected_star_radius(sink) * 1.75f, std::cbrt(std::max(sink.mass, 1.0e-8f)) * 44.0f);
+        sink.fuel = std::clamp(std::max(host.fuel, 0.65f), 0.25f, 1.0f);
+        sink.luminosity = expected_stellar_luminosity(sink.mass, sink.temperature, sink.radius,
+                                                      sink.stellar_stage, sink.fuel);
+        sink.material_phase = PHASE_COLLAPSING;
+        sink.phase_intensity = std::max(host.phase_intensity, 0.55f);
+        sink.collapse_progress = std::clamp(host.collapse_progress + 0.18f, 0.20f, 0.98f);
+        sink.non_attracting = false;
+        sink.props_valid = false;
+        sink.visuals_valid = false;
+        clear_ring_system(sink);
+        clear_impact_signature(sink);
+        sink.name = generate_body_name(hash_combine(host.seed, (uint32_t)(i * 747796405u + 0x53544B52u)), sink.type);
+
+        float consumed = spawn_mass * 0.95f;
+        host.mass = std::max(host.mass - consumed, 1.0e-8f);
+        host.collapse_progress = std::clamp(host.collapse_progress + 0.12f, 0.0f, 1.35f);
+        host.internal_energy += consumed * 8.0f;
+        host.temperature = std::clamp(host.temperature + collapse_metric * 28.0f, 15.0f, 60000.0f);
+        host.props_valid = false;
+        host.visuals_valid = false;
+        register_mass_loss(host, consumed, std::max(dt_step, 1.0e-4f));
+
+        pending_sink_stars.push_back(PendingSinkStar{sink});
+    }
+
     std::vector<float> recent_star_accretion(bodies.size(), 0.0f);
 
     // Cloud concentration: dense gas/dust environments collapse toward protostars.
@@ -2975,6 +3075,14 @@ void CosmosApp::process_stellar_evolution(float dt) {
         host.props_valid = false;
         host.visuals_valid = false;
     }
+
+    for (const auto& p : pending_sink_stars) {
+        CelestialBody sink = p.body;
+        refresh_body_render_state(sink, &state);
+        state.bodies.push_back(sink);
+        state.trails.emplace_back();
+    }
+    recent_star_accretion.resize(bodies.size(), 0.0f);
 
     // Stellar accretion: stars gain mass and hydrogen fuel from nearby feedstock.
     for (size_t i = 0; i < bodies.size(); ++i) {

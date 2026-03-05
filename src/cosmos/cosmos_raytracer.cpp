@@ -19,7 +19,7 @@ struct alignas(16) CameraUBOData {
     glm::vec4 fabric_center;    // 16 bytes (plane center xyz)
     glm::vec4 fabric_right;     // 16 bytes (plane right xyz)
     glm::vec4 fabric_up;        // 16 bytes (plane up xyz)
-    glm::vec4 nebula_params;    // 16 bytes (mode, computeActive, simTime, reserved)
+    glm::vec4 nebula_params;    // 16 bytes (mode, computeActive, simTime, gravityWellCount)
 };                              // Total: 224 bytes
 
 struct SphereGPU {
@@ -43,6 +43,10 @@ struct SphereGPU {
 struct alignas(16) NebulaGPU {
     glm::vec4 flow;    // xyz=advection flow, w=turbulence
     glm::vec4 optical; // x=density scale, y=absorption, z=scatter anisotropy, w=emission gain
+};
+
+struct alignas(16) GravityWellGPU {
+    glm::vec4 pos_mass; // xyz=position (camera-relative), w=mass
 };
 
 // ── Body color helper (matches cosmos_app.cpp) ──────────────────────────────
@@ -91,7 +95,7 @@ static glm::vec3 body_color_vec3(const CelestialBody& b) {
 
 void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     // ── Descriptor set layout ──────────────────────────────────────────────
-    VkDescriptorSetLayoutBinding bindings[4]{};
+    VkDescriptorSetLayoutBinding bindings[5]{};
     // Binding 0: Camera UBO
     bindings[0].binding         = 0;
     bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -112,9 +116,14 @@ void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     bindings[3].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[3].descriptorCount = 1;
     bindings[3].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // Binding 4: Gravity wells for nebula gravitational coupling
+    bindings[4].binding         = 4;
+    bindings[4].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[4].descriptorCount = 1;
+    bindings[4].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutCreateInfo layout_ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layout_ci.bindingCount = 4;
+    layout_ci.bindingCount = 5;
     layout_ci.pBindings    = bindings;
     vkCreateDescriptorSetLayout(vk.device, &layout_ci, nullptr, &desc_layout_);
 
@@ -215,6 +224,11 @@ void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
+    gravity_well_ssbo_ = vk.create_buffer(
+        MAX_GRAVITY_WELLS * sizeof(GravityWellGPU),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
     constexpr VkFormat kNebulaVolumeFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
     VkImageUsageFlags volume_usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                                      VK_IMAGE_USAGE_TRANSFER_DST_BIT;
@@ -255,10 +269,11 @@ void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,  1},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,  1},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,  1},
     };
     VkDescriptorPoolCreateInfo dp_ci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     dp_ci.maxSets       = 1;
-    dp_ci.poolSizeCount = 4;
+    dp_ci.poolSizeCount = 5;
     dp_ci.pPoolSizes    = pool_sizes;
     vkCreateDescriptorPool(vk.device, &dp_ci, nullptr, &desc_pool_);
 
@@ -289,7 +304,12 @@ void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     volume_info.imageView = nebula_volume_a_.view;
     volume_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[4]{};
+    VkDescriptorBufferInfo gravity_well_info{};
+    gravity_well_info.buffer = gravity_well_ssbo_.handle;
+    gravity_well_info.offset = 0;
+    gravity_well_info.range  = MAX_GRAVITY_WELLS * sizeof(GravityWellGPU);
+
+    VkWriteDescriptorSet writes[5]{};
     writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet          = desc_set_;
     writes[0].dstBinding      = 0;
@@ -317,8 +337,14 @@ void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     writes[3].descriptorCount = 1;
     writes[3].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[3].pImageInfo      = &volume_info;
+    writes[4].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[4].dstSet          = desc_set_;
+    writes[4].dstBinding      = 4;
+    writes[4].descriptorCount = 1;
+    writes[4].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[4].pBufferInfo     = &gravity_well_info;
 
-    vkUpdateDescriptorSets(vk.device, 4, writes, 0, nullptr);
+    vkUpdateDescriptorSets(vk.device, 5, writes, 0, nullptr);
 }
 
 // ── Destroy ─────────────────────────────────────────────────────────────────
@@ -338,6 +364,7 @@ void CosmosRaytracer::destroy(VulkanContext& vk) {
     vk.destroy_buffer(camera_ubo_);
     vk.destroy_buffer(sphere_ssbo_);
     vk.destroy_buffer(nebula_ssbo_);
+    vk.destroy_buffer(gravity_well_ssbo_);
 }
 
 // ── Update + draw ───────────────────────────────────────────────────────────
@@ -399,9 +426,9 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     cam.fabric_right = glm::vec4(iso_axis, 0.0f, iso_axis, 0.0f);
     cam.fabric_up = glm::vec4(-iso_axis, 0.0f, iso_axis, 0.0f);
     float nebula_mode = (float)std::clamp(cfg.nebula_render_mode, 0, 2);
-    float compute_active = 0.0f; // SSBO nebula modifiers disabled; voxel field drives compute mode.
-    cam.nebula_params = glm::vec4(nebula_mode, compute_active, (float)cfg.sim_time_accumulated,
-                                  (float)NEBULA_VOLUME_DIM);
+    // Nebula optical/flow payload is consumed by the fragment shader for all modes.
+    float compute_active = 1.0f;
+    cam.nebula_params = glm::vec4(nebula_mode, compute_active, (float)cfg.sim_time_accumulated, 0.0f);
 
     void* mapped = nullptr;
     if (vkMapMemory(vk.device, camera_ubo_.memory, 0, sizeof(CameraUBOData), 0, &mapped) != VK_SUCCESS || !mapped)
@@ -433,9 +460,15 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
             render_radius *= 1.0f + std::clamp(b.phase_intensity, 0.0f, 1.0f) * 0.15f;
         } else if (b.type == CTYPE_NEBULA) {
             // Nebulae render as diffuse cloud fields, not hard planet-like spheres.
+            constexpr float SECONDS_PER_YEAR = 31557600.0f;
+            float age_years = std::max(b.age, 0.0f) / SECONDS_PER_YEAR;
+            float visual_expansion = 1.0f + std::clamp(
+                std::log1p(age_years) * 0.22f + std::clamp(b.collapse_progress, 0.0f, 1.0f) * 0.12f,
+                0.0f, 2.6f);
             float cloud_scale = 1.75f +
                                 std::clamp(b.cached_visuals.cloud_detail, 0.0f, 1.8f) * 0.55f +
                                 std::clamp(b.collapse_progress, 0.0f, 1.0f) * 0.25f;
+            cloud_scale += visual_expansion * 0.42f;
             if (cfg.nebula_render_mode == 2) cloud_scale += 0.55f; // particle mode needs wider bounds
             render_radius *= cloud_scale;
         }
@@ -514,11 +547,17 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
                 vp.volcanic_activity,
                 vp.mie_strength);
         } else if (vp.render_class == RENDER_NEBULA) {
+            constexpr float SECONDS_PER_YEAR = 31557600.0f;
+            float age_years = std::max(b.age, 0.0f) / SECONDS_PER_YEAR;
+            float expansion = 1.0f + std::clamp(
+                std::log1p(age_years) * 0.26f + vp.weather_strength * 0.20f -
+                std::clamp(b.collapse_progress, 0.0f, 1.0f) * 0.25f,
+                0.0f, 3.2f);
             spheres[i].activity_params = glm::vec4(
                 vp.weather_strength,
                 vp.cloud_detail,
                 std::clamp(b.collapse_progress, 0.0f, 1.5f),
-                vp.mie_strength);
+                expansion);
         } else if (vp.render_class == RENDER_STAR) {
             spheres[i].activity_params = glm::vec4(
                 vp.flare_activity,
@@ -638,32 +677,30 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
                 nebula_volume_flip_ = !nebula_volume_flip_;
         }
     }
-    if (!used_nebula_compute) {
-        for (int i = 0; i < n; ++i) {
-            const auto& s = spheres[(size_t)i];
-            if ((int)(s.class_seed_temp.y + 0.5f) != RENDER_NEBULA)
-                continue;
-            float dust = std::clamp(s.composition_params.w, 0.0f, 1.0f);
-            float haze = std::clamp(s.atmosphere_params.z, 0.0f, 2.5f);
-            float flow = std::clamp(s.activity_params.x, 0.0f, 2.5f);
-            float cloud = std::clamp(s.activity_params.y, 0.0f, 2.5f);
-            float collapse = std::clamp(s.activity_params.z, 0.0f, 2.5f);
-            float seed = s.class_seed_temp.x;
-            float t = time * 0.1f;
-            glm::vec3 adv(
-                std::sin(seed * 0.017f + t),
-                std::cos(seed * 0.013f - t * 0.7f),
-                std::sin(seed * 0.011f + t * 0.6f));
-            adv *= (0.05f + flow * 0.18f + cloud * 0.06f);
-            nebula_data[(size_t)i].flow = glm::vec4(adv, glm::length(adv));
-            nebula_data[(size_t)i].optical = glm::vec4(
-                std::clamp(0.75f + haze * 0.40f + cloud * 0.15f, 0.45f, 4.0f),
-                std::clamp(0.95f + dust * 0.90f + haze * 0.30f, 0.50f, 4.0f),
-                std::clamp(0.18f + dust * 0.38f + collapse * 0.08f, 0.02f, 0.90f),
-                std::clamp(0.90f + collapse * 0.30f, 0.55f, 2.4f));
-        }
+    for (int i = 0; i < n; ++i) {
+        const auto& s = spheres[(size_t)i];
+        if ((int)(s.class_seed_temp.y + 0.5f) != RENDER_NEBULA)
+            continue;
+        float dust = std::clamp(s.composition_params.w, 0.0f, 1.0f);
+        float haze = std::clamp(s.atmosphere_params.z, 0.0f, 2.5f);
+        float flow = std::clamp(s.activity_params.x, 0.0f, 2.5f);
+        float cloud = std::clamp(s.activity_params.y, 0.0f, 2.5f);
+        float collapse = std::clamp(s.activity_params.z, 0.0f, 2.5f);
+        float seed = s.class_seed_temp.x;
+        float t = time * 0.1f;
+        glm::vec3 adv(
+            std::sin(seed * 0.017f + t),
+            std::cos(seed * 0.013f - t * 0.7f),
+            std::sin(seed * 0.011f + t * 0.6f));
+        adv *= (0.05f + flow * 0.18f + cloud * 0.06f);
+        nebula_data[(size_t)i].flow = glm::vec4(adv, glm::length(adv));
+        nebula_data[(size_t)i].optical = glm::vec4(
+            std::clamp(0.75f + haze * 0.40f + cloud * 0.15f, 0.45f, 4.0f),
+            std::clamp(0.95f + dust * 0.90f + haze * 0.30f, 0.50f, 4.0f),
+            std::clamp(0.18f + dust * 0.38f + collapse * 0.08f, 0.02f, 0.90f),
+            std::clamp(0.90f + collapse * 0.30f, 0.55f, 2.4f));
     }
-    if (n > 0 && !used_nebula_compute) {
+    if (n > 0) {
         mapped = nullptr;
         if (vkMapMemory(vk.device, nebula_ssbo_.memory, 0,
                         n * sizeof(NebulaGPU), 0, &mapped) != VK_SUCCESS || !mapped)
@@ -671,6 +708,57 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
         memcpy(mapped, nebula_data.data(), n * sizeof(NebulaGPU));
         vkUnmapMemory(vk.device, nebula_ssbo_.memory);
     }
+
+    // Build dominant attracting wells and expose them to nebula shading.
+    std::vector<int> attractor_idx;
+    attractor_idx.reserve((size_t)n);
+    for (int i = 0; i < n; ++i) {
+        const auto& b = state.bodies[(size_t)i];
+        if (b.marked_for_removal || b.non_attracting) continue;
+        if (b.mass <= 1.0e-12f) continue;
+        if (b.type == CTYPE_DUST && cfg.dust_debug_non_attracting) continue;
+        attractor_idx.push_back(i);
+    }
+    if (!attractor_idx.empty()) {
+        auto cmp_mass_desc = [&](int a, int b) {
+            return state.bodies[(size_t)a].mass > state.bodies[(size_t)b].mass;
+        };
+        const size_t keep = std::min(attractor_idx.size(), (size_t)MAX_GRAVITY_WELLS);
+        auto nth = attractor_idx.begin() + static_cast<std::vector<int>::difference_type>(keep - 1);
+        std::nth_element(attractor_idx.begin(),
+                         nth,
+                         attractor_idx.end(),
+                         cmp_mass_desc);
+        attractor_idx.resize(keep);
+        std::sort(attractor_idx.begin(), attractor_idx.end(), cmp_mass_desc);
+    }
+
+    std::vector<GravityWellGPU> wells;
+    wells.reserve((size_t)MAX_GRAVITY_WELLS);
+    for (int idx : attractor_idx) {
+        const auto& b = state.bodies[(size_t)idx];
+        GravityWellGPU w{};
+        w.pos_mass = glm::vec4(glm::vec3(glm::dvec3(b.pos) - target_origin), std::max(b.mass, 0.0f));
+        wells.push_back(w);
+        if ((int)wells.size() >= MAX_GRAVITY_WELLS) break;
+    }
+    if (wells.empty()) {
+        wells.push_back(GravityWellGPU{glm::vec4(0.0f)});
+    }
+    mapped = nullptr;
+    if (vkMapMemory(vk.device, gravity_well_ssbo_.memory, 0,
+                    wells.size() * sizeof(GravityWellGPU), 0, &mapped) != VK_SUCCESS || !mapped)
+        throw std::runtime_error("CosmosRaytracer: failed to map gravity well SSBO memory");
+    memcpy(mapped, wells.data(), wells.size() * sizeof(GravityWellGPU));
+    vkUnmapMemory(vk.device, gravity_well_ssbo_.memory);
+
+    // Update gravity-well count consumed by fragment shader.
+    cam.nebula_params.w = (float)wells.size();
+    mapped = nullptr;
+    if (vkMapMemory(vk.device, camera_ubo_.memory, 0, sizeof(CameraUBOData), 0, &mapped) != VK_SUCCESS || !mapped)
+        throw std::runtime_error("CosmosRaytracer: failed to remap camera UBO memory");
+    memcpy(mapped, &cam, sizeof(CameraUBOData));
+    vkUnmapMemory(vk.device, camera_ubo_.memory);
 
     // Always bind the currently active voxel volume for fragment sampling.
     VkImageView active_volume_view = nebula_volume_flip_ ? nebula_volume_b_.view : nebula_volume_a_.view;

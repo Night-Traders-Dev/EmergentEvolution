@@ -29,6 +29,7 @@ private:
     Buffer camera_ubo_;
     Buffer sphere_ssbo_;
     Buffer nebula_ssbo_;
+    Buffer gravity_well_ssbo_;
     Image  nebula_volume_a_;
     Image  nebula_volume_b_;
     VkSampler nebula_volume_sampler_ = VK_NULL_HANDLE;
@@ -37,4 +38,5 @@ private:
     static constexpr uint32_t NEBULA_VOLUME_DIM = 64;
 
     static constexpr int MAX_SPHERES = 2048;
+    static constexpr int MAX_GRAVITY_WELLS = 64;
 };

@@ -50,6 +50,14 @@ layout(std430, set = 0, binding = 2) readonly buffer NebulaBuffer {
 
 layout(set = 0, binding = 3) uniform sampler3D nebula_volume_tex;
 
+struct GravityWell {
+    vec4 pos_mass; // xyz=position, w=mass
+};
+
+layout(std430, set = 0, binding = 4) readonly buffer GravityWellBuffer {
+    GravityWell gravity_wells[];
+};
+
 const int RENDER_STAR = 0;
 const int RENDER_PLANET = 1;
 const int RENDER_MOON = 2;
@@ -58,6 +66,7 @@ const int RENDER_COMET = 4;
 const int RENDER_BLACK_HOLE = 5;
 const int RENDER_NEBULA = 6;
 const int MAX_TRACE_BODIES = 2048;
+const int MAX_GRAVITY_WELLS = 64;
 
 const int SURF_ROCKY = 0;
 const int SURF_LIQUID = 1;
@@ -1550,12 +1559,43 @@ float temporal_blue_noise(vec2 uv, float frame_time) {
     return fract(n + frame_time * 0.61803398875);
 }
 
+vec4 sample_nebula_voxel_safe(vec3 uv) {
+    // Tile instead of hard-clamping to zero so the field does not split on
+    // axis-aligned cut planes when advection drifts outside [0,1].
+    return texture(nebula_volume_tex, fract(uv));
+}
+
 vec4 sample_nebula_voxel(vec3 local, float seed) {
-    vec3 uv = local * 0.5 + 0.5;
-    vec3 jitter = hash31(seed) * 0.173;
-    vec3 drift = vec3(screen_info.w * 0.010, -screen_info.w * 0.006, screen_info.w * 0.008);
-    uv = fract(uv + jitter + drift);
-    return texture(nebula_volume_tex, uv);
+    vec3 base_uv = local * 0.30 + 0.5;
+    vec3 jitter = (hash31(seed) - 0.5) * 0.10;
+    vec3 drift = vec3(screen_info.w * 0.0011, -screen_info.w * 0.0008, screen_info.w * 0.0009);
+    vec4 a = sample_nebula_voxel_safe(base_uv + jitter + drift);
+    vec4 b = sample_nebula_voxel_safe(base_uv * 1.23 - 0.115 + jitter * 0.6 + drift * 1.35);
+    vec4 c = sample_nebula_voxel_safe(base_uv * 0.78 + 0.19 - jitter * 0.4 + drift * 0.55);
+    return a * 0.44 + b * 0.33 + c * 0.23;
+}
+
+int nebula_gravity_well_count() {
+    return clamp(int(nebula_params.w + 0.5), 0, MAX_GRAVITY_WELLS);
+}
+
+vec3 sample_nebula_gravity(vec3 world_pos) {
+    int wells = nebula_gravity_well_count();
+    if (wells <= 0) return vec3(0.0);
+    float G = max(fabric_params.w, 0.0001);
+    vec3 acc = vec3(0.0);
+    for (int i = 0; i < MAX_GRAVITY_WELLS; ++i) {
+        if (i >= wells) break;
+        vec4 pm = gravity_wells[i].pos_mass;
+        float m = max(pm.w, 0.0);
+        if (m <= 1.0e-12) continue;
+        vec3 d = pm.xyz - world_pos;
+        float r2 = dot(d, d) + 36.0; // softening to keep volumetric advection stable.
+        float inv_r = inversesqrt(max(r2, 1.0e-6));
+        float inv_r3 = inv_r * inv_r * inv_r;
+        acc += d * (G * m * inv_r3);
+    }
+    return acc;
 }
 
 vec3 nebula_velocity_field(vec3 p, float seed, float flow, vec3 external_flow, float turbulence) {
@@ -1575,20 +1615,27 @@ vec3 nebula_velocity_field(vec3 p, float seed, float flow, vec3 external_flow, f
     return curlish * mag + external_flow + voxel_vel * 0.35;
 }
 
-float nebula_density_sample(vec3 local, float seed, float dust_frac, float metal_frac, float pressure,
+float nebula_density_sample(vec3 local, vec3 world_pos, float seed, float dust_frac, float metal_frac, float pressure,
                             float haze, float cloud_detail, float collapse, float flow,
                             vec3 external_flow, float turbulence) {
-    float r2 = dot(local, local);
-    if (r2 >= 1.0) return 0.0;
-
     // Semi-Lagrangian backtrace for fluid-like advection.
     vec3 vel = nebula_velocity_field(local, seed, flow, external_flow, turbulence);
+    vec3 grav_acc = sample_nebula_gravity(world_pos);
+    vec3 grav_drive = grav_acc * (0.020 + collapse * 0.045);
     float adv_dt = 0.035 + cloud_detail * 0.022;
-    vec3 advected_local = local - vel * adv_dt;
-    float adv_r2 = dot(advected_local, advected_local);
-    if (adv_r2 >= 1.0) return 0.0;
-
-    float radial = pow(max(1.0 - adv_r2, 0.0), mix(1.1, 2.0, dust_frac * 0.75));
+    vec3 advected_local = local - (vel + grav_drive) * adv_dt;
+    float envelope = 0.0;
+    for (int c = 0; c < 6; ++c) {
+        float cf = float(c);
+        vec3 center = (hash31(seed * (0.017 + cf * 0.011) + cf * 23.7) * 2.0 - 1.0) *
+                      (0.85 + cf * 0.20);
+        float rad = 0.46 + hash11(seed * 0.091 + cf * 4.37) * 1.20;
+        vec3 d = advected_local - center;
+        envelope += exp(-dot(d, d) / max(rad * rad, 1.0e-4));
+    }
+    envelope /= 6.0;
+    float halo = exp(-max(length(advected_local) - 2.6, 0.0) * 1.7);
+    envelope = clamp(envelope * 0.92 + halo * 0.28, 0.0, 1.6);
     vec3 seed_offset = hash31(seed) * 120.0;
     vec3 drift = vec3(screen_info.w * (0.010 + flow * 0.006),
                       screen_info.w * 0.006,
@@ -1605,22 +1652,28 @@ float nebula_density_sample(vec3 local, float seed, float dust_frac, float metal
     float wisps = billow_fbm(layer_b * 2.40 + vec3(-2.0, 3.0, 4.0), 4);
     float additive = clamp(d_a * 0.70 + d_b * 0.55 + filaments * 0.30 + wisps * 0.20, 0.0, 1.0);
     float condensed = 1.0 - smooth_min(1.0 - d_a, 1.0 - d_b, 0.30);
-    float condense_exp = mix(1.1, 3.6, clamp(collapse + (1.0 - adv_r2) * 0.35, 0.0, 1.0));
+    float condense_exp = mix(1.05, 3.2, clamp(collapse * 0.78 + envelope * 0.22, 0.0, 1.0));
     vec4 voxel = sample_nebula_voxel(advected_local * (1.0 + cloud_detail * 0.35), seed);
     float clump = pow(clamp(additive * 0.62 + condensed * 0.58, 0.0, 1.0), condense_exp);
-    clump *= (0.28 + voxel.x * 1.45);
+    clump *= (0.18 + voxel.x * 1.10);
 
-    float density = radial * clump *
-        (0.30 + haze * 0.50 + pressure * 0.0028) *
-        (0.72 + collapse * 0.55);
-    density *= (0.65 + dust_frac * 0.65 + metal_frac * 0.30);
+    float density = envelope * clump *
+        (0.18 + haze * 0.34 + pressure * 0.0013) *
+        (0.55 + collapse * 0.35);
+    density *= (0.44 + dust_frac * 0.40 + metal_frac * 0.22);
+    float grav_compress = clamp(length(grav_acc) * (0.06 + collapse * 0.10), 0.0, 2.2);
+    density *= (1.0 + grav_compress * 0.22);
     return max(density, 0.0);
 }
 
 vec3 raymarch_nebula(vec3 ro, vec3 rd, Sphere hit, int body_index, vec3 light_dir, vec3 light_color,
                      out float transmittance_out) {
-    float t_enter, t_exit;
-    if (!intersect_sphere_interval(ro, rd, hit.pos_radius.xyz, hit.pos_radius.w, t_enter, t_exit)) {
+    float t_enter_local, t_exit_local;
+    float expansion = max(hit.activity_params.w, 1.0);
+    float march_radius = hit.pos_radius.w * (1.65 + expansion * 0.65);
+    vec3 ro_local = (ro - hit.pos_radius.xyz) / max(march_radius, 1.0e-5);
+    vec3 rd_local = rd / max(march_radius, 1.0e-5);
+    if (!intersect_sphere_interval(ro_local, rd_local, vec3(0.0), 1.0, t_enter_local, t_exit_local)) {
         transmittance_out = 1.0;
         return vec3(0.0);
     }
@@ -1635,7 +1688,7 @@ vec3 raymarch_nebula(vec3 ro, vec3 rd, Sphere hit, int body_index, vec3 light_di
     float cloud_detail = clamp(hit.activity_params.y, 0.0, 2.0);
     float collapse = clamp(hit.activity_params.z, 0.0, 2.0);
     float flow = clamp(hit.activity_params.x, 0.0, 2.0);
-    float radius = max(hit.pos_radius.w, 1.0e-4);
+    float radius = max(march_radius, 1.0e-4);
     float inv_radius = 1.0 / radius;
 
     NebulaData nd = nebula_lookup(body_index);
@@ -1647,14 +1700,15 @@ vec3 raymarch_nebula(vec3 ro, vec3 rd, Sphere hit, int body_index, vec3 light_di
     float emission_scale = max(nd.optical.w, 0.01);
 
     float quality_n = clamp((quality_params.x - 1.0) / 2.5, 0.0, 1.0);
-    int steps = int(mix(36.0, 96.0, quality_n));
+    int steps = int(mix(42.0, 112.0, quality_n));
     steps = int(mix(float(steps), float(steps) * 1.35, clamp(haze * 0.6 + cloud_detail * 0.4, 0.0, 1.0)));
     steps = clamp(steps, 24, 128);
 
-    float path_len = max(t_exit - t_enter, 1.0e-5);
-    float dt = path_len / float(steps);
+    float path_len_local = max(t_exit_local - t_enter_local, 1.0e-5);
+    float dt_local = path_len_local / float(steps);
+    float dt_world = dt_local * march_radius;
     float jitter = temporal_blue_noise(fragUV * screen_info.xy, nebula_params.z * 0.017 + seed * 0.0007);
-    float t = t_enter + dt * jitter;
+    float t_local = t_enter_local + dt_local * jitter;
 
     vec3 hydrogen_col = mix(vec3(0.40, 0.56, 0.98), vec3(0.84, 0.43, 0.96), hash11(seed * 0.071));
     vec3 dust_col = mix(vec3(0.50, 0.40, 0.30), vec3(0.82, 0.66, 0.42), dust_frac);
@@ -1672,19 +1726,27 @@ vec3 raymarch_nebula(vec3 ro, vec3 rd, Sphere hit, int body_index, vec3 light_di
     for (int i = 0; i < 128; ++i) {
         if (i >= steps || transmittance < 0.003) break;
 
-        vec3 p = ro + rd * t;
-        vec3 local = (p - hit.pos_radius.xyz) * inv_radius;
-        float density = nebula_density_sample(local, seed, dust_frac, metal_frac, pressure, haze,
+        vec3 local = ro_local + rd_local * t_local;
+        vec3 p = hit.pos_radius.xyz + local * march_radius;
+        float density = nebula_density_sample(local, p, seed, dust_frac, metal_frac, pressure, haze,
                                               cloud_detail, collapse, flow, external_flow, turbulence);
         density *= density_scale;
+        float radial = length(local);
+        float radial_falloff = 1.0 - smoothstep(0.72, 1.18, radial);
+        radial_falloff *= radial_falloff;
+        float edge_alpha = min((t_local - t_enter_local) / path_len_local,
+                               (t_exit_local - t_local) / path_len_local);
+        float edge_falloff = smoothstep(0.0, 0.10, edge_alpha);
+        density *= radial_falloff * edge_falloff;
+        density = smoothstep(0.010, 0.080, density) * density;
         if (density <= 1.0e-5) {
-            t += dt;
+            t_local += dt_local;
             continue;
         }
 
         // Beer-Lambert extinction.
-        float sigma_t = (1.1 + haze * 1.2 + dust_frac * 0.8) * absorption_scale;
-        float tau = max(density * sigma_t * dt, 0.0);
+        float sigma_t = (0.52 + haze * 0.55 + dust_frac * 0.44) * absorption_scale;
+        float tau = max(density * sigma_t * dt_world, 0.0);
         float step_trans = exp(-tau);
         float scatter_weight = 1.0 - step_trans;
 
@@ -1694,12 +1756,12 @@ vec3 raymarch_nebula(vec3 ro, vec3 rd, Sphere hit, int body_index, vec3 light_di
         emission += vec3(0.95, 0.82, 0.68) * sparkle * 0.22;
         // Beer-Powder style edge boost for denser, condensing cloud silhouettes.
         float view_edge = pow(clamp(1.0 - abs(dot(normalize(local + vec3(1.0e-4)), rd)), 0.0, 1.0), 1.5);
-        float powder = (1.0 - exp(-density * (2.2 + dust_frac * 1.8) * dt)) * (0.45 + 0.55 * view_edge);
+        float powder = (1.0 - exp(-density * (2.2 + dust_frac * 1.8) * dt_world)) * (0.45 + 0.55 * view_edge);
         vec3 scatter = base_col * lit_col * (0.20 + phase * 1.30 + powder * 0.70);
 
         accum += transmittance * scatter_weight * (emission + scatter);
         transmittance *= step_trans;
-        t += dt;
+        t_local += dt_local;
     }
 
     transmittance_out = clamp(transmittance, 0.0, 1.0);
@@ -1708,8 +1770,17 @@ vec3 raymarch_nebula(vec3 ro, vec3 rd, Sphere hit, int body_index, vec3 light_di
 
 vec3 render_nebula_particles(vec3 ro, vec3 rd, Sphere hit, int body_index, vec3 light_dir, vec3 light_color,
                              out float transmittance_out) {
-    float t_enter, t_exit;
-    if (!intersect_sphere_interval(ro, rd, hit.pos_radius.xyz, hit.pos_radius.w, t_enter, t_exit)) {
+    float expansion = max(hit.activity_params.w, 1.0);
+    float cloud_radius = hit.pos_radius.w * (1.95 + expansion * 0.72);
+    vec3 to_center = hit.pos_radius.xyz - ro;
+    float t_center = dot(to_center, rd);
+    if (t_center <= 0.0) {
+        transmittance_out = 1.0;
+        return vec3(0.0);
+    }
+    vec3 closest = ro + rd * t_center;
+    float dist_center = length(closest - hit.pos_radius.xyz);
+    if (dist_center > cloud_radius * 3.6) {
         transmittance_out = 1.0;
         return vec3(0.0);
     }
@@ -1718,14 +1789,14 @@ vec3 render_nebula_particles(vec3 ro, vec3 rd, Sphere hit, int body_index, vec3 
     float dust_frac = clamp(hit.composition_params.w, 0.0, 1.0);
     float flow = clamp(hit.activity_params.x, 0.0, 2.0);
     float collapse = clamp(hit.activity_params.z, 0.0, 2.0);
-    float radius = max(hit.pos_radius.w, 1.0e-4);
+    float radius = max(cloud_radius, 1.0e-4);
     float inv_radius = 1.0 / radius;
     NebulaData nd = nebula_lookup(body_index);
     vec3 flow_bias = nd.flow.xyz;
     float emission_gain = max(nd.optical.w, 1.0);
 
     int quality = int(quality_params.x + 0.5);
-    int particle_count = (quality <= 0) ? 64 : (quality == 1 ? 96 : (quality == 2 ? 144 : 192));
+    int particle_count = (quality <= 0) ? 220 : (quality == 1 ? 360 : (quality == 2 ? 560 : 760));
     float trans = 1.0;
     vec3 accum = vec3(0.0);
 
@@ -1735,40 +1806,42 @@ vec3 render_nebula_particles(vec3 ro, vec3 rd, Sphere hit, int body_index, vec3 
         float h0 = hash11(seed * 0.013 + fi * 3.17);
         float h1 = hash11(seed * 0.031 + fi * 5.91);
         float h2 = hash11(seed * 0.047 + fi * 7.43);
-        vec3 p_local = vec3(h0 * 2.0 - 1.0, h1 * 2.0 - 1.0, h2 * 2.0 - 1.0) * 1.35;
+        vec3 p_local = vec3(h0 * 2.0 - 1.0, h1 * 2.0 - 1.0, h2 * 2.0 - 1.0) *
+                       (1.35 + expansion * 0.70);
 
         // Multi-cluster envelope to avoid planet-like spherical particle clouds.
         float envelope = 0.0;
         for (int c = 0; c < 6; ++c) {
             float cf = float(c);
-            vec3 center = (hash31(seed * (0.011 + cf * 0.007) + cf * 19.37) * 2.0 - 1.0) * 0.95;
+            vec3 center = (hash31(seed * (0.011 + cf * 0.007) + cf * 19.37) * 2.0 - 1.0) *
+                          (1.05 + expansion * 0.55);
             float cr = 0.28 + hash11(seed * 0.071 + cf * 3.71) * 0.40;
             float d2 = dot(p_local - center, p_local - center);
             envelope += exp(-d2 / max(cr * cr, 1.0e-4));
         }
         envelope /= 6.0;
         envelope += sample_nebula_voxel(p_local * 0.75, seed).x * 0.95;
-        if (envelope < 0.10) continue;
+        if (envelope < 0.04) continue;
 
         vec3 swirl = nebula_velocity_field(p_local, seed + fi * 0.11, flow, flow_bias, nd.flow.w);
         p_local += swirl * (0.15 + 0.12 * sin(screen_info.w * (0.35 + h1 * 0.75) + fi * 0.3));
 
         vec3 p_world = hit.pos_radius.xyz + p_local * radius;
         float t_proj = dot(p_world - ro, rd);
-        if (t_proj < t_enter || t_proj > t_exit) continue;
-        vec3 closest = ro + rd * t_proj;
-        float dist = length(closest - p_world) * inv_radius;
-        float size = mix(0.010, 0.055, h2) * (1.0 + dust_frac * 0.6 + envelope * 0.45);
+        if (t_proj < 0.0) continue;
+        vec3 p_close = ro + rd * t_proj;
+        float dist = length(p_close - p_world) * inv_radius;
+        float size = mix(0.012, 0.080, h2) * (1.0 + dust_frac * 0.7 + envelope * 0.65);
         float kernel = exp(-dist * dist / max(size * size, 1.0e-5));
         if (kernel < 0.01) continue;
         kernel *= clamp(envelope, 0.0, 2.0);
 
-        float extinction = (0.20 + dust_frac * 0.65 + collapse * 0.35) * kernel;
+        float extinction = (0.16 + dust_frac * 0.58 + collapse * 0.30) * kernel;
         float step_trans = exp(-extinction * 0.85);
         float weight = 1.0 - step_trans;
         float phase = phase_hg(0.30 + dust_frac * 0.35, dot(rd, light_dir));
-        vec3 col = mix(vec3(0.48, 0.56, 0.84), vec3(0.84, 0.62, 0.44), dust_frac);
-        col *= (0.45 + 0.55 * phase) * emission_gain;
+        vec3 col = mix(vec3(0.42, 0.52, 0.88), vec3(0.92, 0.66, 0.46), dust_frac);
+        col *= (0.40 + 0.60 * phase) * emission_gain * (0.65 + envelope * 0.85);
         col *= clamp(light_color, vec3(0.15), vec3(3.0));
         accum += trans * weight * col;
         trans *= step_trans;
