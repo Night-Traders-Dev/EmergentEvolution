@@ -722,7 +722,7 @@ void CosmosApp::draw_spawn_menu() {
         {CTYPE_BH_SUPERMASSIVE, 1000000.0f}, {CTYPE_BH_PRIMORDIAL, 0.5f},
     };
     static int catalog_tab = 0;
-    const char* tab_names[] = {"Basic", "Stars", "Black Holes", "Existing Objects"};
+    const char* tab_names[] = {"Basic", "Stars", "Black Holes", "Known Objects", "Existing Objects"};
     const TypeEntry* active_list = BASIC;
     int active_count = (int)IM_ARRAYSIZE(BASIC);
     if (catalog_tab == 1) { active_list = STARS; active_count = (int)IM_ARRAYSIZE(STARS); }
@@ -732,7 +732,7 @@ void CosmosApp::draw_spawn_menu() {
     ImGui::SameLine();
     ImGui::TextColored(ImVec4(0.62f, 0.60f, 0.56f, 1.0f),
                        "Select a body card, tune properties, then spawn at camera target.");
-    for (int t = 0; t < 4; ++t) {
+    for (int t = 0; t < 5; ++t) {
         if (t > 0) ImGui::SameLine();
         if (catalog_tab == t) {
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.34f, 0.26f, 0.10f, 0.95f));
@@ -744,6 +744,322 @@ void CosmosApp::draw_spawn_menu() {
     }
 
     if (catalog_tab == 3) {
+        static int known_subtab = 0;
+        static int kuiper_count = 450;
+        static int oort_count = 900;
+        const char* known_tabs[] = {"Basic", "Stars", "Black Holes"};
+
+        auto hash_name_seed = [](const char* name, uint32_t salt) -> uint32_t {
+            uint32_t h = 2166136261u ^ salt;
+            if (!name) return h;
+            for (const unsigned char* p = (const unsigned char*)name; *p; ++p)
+                h = (h ^ (uint32_t)(*p)) * 16777619u;
+            return h;
+        };
+
+        auto make_body = [&](const char* name, uint32_t type, float mass_solar, float radius_km,
+                             float temperature_k, float rotation_hours,
+                             uint32_t stage, float fuel) -> CelestialBody {
+            CelestialBody b;
+            b.type = type;
+            b.mass = std::max(mass_solar, 1.0e-12f);
+            b.radius = std::max(radius_km / SIM_UNIT_TO_KM, 0.06f);
+            b.temperature = temperature_k;
+            b.stellar_stage = stage;
+            b.fuel = std::clamp(fuel, 0.0f, 1.0f);
+            b.seed = hash_name_seed(name, (uint32_t)(type * 2654435761u));
+            b.name = name ? std::string(name) : generate_body_name(b.seed, b.type);
+            if (rotation_hours > 0.0f)
+                b.angular_vel = (2.0f * 3.14159265359f) / (rotation_hours * 3600.0f);
+            clear_ring_system(b);
+            clear_impact_signature(b);
+            if (is_star_type(type)) {
+                b.type = classify_star_spectral(std::max(temperature_k, 2200.0f), std::max(mass_solar, 0.08f));
+                b.stellar_stage = stage;
+                b.material_phase = PHASE_PLASMA;
+                b.phase_intensity = 1.0f;
+                b.luminosity = std::pow(std::max(b.mass, 0.08f), 3.2f) * 0.1f;
+            } else if (is_black_hole_type(type)) {
+                b.type = classify_black_hole(std::max(mass_solar, 0.01f));
+                b.temperature = 0.0f;
+                b.fuel = 0.0f;
+                b.material_phase = PHASE_PLASMA;
+                b.phase_intensity = 1.0f;
+                b.luminosity = 0.0f;
+            } else {
+                b.material_phase = (type == CTYPE_NEBULA) ? PHASE_GAS : PHASE_SOLID;
+                b.phase_intensity = (type == CTYPE_NEBULA) ? 0.75f : 0.0f;
+            }
+            return b;
+        };
+
+        auto append_body = [&](CelestialBody b) -> int {
+            refresh_body_render_state(b, &state);
+            state.bodies.push_back(std::move(b));
+            state.trails.emplace_back();
+            return (int)state.bodies.size() - 1;
+        };
+
+        auto place_orbit_km = [&](CelestialBody& body, int parent_idx, float orbit_km,
+                                  float phase_rad, float inclination_deg) {
+            if (parent_idx < 0 || parent_idx >= (int)state.bodies.size()) return;
+            const CelestialBody& parent = state.bodies[(size_t)parent_idx];
+            float orbit_r = std::max(orbit_km / SIM_UNIT_TO_KM, parent.radius + body.radius + 2.0f);
+            float inc = glm::radians(inclination_deg);
+            glm::vec3 rel(
+                std::cos(phase_rad) * orbit_r,
+                std::sin(inc) * std::sin(phase_rad) * orbit_r,
+                std::cos(inc) * std::sin(phase_rad) * orbit_r);
+            body.pos = parent.pos + rel;
+            body.parent = parent_idx;
+            body.vel = verlet_auto_orbit_velocity(body, parent, 0.0f, 1.0f);
+        };
+
+        auto find_star_or_create_sun = [&]() -> int {
+            for (int i = 0; i < (int)state.bodies.size(); ++i) {
+                const auto& b = state.bodies[(size_t)i];
+                if (!b.marked_for_removal && is_star_type(b.type))
+                    return i;
+            }
+            CelestialBody sun = make_body("Sun", CTYPE_STAR_G, 1.0f, 696340.0f, 5778.0f,
+                                          26.0f * 24.0f, SSTAGE_MAIN_SEQUENCE, 0.72f);
+            sun.pos = camera.target;
+            sun.vel = glm::vec3(0.0f);
+            return append_body(std::move(sun));
+        };
+
+        auto spawn_kuiper_belt = [&](int sun_idx, int count) {
+            if (sun_idx < 0 || sun_idx >= (int)state.bodies.size()) return;
+            constexpr float AU_KM = 149597870.7f;
+            std::mt19937 rng((uint32_t)(sim_time_ * 1000.0f + 9173.0f));
+            std::uniform_real_distribution<float> u01(0.0f, 1.0f);
+            std::uniform_real_distribution<float> dist_au(30.0f, 50.0f);
+            std::uniform_real_distribution<float> inc_deg(-10.0f, 10.0f);
+            for (int i = 0; i < count; ++i) {
+                bool comet = (u01(rng) < 0.62f);
+                float mass = comet ? (4.0e-13f + u01(rng) * 6.0e-11f)
+                                   : (5.0e-12f + u01(rng) * 2.0e-10f);
+                float radius_km = comet ? (1.0f + u01(rng) * 60.0f) : (15.0f + u01(rng) * 1200.0f);
+                CelestialBody obj = make_body(
+                    comet ? "Kuiper Comet" : "Kuiper Object",
+                    comet ? CTYPE_COMET : CTYPE_ASTEROID,
+                    mass, radius_km, comet ? 45.0f : 70.0f, 8.0f + u01(rng) * 20.0f,
+                    SSTAGE_MAIN_SEQUENCE, 0.0f);
+                float phase = u01(rng) * 6.2831853f;
+                place_orbit_km(obj, sun_idx, dist_au(rng) * AU_KM, phase, inc_deg(rng));
+                obj.non_attracting = true;
+                obj.seed = hash_combine(obj.seed, (uint32_t)i);
+                append_body(std::move(obj));
+            }
+        };
+
+        auto spawn_oort_cloud = [&](int sun_idx, int count) {
+            if (sun_idx < 0 || sun_idx >= (int)state.bodies.size()) return;
+            constexpr float AU_KM = 149597870.7f;
+            std::mt19937 rng((uint32_t)(sim_time_ * 1300.0f + 29011.0f));
+            std::uniform_real_distribution<float> u01(0.0f, 1.0f);
+            std::uniform_real_distribution<float> dist_au(2000.0f, 12000.0f);
+            std::uniform_real_distribution<float> cos_i(-1.0f, 1.0f);
+            for (int i = 0; i < count; ++i) {
+                float mass = 2.0e-14f + u01(rng) * 4.0e-12f;
+                float radius_km = 0.3f + u01(rng) * 24.0f;
+                CelestialBody comet = make_body("Oort Comet", CTYPE_COMET, mass, radius_km, 18.0f,
+                                                6.0f + u01(rng) * 30.0f, SSTAGE_MAIN_SEQUENCE, 0.0f);
+                float phase = u01(rng) * 6.2831853f;
+                float inc = glm::degrees(std::acos(std::clamp(cos_i(rng), -1.0f, 1.0f)));
+                place_orbit_km(comet, sun_idx, dist_au(rng) * AU_KM, phase, inc);
+                comet.non_attracting = true;
+                comet.seed = hash_combine(comet.seed, (uint32_t)(i * 19 + 7));
+                append_body(std::move(comet));
+            }
+        };
+
+        auto spawn_solar_system = [&](bool with_structures) {
+            constexpr float AU_KM = 149597870.7f;
+            struct PlanetDef {
+                const char* name;
+                float mass;
+                float radius_km;
+                float temp_k;
+                float orbit_au;
+                float incl_deg;
+                float rotation_h;
+            };
+            struct MoonDef {
+                const char* name;
+                int planet_idx;
+                float mass;
+                float radius_km;
+                float temp_k;
+                float orbit_km;
+                float incl_deg;
+                float rotation_h;
+            };
+            const PlanetDef planets[] = {
+                {"Mercury", 1.660e-7f, 2439.7f, 440.0f, 0.387f, 7.0f, 1407.6f},
+                {"Venus",   2.447e-6f, 6051.8f, 737.0f, 0.723f, 3.4f, -5832.0f},
+                {"Earth",   3.003e-6f, 6371.0f, 288.0f, 1.000f, 0.0f, 24.0f},
+                {"Mars",    3.227e-7f, 3389.5f, 210.0f, 1.524f, 1.9f, 24.6f},
+                {"Jupiter", 9.5458e-4f, 69911.0f, 165.0f, 5.203f, 1.3f, 9.9f},
+                {"Saturn",  2.858e-4f, 58232.0f, 134.0f, 9.537f, 2.5f, 10.7f},
+                {"Uranus",  4.366e-5f, 25362.0f, 76.0f, 19.191f, 0.8f, -17.2f},
+                {"Neptune", 5.151e-5f, 24622.0f, 72.0f, 30.070f, 1.8f, 16.1f},
+                {"Pluto",   6.56e-9f, 1188.3f, 44.0f, 39.482f, 17.2f, -153.3f},
+            };
+            const MoonDef moons[] = {
+                {"Moon",      2, 3.694e-8f, 1737.4f, 220.0f,   384400.0f,  5.1f, 655.7f},
+                {"Phobos",    3, 5.41e-16f, 11.3f,   230.0f,     9376.0f,  1.1f,   7.7f},
+                {"Deimos",    3, 9.10e-17f,  6.2f,   200.0f,    23463.0f,  0.9f,  30.3f},
+                {"Io",        4, 4.49e-8f, 1821.6f,  110.0f,   421700.0f,  0.0f,  42.5f},
+                {"Europa",    4, 2.41e-8f, 1560.8f,  102.0f,   671100.0f,  0.5f,  85.2f},
+                {"Ganymede",  4, 7.80e-8f, 2634.1f,  110.0f,  1070400.0f,  0.2f, 171.7f},
+                {"Callisto",  4, 5.67e-8f, 2410.3f,  134.0f,  1882700.0f,  0.2f, 400.5f},
+                {"Titan",     5, 6.76e-8f, 2574.7f,   94.0f,  1221870.0f,  0.3f, 382.7f},
+                {"Enceladus", 5, 5.44e-11f, 252.1f,   75.0f,   237950.0f,  0.0f,  32.9f},
+                {"Titania",   6, 1.76e-8f,  788.9f,   65.0f,   436300.0f,  0.1f, 208.7f},
+                {"Triton",    7, 1.08e-8f, 1353.4f,   38.0f,   354759.0f, 156.9f, 141.0f},
+                {"Charon",    8, 7.57e-10f, 606.0f,   48.0f,    19596.0f,  0.0f, 153.3f},
+            };
+
+            CelestialBody sun = make_body("Sun", CTYPE_STAR_G, 1.0f, 696340.0f, 5778.0f,
+                                          26.0f * 24.0f, SSTAGE_MAIN_SEQUENCE, 0.72f);
+            sun.pos = camera.target;
+            sun.vel = glm::vec3(0.0f);
+            int sun_idx = append_body(std::move(sun));
+
+            int planet_indices[IM_ARRAYSIZE(planets)]{};
+            for (int i = 0; i < (int)IM_ARRAYSIZE(planets); ++i) {
+                const PlanetDef& pd = planets[(size_t)i];
+                CelestialBody p = make_body(pd.name, CTYPE_PLANET, pd.mass, pd.radius_km,
+                                            pd.temp_k, pd.rotation_h, SSTAGE_MAIN_SEQUENCE, 0.0f);
+                float phase = (float)i * (6.2831853f / (float)IM_ARRAYSIZE(planets));
+                place_orbit_km(p, sun_idx, pd.orbit_au * AU_KM, phase, pd.incl_deg);
+                if (std::strcmp(pd.name, "Saturn") == 0) {
+                    p.ring_inner_radius = p.radius * 1.35f;
+                    p.ring_outer_radius = p.radius * 2.35f;
+                    p.ring_density = 0.38f;
+                    p.ring_ice_fraction = 0.72f;
+                    p.ring_tilt = 0.12f;
+                }
+                planet_indices[i] = append_body(std::move(p));
+            }
+
+            for (size_t i = 0; i < IM_ARRAYSIZE(moons); ++i) {
+                const MoonDef& md = moons[i];
+                if (md.planet_idx < 0 || md.planet_idx >= (int)IM_ARRAYSIZE(planets)) continue;
+                int parent_idx = planet_indices[md.planet_idx];
+                CelestialBody m = make_body(md.name, CTYPE_MOON, md.mass, md.radius_km,
+                                            md.temp_k, md.rotation_h, SSTAGE_MAIN_SEQUENCE, 0.0f);
+                float phase = (float)i * 0.93f + 0.7f;
+                place_orbit_km(m, parent_idx, md.orbit_km, phase, md.incl_deg);
+                append_body(std::move(m));
+            }
+
+            if (with_structures) {
+                spawn_kuiper_belt(sun_idx, kuiper_count);
+                spawn_oort_cloud(sun_idx, oort_count);
+            }
+        };
+
+        ImGui::Separator();
+        for (int t = 0; t < 3; ++t) {
+            if (t > 0) ImGui::SameLine();
+            if (known_subtab == t) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.34f, 0.26f, 0.10f, 0.95f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.40f, 0.30f, 0.12f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.46f, 0.34f, 0.15f, 1.0f));
+            }
+            if (ImGui::Button(known_tabs[t], ImVec2(130, 24))) known_subtab = t;
+            if (known_subtab == t) ImGui::PopStyleColor(3);
+        }
+
+        if (ImGui::BeginChild("##known_objects", ImVec2(0, 0), true)) {
+            if (known_subtab == 0) {
+                ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Known Objects - Basic");
+                ImGui::TextWrapped("Physical mass/radius values are based on real-world references; "
+                                   "orbits are generated around parent bodies with true ordering.");
+                if (ImGui::Button("Spawn Sun (Sol)", ImVec2(-1, 28))) {
+                    CelestialBody sun = make_body("Sun", CTYPE_STAR_G, 1.0f, 696340.0f, 5778.0f,
+                                                  26.0f * 24.0f, SSTAGE_MAIN_SEQUENCE, 0.72f);
+                    sun.pos = camera.target;
+                    sun.vel = glm::vec3(0.0f);
+                    append_body(std::move(sun));
+                }
+                if (ImGui::Button("Spawn Solar System (Sun + Planets + Major Moons)", ImVec2(-1, 28)))
+                    spawn_solar_system(false);
+                if (ImGui::Button("Spawn Solar System + Kuiper Belt + Oort Cloud", ImVec2(-1, 28)))
+                    spawn_solar_system(true);
+                ImGui::Separator();
+                ImGui::SliderInt("Kuiper Belt Count", &kuiper_count, 64, 1600);
+                ImGui::SliderInt("Oort Cloud Count", &oort_count, 128, 2400);
+                if (ImGui::Button("Spawn Kuiper Belt Around Nearest Star", ImVec2(-1, 26))) {
+                    int sun_idx = find_star_or_create_sun();
+                    spawn_kuiper_belt(sun_idx, kuiper_count);
+                }
+                if (ImGui::Button("Spawn Oort Cloud Around Nearest Star", ImVec2(-1, 26))) {
+                    int sun_idx = find_star_or_create_sun();
+                    spawn_oort_cloud(sun_idx, oort_count);
+                }
+            } else if (known_subtab == 1) {
+                ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Known Objects - Stars");
+                if (ImGui::Button("Sirius A", ImVec2(-1, 26))) {
+                    CelestialBody s = make_body("Sirius A", CTYPE_STAR_A, 2.063f, 1189640.0f, 9940.0f,
+                                                120.0f, SSTAGE_MAIN_SEQUENCE, 0.68f);
+                    s.pos = camera.target;
+                    append_body(std::move(s));
+                }
+                if (ImGui::Button("Proxima Centauri", ImVec2(-1, 26))) {
+                    CelestialBody s = make_body("Proxima Centauri", CTYPE_STAR_M, 0.122f, 107280.0f, 3042.0f,
+                                                2000.0f, SSTAGE_MAIN_SEQUENCE, 0.82f);
+                    s.pos = camera.target;
+                    append_body(std::move(s));
+                }
+                if (ImGui::Button("Betelgeuse", ImVec2(-1, 26))) {
+                    CelestialBody s = make_body("Betelgeuse", CTYPE_STAR_M, 16.5f, 617000000.0f, 3500.0f,
+                                                1500.0f, SSTAGE_RED_GIANT, 0.20f);
+                    s.pos = camera.target;
+                    append_body(std::move(s));
+                }
+                if (ImGui::Button("Vega", ImVec2(-1, 26))) {
+                    CelestialBody s = make_body("Vega", CTYPE_STAR_A, 2.135f, 1099000.0f, 9602.0f,
+                                                12.5f, SSTAGE_MAIN_SEQUENCE, 0.60f);
+                    s.pos = camera.target;
+                    append_body(std::move(s));
+                }
+            } else {
+                ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Known Objects - Black Holes");
+                if (ImGui::Button("Cygnus X-1", ImVec2(-1, 26))) {
+                    CelestialBody bh = make_body("Cygnus X-1", CTYPE_BH_STELLAR, 21.0f, 120.0f, 0.0f,
+                                                 0.0f, SSTAGE_NEUTRON_STAR, 0.0f);
+                    bh.pos = camera.target;
+                    append_body(std::move(bh));
+                }
+                if (ImGui::Button("Sagittarius A*", ImVec2(-1, 26))) {
+                    CelestialBody bh = make_body("Sagittarius A*", CTYPE_BH_SUPERMASSIVE, 4.297e6f, 2000.0f, 0.0f,
+                                                 0.0f, SSTAGE_NEUTRON_STAR, 0.0f);
+                    bh.pos = camera.target;
+                    append_body(std::move(bh));
+                }
+                if (ImGui::Button("M87*", ImVec2(-1, 26))) {
+                    CelestialBody bh = make_body("M87*", CTYPE_BH_SUPERMASSIVE, 6.5e9f, 4000.0f, 0.0f,
+                                                 0.0f, SSTAGE_NEUTRON_STAR, 0.0f);
+                    bh.pos = camera.target;
+                    append_body(std::move(bh));
+                }
+                if (ImGui::Button("TON 618", ImVec2(-1, 26))) {
+                    CelestialBody bh = make_body("TON 618", CTYPE_BH_SUPERMASSIVE, 6.6e10f, 5000.0f, 0.0f,
+                                                 0.0f, SSTAGE_NEUTRON_STAR, 0.0f);
+                    bh.pos = camera.target;
+                    append_body(std::move(bh));
+                }
+            }
+        }
+        ImGui::EndChild();
+        ImGui::End();
+        return;
+    }
+
+    if (catalog_tab == 4) {
         static int attach_host = -1;
         static int attach_moon_count = 2;
         static float attach_ring_inner = 1.6f;
