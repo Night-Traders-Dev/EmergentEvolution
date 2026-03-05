@@ -8,7 +8,7 @@
 namespace {
 
 constexpr uint32_t COSMOS_MAGIC   = 0x534D4F43; // "COSM"
-constexpr uint32_t COSMOS_VERSION = 9;
+constexpr uint32_t COSMOS_VERSION = 10;
 constexpr uint32_t COSMOS_SETTINGS_MAGIC   = 0x54475343; // "CSGT"
 constexpr uint32_t COSMOS_SETTINGS_VERSION = 1;
 constexpr const char* COSMOS_SETTINGS_PATH = "cosmos_settings.bin";
@@ -219,6 +219,7 @@ bool CosmosApp::save_simulation(const std::string& path) {
     if (cfg.adaptive_time_step) flags |= 131072;
     if (cfg.barnes_hut) flags |= 262144;
     if (cfg.velocity_verlet) flags |= 524288;
+    if (cfg.gpu_barnes_hut) flags |= 1048576;
     f.write(reinterpret_cast<const char*>(&flags), sizeof(uint32_t));
 
     f.write(reinterpret_cast<const char*>(&cfg.merge_speed_threshold), sizeof(float));
@@ -347,6 +348,8 @@ bool CosmosApp::load_simulation(const std::string& path) {
     else cfg.barnes_hut = true;
     if (version >= 9) cfg.velocity_verlet = (flags & 524288) != 0;
     else cfg.velocity_verlet = true;
+    if (version >= 10) cfg.gpu_barnes_hut = (flags & 1048576) != 0;
+    else cfg.gpu_barnes_hut = false;
     if (version < 3) {
         cfg.material_phases = true;
         cfg.planetary_rings = true;

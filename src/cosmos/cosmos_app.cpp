@@ -6,9 +6,30 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <mutex>
 #include <numeric>
 #include <random>
 #include <thread>
+
+template <typename Fn>
+static void run_parallel_chunks(size_t count, size_t workers, Fn&& fn) {
+    if (count == 0) return;
+    workers = std::max<size_t>(1, std::min(workers, count));
+    if (workers <= 1) {
+        fn(0, count);
+        return;
+    }
+
+    std::vector<std::thread> pool;
+    pool.reserve(workers - 1);
+    for (size_t t = 1; t < workers; ++t) {
+        const size_t begin = (count * t) / workers;
+        const size_t end = (count * (t + 1)) / workers;
+        pool.emplace_back([&, begin, end]() { fn(begin, end); });
+    }
+    fn(0, count / workers);
+    for (auto& worker : pool) worker.join();
+}
 
 // ── Star / BH classification helpers ────────────────────────────────────────
 
@@ -1012,6 +1033,7 @@ void CosmosApp::init(GLFWwindow* window) {
     vk.init(window);
     renderer.init(vk, window);
     raytracer_.init(vk, renderer.render_pass());
+    gravity_compute_.init(vk);
 
     state.clear();
     cfg.body_count = 0;
@@ -1058,6 +1080,7 @@ int CosmosApp::pick_body(float mx, float my, float W, float H) const {
 void CosmosApp::destroy() {
     save_persistent_settings();
     vkDeviceWaitIdle(vk.device);
+    gravity_compute_.destroy(vk);
     raytracer_.destroy(vk);
     renderer.destroy(vk);
     vk.destroy();
@@ -1376,6 +1399,17 @@ void CosmosApp::step_physics(float dt) {
     float scaled_dt_nominal = dt * cfg.dt_scale * time_sign;
     auto& bodies = state.bodies;
     size_t n = bodies.size();
+    const size_t hw_threads = std::thread::hardware_concurrency() > 0
+        ? static_cast<size_t>(std::thread::hardware_concurrency())
+        : 1;
+    const bool can_parallel = cfg.parallel_gravity && hw_threads > 1;
+    auto parallel_for = [&](size_t count, size_t min_parallel, auto&& fn) {
+        if (!can_parallel || count < min_parallel) {
+            fn(0, count);
+            return;
+        }
+        run_parallel_chunks(count, std::min(hw_threads, count), fn);
+    };
     if (n == 0) return;
     apply_dust_debug_mode();
 
@@ -1384,17 +1418,19 @@ void CosmosApp::step_physics(float dt) {
     std::vector<uint8_t> source_active(n, 0u);
     std::vector<float> source_mass(n, 0.0f);
     std::vector<float> source_spin_y(n, 0.0f);
-    for (size_t i = 0; i < n; ++i) {
-        const auto& b = bodies[i];
-        pos0[i] = b.pos;
-        vel0[i] = b.vel;
-        if (!b.marked_for_removal && !b.non_attracting && b.mass > 0.0f) {
-            source_active[i] = 1u;
-            source_mass[i] = b.mass;
-            float r = std::max(b.radius, 1.0e-4f);
-            source_spin_y[i] = b.mass * r * r * b.angular_vel;
+    parallel_for(n, 512, [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+            const auto& b = bodies[i];
+            pos0[i] = b.pos;
+            vel0[i] = b.vel;
+            if (!b.marked_for_removal && !b.non_attracting && b.mass > 0.0f) {
+                source_active[i] = 1u;
+                source_mass[i] = b.mass;
+                float r = std::max(b.radius, 1.0e-4f);
+                source_spin_y[i] = b.mass * r * r * b.angular_vel;
+            }
         }
-    }
+    });
 
     float c2 = cfg.speed_of_light * cfg.speed_of_light;
     float soft2 = cfg.softening * cfg.softening;
@@ -1448,11 +1484,7 @@ void CosmosApp::step_physics(float dt) {
         std::fill(out_accel.begin(), out_accel.end(), glm::vec3(0.0f));
 
         constexpr size_t kParallelGravityThreshold = 256;
-        const size_t hw_threads = std::thread::hardware_concurrency() > 0
-            ? static_cast<size_t>(std::thread::hardware_concurrency())
-            : 1;
-        const bool use_parallel_gravity =
-            cfg.parallel_gravity && n >= kParallelGravityThreshold && hw_threads > 1;
+        const bool use_parallel_gravity = can_parallel && n >= kParallelGravityThreshold;
 
         auto accumulate_pair = [&](size_t i, size_t j, std::vector<glm::vec3>& out) {
             if (bodies[i].marked_for_removal || bodies[j].marked_for_removal) return;
@@ -1510,19 +1542,19 @@ void CosmosApp::step_physics(float dt) {
         float spin_y = 0.0f;
     };
 
-    auto compute_accel_barnes_hut = [&](const std::vector<glm::vec3>& pos,
-                                        const std::vector<glm::vec3>& vel,
-                                        std::vector<glm::vec3>& out_accel) {
-        std::fill(out_accel.begin(), out_accel.end(), glm::vec3(0.0f));
-
+    auto build_barnes_hut_tree = [&](const std::vector<glm::vec3>& pos,
+                                     std::vector<BHNode>& nodes,
+                                     int& root_out) -> bool {
         std::vector<size_t> sources;
         sources.reserve(n);
         for (size_t i = 0; i < n; ++i) {
             if (source_active[i] && !bodies[i].marked_for_removal)
                 sources.push_back(i);
         }
-        if (sources.empty())
-            return;
+        if (sources.empty()) {
+            root_out = -1;
+            return false;
+        }
 
         glm::vec3 bmin(std::numeric_limits<float>::max());
         glm::vec3 bmax(std::numeric_limits<float>::lowest());
@@ -1535,7 +1567,7 @@ void CosmosApp::step_physics(float dt) {
         half = std::max(half + std::max(cfg.softening * 2.0f, 1.0f), 1.0e-3f);
         glm::vec3 root_center = (bmin + bmax) * 0.5f;
 
-        std::vector<BHNode> nodes;
+        nodes.clear();
         nodes.reserve(sources.size() * 2 + 8);
         auto make_node = [&](const glm::vec3& center, float node_half) -> int {
             nodes.push_back(BHNode{});
@@ -1572,7 +1604,7 @@ void CosmosApp::step_physics(float dt) {
         constexpr int kLeafCap = 4;
         constexpr int kMaxDepth = 20;
         constexpr float kMinHalf = 1.0e-4f;
-        int root = make_node(root_center, half);
+        root_out = make_node(root_center, half);
         auto insert_body = [&](auto&& self, int node_idx, size_t body_idx, int depth) -> void {
             if (node_idx < 0) return;
             BHNode& node = nodes[(size_t)node_idx];
@@ -1598,7 +1630,7 @@ void CosmosApp::step_physics(float dt) {
             self(self, child_idx, body_idx, depth + 1);
         };
         for (size_t idx : sources)
-            insert_body(insert_body, root, idx, 0);
+            insert_body(insert_body, root_out, idx, 0);
 
         auto finalize_mass = [&](auto&& self, int node_idx) -> void {
             BHNode& node = nodes[(size_t)node_idx];
@@ -1631,7 +1663,18 @@ void CosmosApp::step_physics(float dt) {
             else
                 node.com = node.center;
         };
-        finalize_mass(finalize_mass, root);
+        finalize_mass(finalize_mass, root_out);
+        return true;
+    };
+
+    auto compute_accel_barnes_hut = [&](const std::vector<glm::vec3>& pos,
+                                        const std::vector<glm::vec3>& vel,
+                                        std::vector<glm::vec3>& out_accel) {
+        std::fill(out_accel.begin(), out_accel.end(), glm::vec3(0.0f));
+        std::vector<BHNode> nodes;
+        int root = -1;
+        if (!build_barnes_hut_tree(pos, nodes, root))
+            return;
 
         float theta = std::clamp(cfg.barnes_hut_theta, 0.2f, 1.6f);
         auto traverse = [&](auto&& self, size_t target, int node_idx) -> void {
@@ -1667,17 +1710,73 @@ void CosmosApp::step_physics(float dt) {
             }
         };
 
-        for (size_t i = 0; i < n; ++i) {
-            if (bodies[i].marked_for_removal) continue;
-            traverse(traverse, i, root);
+        constexpr size_t kParallelBhTraverseThreshold = 256;
+        if (can_parallel && n >= kParallelBhTraverseThreshold) {
+            run_parallel_chunks(n, std::min(hw_threads, n), [&](size_t begin, size_t end) {
+                for (size_t i = begin; i < end; ++i) {
+                    if (bodies[i].marked_for_removal) continue;
+                    traverse(traverse, i, root);
+                }
+            });
+        } else {
+            for (size_t i = 0; i < n; ++i) {
+                if (bodies[i].marked_for_removal) continue;
+                traverse(traverse, i, root);
+            }
         }
+    };
+
+    auto compute_accel_barnes_hut_gpu = [&](const std::vector<glm::vec3>& pos,
+                                            const std::vector<glm::vec3>& vel,
+                                            std::vector<glm::vec3>& out_accel) {
+        std::fill(out_accel.begin(), out_accel.end(), glm::vec3(0.0f));
+        std::vector<BHNode> nodes;
+        int root = -1;
+        if (!build_barnes_hut_tree(pos, nodes, root))
+            return;
+        if (root != 0 || nodes.empty()) {
+            compute_accel_barnes_hut(pos, vel, out_accel);
+            return;
+        }
+
+        std::vector<CosmosBhGpuNode> gpu_nodes(nodes.size());
+        for (size_t i = 0; i < nodes.size(); ++i) {
+            const BHNode& node = nodes[i];
+            CosmosBhGpuNode gn{};
+            gn.center_half = glm::vec4(node.center, node.half);
+            gn.com_mass = glm::vec4(node.com, node.mass);
+            gn.spin_leaf = glm::vec4(node.spin_y, (float)node.leaf_count, node.is_leaf ? 1.0f : 0.0f, 0.0f);
+            gn.child0 = glm::ivec4(node.child[0], node.child[1], node.child[2], node.child[3]);
+            gn.child1 = glm::ivec4(node.child[4], node.child[5], node.child[6], node.child[7]);
+            gn.leaf = glm::ivec4(-1);
+            for (int li = 0; li < node.leaf_count && li < 4; ++li)
+                gn.leaf[li] = (int)node.leaf[(size_t)li];
+            gpu_nodes[i] = gn;
+        }
+
+        std::vector<glm::vec4> gpu_sources(n, glm::vec4(0.0f));
+        parallel_for(n, 256, [&](size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i) {
+                gpu_sources[i] = glm::vec4(
+                    source_mass[i],
+                    source_spin_y[i],
+                    source_active[i] ? 1.0f : 0.0f,
+                    bodies[i].marked_for_removal ? 1.0f : 0.0f);
+            }
+        });
+
+        float theta = std::clamp(cfg.barnes_hut_theta, 0.2f, 1.6f);
+        if (!gravity_compute_.compute_barnes_hut(vk, pos, vel, gpu_sources, gpu_nodes, theta, cfg, out_accel))
+            compute_accel_barnes_hut(pos, vel, out_accel);
     };
 
     auto compute_accel = [&](const std::vector<glm::vec3>& pos,
                              const std::vector<glm::vec3>& vel,
                              std::vector<glm::vec3>& out_accel) {
         bool use_bh = cfg.barnes_hut && (int)n >= std::max(cfg.barnes_hut_min_bodies, 16);
-        if (use_bh)
+        if (use_bh && cfg.gpu_barnes_hut)
+            compute_accel_barnes_hut_gpu(pos, vel, out_accel);
+        else if (use_bh)
             compute_accel_barnes_hut(pos, vel, out_accel);
         else
             compute_accel_direct(pos, vel, out_accel);
@@ -1690,10 +1789,26 @@ void CosmosApp::step_physics(float dt) {
     if (cfg.adaptive_time_step) {
         float max_speed = 0.0f;
         float max_acc = 0.0f;
-        for (size_t i = 0; i < n; ++i) {
-            if (bodies[i].marked_for_removal) continue;
-            max_speed = std::max(max_speed, glm::length(vel0[i]));
-            max_acc = std::max(max_acc, glm::length(accel0[i]));
+        if (can_parallel && n >= 512) {
+            std::mutex reduce_mutex;
+            run_parallel_chunks(n, std::min(hw_threads, n), [&](size_t begin, size_t end) {
+                float local_max_speed = 0.0f;
+                float local_max_acc = 0.0f;
+                for (size_t i = begin; i < end; ++i) {
+                    if (bodies[i].marked_for_removal) continue;
+                    local_max_speed = std::max(local_max_speed, glm::length(vel0[i]));
+                    local_max_acc = std::max(local_max_acc, glm::length(accel0[i]));
+                }
+                std::lock_guard<std::mutex> lock(reduce_mutex);
+                max_speed = std::max(max_speed, local_max_speed);
+                max_acc = std::max(max_acc, local_max_acc);
+            });
+        } else {
+            for (size_t i = 0; i < n; ++i) {
+                if (bodies[i].marked_for_removal) continue;
+                max_speed = std::max(max_speed, glm::length(vel0[i]));
+                max_acc = std::max(max_acc, glm::length(accel0[i]));
+            }
         }
 
         float abs_nominal = std::abs(scaled_dt_nominal);
@@ -1715,34 +1830,40 @@ void CosmosApp::step_physics(float dt) {
 
     if (cfg.velocity_verlet) {
         float dt2 = scaled_dt * scaled_dt;
-        for (size_t i = 0; i < n; ++i) {
-            if (bodies[i].marked_for_removal) {
-                pos1[i] = pos0[i];
-                vel_half[i] = vel0[i];
-                continue;
+        parallel_for(n, 384, [&](size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i) {
+                if (bodies[i].marked_for_removal) {
+                    pos1[i] = pos0[i];
+                    vel_half[i] = vel0[i];
+                    continue;
+                }
+                pos1[i] = pos0[i] + vel0[i] * scaled_dt + 0.5f * accel0[i] * dt2;
+                vel_half[i] = vel0[i] + 0.5f * accel0[i] * scaled_dt;
             }
-            pos1[i] = pos0[i] + vel0[i] * scaled_dt + 0.5f * accel0[i] * dt2;
-            vel_half[i] = vel0[i] + 0.5f * accel0[i] * scaled_dt;
-        }
+        });
 
         std::vector<glm::vec3> accel1(n, glm::vec3(0.0f));
         compute_accel(pos1, vel_half, accel1);
-        for (size_t i = 0; i < n; ++i) {
-            if (bodies[i].marked_for_removal) continue;
-            bodies[i].mass_loss_rate = 0.0f;
-            glm::vec3 v1 = vel0[i] + 0.5f * (accel0[i] + accel1[i]) * scaled_dt;
-            bodies[i].vel = v1 * cfg.damping;
-            bodies[i].pos = pos1[i];
-            bodies[i].age += scaled_dt;
-        }
+        parallel_for(n, 384, [&](size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i) {
+                if (bodies[i].marked_for_removal) continue;
+                bodies[i].mass_loss_rate = 0.0f;
+                glm::vec3 v1 = vel0[i] + 0.5f * (accel0[i] + accel1[i]) * scaled_dt;
+                bodies[i].vel = v1 * cfg.damping;
+                bodies[i].pos = pos1[i];
+                bodies[i].age += scaled_dt;
+            }
+        });
     } else {
-        for (size_t i = 0; i < n; ++i) {
-            if (bodies[i].marked_for_removal) continue;
-            bodies[i].mass_loss_rate = 0.0f;
-            bodies[i].vel = (vel0[i] + accel0[i] * scaled_dt) * cfg.damping;
-            bodies[i].pos = pos0[i] + bodies[i].vel * scaled_dt;
-            bodies[i].age += scaled_dt;
-        }
+        parallel_for(n, 384, [&](size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i) {
+                if (bodies[i].marked_for_removal) continue;
+                bodies[i].mass_loss_rate = 0.0f;
+                bodies[i].vel = (vel0[i] + accel0[i] * scaled_dt) * cfg.damping;
+                bodies[i].pos = pos0[i] + bodies[i].vel * scaled_dt;
+                bodies[i].age += scaled_dt;
+            }
+        });
     }
 
     // Physics subsystems
@@ -1755,14 +1876,20 @@ void CosmosApp::step_physics(float dt) {
     if (cfg.stellar_evolution)  process_stellar_evolution(scaled_dt);
     cleanup_bodies();
 
-    for (auto& b : state.bodies)
-        enforce_body_physical_limits(b);
+    n = bodies.size();
+    parallel_for(n, 256, [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i)
+            enforce_body_physical_limits(bodies[i]);
+    });
 
-    // Refresh cached planet properties (only recomputes on temperature band changes)
-    for (auto& b : state.bodies) {
-        refresh_planet_props(b);
+    // Refresh cached planet properties in parallel (independent per body).
+    parallel_for(n, 256, [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i)
+            refresh_planet_props(bodies[i]);
+    });
+    // Visual refresh reads broader system context, so keep it ordered.
+    for (auto& b : state.bodies)
         refresh_body_visuals(b, &state);
-    }
 
     update_body_tracking_cache();
 
@@ -1770,11 +1897,13 @@ void CosmosApp::step_physics(float dt) {
     n = bodies.size();
     while (state.trails.size() < n)
         state.trails.emplace_back();
-    for (size_t i = 0; i < n; i++) {
-        state.trails[i].push_back(bodies[i].pos);
-        while (state.trails[i].size() > cfg.trail_length)
-            state.trails[i].pop_front();
-    }
+    parallel_for(n, 256, [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; i++) {
+            state.trails[i].push_back(bodies[i].pos);
+            while (state.trails[i].size() > cfg.trail_length)
+                state.trails[i].pop_front();
+        }
+    });
 }
 
 int CosmosApp::dominant_primary_for(int body_index) const {
@@ -1815,32 +1944,54 @@ void CosmosApp::update_body_tracking_cache() {
     tracked_primary_.assign(n, -1);
     tracked_children_count_.assign(n, 0);
     tracked_eccentricity_.assign(n, -1.0f);
+    const size_t hw_threads = std::thread::hardware_concurrency() > 0
+        ? static_cast<size_t>(std::thread::hardware_concurrency())
+        : 1;
+    const bool can_parallel = cfg.parallel_gravity && hw_threads > 1 && n >= 256;
+
+    if (can_parallel) {
+        run_parallel_chunks(n, std::min(hw_threads, n), [&](size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i) {
+                if (state.bodies[i].marked_for_removal) continue;
+                tracked_primary_[i] = dominant_primary_for((int)i);
+            }
+        });
+    } else {
+        for (size_t i = 0; i < n; ++i) {
+            if (state.bodies[i].marked_for_removal) continue;
+            tracked_primary_[i] = dominant_primary_for((int)i);
+        }
+    }
 
     for (size_t i = 0; i < n; ++i) {
-        if (state.bodies[i].marked_for_removal) continue;
-        int primary = dominant_primary_for((int)i);
-        tracked_primary_[i] = primary;
+        int primary = tracked_primary_[i];
         if (primary >= 0 && primary < (int)n)
             tracked_children_count_[(size_t)primary]++;
     }
 
-    for (size_t i = 0; i < n; ++i) {
-        int pidx = tracked_primary_[i];
-        if (pidx < 0 || pidx >= (int)n) continue;
-        const auto& b = state.bodies[i];
-        const auto& p = state.bodies[(size_t)pidx];
-        if (b.marked_for_removal || p.marked_for_removal) continue;
+    auto calc_ecc_range = [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+            int pidx = tracked_primary_[i];
+            if (pidx < 0 || pidx >= (int)n) continue;
+            const auto& b = state.bodies[i];
+            const auto& p = state.bodies[(size_t)pidx];
+            if (b.marked_for_removal || p.marked_for_removal) continue;
 
-        glm::dvec3 r = glm::dvec3(b.pos) - glm::dvec3(p.pos);
-        glm::dvec3 v = glm::dvec3(b.vel) - glm::dvec3(p.vel);
-        double rmag = glm::length(r);
-        if (rmag <= 1.0e-8) continue;
-        double mu = (double)cfg.G * std::max((double)b.mass + (double)p.mass, 1.0e-8);
-        if (mu <= 0.0) continue;
-        glm::dvec3 h = glm::cross(r, v);
-        glm::dvec3 evec = glm::cross(v, h) / mu - r / rmag;
-        tracked_eccentricity_[i] = (float)glm::length(evec);
-    }
+            glm::dvec3 r = glm::dvec3(b.pos) - glm::dvec3(p.pos);
+            glm::dvec3 v = glm::dvec3(b.vel) - glm::dvec3(p.vel);
+            double rmag = glm::length(r);
+            if (rmag <= 1.0e-8) continue;
+            double mu = (double)cfg.G * std::max((double)b.mass + (double)p.mass, 1.0e-8);
+            if (mu <= 0.0) continue;
+            glm::dvec3 h = glm::cross(r, v);
+            glm::dvec3 evec = glm::cross(v, h) / mu - r / rmag;
+            tracked_eccentricity_[i] = (float)glm::length(evec);
+        }
+    };
+    if (can_parallel)
+        run_parallel_chunks(n, std::min(hw_threads, n), calc_ecc_range);
+    else
+        calc_ecc_range(0, n);
 }
 
 glm::vec3 CosmosApp::verlet_auto_orbit_velocity(const CelestialBody& body, const CelestialBody& primary,

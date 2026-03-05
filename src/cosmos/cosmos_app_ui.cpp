@@ -2318,6 +2318,9 @@ void CosmosApp::draw_bottom_bar() {
                     ImGui::Checkbox("Velocity Verlet##Menu", &cfg.velocity_verlet);
                     ImGui::Checkbox("Barnes-Hut Gravity##Menu", &cfg.barnes_hut);
                     if (cfg.barnes_hut) {
+                        ImGui::Checkbox("GPU BH Compute##Menu", &cfg.gpu_barnes_hut);
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Use Vulkan compute shader to evaluate Barnes-Hut gravity.");
                         ImGui::SliderFloat("BH Theta##Menu", &cfg.barnes_hut_theta, 0.2f, 1.6f, "%.2f");
                         ImGui::SliderInt("BH Min Bodies##Menu", &cfg.barnes_hut_min_bodies, 16, 2000);
                     }

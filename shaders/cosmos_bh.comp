@@ -1,0 +1,180 @@
+#version 450
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+struct BHNodeGPU {
+    vec4 center_half; // xyz=center, w=half
+    vec4 com_mass;    // xyz=center of mass, w=mass
+    vec4 spin_leaf;   // x=spin_y, y=leaf_count, z=is_leaf
+    ivec4 child0;     // child[0..3]
+    ivec4 child1;     // child[4..7]
+    ivec4 leaf;       // source indices[0..3]
+};
+
+layout(std430, binding = 0) readonly buffer PosBuffer {
+    vec4 pos_data[];
+};
+
+layout(std430, binding = 1) readonly buffer VelBuffer {
+    vec4 vel_data[];
+};
+
+layout(std430, binding = 2) readonly buffer SourceBuffer {
+    // x=mass, y=spin_y, z=active(0/1), w=marked_for_removal(0/1)
+    vec4 source_data[];
+};
+
+layout(std430, binding = 3) readonly buffer NodeBuffer {
+    BHNodeGPU nodes[];
+};
+
+layout(std430, binding = 4) writeonly buffer OutAccelBuffer {
+    vec4 out_accel[];
+};
+
+layout(push_constant) uniform Params {
+    uint body_count;
+    uint node_count;
+    float theta;
+    float G;
+    float soft2;
+    float c2;
+    float gr_precession_scale;
+    float gr_time_dilation;
+    float gr_frame_dragging;
+    uint gr_enabled;
+    float pad0;
+    float pad1;
+} pc;
+
+const float K_MIN_DIST = 1.0e-6;
+
+vec3 apply_source_accel(float src_mass, float src_spin_y, vec3 src_pos,
+                        vec3 tgt_pos, vec3 tgt_vel) {
+    if (src_mass <= 0.0)
+        return vec3(0.0);
+
+    vec3 diff = src_pos - tgt_pos;
+    float dist2 = dot(diff, diff) + pc.soft2;
+    float dist = sqrt(dist2);
+    if (dist <= K_MIN_DIST)
+        return vec3(0.0);
+
+    vec3 r_hat = diff / dist;
+    float GM = pc.G * src_mass;
+    vec3 acc = r_hat * (GM / dist2);
+
+    if (pc.gr_enabled != 0u && pc.c2 > 0.0) {
+        if (pc.gr_precession_scale > 0.0) {
+            float v2 = dot(tgt_vel, tgt_vel);
+            float vr = dot(tgt_vel, r_hat);
+            float pn_scale = GM / (dist * pc.c2) * pc.gr_precession_scale;
+            acc += pn_scale * ((4.0 * GM / dist - v2) * r_hat + 4.0 * vr * tgt_vel);
+        }
+        if (pc.gr_time_dilation > 0.0) {
+            float phi = -GM / dist;
+            float td = 1.0 + pc.gr_time_dilation * phi / pc.c2;
+            acc *= td;
+        }
+        if (pc.gr_frame_dragging > 0.0 && abs(src_spin_y) > 1.0e-9) {
+            float coeff = pc.gr_frame_dragging * pc.G * src_spin_y /
+                          (pc.c2 * dist * dist * dist);
+            vec3 J_hat = vec3(0.0, 1.0, 0.0);
+            vec3 vxJ = cross(tgt_vel, J_hat);
+            float rdotJ = dot(r_hat, J_hat);
+            vec3 vxr = cross(tgt_vel, r_hat);
+            acc += coeff * (vxJ - 3.0 * rdotJ * vxr);
+        }
+    }
+
+    return acc;
+}
+
+int get_leaf_index(ivec4 leaf, int idx) {
+    if (idx == 0) return leaf.x;
+    if (idx == 1) return leaf.y;
+    if (idx == 2) return leaf.z;
+    return leaf.w;
+}
+
+int get_child_index(BHNodeGPU n, int idx) {
+    if (idx < 4) {
+        if (idx == 0) return n.child0.x;
+        if (idx == 1) return n.child0.y;
+        if (idx == 2) return n.child0.z;
+        return n.child0.w;
+    }
+    int j = idx - 4;
+    if (j == 0) return n.child1.x;
+    if (j == 1) return n.child1.y;
+    if (j == 2) return n.child1.z;
+    return n.child1.w;
+}
+
+void main() {
+    uint tid = gl_GlobalInvocationID.x;
+    if (tid >= pc.body_count) return;
+    if (tid >= source_data.length()) return;
+    if (source_data[tid].w > 0.5) {
+        out_accel[tid] = vec4(0.0);
+        return;
+    }
+
+    vec3 tgt_pos = pos_data[tid].xyz;
+    vec3 tgt_vel = vel_data[tid].xyz;
+    vec3 accel = vec3(0.0);
+
+    int stack[64];
+    int sp = 0;
+    stack[sp++] = 0;
+
+    while (sp > 0) {
+        int node_idx = stack[--sp];
+        if (node_idx < 0 || uint(node_idx) >= pc.node_count)
+            continue;
+
+        BHNodeGPU n = nodes[node_idx];
+        float node_mass = n.com_mass.w;
+        if (node_mass <= 0.0)
+            continue;
+
+        bool is_leaf = n.spin_leaf.z > 0.5;
+        if (is_leaf) {
+            int leaf_count = int(n.spin_leaf.y + 0.5);
+            leaf_count = clamp(leaf_count, 0, 4);
+            for (int i = 0; i < leaf_count; ++i) {
+                int src = get_leaf_index(n.leaf, i);
+                if (src < 0 || uint(src) >= pc.body_count) continue;
+                if (uint(src) == tid) continue;
+                if (source_data[src].z < 0.5) continue;
+                accel += apply_source_accel(source_data[src].x, source_data[src].y,
+                                            pos_data[src].xyz, tgt_pos, tgt_vel);
+            }
+            continue;
+        }
+
+        vec3 c = n.center_half.xyz;
+        float node_half = n.center_half.w;
+        bool target_inside =
+            abs(tgt_pos.x - c.x) <= node_half &&
+            abs(tgt_pos.y - c.y) <= node_half &&
+            abs(tgt_pos.z - c.z) <= node_half;
+
+        vec3 delta = n.com_mass.xyz - tgt_pos;
+        float dist2 = dot(delta, delta) + pc.soft2;
+        float dist = sqrt(dist2);
+        float size = node_half * 2.0;
+
+        if (!target_inside && dist > K_MIN_DIST && (size / dist) < pc.theta) {
+            accel += apply_source_accel(node_mass, n.spin_leaf.x, n.com_mass.xyz, tgt_pos, tgt_vel);
+        } else {
+            for (int ci = 0; ci < 8; ++ci) {
+                int child = get_child_index(n, ci);
+                if (child >= 0 && sp < 64)
+                    stack[sp++] = child;
+            }
+        }
+    }
+
+    out_accel[tid] = vec4(accel, 0.0);
+}

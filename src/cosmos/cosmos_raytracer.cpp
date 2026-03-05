@@ -2,6 +2,7 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <thread>
 #include <glm/gtc/matrix_inverse.hpp>
 
 // ── GPU data layout (must match shader) ─────────────────────────────────────
@@ -317,8 +318,13 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     int n = std::min((int)state.bodies.size(), MAX_SPHERES);
     static thread_local std::vector<SphereGPU> spheres;
     spheres.resize(n);
-    for (int i = 0; i < n; i++) {
-        const auto& b = state.bodies[i];
+    const size_t hw_threads = std::thread::hardware_concurrency() > 0
+        ? static_cast<size_t>(std::thread::hardware_concurrency())
+        : 1;
+    const bool use_parallel_pack = cfg.parallel_gravity && hw_threads > 1 && n >= 256;
+    auto pack_range = [&](int begin, int end) {
+        for (int i = begin; i < end; ++i) {
+            const auto& b = state.bodies[i];
         glm::vec3 col = body_color_vec3(b);
         float emissive = 0.0f;
         if (is_star_type(b.type))
@@ -469,6 +475,21 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
             std::clamp(b.impact_heat, 0.0f, 1.0f),
             std::clamp(b.impact_radius, 0.0f, 1.0f),
             std::clamp(b.impact_ejecta, 0.0f, 1.0f));
+        }
+    };
+    if (use_parallel_pack) {
+        const size_t worker_count = std::min(hw_threads, (size_t)n);
+        std::vector<std::thread> workers;
+        workers.reserve(worker_count - 1);
+        for (size_t t = 1; t < worker_count; ++t) {
+            int begin = (int)((size_t)n * t / worker_count);
+            int end = (int)((size_t)n * (t + 1) / worker_count);
+            workers.emplace_back([&, begin, end]() { pack_range(begin, end); });
+        }
+        pack_range(0, (int)((size_t)n / worker_count));
+        for (auto& worker : workers) worker.join();
+    } else {
+        pack_range(0, n);
     }
 
     if (n > 0) {

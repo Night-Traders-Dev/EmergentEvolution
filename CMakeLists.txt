@@ -257,6 +257,7 @@ add_executable(particle_cosmos
     src/cosmos/cosmos_app.cpp
     src/cosmos/cosmos_app_io.cpp
     src/cosmos/cosmos_app_ui.cpp
+    src/cosmos/cosmos_gravity_compute.cpp
     src/cosmos/cosmos_raytracer.cpp
 )
 target_link_libraries(particle_cosmos PRIVATE pp_common)
@@ -310,6 +311,7 @@ compile_shader(overlay.vert      overlay.vert.spv)
 compile_shader(overlay.frag      overlay.frag.spv)
 compile_shader(cosmos_rt.vert    cosmos_rt.vert.spv)
 compile_shader(cosmos_rt.frag    cosmos_rt.frag.spv)
+compile_shader(cosmos_bh.comp    cosmos_bh.spv)
 compile_shader(biochem_rt.vert   biochem_rt.vert.spv)
 compile_shader(biochem_rt.frag   biochem_rt.frag.spv)
 
@@ -321,6 +323,7 @@ add_custom_target(shaders ALL DEPENDS
     ${SHADER_BIN_DIR}/overlay.frag.spv
     ${SHADER_BIN_DIR}/cosmos_rt.vert.spv
     ${SHADER_BIN_DIR}/cosmos_rt.frag.spv
+    ${SHADER_BIN_DIR}/cosmos_bh.spv
     ${SHADER_BIN_DIR}/biochem_rt.vert.spv
     ${SHADER_BIN_DIR}/biochem_rt.frag.spv
 )

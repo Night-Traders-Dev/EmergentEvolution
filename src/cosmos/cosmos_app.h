@@ -3,6 +3,7 @@
 
 #include "cosmos/cosmos_types.h"
 #include "cosmos/cosmos_raytracer.h"
+#include "cosmos/cosmos_gravity_compute.h"
 #include "common/simple_renderer.h"
 #include <glm/glm.hpp>
 #include <vector>
@@ -110,6 +111,7 @@ private:
                         float screen_h) const;
 
     CosmosRaytracer raytracer_;
+    CosmosGravityCompute gravity_compute_;
     float sim_time_ = 0.0f;
     float smoothed_fps_ = 60.0f;
     bool  reverse_time_ = false;
