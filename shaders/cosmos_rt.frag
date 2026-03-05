@@ -14,6 +14,7 @@ layout(std140, set = 0, binding = 0) uniform CameraUBO {
     vec4 fabric_center;   // xyz=focus plane center
     vec4 fabric_right;    // xyz=focus plane right axis
     vec4 fabric_up;       // xyz=focus plane up axis
+    vec4 nebula_params;   // x=mode (0/1/2), y=compute active, z=sim time
 };
 
 struct Sphere {
@@ -36,6 +37,15 @@ struct Sphere {
 
 layout(std430, set = 0, binding = 1) readonly buffer SphereBuffer {
     Sphere spheres[];
+};
+
+struct NebulaData {
+    vec4 flow;    // xyz=advection flow, w=turbulence
+    vec4 optical; // x=density scale, y=absorption, z=scatter anisotropy, w=emission gain
+};
+
+layout(std430, set = 0, binding = 2) readonly buffer NebulaBuffer {
+    NebulaData nebula_data[];
 };
 
 const int RENDER_STAR = 0;
@@ -104,6 +114,11 @@ float noise3D(vec3 p) {
                        dot(hash33(i + vec3(1,0,1)), f - vec3(1,0,1)), u.x),
                    mix(dot(hash33(i + vec3(0,1,1)), f - vec3(0,1,1)),
                        dot(hash33(i + vec3(1,1,1)), f - vec3(1,1,1)), u.x), u.y), u.z);
+}
+
+// Explicit Perlin entrypoint used by nebula advection + density sampling.
+float perlin3D(vec3 p) {
+    return noise3D(p);
 }
 
 vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
@@ -397,6 +412,29 @@ float intersect_sphere(vec3 ro, vec3 rd, vec3 center, float radius) {
     t = -b + sq;
     if (t > 0.001) return t;
     return -1.0;
+}
+
+bool intersect_sphere_interval(vec3 ro, vec3 rd, vec3 center, float radius, out float t_enter, out float t_exit) {
+    vec3 oc = ro - center;
+    float b = dot(oc, rd);
+    float c = dot(oc, oc) - radius * radius;
+    float disc = b * b - c;
+    if (disc < 0.0) {
+        t_enter = -1.0;
+        t_exit = -1.0;
+        return false;
+    }
+    float sq = sqrt(disc);
+    float t0 = -b - sq;
+    float t1 = -b + sq;
+    if (t1 <= 0.001) {
+        t_enter = -1.0;
+        t_exit = -1.0;
+        return false;
+    }
+    t_enter = max(t0, 0.001);
+    t_exit = max(t1, t_enter + 1.0e-4);
+    return true;
 }
 
 bool intersect_plane(vec3 ro, vec3 rd, vec3 plane_point, vec3 plane_normal, out float t) {
@@ -1481,6 +1519,240 @@ vec3 shade_nebula_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     return max(col, vec3(0.0));
 }
 
+int nebula_mode() {
+    return clamp(int(nebula_params.x + 0.5), 0, 2);
+}
+
+bool nebula_compute_enabled() {
+    return nebula_params.y > 0.5;
+}
+
+NebulaData nebula_lookup(int body_index) {
+    int count = int(screen_info.z + 0.5);
+    NebulaData d;
+    d.flow = vec4(0.0);
+    d.optical = vec4(1.0, 1.0, 0.25, 1.0);
+    if (!nebula_compute_enabled()) return d;
+    if (body_index < 0 || body_index >= count) return d;
+    return nebula_data[body_index];
+}
+
+float smooth_min(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (b - a) / max(k, 1.0e-4), 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+float temporal_blue_noise(vec2 uv, float frame_time) {
+    // Blue-noise-like temporal jitter (interleaved gradient noise + golden-ratio temporal offset).
+    float n = fract(52.9829189 * fract(dot(uv, vec2(0.06711056, 0.00583715))));
+    return fract(n + frame_time * 0.61803398875);
+}
+
+vec3 nebula_velocity_field(vec3 p, float seed, float flow, vec3 external_flow, float turbulence) {
+    vec3 q = p + vec3(seed * 0.013, seed * 0.007, seed * 0.019);
+    vec3 la = vec3(
+        perlin3D(q * 1.8 + vec3(2.0, 0.8, 1.5) + vec3(screen_info.w * 0.06)),
+        perlin3D(q * 2.0 + vec3(0.4, 3.1, 2.6) + vec3(-screen_info.w * 0.05)),
+        perlin3D(q * 1.7 + vec3(1.4, 2.3, 4.2) + vec3(screen_info.w * 0.04)));
+    vec3 lb = vec3(
+        perlin3D(q * 2.6 + vec3(4.5, 1.1, 0.9) + vec3(-screen_info.w * 0.04)),
+        perlin3D(q * 2.2 + vec3(1.7, 5.0, 2.1) + vec3(screen_info.w * 0.05)),
+        perlin3D(q * 2.9 + vec3(0.9, 0.6, 6.2) + vec3(-screen_info.w * 0.03)));
+    vec3 curlish = la * 0.68 + lb * 0.46;
+    float mag = 0.20 + flow * 0.55 + turbulence * 0.20;
+    return curlish * mag + external_flow;
+}
+
+float nebula_density_sample(vec3 local, float seed, float dust_frac, float metal_frac, float pressure,
+                            float haze, float cloud_detail, float collapse, float flow,
+                            vec3 external_flow, float turbulence) {
+    float r2 = dot(local, local);
+    if (r2 >= 1.0) return 0.0;
+
+    // Semi-Lagrangian backtrace for fluid-like advection.
+    vec3 vel = nebula_velocity_field(local, seed, flow, external_flow, turbulence);
+    float adv_dt = 0.035 + cloud_detail * 0.022;
+    vec3 advected_local = local - vel * adv_dt;
+    float adv_r2 = dot(advected_local, advected_local);
+    if (adv_r2 >= 1.0) return 0.0;
+
+    float radial = pow(max(1.0 - adv_r2, 0.0), mix(1.1, 2.0, dust_frac * 0.75));
+    vec3 seed_offset = hash31(seed) * 120.0;
+    vec3 drift = vec3(screen_info.w * (0.010 + flow * 0.006),
+                      screen_info.w * 0.006,
+                      -screen_info.w * (0.008 + flow * 0.005));
+    vec3 np = advected_local * (2.0 + cloud_detail * 2.5) + seed_offset * 0.04 + drift;
+    vec3 wp = domain_warp(np, 0.22 + cloud_detail * 0.25);
+
+    // Multi-layer density blending with independent advection.
+    vec3 layer_a = wp + vec3(0.11, -0.06, 0.08) * screen_info.w;
+    vec3 layer_b = wp + vec3(-0.08, 0.09, -0.05) * screen_info.w;
+    float d_a = 0.5 + 0.5 * perlin3D(layer_a * 1.05);
+    float d_b = 0.5 + 0.5 * perlin3D(layer_b * 2.15 + vec3(4.1, 0.7, 2.3));
+    float filaments = ridged_fbm(layer_a * 1.85 + vec3(5.0, 1.5, 2.0), 4);
+    float wisps = billow_fbm(layer_b * 2.40 + vec3(-2.0, 3.0, 4.0), 4);
+    float additive = clamp(d_a * 0.70 + d_b * 0.55 + filaments * 0.30 + wisps * 0.20, 0.0, 1.0);
+    float condensed = 1.0 - smooth_min(1.0 - d_a, 1.0 - d_b, 0.30);
+    float condense_exp = mix(1.1, 3.6, clamp(collapse + (1.0 - adv_r2) * 0.35, 0.0, 1.0));
+    float clump = pow(clamp(additive * 0.62 + condensed * 0.58, 0.0, 1.0), condense_exp);
+
+    float density = radial * clump *
+        (0.30 + haze * 0.50 + pressure * 0.0028) *
+        (0.72 + collapse * 0.55);
+    density *= (0.65 + dust_frac * 0.65 + metal_frac * 0.30);
+    return max(density, 0.0);
+}
+
+vec3 raymarch_nebula(vec3 ro, vec3 rd, Sphere hit, int body_index, vec3 light_dir, vec3 light_color,
+                     out float transmittance_out) {
+    float t_enter, t_exit;
+    if (!intersect_sphere_interval(ro, rd, hit.pos_radius.xyz, hit.pos_radius.w, t_enter, t_exit)) {
+        transmittance_out = 1.0;
+        return vec3(0.0);
+    }
+
+    float seed = hit.class_seed_temp.x;
+    float temperature = hit.class_seed_temp.w;
+    float dust_frac = clamp(hit.composition_params.w, 0.0, 1.0);
+    float ice_frac = clamp(hit.composition_params.y, 0.0, 1.0);
+    float metal_frac = clamp(hit.composition_params.z, 0.0, 1.0);
+    float pressure = max(hit.atmosphere_params.y, 0.0);
+    float haze = clamp(hit.atmosphere_params.z, 0.0, 2.5);
+    float cloud_detail = clamp(hit.activity_params.y, 0.0, 2.0);
+    float collapse = clamp(hit.activity_params.z, 0.0, 2.0);
+    float flow = clamp(hit.activity_params.x, 0.0, 2.0);
+    float radius = max(hit.pos_radius.w, 1.0e-4);
+    float inv_radius = 1.0 / radius;
+
+    NebulaData nd = nebula_lookup(body_index);
+    vec3 external_flow = nd.flow.xyz;
+    float turbulence = max(nd.flow.w, 0.0);
+    float density_scale = max(nd.optical.x, 0.01);
+    float absorption_scale = max(nd.optical.y, 0.01);
+    float anisotropy = clamp(nd.optical.z, 0.01, 0.95);
+    float emission_scale = max(nd.optical.w, 0.01);
+
+    float quality_n = clamp((quality_params.x - 1.0) / 2.5, 0.0, 1.0);
+    int steps = int(mix(36.0, 96.0, quality_n));
+    steps = int(mix(float(steps), float(steps) * 1.35, clamp(haze * 0.6 + cloud_detail * 0.4, 0.0, 1.0)));
+    steps = clamp(steps, 24, 128);
+
+    float path_len = max(t_exit - t_enter, 1.0e-5);
+    float dt = path_len / float(steps);
+    float jitter = temporal_blue_noise(fragUV * screen_info.xy, nebula_params.z * 0.017 + seed * 0.0007);
+    float t = t_enter + dt * jitter;
+
+    vec3 hydrogen_col = mix(vec3(0.40, 0.56, 0.98), vec3(0.84, 0.43, 0.96), hash11(seed * 0.071));
+    vec3 dust_col = mix(vec3(0.50, 0.40, 0.30), vec3(0.82, 0.66, 0.42), dust_frac);
+    vec3 cold_col = vec3(0.72, 0.88, 1.00);
+    float hydrogen_bias = clamp(1.0 - dust_frac * 0.65 - metal_frac * 0.90, 0.0, 1.0);
+    vec3 base_col = mix(dust_col, hydrogen_col, hydrogen_bias);
+    base_col = mix(base_col, cold_col, clamp(ice_frac * 0.6 + (180.0 - temperature) / 260.0, 0.0, 1.0));
+
+    float transmittance = 1.0;
+    vec3 accum = vec3(0.0);
+    vec3 lit_col = clamp(light_color, vec3(0.0), vec3(4.0));
+    float phase = phase_hg(mix(0.18, 0.52, dust_frac), dot(rd, light_dir));
+    phase = mix(phase, phase_hg(anisotropy, dot(rd, light_dir)), 0.65);
+
+    for (int i = 0; i < 128; ++i) {
+        if (i >= steps || transmittance < 0.003) break;
+
+        vec3 p = ro + rd * t;
+        vec3 local = (p - hit.pos_radius.xyz) * inv_radius;
+        float density = nebula_density_sample(local, seed, dust_frac, metal_frac, pressure, haze,
+                                              cloud_detail, collapse, flow, external_flow, turbulence);
+        density *= density_scale;
+        if (density <= 1.0e-5) {
+            t += dt;
+            continue;
+        }
+
+        // Beer-Lambert extinction.
+        float sigma_t = (1.1 + haze * 1.2 + dust_frac * 0.8) * absorption_scale;
+        float tau = max(density * sigma_t * dt, 0.0);
+        float step_trans = exp(-tau);
+        float scatter_weight = 1.0 - step_trans;
+
+        float glow = smoothstep(0.40, 0.98, density) * (0.28 + collapse * 0.30);
+        float sparkle = pow(white_noise(local * 95.0 + vec3(screen_info.w * 0.21 + seed)), 9.0) * dust_frac;
+        vec3 emission = base_col * (0.18 + glow * 0.66) * emission_scale;
+        emission += vec3(0.95, 0.82, 0.68) * sparkle * 0.22;
+        // Beer-Powder style edge boost for denser, condensing cloud silhouettes.
+        float view_edge = pow(clamp(1.0 - abs(dot(normalize(local + vec3(1.0e-4)), rd)), 0.0, 1.0), 1.5);
+        float powder = (1.0 - exp(-density * (2.2 + dust_frac * 1.8) * dt)) * (0.45 + 0.55 * view_edge);
+        vec3 scatter = base_col * lit_col * (0.20 + phase * 1.30 + powder * 0.70);
+
+        accum += transmittance * scatter_weight * (emission + scatter);
+        transmittance *= step_trans;
+        t += dt;
+    }
+
+    transmittance_out = clamp(transmittance, 0.0, 1.0);
+    return max(accum, vec3(0.0));
+}
+
+vec3 render_nebula_particles(vec3 ro, vec3 rd, Sphere hit, int body_index, vec3 light_dir, vec3 light_color,
+                             out float transmittance_out) {
+    float t_enter, t_exit;
+    if (!intersect_sphere_interval(ro, rd, hit.pos_radius.xyz, hit.pos_radius.w, t_enter, t_exit)) {
+        transmittance_out = 1.0;
+        return vec3(0.0);
+    }
+
+    float seed = hit.class_seed_temp.x;
+    float dust_frac = clamp(hit.composition_params.w, 0.0, 1.0);
+    float flow = clamp(hit.activity_params.x, 0.0, 2.0);
+    float collapse = clamp(hit.activity_params.z, 0.0, 2.0);
+    float radius = max(hit.pos_radius.w, 1.0e-4);
+    float inv_radius = 1.0 / radius;
+    NebulaData nd = nebula_lookup(body_index);
+    vec3 flow_bias = nd.flow.xyz;
+    float emission_gain = max(nd.optical.w, 1.0);
+
+    int quality = int(quality_params.x + 0.5);
+    int particle_count = (quality <= 0) ? 64 : (quality == 1 ? 96 : (quality == 2 ? 144 : 192));
+    float trans = 1.0;
+    vec3 accum = vec3(0.0);
+
+    for (int i = 0; i < 256; ++i) {
+        if (i >= particle_count || trans < 0.004) break;
+        float fi = float(i);
+        float h0 = hash11(seed * 0.013 + fi * 3.17);
+        float h1 = hash11(seed * 0.031 + fi * 5.91);
+        float h2 = hash11(seed * 0.047 + fi * 7.43);
+        vec3 dir = normalize(vec3(h0 * 2.0 - 1.0, h1 * 2.0 - 1.0, h2 * 2.0 - 1.0));
+        float rr = pow(max(hash11(seed * 0.071 + fi * 11.17), 1.0e-4), 0.3333);
+        vec3 p_local = dir * rr;
+
+        vec3 swirl = nebula_velocity_field(p_local, seed + fi * 0.11, flow, flow_bias, nd.flow.w);
+        p_local += swirl * (0.15 + 0.12 * sin(screen_info.w * (0.35 + h1 * 0.75) + fi * 0.3));
+        if (dot(p_local, p_local) >= 1.0) continue;
+
+        vec3 p_world = hit.pos_radius.xyz + p_local * radius;
+        float t_proj = dot(p_world - ro, rd);
+        if (t_proj < t_enter || t_proj > t_exit) continue;
+        vec3 closest = ro + rd * t_proj;
+        float dist = length(closest - p_world) * inv_radius;
+        float size = mix(0.010, 0.045, h2) * (1.0 + dust_frac * 0.5);
+        float kernel = exp(-dist * dist / max(size * size, 1.0e-5));
+        if (kernel < 0.01) continue;
+
+        float extinction = (0.20 + dust_frac * 0.65 + collapse * 0.35) * kernel;
+        float step_trans = exp(-extinction * 0.85);
+        float weight = 1.0 - step_trans;
+        float phase = phase_hg(0.30 + dust_frac * 0.35, dot(rd, light_dir));
+        vec3 col = mix(vec3(0.48, 0.56, 0.84), vec3(0.84, 0.62, 0.44), dust_frac);
+        col *= (0.45 + 0.55 * phase) * emission_gain;
+        col *= clamp(light_color, vec3(0.15), vec3(3.0));
+        accum += trans * weight * col;
+        trans *= step_trans;
+    }
+
+    transmittance_out = clamp(trans, 0.0, 1.0);
+    return max(accum, vec3(0.0));
+}
+
 vec3 shade_moon_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
                         out float roughness_out, out vec3 surf_normal) {
     vec3 col = shade_planet_surface(normal, hit, rd, light_dir, roughness_out, surf_normal);
@@ -1771,6 +2043,47 @@ void main() {
     bool has_primary_light = compute_primary_light(hit_pos, body_count, closest_idx,
                                                    primary_light_idx, primary_light_dir, primary_light_color);
 
+    if (render_class == RENDER_NEBULA) {
+        vec3 nebula_light_dir = has_primary_light ? primary_light_dir : normalize(vec3(0.5, 0.8, 0.3));
+        vec3 nebula_light_col = has_primary_light ? primary_light_color : vec3(1.0);
+        float nebula_transmittance = 1.0;
+        vec3 final_color = vec3(0.0);
+        int nmode = nebula_mode();
+        if (nmode == 2) {
+            final_color = render_nebula_particles(ro, rd, hit, closest_idx, nebula_light_dir,
+                                                  nebula_light_col, nebula_transmittance);
+        } else {
+            final_color = raymarch_nebula(ro, rd, hit, closest_idx, nebula_light_dir,
+                                          nebula_light_col, nebula_transmittance);
+        }
+        final_color += background(rd) * nebula_transmittance;
+
+        vec3 fabric_col = vec3(0.0);
+        float fabric_alpha = 0.0;
+        float fabric_t = -1.0;
+        if (sample_space_fabric(ro, rd, body_count, fabric_col, fabric_alpha, fabric_t)) {
+            float overlay = fabric_alpha * 0.75;
+            if (fabric_t > closest_t)
+                overlay *= 0.85;
+            final_color = mix(final_color, final_color + fabric_col, overlay);
+        }
+
+        vec3 ring_col = vec3(0.0);
+        float ring_alpha = 0.0;
+        accumulate_rings(ro, rd, body_count, closest_t, ring_col, ring_alpha);
+        if (ring_alpha > 0.0)
+            final_color = mix(final_color, final_color + ring_col, ring_alpha);
+
+        vec3 magnet_col = vec3(0.0);
+        float magnet_alpha = 0.0;
+        accumulate_magnetospheres(ro, rd, body_count, closest_t, magnet_col, magnet_alpha);
+        if (magnet_alpha > 0.0)
+            final_color = mix(final_color, final_color + magnet_col, magnet_alpha);
+
+        outColor = vec4(pow(max(final_color, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
+        return;
+    }
+
     if (render_class == RENDER_STAR || hit.base_emit.a > 0.0) {
         vec3 star_col = shade_star(normal, rd, hit);
         vec3 ring_col = vec3(0.0);
@@ -1795,8 +2108,6 @@ void main() {
         base_color = shade_planet_surface(normal, hit, rd, primary_light_dir, roughness, surf_normal);
     } else if (render_class == RENDER_MOON) {
         base_color = shade_moon_surface(normal, hit, rd, primary_light_dir, roughness, surf_normal);
-    } else if (render_class == RENDER_NEBULA) {
-        base_color = shade_nebula_surface(normal, hit, rd, primary_light_dir, roughness, surf_normal);
     } else if (render_class == RENDER_ASTEROID || render_class == RENDER_COMET) {
         base_color = shade_asteroid_surface(normal, hit, primary_light_dir, render_class == RENDER_COMET, roughness);
     }

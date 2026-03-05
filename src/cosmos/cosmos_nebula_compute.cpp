@@ -1,0 +1,200 @@
+#include "cosmos/cosmos_nebula_compute.h"
+
+#include <algorithm>
+#include <stdexcept>
+
+namespace {
+
+template <typename T>
+inline void reset_handle(T& h) {
+    h = VK_NULL_HANDLE;
+}
+
+} // namespace
+
+size_t CosmosNebulaCompute::next_capacity(size_t current, size_t required) {
+    size_t cap = std::max<size_t>(current, 256);
+    while (cap < required)
+        cap *= 2;
+    return cap;
+}
+
+void CosmosNebulaCompute::init(VulkanContext& vk) {
+    if (pipeline_ != VK_NULL_HANDLE)
+        return;
+
+    VkDescriptorSetLayoutBinding bindings[2]{};
+    for (uint32_t i = 0; i < 2; ++i) {
+        bindings[i].binding = i;
+        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+
+    VkDescriptorSetLayoutCreateInfo dsl_ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    dsl_ci.bindingCount = 2;
+    dsl_ci.pBindings = bindings;
+    if (vkCreateDescriptorSetLayout(vk.device, &dsl_ci, nullptr, &desc_set_layout_) != VK_SUCCESS)
+        throw std::runtime_error("Failed to create nebula compute descriptor set layout");
+
+    VkPushConstantRange pc{};
+    pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pc.offset = 0;
+    pc.size = sizeof(PushConstants);
+
+    VkPipelineLayoutCreateInfo pl_ci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    pl_ci.setLayoutCount = 1;
+    pl_ci.pSetLayouts = &desc_set_layout_;
+    pl_ci.pushConstantRangeCount = 1;
+    pl_ci.pPushConstantRanges = &pc;
+    if (vkCreatePipelineLayout(vk.device, &pl_ci, nullptr, &pipeline_layout_) != VK_SUCCESS)
+        throw std::runtime_error("Failed to create nebula compute pipeline layout");
+
+    VkShaderModule cs_mod = vk.create_shader_module("shaders/cosmos_nebula.spv");
+
+    VkPipelineShaderStageCreateInfo stage_ci{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stage_ci.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    stage_ci.module = cs_mod;
+    stage_ci.pName = "main";
+
+    VkComputePipelineCreateInfo cp_ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    cp_ci.stage = stage_ci;
+    cp_ci.layout = pipeline_layout_;
+    if (vkCreateComputePipelines(vk.device, VK_NULL_HANDLE, 1, &cp_ci, nullptr, &pipeline_) != VK_SUCCESS) {
+        vkDestroyShaderModule(vk.device, cs_mod, nullptr);
+        throw std::runtime_error("Failed to create nebula compute pipeline");
+    }
+    vkDestroyShaderModule(vk.device, cs_mod, nullptr);
+
+    VkDescriptorPoolSize pool_size{};
+    pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    pool_size.descriptorCount = 2;
+
+    VkDescriptorPoolCreateInfo dp_ci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    dp_ci.maxSets = 1;
+    dp_ci.poolSizeCount = 1;
+    dp_ci.pPoolSizes = &pool_size;
+    if (vkCreateDescriptorPool(vk.device, &dp_ci, nullptr, &desc_pool_) != VK_SUCCESS)
+        throw std::runtime_error("Failed to create nebula compute descriptor pool");
+
+    VkDescriptorSetAllocateInfo alloc_ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    alloc_ci.descriptorPool = desc_pool_;
+    alloc_ci.descriptorSetCount = 1;
+    alloc_ci.pSetLayouts = &desc_set_layout_;
+    if (vkAllocateDescriptorSets(vk.device, &alloc_ci, &desc_set_) != VK_SUCCESS)
+        throw std::runtime_error("Failed to allocate nebula compute descriptor set");
+}
+
+void CosmosNebulaCompute::destroy(VulkanContext& vk) {
+    vk.destroy_buffer(input_buffer_);
+    vk.destroy_buffer(output_buffer_);
+    capacity_ = 0;
+
+    if (desc_pool_ != VK_NULL_HANDLE)
+        vkDestroyDescriptorPool(vk.device, desc_pool_, nullptr);
+    if (pipeline_ != VK_NULL_HANDLE)
+        vkDestroyPipeline(vk.device, pipeline_, nullptr);
+    if (pipeline_layout_ != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(vk.device, pipeline_layout_, nullptr);
+    if (desc_set_layout_ != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(vk.device, desc_set_layout_, nullptr);
+
+    reset_handle(desc_pool_);
+    reset_handle(pipeline_);
+    reset_handle(pipeline_layout_);
+    reset_handle(desc_set_layout_);
+    reset_handle(desc_set_);
+}
+
+void CosmosNebulaCompute::write_descriptor_set(VulkanContext& vk) {
+    VkDescriptorBufferInfo infos[2]{};
+    infos[0] = {input_buffer_.handle, 0, input_buffer_.size};
+    infos[1] = {output_buffer_.handle, 0, output_buffer_.size};
+
+    VkWriteDescriptorSet writes[2]{};
+    for (uint32_t i = 0; i < 2; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = desc_set_;
+        writes[i].dstBinding = i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[i].pBufferInfo = &infos[i];
+    }
+    vkUpdateDescriptorSets(vk.device, 2, writes, 0, nullptr);
+}
+
+void CosmosNebulaCompute::ensure_capacity(VulkanContext& vk, size_t required) {
+    if (required <= capacity_)
+        return;
+
+    capacity_ = next_capacity(capacity_, required);
+
+    vk.destroy_buffer(input_buffer_);
+    vk.destroy_buffer(output_buffer_);
+
+    const VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    const VkMemoryPropertyFlags host_mem = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                           VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    input_buffer_ = vk.create_buffer(capacity_ * sizeof(NebulaComputeInput), usage, host_mem);
+    output_buffer_ = vk.create_buffer(capacity_ * sizeof(NebulaComputeOutput), usage, host_mem);
+    write_descriptor_set(vk);
+}
+
+bool CosmosNebulaCompute::compute_to_buffer(VulkanContext& vk,
+                                            const std::vector<NebulaComputeInput>& in,
+                                            float sim_time,
+                                            const Buffer& dst_buffer,
+                                            size_t dst_capacity_elems) {
+    if (!is_ready())
+        return false;
+
+    const size_t body_count = in.size();
+    if (body_count == 0) {
+        return true;
+    }
+    if (dst_buffer.handle == VK_NULL_HANDLE || dst_capacity_elems < body_count)
+        return false;
+
+    ensure_capacity(vk, body_count);
+
+    vk.update_buffer(input_buffer_, in.data(), body_count * sizeof(NebulaComputeInput));
+
+    VkCommandBuffer cmd = vk.begin_single_command();
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout_,
+                            0, 1, &desc_set_, 0, nullptr);
+
+    PushConstants pc{};
+    pc.body_count = static_cast<uint32_t>(body_count);
+    pc.sim_time = sim_time;
+    pc.dt_hint = 1.0f / 60.0f;
+
+    vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &pc);
+
+    const uint32_t groups = static_cast<uint32_t>((body_count + 63u) / 64u);
+    vkCmdDispatch(cmd, std::max(groups, 1u), 1, 1);
+
+    VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 1, &barrier, 0, nullptr, 0, nullptr);
+
+    VkBufferCopy copy{};
+    copy.size = body_count * sizeof(NebulaComputeOutput);
+    vkCmdCopyBuffer(cmd, output_buffer_.handle, dst_buffer.handle, 1, &copy);
+
+    VkMemoryBarrier copy_barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    copy_barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    copy_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         0, 1, &copy_barrier, 0, nullptr, 0, nullptr);
+
+    vk.end_single_command(cmd);
+    return true;
+}

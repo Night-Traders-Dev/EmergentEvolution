@@ -4,6 +4,7 @@
 // Renders 3D-lit spheres with shadow rays, star lighting, and uniform modes.
 
 #include "cosmos/cosmos_types.h"
+#include "cosmos/cosmos_nebula_compute.h"
 #include "common/vulkan_context.h"
 
 class CosmosRaytracer {
@@ -27,6 +28,8 @@ private:
 
     Buffer camera_ubo_;
     Buffer sphere_ssbo_;
+    Buffer nebula_ssbo_;
+    CosmosNebulaCompute nebula_compute_;
 
     static constexpr int MAX_SPHERES = 2048;
 };

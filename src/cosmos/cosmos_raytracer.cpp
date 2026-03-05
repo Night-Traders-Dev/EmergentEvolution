@@ -19,7 +19,8 @@ struct alignas(16) CameraUBOData {
     glm::vec4 fabric_center;    // 16 bytes (plane center xyz)
     glm::vec4 fabric_right;     // 16 bytes (plane right xyz)
     glm::vec4 fabric_up;        // 16 bytes (plane up xyz)
-};                              // Total: 208 bytes
+    glm::vec4 nebula_params;    // 16 bytes (mode, computeActive, simTime, reserved)
+};                              // Total: 224 bytes
 
 struct SphereGPU {
     glm::vec4 pos_radius;         // xyz = position, w = radius
@@ -37,6 +38,11 @@ struct SphereGPU {
     glm::vec4 phase_params;       // x = material phase, y = phase intensity, z = collapse, w = ring ice fraction
     glm::vec4 impact_axis;        // xyz = recent impact normal
     glm::vec4 impact_params;      // x = crater, y = heat, z = radius, w = ejecta
+};
+
+struct alignas(16) NebulaGPU {
+    glm::vec4 flow;    // xyz=advection flow, w=turbulence
+    glm::vec4 optical; // x=density scale, y=absorption, z=scatter anisotropy, w=emission gain
 };
 
 // ── Body color helper (matches cosmos_app.cpp) ──────────────────────────────
@@ -85,7 +91,7 @@ static glm::vec3 body_color_vec3(const CelestialBody& b) {
 
 void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     // ── Descriptor set layout ──────────────────────────────────────────────
-    VkDescriptorSetLayoutBinding bindings[2]{};
+    VkDescriptorSetLayoutBinding bindings[3]{};
     // Binding 0: Camera UBO
     bindings[0].binding         = 0;
     bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -96,9 +102,14 @@ void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // Binding 2: Nebula SSBO (compute-assisted advection/optical params)
+    bindings[2].binding         = 2;
+    bindings[2].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutCreateInfo layout_ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layout_ci.bindingCount = 2;
+    layout_ci.bindingCount = 3;
     layout_ci.pBindings    = bindings;
     vkCreateDescriptorSetLayout(vk.device, &layout_ci, nullptr, &desc_layout_);
 
@@ -194,14 +205,22 @@ void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
+    nebula_ssbo_ = vk.create_buffer(
+        MAX_SPHERES * sizeof(NebulaGPU),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    nebula_compute_.init(vk);
+
     // ── Descriptor pool + set ──────────────────────────────────────────────
     VkDescriptorPoolSize pool_sizes[] = {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,  1},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,  1},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,  1},
     };
     VkDescriptorPoolCreateInfo dp_ci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     dp_ci.maxSets       = 1;
-    dp_ci.poolSizeCount = 2;
+    dp_ci.poolSizeCount = 3;
     dp_ci.pPoolSizes    = pool_sizes;
     vkCreateDescriptorPool(vk.device, &dp_ci, nullptr, &desc_pool_);
 
@@ -222,7 +241,12 @@ void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     ssbo_info.offset = 0;
     ssbo_info.range  = MAX_SPHERES * sizeof(SphereGPU);
 
-    VkWriteDescriptorSet writes[2]{};
+    VkDescriptorBufferInfo nebula_info{};
+    nebula_info.buffer = nebula_ssbo_.handle;
+    nebula_info.offset = 0;
+    nebula_info.range  = MAX_SPHERES * sizeof(NebulaGPU);
+
+    VkWriteDescriptorSet writes[3]{};
     writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet          = desc_set_;
     writes[0].dstBinding      = 0;
@@ -237,18 +261,27 @@ void CosmosRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[1].pBufferInfo     = &ssbo_info;
 
-    vkUpdateDescriptorSets(vk.device, 2, writes, 0, nullptr);
+    writes[2].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet          = desc_set_;
+    writes[2].dstBinding      = 2;
+    writes[2].descriptorCount = 1;
+    writes[2].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[2].pBufferInfo     = &nebula_info;
+
+    vkUpdateDescriptorSets(vk.device, 3, writes, 0, nullptr);
 }
 
 // ── Destroy ─────────────────────────────────────────────────────────────────
 
 void CosmosRaytracer::destroy(VulkanContext& vk) {
+    nebula_compute_.destroy(vk);
     vkDestroyPipeline(vk.device, pipeline_, nullptr);
     vkDestroyPipelineLayout(vk.device, pipe_layout_, nullptr);
     vkDestroyDescriptorPool(vk.device, desc_pool_, nullptr);
     vkDestroyDescriptorSetLayout(vk.device, desc_layout_, nullptr);
     vk.destroy_buffer(camera_ubo_);
     vk.destroy_buffer(sphere_ssbo_);
+    vk.destroy_buffer(nebula_ssbo_);
 }
 
 // ── Update + draw ───────────────────────────────────────────────────────────
@@ -309,6 +342,9 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     // like the classic isometric gravity grid instead of a camera-facing sheet.
     cam.fabric_right = glm::vec4(iso_axis, 0.0f, iso_axis, 0.0f);
     cam.fabric_up = glm::vec4(-iso_axis, 0.0f, iso_axis, 0.0f);
+    float nebula_mode = (float)std::clamp(cfg.nebula_render_mode, 0, 2);
+    float compute_active = (cfg.nebula_render_mode == 1 && nebula_compute_.is_ready()) ? 1.0f : 0.0f;
+    cam.nebula_params = glm::vec4(nebula_mode, compute_active, (float)cfg.sim_time_accumulated, 0.0f);
 
     void* mapped = nullptr;
     if (vkMapMemory(vk.device, camera_ubo_.memory, 0, sizeof(CameraUBOData), 0, &mapped) != VK_SUCCESS || !mapped)
@@ -509,6 +545,58 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
             throw std::runtime_error("CosmosRaytracer: failed to map sphere SSBO memory");
         memcpy(mapped, spheres.data(), n * sizeof(SphereGPU));
         vkUnmapMemory(vk.device, sphere_ssbo_.memory);
+    }
+
+    // ── Nebula compute prepass (optional) + upload ────────────────────────
+    std::vector<NebulaGPU> nebula_data((size_t)n);
+    for (int i = 0; i < n; ++i) {
+        nebula_data[(size_t)i].flow = glm::vec4(0.0f);
+        nebula_data[(size_t)i].optical = glm::vec4(1.0f, 1.0f, 0.25f, 1.0f);
+    }
+
+    bool used_nebula_compute = false;
+    if (n > 0 && cfg.nebula_render_mode == 1 && nebula_compute_.is_ready()) {
+        std::vector<NebulaComputeInput> nebula_in((size_t)n);
+        for (int i = 0; i < n; ++i) {
+            nebula_in[(size_t)i].seed_class_temp = spheres[(size_t)i].class_seed_temp;
+            nebula_in[(size_t)i].atmosphere = spheres[(size_t)i].atmosphere_params;
+            nebula_in[(size_t)i].activity = spheres[(size_t)i].activity_params;
+            nebula_in[(size_t)i].composition = spheres[(size_t)i].composition_params;
+        }
+        used_nebula_compute = nebula_compute_.compute_to_buffer(vk, nebula_in, time, nebula_ssbo_, (size_t)MAX_SPHERES);
+    }
+    if (!used_nebula_compute) {
+        for (int i = 0; i < n; ++i) {
+            const auto& s = spheres[(size_t)i];
+            if ((int)(s.class_seed_temp.y + 0.5f) != RENDER_NEBULA)
+                continue;
+            float dust = std::clamp(s.composition_params.w, 0.0f, 1.0f);
+            float haze = std::clamp(s.atmosphere_params.z, 0.0f, 2.5f);
+            float flow = std::clamp(s.activity_params.x, 0.0f, 2.5f);
+            float cloud = std::clamp(s.activity_params.y, 0.0f, 2.5f);
+            float collapse = std::clamp(s.activity_params.z, 0.0f, 2.5f);
+            float seed = s.class_seed_temp.x;
+            float t = time * 0.1f;
+            glm::vec3 adv(
+                std::sin(seed * 0.017f + t),
+                std::cos(seed * 0.013f - t * 0.7f),
+                std::sin(seed * 0.011f + t * 0.6f));
+            adv *= (0.05f + flow * 0.18f + cloud * 0.06f);
+            nebula_data[(size_t)i].flow = glm::vec4(adv, glm::length(adv));
+            nebula_data[(size_t)i].optical = glm::vec4(
+                std::clamp(0.75f + haze * 0.40f + cloud * 0.15f, 0.45f, 4.0f),
+                std::clamp(0.95f + dust * 0.90f + haze * 0.30f, 0.50f, 4.0f),
+                std::clamp(0.18f + dust * 0.38f + collapse * 0.08f, 0.02f, 0.90f),
+                std::clamp(0.90f + collapse * 0.30f, 0.55f, 2.4f));
+        }
+    }
+    if (n > 0 && !used_nebula_compute) {
+        mapped = nullptr;
+        if (vkMapMemory(vk.device, nebula_ssbo_.memory, 0,
+                        n * sizeof(NebulaGPU), 0, &mapped) != VK_SUCCESS || !mapped)
+            throw std::runtime_error("CosmosRaytracer: failed to map nebula SSBO memory");
+        memcpy(mapped, nebula_data.data(), n * sizeof(NebulaGPU));
+        vkUnmapMemory(vk.device, nebula_ssbo_.memory);
     }
 
     // ── Draw fullscreen triangle ───────────────────────────────────────────

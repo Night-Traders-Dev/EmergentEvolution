@@ -1844,6 +1844,52 @@ void CosmosApp::process_collisions(float dt) {
             bool swept_hit = (sweep_dist < touch);
             if (!overlap_now && !swept_hit) continue;
 
+            bool nebula_pair = (bodies[i].type == CTYPE_NEBULA || bodies[j].type == CTYPE_NEBULA);
+            if (nebula_pair) {
+                float contact_dist = overlap_now ? dist : sweep_dist;
+                float overlap = std::max(touch - contact_dist, 0.0f);
+                float overlap_fraction = overlap / std::max(touch, 1.0e-6f);
+
+                int nebula_i = (bodies[i].type == CTYPE_NEBULA) ? 1 : 0;
+                int nebula_j = (bodies[j].type == CTYPE_NEBULA) ? 1 : 0;
+
+                // Nebulae are diffuse volumes: no rigid-body bounce/depenetration.
+                // We only apply soft drag so bodies are entrained by cloud flow.
+                if (nebula_i && !nebula_j) {
+                    float drag = std::clamp((0.12f + overlap_fraction * 0.70f) * std::max(dt, 1.0e-4f) * 8.0f, 0.0f, 0.94f);
+                    bodies[j].vel = glm::mix(bodies[j].vel, bodies[i].vel, drag);
+                } else if (nebula_j && !nebula_i) {
+                    float drag = std::clamp((0.12f + overlap_fraction * 0.70f) * std::max(dt, 1.0e-4f) * 8.0f, 0.0f, 0.94f);
+                    bodies[i].vel = glm::mix(bodies[i].vel, bodies[j].vel, drag);
+                } else {
+                    float mutual = std::clamp((0.06f + overlap_fraction * 0.35f) * std::max(dt, 1.0e-4f) * 8.0f, 0.0f, 0.65f);
+                    glm::vec3 vcm = (bodies[i].vel * bodies[i].mass + bodies[j].vel * bodies[j].mass) /
+                                    std::max(bodies[i].mass + bodies[j].mass, 1.0e-6f);
+                    bodies[i].vel = glm::mix(bodies[i].vel, vcm, mutual);
+                    bodies[j].vel = glm::mix(bodies[j].vel, vcm, mutual);
+                }
+
+                if (cfg.temperature_system) {
+                    float thermal_kick = std::min(glm::length(rel_vel) * overlap_fraction * 18.0f, 1200.0f);
+                    if (nebula_i) {
+                        bodies[i].temperature += thermal_kick * 0.10f;
+                        bodies[i].internal_energy += thermal_kick * 0.002f;
+                    }
+                    if (nebula_j) {
+                        bodies[j].temperature += thermal_kick * 0.10f;
+                        bodies[j].internal_energy += thermal_kick * 0.002f;
+                    }
+                    if (nebula_i && !nebula_j) {
+                        bodies[j].temperature += thermal_kick * 0.25f;
+                        bodies[j].internal_energy += thermal_kick * 0.004f;
+                    } else if (nebula_j && !nebula_i) {
+                        bodies[i].temperature += thermal_kick * 0.25f;
+                        bodies[i].internal_energy += thermal_kick * 0.004f;
+                    }
+                }
+                continue;
+            }
+
             float contact_dist = overlap_now ? dist : sweep_dist;
             glm::vec3 normal = overlap_now ? (diff / std::max(dist, 1.0e-6f))
                                            : (closest_rel / std::max(sweep_dist, 1.0e-6f));
@@ -3489,4 +3535,3 @@ float CosmosApp::screen_radius(float world_radius, float depth,
     if (depth <= 0.0f) return 0.0f;
     return (world_radius / depth) * (screen_h / (2.0f * std::tan(fov_rad * 0.5f)));
 }
-

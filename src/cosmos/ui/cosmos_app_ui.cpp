@@ -1730,6 +1730,21 @@ void CosmosApp::draw_spawn_menu() {
             spawn_draft_.star_stage_hint = -1;
         }
 
+        if (spawn_type == CTYPE_NEBULA) {
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Nebula Render Path");
+            int mode = std::clamp(cfg.nebula_render_mode, 0, 2);
+            bool m0 = (mode == 0);
+            bool m1 = (mode == 1);
+            bool m2 = (mode == 2);
+            if (ImGui::Checkbox("Volumetric Raymarching", &m0) && m0) mode = 0;
+            if (ImGui::Checkbox("Volumetric Raymarching + Compute Shaders", &m1) && m1) mode = 1;
+            if (ImGui::Checkbox("Advanced Particle Systems", &m2) && m2) mode = 2;
+            cfg.nebula_render_mode = mode;
+            ImGui::TextColored(ImVec4(0.60f, 0.70f, 0.82f, 1.0f),
+                               "Raymarching uses Perlin + Beer-Lambert + semi-Lagrangian advection.");
+        }
+
         static uint32_t preview_seed = 0xC05109ADu;
         ImGui::Separator();
         ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Body Preview");

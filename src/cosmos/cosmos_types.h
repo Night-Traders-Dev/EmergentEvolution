@@ -876,6 +876,7 @@ struct CosmosConfig {
     bool     velocity_verlet      = true;    // use Velocity Verlet integration
     bool     barnes_hut           = true;    // use Barnes-Hut gravity approximation at scale
     bool     gpu_barnes_hut       = false;   // evaluate Barnes-Hut acceleration with Vulkan compute
+    int      nebula_render_mode   = 1;       // 0=raymarch, 1=raymarch+compute, 2=advanced particles
     float    barnes_hut_theta     = 0.72f;   // opening angle (smaller = more accurate)
     int      barnes_hut_min_bodies = 128;    // body-count threshold before BH engages
 };

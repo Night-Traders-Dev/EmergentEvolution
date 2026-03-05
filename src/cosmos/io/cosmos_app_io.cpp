@@ -817,13 +817,16 @@ void CosmosApp::load_persistent_settings() {
     if (!f.good() || magic != COSMOS_SETTINGS_MAGIC || version > COSMOS_SETTINGS_VERSION)
         return;
 
-    if (cfg_size == sizeof(CosmosConfig)) {
-        f.read(reinterpret_cast<char*>(&cfg), sizeof(CosmosConfig));
+    if (cfg_size > 0 && cfg_size < (1u << 20)) {
+        CosmosConfig loaded_cfg = cfg;
+        size_t copy_bytes = std::min<size_t>(cfg_size, sizeof(CosmosConfig));
+        f.read(reinterpret_cast<char*>(&loaded_cfg), (std::streamsize)copy_bytes);
+        if (!f.good()) return;
+        if (cfg_size > copy_bytes)
+            f.seekg((std::streamoff)(cfg_size - copy_bytes), std::ios::cur);
+        cfg = loaded_cfg;
     } else {
-        if (cfg_size > 0 && cfg_size < (1u << 20))
-            f.seekg((std::streamoff)cfg_size, std::ios::cur);
-        else
-            return;
+        return;
     }
     if (!f.good()) return;
 

@@ -1,0 +1,195 @@
+#version 450
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct NebulaComputeInput {
+    vec4 seed_class_temp;
+    vec4 atmosphere;
+    vec4 activity;
+    vec4 composition;
+};
+
+struct NebulaComputeOutput {
+    vec4 flow;
+    vec4 optical;
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer InputBuffer {
+    NebulaComputeInput entries[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer OutputBuffer {
+    NebulaComputeOutput out_entries[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint body_count;
+    float sim_time;
+    float dt_hint;
+    float pad;
+} pc;
+
+const int RENDER_NEBULA = 6;
+
+vec3 hash33(vec3 p) {
+    p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
+             dot(p, vec3(269.5, 183.3, 246.1)),
+             dot(p, vec3(113.5, 271.9, 124.6)));
+    return -1.0 + 2.0 * fract(sin(p) * 43758.5453123);
+}
+
+float perlin3(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+
+    float n000 = dot(hash33(i + vec3(0.0, 0.0, 0.0)), f - vec3(0.0, 0.0, 0.0));
+    float n100 = dot(hash33(i + vec3(1.0, 0.0, 0.0)), f - vec3(1.0, 0.0, 0.0));
+    float n010 = dot(hash33(i + vec3(0.0, 1.0, 0.0)), f - vec3(0.0, 1.0, 0.0));
+    float n110 = dot(hash33(i + vec3(1.0, 1.0, 0.0)), f - vec3(1.0, 1.0, 0.0));
+    float n001 = dot(hash33(i + vec3(0.0, 0.0, 1.0)), f - vec3(0.0, 0.0, 1.0));
+    float n101 = dot(hash33(i + vec3(1.0, 0.0, 1.0)), f - vec3(1.0, 0.0, 1.0));
+    float n011 = dot(hash33(i + vec3(0.0, 1.0, 1.0)), f - vec3(0.0, 1.0, 1.0));
+    float n111 = dot(hash33(i + vec3(1.0, 1.0, 1.0)), f - vec3(1.0, 1.0, 1.0));
+
+    float nx00 = mix(n000, n100, u.x);
+    float nx10 = mix(n010, n110, u.x);
+    float nx01 = mix(n001, n101, u.x);
+    float nx11 = mix(n011, n111, u.x);
+    float nxy0 = mix(nx00, nx10, u.y);
+    float nxy1 = mix(nx01, nx11, u.y);
+    return mix(nxy0, nxy1, u.z);
+}
+
+float fbm3(vec3 p) {
+    float sum = 0.0;
+    float amp = 0.55;
+    float freq = 1.0;
+    for (int i = 0; i < 4; ++i) {
+        sum += amp * perlin3(p * freq);
+        freq *= 2.03;
+        amp *= 0.5;
+    }
+    return sum * 0.5 + 0.5;
+}
+
+float smooth_min(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (b - a) / max(k, 1.0e-4), 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+float layered_density(vec3 p, float seed, float t, vec3 v_a, vec3 v_b, float collapse) {
+    vec3 p_a = p + v_a * t + vec3(seed * 0.013, seed * 0.009, seed * 0.017);
+    vec3 p_b = p + v_b * t + vec3(seed * 0.021, seed * 0.015, seed * 0.011);
+    float d_a = fbm3(p_a * 2.2);
+    float d_b = fbm3(p_b * 3.6);
+    float additive = clamp(d_a * 0.72 + d_b * 0.58, 0.0, 1.0);
+    float condense = smooth_min(1.0 - d_a, 1.0 - d_b, 0.32);
+    condense = 1.0 - condense;
+    float exponent = mix(1.2, 3.8, clamp(collapse, 0.0, 1.0));
+    return pow(clamp(additive * 0.62 + condense * 0.55, 0.0, 1.0), exponent);
+}
+
+vec3 flow_field(vec3 p, float seed, float flow_strength, float t, out vec3 v_a, out vec3 v_b) {
+    v_a = vec3(0.10, -0.06, 0.08) * (0.5 + flow_strength);
+    v_b = vec3(-0.08, 0.09, -0.05) * (0.4 + flow_strength * 0.8);
+    vec3 q = p + vec3(seed * 0.013, seed * 0.007, seed * 0.017);
+    vec3 qa = q + v_a * t;
+    vec3 qb = q + v_b * t;
+    vec3 layer_a = vec3(
+        perlin3(qa * 1.9 + vec3(2.1, 0.8, 1.7)),
+        perlin3(qa * 2.1 + vec3(0.4, 3.3, 2.6)),
+        perlin3(qa * 1.7 + vec3(1.3, 2.7, 4.1)));
+    vec3 layer_b = vec3(
+        perlin3(qb * 2.4 + vec3(4.5, 1.7, 0.8)),
+        perlin3(qb * 2.0 + vec3(0.9, 5.2, 1.4)),
+        perlin3(qb * 2.8 + vec3(2.3, 0.5, 6.1)));
+    vec3 f = layer_a * 0.64 + layer_b * 0.48;
+    return f * (0.14 + flow_strength * 0.62);
+}
+
+vec3 flow_curl(vec3 p, float seed, float flow_strength, float t) {
+    vec3 va, vb;
+    float e = 0.04;
+    vec3 fx1 = flow_field(p + vec3(e, 0.0, 0.0), seed, flow_strength, t, va, vb);
+    vec3 fx0 = flow_field(p - vec3(e, 0.0, 0.0), seed, flow_strength, t, va, vb);
+    vec3 fy1 = flow_field(p + vec3(0.0, e, 0.0), seed, flow_strength, t, va, vb);
+    vec3 fy0 = flow_field(p - vec3(0.0, e, 0.0), seed, flow_strength, t, va, vb);
+    vec3 fz1 = flow_field(p + vec3(0.0, 0.0, e), seed, flow_strength, t, va, vb);
+    vec3 fz0 = flow_field(p - vec3(0.0, 0.0, e), seed, flow_strength, t, va, vb);
+
+    vec3 curl = vec3(
+        (fy1.z - fy0.z) - (fz1.y - fz0.y),
+        (fz1.x - fz0.x) - (fx1.z - fx0.z),
+        (fx1.y - fx0.y) - (fy1.x - fy0.x));
+    return curl * (0.5 / e);
+}
+
+vec3 density_gradient(vec3 p, float seed, float t, vec3 v_a, vec3 v_b, float collapse) {
+    float e = 0.035;
+    float dx = layered_density(p + vec3(e, 0.0, 0.0), seed, t, v_a, v_b, collapse) -
+               layered_density(p - vec3(e, 0.0, 0.0), seed, t, v_a, v_b, collapse);
+    float dy = layered_density(p + vec3(0.0, e, 0.0), seed, t, v_a, v_b, collapse) -
+               layered_density(p - vec3(0.0, e, 0.0), seed, t, v_a, v_b, collapse);
+    float dz = layered_density(p + vec3(0.0, 0.0, e), seed, t, v_a, v_b, collapse) -
+               layered_density(p - vec3(0.0, 0.0, e), seed, t, v_a, v_b, collapse);
+    return vec3(dx, dy, dz) * (0.5 / e);
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.body_count) return;
+
+    NebulaComputeInput e = entries[idx];
+    int render_class = int(e.seed_class_temp.y + 0.5);
+    if (render_class != RENDER_NEBULA) {
+        out_entries[idx].flow = vec4(0.0);
+        out_entries[idx].optical = vec4(1.0, 1.0, 0.25, 1.0);
+        return;
+    }
+
+    float seed = e.seed_class_temp.x;
+    float dust = clamp(e.composition.w, 0.0, 1.0);
+    float metal = clamp(e.composition.z, 0.0, 1.0);
+    float pressure = max(e.atmosphere.y, 0.0);
+    float haze = clamp(e.atmosphere.z, 0.0, 2.5);
+    float flow = clamp(e.activity.x, 0.0, 2.5);
+    float cloud_detail = clamp(e.activity.y, 0.0, 2.5);
+    float collapse = clamp(e.activity.z, 0.0, 2.5);
+
+    vec3 sample_pos = vec3(
+        fract(seed * 0.031 + 0.17),
+        fract(seed * 0.047 + 0.53),
+        fract(seed * 0.061 + 0.79));
+
+    vec3 v_a;
+    vec3 v_b;
+    vec3 vel = flow_field(sample_pos, seed, flow + cloud_detail * 0.25, pc.sim_time, v_a, v_b);
+    float dt = max(pc.dt_hint, 1.0 / 240.0);
+    vec3 prev_pos = sample_pos - vel * dt; // semi-Lagrangian backtrace
+    vec3 prev_vel = flow_field(prev_pos, seed, flow + cloud_detail * 0.25, pc.sim_time - dt, v_a, v_b);
+    vec3 advected = mix(prev_vel, vel, 0.65);
+
+    vec3 vort = flow_curl(sample_pos, seed, flow + cloud_detail * 0.25, pc.sim_time);
+    advected += vort * (0.015 + cloud_detail * 0.020); // vorticity confinement
+
+    vec3 grad_density = density_gradient(sample_pos, seed, pc.sim_time, v_a, v_b, collapse);
+    float grad_len = length(grad_density);
+    if (grad_len > 1.0e-5) {
+        vec3 attraction = grad_density / grad_len; // pull toward higher-density peaks
+        advected += attraction * (0.010 + collapse * 0.035);
+    }
+
+    float dens_l = layered_density(sample_pos, seed, pc.sim_time, v_a, v_b, collapse);
+    float density_scale = clamp((0.60 + haze * 0.44 + pressure * 0.0013 + cloud_detail * 0.22) *
+                                (0.65 + dens_l * 1.25), 0.45, 4.0);
+    float absorption = clamp((0.85 + dust * 0.95 + metal * 0.85 + haze * 0.36) *
+                             (0.75 + dens_l * 0.85), 0.50, 4.0);
+    float anisotropy = clamp(0.15 + dust * 0.45 + collapse * 0.10, 0.02, 0.90);
+    float emission = clamp(0.80 + collapse * 0.35 + cloud_detail * 0.10, 0.55, 2.4);
+
+    float turbulence = length(advected) * (1.0 + 0.35 * cloud_detail);
+
+    out_entries[idx].flow = vec4(advected, turbulence);
+    out_entries[idx].optical = vec4(density_scale, absorption, anisotropy, emission);
+}
