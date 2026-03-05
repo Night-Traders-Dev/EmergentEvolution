@@ -747,7 +747,7 @@ void CosmosApp::draw_spawn_menu() {
         static int known_subtab = 0;
         static int kuiper_count = 450;
         static int oort_count = 900;
-        const char* known_tabs[] = {"Basic", "Stars", "Black Holes"};
+        const char* known_tabs[] = {"Basic", "Stars", "Black Holes", "System"};
 
         auto hash_name_seed = [](const char* name, uint32_t salt) -> uint32_t {
             uint32_t h = 2166136261u ^ salt;
@@ -961,8 +961,88 @@ void CosmosApp::draw_spawn_menu() {
             }
         };
 
+        auto find_body_by_name = [&](const char* name) -> int {
+            for (int i = 0; i < (int)state.bodies.size(); ++i) {
+                const auto& b = state.bodies[(size_t)i];
+                if (b.marked_for_removal) continue;
+                if (!b.name.empty() && b.name == name) return i;
+            }
+            return -1;
+        };
+
+        auto ensure_named_planet = [&](const char* name, float mass_solar, float radius_km,
+                                       float temp_k, float orbit_au, float incl_deg,
+                                       float rotation_h) -> int {
+            int idx = find_body_by_name(name);
+            if (idx >= 0) return idx;
+            constexpr float AU_KM = 149597870.7f;
+            int sun_idx = find_star_or_create_sun();
+            CelestialBody p = make_body(name, CTYPE_PLANET, mass_solar, radius_km,
+                                        temp_k, rotation_h, SSTAGE_MAIN_SEQUENCE, 0.0f);
+            float phase = hash_float(hash_name_seed(name, 314159u)) * 6.2831853f;
+            place_orbit_km(p, sun_idx, orbit_au * AU_KM, phase, incl_deg);
+            return append_body(std::move(p));
+        };
+
+        auto spawn_named_moon = [&](const char* name, int parent_idx, float mass_solar,
+                                    float radius_km, float temp_k, float orbit_km,
+                                    float incl_deg, float rotation_h) {
+            CelestialBody m = make_body(name, CTYPE_MOON, mass_solar, radius_km,
+                                        temp_k, rotation_h, SSTAGE_MAIN_SEQUENCE, 0.0f);
+            float phase = hash_float(hash_name_seed(name, 271828u)) * 6.2831853f;
+            place_orbit_km(m, parent_idx, orbit_km, phase, incl_deg);
+            append_body(std::move(m));
+        };
+
+        auto spawn_galilean_system = [&]() {
+            int jupiter = ensure_named_planet("Jupiter", 9.5458e-4f, 69911.0f, 165.0f, 5.203f, 1.3f, 9.9f);
+            spawn_named_moon("Io", jupiter, 4.49e-8f, 1821.6f, 110.0f, 421700.0f, 0.0f, 42.5f);
+            spawn_named_moon("Europa", jupiter, 2.41e-8f, 1560.8f, 102.0f, 671100.0f, 0.5f, 85.2f);
+            spawn_named_moon("Ganymede", jupiter, 7.80e-8f, 2634.1f, 110.0f, 1070400.0f, 0.2f, 171.7f);
+            spawn_named_moon("Callisto", jupiter, 5.67e-8f, 2410.3f, 134.0f, 1882700.0f, 0.2f, 400.5f);
+        };
+
+        auto spawn_saturn_system = [&]() {
+            int saturn = ensure_named_planet("Saturn", 2.858e-4f, 58232.0f, 134.0f, 9.537f, 2.5f, 10.7f);
+            if (saturn >= 0 && saturn < (int)state.bodies.size()) {
+                auto& p = state.bodies[(size_t)saturn];
+                p.ring_inner_radius = p.radius * 1.35f;
+                p.ring_outer_radius = p.radius * 2.35f;
+                p.ring_density = 0.38f;
+                p.ring_ice_fraction = 0.72f;
+                p.ring_tilt = 0.12f;
+                p.visuals_valid = false;
+            }
+            spawn_named_moon("Titan", saturn, 6.76e-8f, 2574.7f, 94.0f, 1221870.0f, 0.3f, 382.7f);
+            spawn_named_moon("Enceladus", saturn, 5.44e-11f, 252.1f, 75.0f, 237950.0f, 0.0f, 32.9f);
+            spawn_named_moon("Rhea", saturn, 1.17e-8f, 763.8f, 76.0f, 527108.0f, 0.3f, 108.4f);
+            spawn_named_moon("Iapetus", saturn, 9.06e-10f, 734.5f, 81.0f, 3560820.0f, 15.5f, 1903.0f);
+        };
+
+        auto spawn_uranus_system = [&]() {
+            int uranus = ensure_named_planet("Uranus", 4.366e-5f, 25362.0f, 76.0f, 19.191f, 0.8f, -17.2f);
+            spawn_named_moon("Miranda", uranus, 3.30e-11f, 235.8f, 60.0f, 129390.0f, 4.3f, 33.9f);
+            spawn_named_moon("Ariel", uranus, 6.75e-10f, 578.9f, 58.0f, 190900.0f, 0.3f, 60.5f);
+            spawn_named_moon("Umbriel", uranus, 6.50e-10f, 584.7f, 58.0f, 266000.0f, 0.1f, 99.5f);
+            spawn_named_moon("Titania", uranus, 1.76e-8f, 788.9f, 65.0f, 436300.0f, 0.1f, 208.7f);
+            spawn_named_moon("Oberon", uranus, 1.51e-8f, 761.4f, 63.0f, 583500.0f, 0.1f, 323.3f);
+        };
+
+        auto spawn_neptune_system = [&]() {
+            int neptune = ensure_named_planet("Neptune", 5.151e-5f, 24622.0f, 72.0f, 30.070f, 1.8f, 16.1f);
+            spawn_named_moon("Triton", neptune, 1.08e-8f, 1353.4f, 38.0f, 354759.0f, 156.9f, 141.0f);
+            spawn_named_moon("Nereid", neptune, 1.55e-12f, 170.0f, 50.0f, 5513818.0f, 7.2f, 360.0f * 360.0f);
+        };
+
+        auto spawn_pluto_system = [&]() {
+            int pluto = ensure_named_planet("Pluto", 6.56e-9f, 1188.3f, 44.0f, 39.482f, 17.2f, -153.3f);
+            spawn_named_moon("Charon", pluto, 7.57e-10f, 606.0f, 48.0f, 19596.0f, 0.0f, 153.3f);
+            spawn_named_moon("Nix", pluto, 2.35e-14f, 24.8f, 40.0f, 48694.0f, 0.1f, 600.0f);
+            spawn_named_moon("Hydra", pluto, 2.80e-14f, 30.5f, 40.0f, 64738.0f, 0.2f, 900.0f);
+        };
+
         ImGui::Separator();
-        for (int t = 0; t < 3; ++t) {
+        for (int t = 0; t < 4; ++t) {
             if (t > 0) ImGui::SameLine();
             if (known_subtab == t) {
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.34f, 0.26f, 0.10f, 0.95f));
@@ -1000,6 +1080,18 @@ void CosmosApp::draw_spawn_menu() {
                     int sun_idx = find_star_or_create_sun();
                     spawn_oort_cloud(sun_idx, oort_count);
                 }
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Named Moon Systems");
+                if (ImGui::Button("Jupiter System (Galilean Moons)", ImVec2(-1, 26)))
+                    spawn_galilean_system();
+                if (ImGui::Button("Saturn System (Titan + Major Moons)", ImVec2(-1, 26)))
+                    spawn_saturn_system();
+                if (ImGui::Button("Uranus System (Major Moons)", ImVec2(-1, 26)))
+                    spawn_uranus_system();
+                if (ImGui::Button("Neptune System (Triton + Nereid)", ImVec2(-1, 26)))
+                    spawn_neptune_system();
+                if (ImGui::Button("Pluto System (Charon + Outer Moons)", ImVec2(-1, 26)))
+                    spawn_pluto_system();
             } else if (known_subtab == 1) {
                 ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Known Objects - Stars");
                 if (ImGui::Button("Sirius A", ImVec2(-1, 26))) {
@@ -1026,7 +1118,7 @@ void CosmosApp::draw_spawn_menu() {
                     s.pos = camera.target;
                     append_body(std::move(s));
                 }
-            } else {
+            } else if (known_subtab == 2) {
                 ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Known Objects - Black Holes");
                 if (ImGui::Button("Cygnus X-1", ImVec2(-1, 26))) {
                     CelestialBody bh = make_body("Cygnus X-1", CTYPE_BH_STELLAR, 21.0f, 120.0f, 0.0f,
@@ -1052,6 +1144,24 @@ void CosmosApp::draw_spawn_menu() {
                     bh.pos = camera.target;
                     append_body(std::move(bh));
                 }
+            } else {
+                ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Known Objects - System");
+                ImGui::TextWrapped("System-level one-click presets built from the Known Objects catalog.");
+                if (ImGui::Button("Our Solar System (Known Objects)", ImVec2(-1, 30)))
+                    spawn_solar_system(false);
+                if (ImGui::Button("Our Solar System + Kuiper Belt + Oort Cloud", ImVec2(-1, 30)))
+                    spawn_solar_system(true);
+                ImGui::Separator();
+                if (ImGui::Button("Add Jupiter System to Current Scene", ImVec2(-1, 26)))
+                    spawn_galilean_system();
+                if (ImGui::Button("Add Saturn System to Current Scene", ImVec2(-1, 26)))
+                    spawn_saturn_system();
+                if (ImGui::Button("Add Uranus System to Current Scene", ImVec2(-1, 26)))
+                    spawn_uranus_system();
+                if (ImGui::Button("Add Neptune System to Current Scene", ImVec2(-1, 26)))
+                    spawn_neptune_system();
+                if (ImGui::Button("Add Pluto System to Current Scene", ImVec2(-1, 26)))
+                    spawn_pluto_system();
             }
         }
         ImGui::EndChild();
