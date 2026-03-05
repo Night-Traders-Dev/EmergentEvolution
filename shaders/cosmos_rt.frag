@@ -895,6 +895,8 @@ vec3 shade_star(vec3 normal, vec3 rd, Sphere hit) {
     float active_lat = 0.16 + differential_rotation * 0.24;
     float magnetic_band = 1.0 - smoothstep(0.08, 0.44, abs(abs(normal.y) - active_lat));
     float cool_star = clamp((6500.0 - temperature) / 4000.0, 0.0, 1.0);
+    float storm_strength = clamp(0.20 + flare_activity * 0.55 + corona_strength * 0.22 +
+                                 differential_rotation * 0.35, 0.0, 1.75);
     vec3 spot_field = vec3(
         lon * (8.0 + differential_rotation * 8.0) - spin_phase * (0.9 + differential_rotation * 0.5),
         lat * 14.0,
@@ -902,18 +904,29 @@ vec3 shade_star(vec3 normal, vec3 rd, Sphere hit) {
     float spot_noise = fbm(spot_field, 4);
     float spot_cluster = fbm(vec3(lon * 4.0 + seed * 0.03, lat * 6.0, seed * 0.59 - spin_phase * 0.25), 3);
     float spot_mask = spot_noise * 0.72 + spot_cluster * 0.48 + magnetic_band * 0.22;
-    float spot_cut = clamp(1.0 - spot_coverage * (1.35 + cool_star * 0.35), 0.52, 0.92);
-    float spots = smoothstep(spot_cut, min(spot_cut + 0.10, 0.995), spot_mask);
+    float spot_cut = clamp(1.0 - spot_coverage * (1.35 + cool_star * 0.35), 0.48, 0.90);
+    float spots = smoothstep(spot_cut, min(spot_cut + 0.11, 0.995), spot_mask);
+    float umbra = smoothstep(min(spot_cut + 0.06, 0.99), min(spot_cut + 0.16, 0.999), spot_mask);
     float facula = smoothstep(0.46, 0.64, fbm(spot_field * vec3(0.72, 0.82, 1.0) + vec3(0.8, 0.0, 1.7), 4));
     gran_col = mix(gran_col, gran_col * (0.42 + 0.2 * cool_star), spots * spot_strength * cool_star);
+    gran_col = mix(gran_col, gran_col * 0.28, umbra * spot_strength * (0.6 + cool_star * 0.8));
     gran_col += tint * facula * spot_strength * (0.10 + 0.12 * cool_star);
+
+    float storm_band_wave = sin(lon * (7.0 + flare_frequency * 2.8) + screen_info.w * (0.95 + storm_strength * 1.65) +
+                                seed * 0.23);
+    float storm_lat_band = 1.0 - smoothstep(0.03, 0.28 + differential_rotation * 0.20, abs(abs(normal.y) - active_lat));
+    float storm_noise = fbm(vec3(lon * 9.5 - screen_info.w * (1.3 + storm_strength * 1.8),
+                                 lat * 16.0,
+                                 seed * 0.53), 4);
+    float storm_cells = smoothstep(0.58, 0.86, storm_noise + storm_lat_band * 0.45 + storm_band_wave * 0.25);
+    gran_col += tint * (0.08 + 0.22 * flare_activity) * storm_cells * storm_strength * (0.45 + 0.55 * magnetic_band);
 
     float mu = max(dot(normal, -rd), 0.0);
     float limb_dark = mix(0.45, 0.75, clamp(temperature / 18000.0, 0.0, 1.0));
     float pulsate = 1.0 + pulsation * 0.06 * sin(screen_info.w * (0.6 + flare_frequency * 0.35) + seed * 0.13);
     vec3 col = gran_col * mix(limb_dark, 1.0, pow(mu, 0.65)) * pulsate;
 
-    float global_flare = 0.94 + flare_activity * 0.09 *
+    float global_flare = 0.94 + flare_activity * 0.12 *
         sin(screen_info.w * (1.0 + flare_frequency * 0.7) + seed * 0.13);
     col *= global_flare;
 
@@ -924,10 +937,24 @@ vec3 shade_star(vec3 normal, vec3 rd, Sphere hit) {
             + magnetic_band * 0.35);
         float flare_cycle = max(0.0, sin(screen_info.w * (0.7 + flare_frequency * 1.1) + seed * 0.47));
         float flare_burst = pow(flare_cycle, 8.0) * active_region * flare_activity;
-        float streamer = edge * active_region * (0.35 + 0.65 * flare_burst);
-        col += tint * corona_strength * edge * (0.62 + 0.18 * pulsation);
-        col += mix(tint, vec3(1.00, 0.96, 0.88), 0.35) * streamer * (0.18 + flare_activity * 0.55);
-        col += vec3(0.95, 0.98, 1.0) * flare_burst * edge * (0.25 + corona_strength * 0.65);
+        float streamer = edge * active_region * (0.42 + 0.78 * flare_burst);
+
+        float flare_fan = abs(sin(lon * (13.0 + flare_frequency * 5.2) + seed * 0.39 -
+                                  screen_info.w * (2.2 + flare_activity * 1.9)));
+        flare_fan = pow(flare_fan, 8.0) * edge;
+        float cme_ribbon = smoothstep(0.62, 0.93,
+            fbm(vec3(lon * 12.5 + screen_info.w * (0.65 + storm_strength * 1.1),
+                     lat * 20.0 - screen_info.w * 0.4,
+                     seed * 0.71), 4) + active_region * 0.35);
+        float cme = cme_ribbon * edge * storm_strength * (0.25 + 0.75 * flare_cycle);
+        float storm_glow = storm_cells * edge * (0.10 + 0.32 * storm_strength);
+
+        col += tint * corona_strength * edge * (0.72 + 0.24 * pulsation);
+        col += mix(tint, vec3(1.00, 0.96, 0.88), 0.35) * streamer * (0.24 + flare_activity * 0.72);
+        col += vec3(1.0, 0.97, 0.92) * flare_fan * flare_activity * (0.18 + corona_strength * 0.40);
+        col += vec3(0.95, 0.98, 1.0) * flare_burst * edge * (0.32 + corona_strength * 0.78);
+        col += mix(tint, vec3(1.0, 0.88, 0.72), 0.62) * cme * (0.30 + flare_activity * 0.68);
+        col += tint * storm_glow;
     }
 
     return col * (1.1 + hit.base_emit.a * 0.35);

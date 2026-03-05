@@ -1055,17 +1055,17 @@ inline BodyVisualProperties generate_body_visual_properties(const CelestialBody&
         vp.ridge_amp = (b.type == CTYPE_STAR_G || b.type == CTYPE_STAR_K || b.type == CTYPE_STAR_M)
             ? (0.20f + h2 * 0.60f) : (0.03f + h2 * 0.18f);
         vp.rock_frac = 0.02f + h0 * 0.18f;
-        vp.star_spot_coverage = std::clamp(0.04f + cool_factor * 0.22f + spin_mag * 0.12f +
-            spent_fuel * 0.10f + h1 * 0.08f, 0.01f, 0.42f);
-        vp.star_flare_frequency = 0.65f + spin_mag * 1.8f + h2 * 0.9f + compact_factor * 1.6f;
+        vp.star_spot_coverage = std::clamp(0.08f + cool_factor * 0.28f + spin_mag * 0.14f +
+            spent_fuel * 0.12f + h1 * 0.12f, 0.05f, 0.58f);
+        vp.star_flare_frequency = 0.75f + spin_mag * 1.9f + h2 * 1.0f + compact_factor * 1.8f;
         vp.star_pulsation = std::clamp(evolved_factor * (0.22f + h0 * 0.32f) +
             compact_factor * (0.18f + h1 * 0.22f) + spent_fuel * 0.10f, 0.0f, 0.75f);
         vp.star_differential_rotation = std::clamp(0.18f + h2 * 0.48f + spin_mag * 0.30f, 0.10f, 0.95f);
-        vp.flare_activity = std::clamp(0.12f + b.mass * 0.025f + spin_mag * 0.55f +
-            spent_fuel * 0.18f + h0 * 0.12f, 0.0f, 1.25f);
-        vp.corona_strength = std::clamp(0.25f + temp_n * 0.85f +
-            evolved_factor * 0.18f + compact_factor * 0.28f + spent_fuel * 0.08f,
-            0.0f, 1.35f);
+        vp.flare_activity = std::clamp(0.26f + b.mass * 0.030f + spin_mag * 0.58f +
+            spent_fuel * 0.22f + h0 * 0.16f, 0.10f, 1.45f);
+        vp.corona_strength = std::clamp(0.38f + temp_n * 0.88f +
+            evolved_factor * 0.20f + compact_factor * 0.30f + spent_fuel * 0.10f,
+            0.15f, 1.55f);
         vp.spin_visual = spin_mag;
         return vp;
     }
