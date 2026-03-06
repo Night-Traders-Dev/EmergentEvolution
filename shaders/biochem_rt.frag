@@ -266,6 +266,67 @@ float torus_mask(vec3 p, vec3 center, vec2 radii, float blur) {
     return mask_from_sdf(sd_torus(p - center, radii), blur);
 }
 
+vec4 sample_nonfunctional_organelles(vec3 p0, vec3 p1, vec3 p2,
+                                     int morph, float phase, float noise) {
+    vec3 color = vec3(0.0);
+    float density = 0.0;
+
+    for (int i = 0; i < 2; ++i) {
+        float fi = float(i);
+        vec3 center = vec3(
+            sin(phase * 0.7 + fi * 2.9) * 0.26,
+            cos(phase * 1.1 + fi * 2.2) * (morph == 1 ? 0.09 : 0.16),
+            sin(phase * 0.9 + fi * 3.4) * 0.20);
+        float r = 0.11 + fi * 0.025 + noise * 0.03;
+        float vacuole = max(sphere_mask(p0, center, r, 0.06),
+                            sphere_mask(p1, center, r, 0.06));
+        color += vec3(0.36, 0.62, 0.84) * vacuole * 0.10;
+        density += vacuole * 0.035;
+    }
+
+    for (int i = 0; i < 4; ++i) {
+        float fi = float(i);
+        vec3 center = vec3(
+            cos(phase * 1.7 + fi * 1.3) * 0.24,
+            sin(phase * 0.8 + fi * 2.7) * 0.18,
+            cos(phase * 1.2 + fi * 1.9) * 0.22);
+        float lysosome = max(sphere_mask(p1, center, 0.045 + fi * 0.004, 0.035),
+                             sphere_mask(p2, center, 0.045 + fi * 0.004, 0.035));
+        color += vec3(0.92, 0.54, 0.64) * lysosome * 0.11;
+        density += lysosome * 0.024;
+    }
+
+    for (int i = 0; i < 3; ++i) {
+        float fi = float(i);
+        vec3 center = vec3(
+            sin(phase * 1.4 + fi * 2.4) * 0.20,
+            cos(phase * 1.0 + fi * 1.6) * 0.15,
+            sin(phase * 0.6 + fi * 2.8) * 0.24);
+        vec3 axis = normalize(vec3(
+            cos(fi + phase * 0.7),
+            sin(fi * 1.7 - phase),
+            cos(fi * 0.8 + phase * 1.4)));
+        float body = max(capsule_mask(p0, center - axis * 0.08, center + axis * 0.08, 0.03, 0.03),
+                         capsule_mask(p1, center - axis * 0.08, center + axis * 0.08, 0.03, 0.03));
+        color += vec3(0.82, 0.78, 0.36) * body * 0.08;
+        density += body * 0.018;
+    }
+
+    for (int i = 0; i < 3; ++i) {
+        float fi = float(i);
+        vec3 center = vec3(
+            cos(phase * 0.9 + fi * 1.5) * 0.17,
+            sin(phase * 1.8 + fi * 1.2) * 0.13,
+            cos(phase * 1.5 + fi * 2.5) * 0.16);
+        float peroxisome = max(sphere_mask(p0, center, 0.034, 0.028),
+                               sphere_mask(p2, center, 0.034, 0.028));
+        color += vec3(0.52, 0.90, 0.70) * peroxisome * 0.10;
+        density += peroxisome * 0.02;
+    }
+
+    return vec4(color, clamp(density, 0.0, 0.22));
+}
+
 vec4 sample_cell_interior(vec3 surface_pt, vec3 local_view, int morph,
                           float aspect, float noise, float phase) {
     vec3 p0 = surface_pt + local_view * (0.14 + noise * 0.03);
@@ -339,6 +400,10 @@ vec4 sample_cell_interior(vec3 surface_pt, vec3 local_view, int morph,
         vesicles += vesicle;
     }
     density += vesicles * 0.05;
+
+    vec4 decorative = sample_nonfunctional_organelles(p0, p1, p2, morph, phase, noise);
+    color += decorative.rgb;
+    density += decorative.a;
 
     if (morph == 1) {
         for (int i = 0; i < 3; ++i) {
@@ -671,10 +736,13 @@ void main() {
         spike = max(0.0, s) * (0.10 + shape_noise * 0.18);
     }
 
-    vec3 final_color = (diffuse + amb + sss) * membrane
+    vec3 shell_color = (diffuse + amb + sss) * membrane
                      + spec_color * spec
                      + rim_color * rim * 0.35
                      + base_color * spike;
+    vec3 interior_color = vec3(0.0);
+    float interior_alpha = 0.0;
+    vec3 final_color = shell_color;
 
     if (entity_type == 0 || entity_type == 1) {
         vec4 interior = entity_type == 0
@@ -683,7 +751,9 @@ void main() {
         float translucency = entity_type == 0 ? 0.42 : 0.34;
         translucency *= 0.55 + 0.45 * max(dot(normal, V), 0.0);
         translucency *= 0.85 + 0.15 * membrane;
-        final_color = mix(final_color, final_color * 0.90 + interior.rgb, interior.a * translucency);
+        interior_color = interior.rgb;
+        interior_alpha = interior.a * translucency;
+        final_color = mix(shell_color, shell_color * 0.90 + interior_color, interior_alpha);
     }
 
     if (entity_type == 0) {
@@ -723,9 +793,19 @@ void main() {
     final_color *= (0.4 + 0.6 * shadow);
 
     vec4 media = trace_environment_media(ro, rd, closest_t, feature_count);
+    vec3 bg = background(rd, time, env_tint, oxygen, nutrients, acidity, toxicity);
+
+    if (entity_type == 0) {
+        float membrane_alpha = clamp(0.18 + fresnel * 0.26 + rim * 0.10 + membrane * 0.05, 0.20, 0.44);
+        vec3 transparent_fill = mix(bg + media.rgb * 0.24,
+                                    interior_color + shell_color * 0.20,
+                                    clamp(interior_alpha + 0.20, 0.20, 0.88));
+        final_color = mix(transparent_fill, shell_color + interior_color * 0.78, membrane_alpha);
+        final_color += vec3(0.10, 0.18, 0.22) * fresnel * 0.10;
+    }
+
     final_color += media.rgb;
 
-    vec3 bg = background(rd, time, env_tint, oxygen, nutrients, acidity, toxicity);
     float haze = 1.0 - exp(-closest_t * haze_density);
     haze *= 0.35 + nutrients * 0.10 + toxicity * 0.35;
     final_color = mix(final_color, bg + media.rgb * 0.35, clamp(haze + media.a * 0.22, 0.0, 0.82));

@@ -55,6 +55,7 @@ public:
     uint32_t                 queue_family    = 0;
     VkSurfaceKHR             surface         = VK_NULL_HANDLE;
     VkCommandPool            cmd_pool        = VK_NULL_HANDLE;
+    VkPipelineCache          pipeline_cache  = VK_NULL_HANDLE;
 
     bool                     vsync_requested = false;  // true = FIFO (VSync on), false = MAILBOX preferred
 

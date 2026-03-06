@@ -2326,6 +2326,15 @@ void main() {
             vec3 spin_axis = ring_axis(max(spheres[i].ring_params.w, 0.02), spheres[i].class_seed_temp.x);
             t = intersect_irregular_body(ro, rd, spheres[i].pos_radius.xyz, spheres[i].pos_radius.w,
                                          spheres[i].class_seed_temp.x, roughness, spin_phase, spin_axis);
+        } else if (render_class == RENDER_NEBULA) {
+            // Nebulae are volumetric — the raymarch volume is much larger than
+            // pos_radius.w.  Inflate the hit-test sphere to match the march
+            // bounds so rays through outer filaments actually reach the marcher.
+            float expansion = max(spheres[i].activity_params.w, 1.0);
+            float march_r = spheres[i].pos_radius.w * (2.2 + expansion * 0.85);
+            float aabb_half = 2.8 + expansion * 0.70;
+            float effective_r = march_r * aabb_half * 0.58; // ~cube-inscribed sphere
+            t = intersect_sphere(ro, rd, spheres[i].pos_radius.xyz, effective_r);
         } else {
             t = intersect_sphere(ro, rd, spheres[i].pos_radius.xyz, spheres[i].pos_radius.w);
         }

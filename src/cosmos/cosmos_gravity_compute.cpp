@@ -61,7 +61,7 @@ void CosmosGravityCompute::init(VulkanContext& vk) {
     VkComputePipelineCreateInfo cp_ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
     cp_ci.stage = stage_ci;
     cp_ci.layout = pipeline_layout_;
-    if (vkCreateComputePipelines(vk.device, VK_NULL_HANDLE, 1, &cp_ci, nullptr, &pipeline_) != VK_SUCCESS) {
+    if (vkCreateComputePipelines(vk.device, vk.pipeline_cache, 1, &cp_ci, nullptr, &pipeline_) != VK_SUCCESS) {
         vkDestroyShaderModule(vk.device, cs_mod, nullptr);
         throw std::runtime_error("Failed to create cosmos gravity compute pipeline");
     }

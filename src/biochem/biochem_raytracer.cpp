@@ -144,7 +144,7 @@ void BiochemRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     pipe_ci.renderPass          = render_pass;
     pipe_ci.subpass             = 0;
 
-    vkCreateGraphicsPipelines(vk.device, VK_NULL_HANDLE, 1, &pipe_ci, nullptr, &pipeline_);
+    vkCreateGraphicsPipelines(vk.device, vk.pipeline_cache, 1, &pipe_ci, nullptr, &pipeline_);
 
     vkDestroyShaderModule(vk.device, vert_mod, nullptr);
     vkDestroyShaderModule(vk.device, frag_mod, nullptr);

@@ -30,6 +30,31 @@ static const std::vector<const char*> DEVICE_EXTENSIONS = {
                 __FILE__ ":") + std::to_string(__LINE__) + " code=" + std::to_string(_r)); \
     } while (0)
 
+// ── Pipeline cache persistence ────────────────────────────────────────────────
+
+static const char* PIPELINE_CACHE_PATH = "pipeline_cache.bin";
+
+static std::vector<uint8_t> load_pipeline_cache_data() {
+    std::ifstream f(PIPELINE_CACHE_PATH, std::ios::binary | std::ios::ate);
+    if (!f.is_open()) return {};
+    auto size = f.tellg();
+    if (size <= 0) return {};
+    std::vector<uint8_t> data((size_t)size);
+    f.seekg(0);
+    f.read(reinterpret_cast<char*>(data.data()), size);
+    return f.good() ? data : std::vector<uint8_t>{};
+}
+
+static void save_pipeline_cache_data(VkDevice device, VkPipelineCache cache) {
+    if (cache == VK_NULL_HANDLE) return;
+    size_t size = 0;
+    if (vkGetPipelineCacheData(device, cache, &size, nullptr) != VK_SUCCESS || size == 0) return;
+    std::vector<uint8_t> data(size);
+    if (vkGetPipelineCacheData(device, cache, &size, data.data()) != VK_SUCCESS) return;
+    std::ofstream f(PIPELINE_CACHE_PATH, std::ios::binary);
+    f.write(reinterpret_cast<const char*>(data.data()), (std::streamsize)size);
+}
+
 // ── Init / Destroy ────────────────────────────────────────────────────────────
 
 void VulkanContext::init(GLFWwindow* window) {
@@ -41,9 +66,23 @@ void VulkanContext::init(GLFWwindow* window) {
     create_command_pool();
     create_swapchain(window);
     create_swapchain_image_views();
+
+    // Load or create pipeline cache for faster subsequent startups.
+    auto cache_data = load_pipeline_cache_data();
+    VkPipelineCacheCreateInfo cache_ci{};
+    cache_ci.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    cache_ci.initialDataSize = cache_data.size();
+    cache_ci.pInitialData = cache_data.empty() ? nullptr : cache_data.data();
+    if (vkCreatePipelineCache(device, &cache_ci, nullptr, &pipeline_cache) != VK_SUCCESS)
+        pipeline_cache = VK_NULL_HANDLE; // non-fatal
 }
 
 void VulkanContext::destroy() {
+    save_pipeline_cache_data(device, pipeline_cache);
+    if (pipeline_cache != VK_NULL_HANDLE) {
+        vkDestroyPipelineCache(device, pipeline_cache, nullptr);
+        pipeline_cache = VK_NULL_HANDLE;
+    }
     cleanup_swapchain();
     vkDestroyCommandPool(device, cmd_pool, nullptr);
     vkDestroyDevice(device, nullptr);

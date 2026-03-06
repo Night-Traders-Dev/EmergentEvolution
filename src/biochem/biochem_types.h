@@ -170,6 +170,14 @@ inline const char* bio_entity_variant_name(uint32_t type, uint32_t morphology) {
 
 // ── Single biological entity ────────────────────────────────────────────────
 
+struct BioGenes {
+    float seek     = 1.0f;
+    float flee     = 1.0f;
+    float spacing  = 1.0f;
+    float brownian = 1.0f;
+    float energy   = 1.0f;
+};
+
 struct BioEntity {
     glm::vec3   pos{0.0f};
     glm::vec3   vel{0.0f};
@@ -180,6 +188,7 @@ struct BioEntity {
     float       shape_aspect = 1.0f;
     float       shape_noise  = 0.2f;
     float       shape_phase  = 0.0f;
+    BioGenes     genes{};
     uint32_t    type      = BIO_CELL;
     uint32_t    morphology = 0;
     uint32_t    genome    = 0;          // simple genome tag for mutations

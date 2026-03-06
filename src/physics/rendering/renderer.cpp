@@ -236,7 +236,7 @@ void Renderer::create_quad_pipeline(VulkanContext& ctx,
     pipe_ci.renderPass          = render_pass_;
     pipe_ci.subpass             = 0;
 
-    VK_CHECK(vkCreateGraphicsPipelines(ctx.device, VK_NULL_HANDLE, 1,
+    VK_CHECK(vkCreateGraphicsPipelines(ctx.device, ctx.pipeline_cache, 1,
                                        &pipe_ci, nullptr, &quad_pipeline_));
 
     vkDestroyShaderModule(ctx.device, vert, nullptr);
@@ -392,7 +392,7 @@ void Renderer::create_overlay_pipeline(VulkanContext& ctx) {
     pipe_ci.renderPass          = render_pass_;
     pipe_ci.subpass             = 0;
 
-    VK_CHECK(vkCreateGraphicsPipelines(ctx.device, VK_NULL_HANDLE, 1,
+    VK_CHECK(vkCreateGraphicsPipelines(ctx.device, ctx.pipeline_cache, 1,
                                        &pipe_ci, nullptr, &overlay_pipeline_));
 
     vkDestroyShaderModule(ctx.device, vert, nullptr);

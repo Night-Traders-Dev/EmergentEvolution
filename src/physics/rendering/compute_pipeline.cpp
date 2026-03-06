@@ -251,7 +251,7 @@ void ComputePipeline::create_compute_pipeline(VulkanContext& ctx,
     ci.stage  = stage_ci;
     ci.layout = pipeline_layout_;
 
-    if (vkCreateComputePipelines(ctx.device, VK_NULL_HANDLE, 1, &ci, nullptr, &pipeline_) != VK_SUCCESS)
+    if (vkCreateComputePipelines(ctx.device, ctx.pipeline_cache, 1, &ci, nullptr, &pipeline_) != VK_SUCCESS)
         throw std::runtime_error("Failed to create compute pipeline");
 
     vkDestroyShaderModule(ctx.device, module, nullptr);
