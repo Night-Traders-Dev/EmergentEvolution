@@ -1695,6 +1695,64 @@ void CosmosApp::draw_spawn_menu() {
             if (spawn_draft_.spawn_rings) {
                 ImGui::Checkbox("Override Ring Layout", &spawn_draft_.override_ring_layout);
                 if (spawn_draft_.override_ring_layout) {
+                    const char* ring_layouts[] = {
+                        "Saturn", "Uranus", "Neptune", "Torus",
+                        "Realistic Disk", "Unrealistic Geometries", "Resonance Gaps"
+                    };
+                    auto apply_ring_preset = [&]() {
+                        switch (std::clamp(spawn_draft_.ring_layout_type, 0, 6)) {
+                        case 0: // Saturn
+                            spawn_draft_.ring_inner_mult = 1.24f;
+                            spawn_draft_.ring_outer_mult = 2.48f;
+                            spawn_draft_.ring_density = 0.82f;
+                            spawn_draft_.ring_ice_fraction = 0.84f;
+                            break;
+                        case 1: // Uranus
+                            spawn_draft_.ring_inner_mult = 1.68f;
+                            spawn_draft_.ring_outer_mult = 2.16f;
+                            spawn_draft_.ring_density = 0.26f;
+                            spawn_draft_.ring_ice_fraction = 0.58f;
+                            break;
+                        case 2: // Neptune
+                            spawn_draft_.ring_inner_mult = 2.15f;
+                            spawn_draft_.ring_outer_mult = 2.90f;
+                            spawn_draft_.ring_density = 0.14f;
+                            spawn_draft_.ring_ice_fraction = 0.50f;
+                            break;
+                        case 3: // Torus
+                            spawn_draft_.ring_inner_mult = 1.92f;
+                            spawn_draft_.ring_outer_mult = 2.58f;
+                            spawn_draft_.ring_density = 0.95f;
+                            spawn_draft_.ring_ice_fraction = 0.36f;
+                            break;
+                        case 4: // Realistic disk
+                            spawn_draft_.ring_inner_mult = 1.50f;
+                            spawn_draft_.ring_outer_mult = 3.20f;
+                            spawn_draft_.ring_density = 0.42f;
+                            spawn_draft_.ring_ice_fraction = 0.62f;
+                            break;
+                        case 5: // Unrealistic geometries
+                            spawn_draft_.ring_inner_mult = 1.15f;
+                            spawn_draft_.ring_outer_mult = 4.80f;
+                            spawn_draft_.ring_density = 0.92f;
+                            spawn_draft_.ring_ice_fraction = 0.12f;
+                            break;
+                        case 6: // Resonance gaps
+                        default:
+                            spawn_draft_.ring_inner_mult = 1.36f;
+                            spawn_draft_.ring_outer_mult = 3.65f;
+                            spawn_draft_.ring_density = 0.56f;
+                            spawn_draft_.ring_ice_fraction = 0.58f;
+                            break;
+                        }
+                    };
+                    int prev_ring_layout = spawn_draft_.ring_layout_type;
+                    ImGui::Combo("Ring Type", &spawn_draft_.ring_layout_type, ring_layouts, IM_ARRAYSIZE(ring_layouts));
+                    if (spawn_draft_.ring_layout_type != prev_ring_layout)
+                        apply_ring_preset();
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("Apply Preset"))
+                        apply_ring_preset();
                     ImGui::SliderFloat("Ring Inner xR", &spawn_draft_.ring_inner_mult, 1.15f, 4.0f, "%.2f");
                     ImGui::SliderFloat("Ring Outer xR", &spawn_draft_.ring_outer_mult, 1.5f, 8.0f, "%.2f");
                     ImGui::SliderFloat("Ring Density", &spawn_draft_.ring_density, 0.01f, 1.0f, "%.2f");
@@ -3189,6 +3247,12 @@ void CosmosApp::draw_bottom_bar() {
                 }
 
                 if (ImGui::CollapsingHeader("Collision & Fragmentation")) {
+                    ImGui::Checkbox("Smoothed Particle Hydrodynamics##Menu", &cfg.collision_sph);
+                    ImGui::Checkbox("Rigid Body Dynamics##Menu", &cfg.collision_rigid_body_dynamics);
+                    if (!cfg.collision_sph && !cfg.collision_rigid_body_dynamics) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
+                                           "Enable SPH and/or Rigid Body Dynamics.");
+                    }
                     ImGui::Checkbox("Merging##Menu", &cfg.collision_merging);
                     ImGui::Checkbox("Fragmentation##Menu", &cfg.collision_fragmentation);
                     ImGui::SliderFloat("Merge Speed##Menu", &cfg.merge_speed_threshold, 1.0f, 20.0f);

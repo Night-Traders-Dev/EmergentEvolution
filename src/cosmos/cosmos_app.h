@@ -84,13 +84,14 @@ private:
     glm::vec3 verlet_auto_orbit_velocity(const CelestialBody& body, const CelestialBody& primary,
                                          float radial_scale, float tangential_scale) const;
     bool spawn_dust_ring(int host_index, float total_mass, float inner_radius, float outer_radius,
-                         float density, float ice_fraction, uint32_t seed_hint = 0u);
+                         float density, float ice_fraction, uint32_t seed_hint = 0u,
+                         int ring_style = 4);
     void spawn_moons_for_host(int host_index, int moon_count,
                               int orbit_layout = 0,
                               float inclination_deg = 8.0f,
                               float spacing_scale = 1.0f);
     void spawn_ring_for_host(int host_index, float inner_mult, float outer_mult,
-                             float density, float ice_fraction);
+                             float density, float ice_fraction, int ring_style = 4);
     void apply_dust_debug_mode();
     void cleanup_bodies();
     bool validate_body_state(const char* context, bool pause_on_invalid = true);
@@ -161,6 +162,7 @@ private:
         float moon_inclination_deg = 8.0f;
         float moon_spacing_scale = 1.0f;
         bool override_ring_layout = false;
+        int ring_layout_type = 4; // 0=saturn, 1=uranus, 2=neptune, 3=torus, 4=realistic disk, 5=unrealistic geometries, 6=resonance gaps
         float ring_inner_mult = 1.6f;
         float ring_outer_mult = 3.0f;
         float ring_density = 0.35f;

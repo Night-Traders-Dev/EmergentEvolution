@@ -484,13 +484,25 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
         }
         if (body_can_host_rings(nb)) {
             if (spawn_draft_.spawn_rings) {
+                int ring_style = std::clamp(spawn_draft_.ring_layout_type, 0, 6);
                 if (spawn_draft_.override_ring_layout) {
+                    float ring_tilt = std::clamp(std::abs(nb.angular_vel) * 150.0f, 0.02f, 0.45f);
+                    switch (ring_style) {
+                    case 0: ring_tilt = 0.14f; break; // Saturn-like
+                    case 1: ring_tilt = 1.24f; break; // Uranus-like high obliquity
+                    case 2: ring_tilt = 0.52f; break; // Neptune-like
+                    case 3: ring_tilt = 0.32f; break; // Torus
+                    case 4: ring_tilt = 0.18f; break; // Realistic disk
+                    case 5: ring_tilt = 0.90f; break; // Unrealistic geometry
+                    case 6: ring_tilt = 0.22f; break; // Resonance gaps
+                    default: break;
+                    }
                     set_ring_system(nb,
                         nb.radius * std::max(spawn_draft_.ring_inner_mult, 1.15f),
                         nb.radius * std::max(spawn_draft_.ring_outer_mult, spawn_draft_.ring_inner_mult + 0.25f),
                         std::clamp(spawn_draft_.ring_density, 0.01f, 1.0f),
                         std::clamp(spawn_draft_.ring_ice_fraction, 0.0f, 1.0f),
-                        std::clamp(std::abs(nb.angular_vel) * 150.0f, 0.02f, 0.45f));
+                        std::clamp(ring_tilt, 0.02f, 1.30f));
                 } else if (nb.ring_density <= 0.001f) {
                     set_ring_system(nb, nb.radius * 1.5f, nb.radius * 3.0f, 0.32f, 0.55f, 0.12f);
                 }
@@ -535,6 +547,7 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
 
         int host_idx = (int)state.bodies.size() - 1;
         const auto spawned = state.bodies[(size_t)host_idx];
+        int ring_style = std::clamp(spawn_draft_.ring_layout_type, 0, 6);
         if (cfg.planetary_rings && spawned.ring_density > 0.001f &&
             (spawned.type == CTYPE_PLANET || spawned.type == CTYPE_MOON)) {
             float annulus = std::max(spawned.ring_outer_radius * spawned.ring_outer_radius -
@@ -543,7 +556,8 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
                                        (annulus / std::max(spawned.radius * spawned.radius, 1.0e-5f)),
                                        std::max(cfg.min_fragment_mass, 1.0e-12f) * 2.0f);
             spawn_dust_ring(host_idx, mass_hint, spawned.ring_inner_radius, spawned.ring_outer_radius,
-                            spawned.ring_density, spawned.ring_ice_fraction, spawned.seed ^ 0xD05751EDu);
+                            spawned.ring_density, spawned.ring_ice_fraction, spawned.seed ^ 0xD05751EDu,
+                            ring_style);
             if (host_idx >= 0 && host_idx < (int)state.bodies.size())
                 clear_ring_system(state.bodies[(size_t)host_idx]);
         }
@@ -1435,7 +1449,7 @@ glm::vec3 CosmosApp::verlet_auto_orbit_velocity(const CelestialBody& body, const
 }
 
 bool CosmosApp::spawn_dust_ring(int host_index, float total_mass, float inner_radius, float outer_radius,
-                                float density, float ice_fraction, uint32_t seed_hint) {
+                                float density, float ice_fraction, uint32_t seed_hint, int ring_style) {
     if (!cfg.planetary_rings || host_index < 0 || host_index >= (int)state.bodies.size())
         return false;
     if (total_mass <= 0.0f || !std::isfinite(total_mass))
@@ -1449,6 +1463,7 @@ bool CosmosApp::spawn_dust_ring(int host_index, float total_mass, float inner_ra
     float density_scaled = density * std::clamp(cfg.ring_density_scale, 0.2f, 3.0f);
     float inner = std::max(inner_radius * std::clamp(cfg.ring_inner_scale, 0.6f, 3.0f), host.radius * 1.15f);
     float outer = std::max(outer_radius * std::clamp(cfg.ring_outer_scale, 0.6f, 3.0f), inner + host.radius * 0.18f);
+    int style = std::clamp(ring_style, 0, 6);
     float width = outer - inner;
     if (!std::isfinite(inner) || !std::isfinite(outer) || width <= 1.0e-4f)
         return false;
@@ -1514,16 +1529,44 @@ bool CosmosApp::spawn_dust_ring(int host_index, float total_mass, float inner_ra
         masses[(size_t)i] += rem_mass * (weights[(size_t)i] / std::max(wsum, 1.0e-6f));
     masses.back() += ring_mass - std::accumulate(masses.begin(), masses.end(), 0.0f);
 
+    float style_thickness = 1.0f;
+    if (style == 3) style_thickness = 2.1f;      // torus
+    if (style == 5) style_thickness = 1.8f;      // exaggerated geometry
+    if (style == 6) style_thickness = 0.9f;      // resonance gaps stay relatively thin
     float max_vertical = std::max(host.radius * (0.006f + density_scaled * 0.02f) *
-                                  std::clamp(cfg.ring_thickness_scale, 0.3f, 4.0f), 0.01f);
+                                  std::clamp(cfg.ring_thickness_scale, 0.3f, 4.0f) * style_thickness, 0.01f);
     float base_temp = std::clamp(host.temperature * (0.14f + (1.0f - ice_fraction) * 0.12f),
                                  30.0f, 900.0f);
     bool spawned_any = false;
 
     for (int i = 0; i < count; ++i) {
-        float radial_t = std::pow(u01(rng), 0.75f);
-        float radial = inner + width * radial_t;
         float theta = u01(rng) * 6.28318530718f;
+        float radial_t = std::pow(u01(rng), 0.75f);
+        if (style == 0) { // Saturn
+            radial_t = std::pow(u01(rng), 0.60f);
+        } else if (style == 1) { // Uranus
+            radial_t = std::pow(u01(rng), 1.35f);
+        } else if (style == 2) { // Neptune
+            radial_t = std::pow(u01(rng), 1.85f);
+        } else if (style == 3) { // Torus
+            radial_t = std::clamp(0.50f + (u01(rng) * 2.0f - 1.0f) * 0.18f, 0.0f, 1.0f);
+        } else if (style == 5) { // Unrealistic geometries
+            float lobes = 0.5f + 0.5f * std::sin(theta * 3.0f + u01(rng) * 6.28318530718f);
+            radial_t = std::clamp(0.20f + lobes * 0.70f + (u01(rng) * 2.0f - 1.0f) * 0.18f, 0.0f, 1.0f);
+        } else if (style == 6) { // Resonance gaps
+            for (int iter = 0; iter < 8; ++iter) {
+                float candidate = std::pow(u01(rng), 0.78f);
+                float g0 = std::abs(candidate - 0.22f);
+                float g1 = std::abs(candidate - 0.48f);
+                float g2 = std::abs(candidate - 0.74f);
+                bool near_gap = (g0 < 0.04f) || (g1 < 0.05f) || (g2 < 0.05f);
+                if (!near_gap || u01(rng) < 0.10f) {
+                    radial_t = candidate;
+                    break;
+                }
+            }
+        }
+        float radial = inner + width * radial_t;
         float vertical = (u01(rng) * 2.0f - 1.0f) * max_vertical;
         glm::vec3 ring_dir = basis_u * std::cos(theta) + basis_v * std::sin(theta);
         glm::vec3 rel = ring_dir * radial + axis * vertical;
@@ -1641,7 +1684,7 @@ void CosmosApp::spawn_moons_for_host(int host_index, int moon_count,
 }
 
 void CosmosApp::spawn_ring_for_host(int host_index, float inner_mult, float outer_mult,
-                                    float density, float ice_fraction) {
+                                    float density, float ice_fraction, int ring_style) {
     if (host_index < 0 || host_index >= (int)state.bodies.size())
         return;
     CelestialBody& host = state.bodies[(size_t)host_index];
@@ -1665,7 +1708,8 @@ void CosmosApp::spawn_ring_for_host(int host_index, float inner_mult, float oute
                                std::max(cfg.min_fragment_mass, 1.0e-12f) * 2.0f);
     spawn_dust_ring(host_index, mass_hint, host.ring_inner_radius, host.ring_outer_radius,
                     host.ring_density, host.ring_ice_fraction,
-                    hash_combine(host.seed, 0xA77A11u));
+                    hash_combine(host.seed, 0xA77A11u),
+                    ring_style);
     clear_ring_system(host);
     host.props_valid = false;
     host.visuals_valid = false;
@@ -1912,9 +1956,14 @@ void CosmosApp::process_collisions(float dt) {
             float overlap_fraction = overlap / std::max(touch, 1.0e-6f);
             float total_mass = bodies[i].mass + bodies[j].mass;
             if (total_mass <= 1.0e-8f) continue;
+            bool soft_body_pair =
+                !is_star_type(bodies[i].type) && !is_star_type(bodies[j].type) &&
+                !is_black_hole_type(bodies[i].type) && !is_black_hole_type(bodies[j].type) &&
+                bodies[i].type != CTYPE_NEBULA && bodies[j].type != CTYPE_NEBULA;
+            bool use_rigid_response = cfg.collision_rigid_body_dynamics || !soft_body_pair;
 
             // Immediate depenetration to avoid sticky overlap accumulation.
-            if (overlap_now && overlap > 0.0f) {
+            if (use_rigid_response && overlap_now && overlap > 0.0f) {
                 bodies[i].pos -= normal * overlap * (bodies[j].mass / std::max(total_mass, 1.0e-6f));
                 bodies[j].pos += normal * overlap * (bodies[i].mass / std::max(total_mass, 1.0e-6f));
             }
@@ -1923,10 +1972,6 @@ void CosmosApp::process_collisions(float dt) {
             float closing_speed = std::max(-vel_along, 0.0f);
             float escape_speed = body_escape_speed(bodies[i], bodies[j], cfg.G);
 
-            bool soft_body_pair =
-                !is_star_type(bodies[i].type) && !is_star_type(bodies[j].type) &&
-                !is_black_hole_type(bodies[i].type) && !is_black_hole_type(bodies[j].type) &&
-                bodies[i].type != CTYPE_NEBULA && bodies[j].type != CTYPE_NEBULA;
             bool small_soft_pair = soft_body_pair &&
                 std::max(bodies[i].radius, bodies[j].radius) < (EARTH_RADIUS_SIM_UNITS * 0.95f);
             bool compact_i = is_star_type(bodies[i].type) || is_black_hole_type(bodies[i].type);
@@ -1946,6 +1991,30 @@ void CosmosApp::process_collisions(float dt) {
             float disruption_j = impact_energy / std::max(binding_j, 1.0e-6f);
             float combined_disruption = impact_energy / std::max(combined_binding, 1.0e-6f);
             glm::vec3 impact_axis = (rel_speed > 1.0e-5f) ? (rel_vel / rel_speed) : normal;
+
+            if (soft_body_pair && cfg.collision_sph) {
+                float h = touch * 1.25f;
+                float q = std::clamp(1.0f - contact_dist / std::max(h, 1.0e-6f), 0.0f, 1.0f);
+                if (q > 0.0f) {
+                    float inv_total_mass = 1.0f / std::max(total_mass, 1.0e-6f);
+                    float pressure_term = q * q * (0.18f + overlap_fraction * 0.65f);
+                    glm::vec3 pressure_push = normal * pressure_term;
+                    bodies[i].vel -= pressure_push * (bodies[j].mass * inv_total_mass);
+                    bodies[j].vel += pressure_push * (bodies[i].mass * inv_total_mass);
+
+                    glm::vec3 post_rel = bodies[j].vel - bodies[i].vel;
+                    float viscosity_term = (0.10f + 0.65f * q) * std::max(dt, 1.0e-4f);
+                    glm::vec3 viscosity = post_rel * viscosity_term;
+                    bodies[i].vel += viscosity * (bodies[j].mass * inv_total_mass);
+                    bodies[j].vel -= viscosity * (bodies[i].mass * inv_total_mass);
+
+                    if (cfg.temperature_system) {
+                        float sph_heat = impact_energy * q * (0.05f + overlap_fraction * 0.10f);
+                        bodies[i].internal_energy += sph_heat * 0.5f;
+                        bodies[j].internal_energy += sph_heat * 0.5f;
+                    }
+                }
+            }
 
             // Collision heating (kinetic -> thermal/internal).
             if (cfg.temperature_system) {
@@ -2119,26 +2188,28 @@ void CosmosApp::process_collisions(float dt) {
             if (!closing_contact) continue;
 
             bool fragmenting = fragment_candidate;
-            float restitution = fragmenting ? 0.0f : (soft_body_pair ? 0.0f : 0.28f);
-            float inv_mass_sum = (1.0f / std::max(bodies[i].mass, 1.0e-6f)) +
-                                 (1.0f / std::max(bodies[j].mass, 1.0e-6f));
-            float impulse_speed = (vel_along < -1.0e-5f) ? vel_along : (soft_body_pair ? 0.0f : -impact_speed * 0.35f);
-            float j_impulse = -(1.0f + restitution) * impulse_speed / std::max(inv_mass_sum, 1.0e-6f);
-            glm::vec3 impulse = normal * j_impulse;
-            bodies[i].vel -= impulse / std::max(bodies[i].mass, 1.0e-6f);
-            bodies[j].vel += impulse / std::max(bodies[j].mass, 1.0e-6f);
+            if (use_rigid_response) {
+                float restitution = fragmenting ? 0.0f : (soft_body_pair ? 0.0f : 0.28f);
+                float inv_mass_sum = (1.0f / std::max(bodies[i].mass, 1.0e-6f)) +
+                                     (1.0f / std::max(bodies[j].mass, 1.0e-6f));
+                float impulse_speed = (vel_along < -1.0e-5f) ? vel_along : (soft_body_pair ? 0.0f : -impact_speed * 0.35f);
+                float j_impulse = -(1.0f + restitution) * impulse_speed / std::max(inv_mass_sum, 1.0e-6f);
+                glm::vec3 impulse = normal * j_impulse;
+                bodies[i].vel -= impulse / std::max(bodies[i].mass, 1.0e-6f);
+                bodies[j].vel += impulse / std::max(bodies[j].mass, 1.0e-6f);
 
-            // Tangential damping keeps non-fragment impacts from behaving like pinballs.
-            glm::vec3 post_rel = bodies[j].vel - bodies[i].vel;
-            glm::vec3 tangential = post_rel - normal * glm::dot(post_rel, normal);
-            float tangential_len = glm::length(tangential);
-            if (tangential_len > 1.0e-6f) {
-                glm::vec3 tangent_dir = tangential / tangential_len;
-                float tangential_reduce = tangential_len * (fragmenting ? 0.80f : (soft_body_pair ? 0.90f : 0.35f));
-                float jt = tangential_reduce / std::max(inv_mass_sum, 1.0e-6f);
-                glm::vec3 tangent_impulse = tangent_dir * jt;
-                bodies[i].vel += tangent_impulse / std::max(bodies[i].mass, 1.0e-6f);
-                bodies[j].vel -= tangent_impulse / std::max(bodies[j].mass, 1.0e-6f);
+                // Tangential damping keeps non-fragment impacts from behaving like pinballs.
+                glm::vec3 post_rel = bodies[j].vel - bodies[i].vel;
+                glm::vec3 tangential = post_rel - normal * glm::dot(post_rel, normal);
+                float tangential_len = glm::length(tangential);
+                if (tangential_len > 1.0e-6f) {
+                    glm::vec3 tangent_dir = tangential / tangential_len;
+                    float tangential_reduce = tangential_len * (fragmenting ? 0.80f : (soft_body_pair ? 0.90f : 0.35f));
+                    float jt = tangential_reduce / std::max(inv_mass_sum, 1.0e-6f);
+                    glm::vec3 tangent_impulse = tangent_dir * jt;
+                    bodies[i].vel += tangent_impulse / std::max(bodies[i].mass, 1.0e-6f);
+                    bodies[j].vel -= tangent_impulse / std::max(bodies[j].mass, 1.0e-6f);
+                }
             }
 
             float effective_min_frag_mass = std::max(1.0e-12f, std::min(cfg.min_fragment_mass, 1.0e-9f));

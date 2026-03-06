@@ -497,18 +497,24 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
         float radiation_belts = magnetic.has_magnetosphere
             ? std::clamp((stellar_flux + bh_flux * 1.4f) * (0.18f + magnetic.particle_trapping * 0.72f), 0.0f, 2.2f)
             : 0.0f;
+        int render_class = (int)vp.render_class;
+        int render_subtype = (int)vp.subtype;
+        // Never allow nebula bodies to fall back to planet shading due to stale visual caches.
+        if (b.type == CTYPE_NEBULA) {
+            render_class = RENDER_NEBULA;
+        }
         bool physical_planet = (b.type == CTYPE_PLANET || b.type == CTYPE_MOON);
-        bool planet_like_visual = (vp.render_class == RENDER_PLANET || vp.render_class == RENDER_MOON);
+        bool planet_like_visual = (render_class == RENDER_PLANET || render_class == RENDER_MOON);
+        bool nebula_visual = (render_class == RENDER_NEBULA);
 
         float cloud_cov = physical_planet ? (pp.cloud_coverage / 100.0f)
             : (b.type == CTYPE_NEBULA ? vp.cloud_detail : 0.0f);
         float pressure = physical_planet ? pp.atmosphere.pressure
             : (b.type == CTYPE_NEBULA ? (35.0f + b.collapse_progress * 140.0f) : 0.0f);
-
         spheres[i].class_seed_temp = glm::vec4(
             shader_seed,
-            (float)vp.render_class,
-            (float)vp.subtype,
+            (float)render_class,
+            (float)render_subtype,
             b.temperature);
         spheres[i].terrain_params = glm::vec4(
             vp.terrain_amp,
@@ -528,7 +534,7 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
         float comp_w = vp.dust_frac;
         if (physical_planet && planet_like_visual)
             comp_w = pp.ocean_coverage / 100.0f;
-        if (vp.render_class == RENDER_STAR) {
+        if (render_class == RENDER_STAR) {
             spheres[i].composition_params = glm::vec4(
                 vp.star_spot_coverage,
                 vp.star_flare_frequency,
@@ -552,7 +558,7 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
                 vp.aurora_strength,
                 vp.volcanic_activity,
                 vp.mie_strength);
-        } else if (vp.render_class == RENDER_NEBULA) {
+        } else if (nebula_visual) {
             constexpr float SECONDS_PER_YEAR = 31557600.0f;
             float age_years = std::max(b.age, 0.0f) / SECONDS_PER_YEAR;
             float expansion = 1.0f + std::clamp(
@@ -564,19 +570,19 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
                 vp.cloud_detail,
                 std::clamp(b.collapse_progress, 0.0f, 1.5f),
                 expansion);
-        } else if (vp.render_class == RENDER_STAR) {
+        } else if (render_class == RENDER_STAR) {
             spheres[i].activity_params = glm::vec4(
                 vp.flare_activity,
                 vp.corona_strength,
                 vp.spin_visual,
                 vp.star_spot_coverage);
-        } else if (vp.render_class == RENDER_COMET) {
+        } else if (render_class == RENDER_COMET) {
             spheres[i].activity_params = glm::vec4(
                 0.0f,
                 vp.coma_strength,
                 vp.tail_strength,
                 0.0f);
-        } else if (vp.render_class == RENDER_BLACK_HOLE) {
+        } else if (render_class == RENDER_BLACK_HOLE) {
             spheres[i].activity_params = glm::vec4(
                 vp.spin_visual,
                 vp.accretion_strength,

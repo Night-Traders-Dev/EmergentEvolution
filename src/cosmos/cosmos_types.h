@@ -805,6 +805,8 @@ struct CosmosConfig {
     // Collision physics
     bool     collision_merging       = true;
     bool     collision_fragmentation = true;
+    bool     collision_sph           = true;     // apply SPH-like pressure/viscosity for soft-body impacts
+    bool     collision_rigid_body_dynamics = true; // apply rigid-body impulse/depenetration response
     float    merge_speed_threshold   = 5.0f;     // relative speed below which bodies merge
     float    fragment_speed_threshold = 20.0f;   // relative speed above which bodies fragment
     int      fragment_count          = 4;        // number of fragments from collision/tidal breakup (1-12)
