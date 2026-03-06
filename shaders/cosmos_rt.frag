@@ -1327,9 +1327,14 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     float billow_mtn = billow_fbm(warped_np * 1.25 + vec3(7.0, 2.0, 4.0), 5);
     float elev = clamp(mix(base_fbm, simplex_elev, 0.35) +
                        rigid_detail * 0.18 + billow_mtn * 0.12 * ridge_amp, 0.0, 1.0);
-    if (!gas_world && surface_type < 0.5) {
-        float crater_field = crater_mask(sample_normal, seed * 1.17, clamp(hit.terrain_params.w + 0.18, 0.0, 1.0));
-        elev = clamp(elev - crater_field * 0.10 + rigid_detail * 0.05, 0.0, 1.0);
+    if (!gas_world) {
+        // Craters appear on all non-gas surfaces — rocky, frozen, desert, mixed, earth-like
+        // Atmosphere reduces crater visibility (erosion/infill) but doesn't eliminate them
+        float atmo_suppress = clamp(1.0 - hit.atmosphere_params.x * 0.55, 0.15, 1.0);
+        float crater_d = clamp(hit.terrain_params.w + 0.18, 0.0, 1.0) * atmo_suppress;
+        float crater_field = crater_mask(sample_normal, seed * 1.17, crater_d);
+        // Craters depress elevation AND darken the surface
+        elev = clamp(elev - crater_field * 0.18 + rigid_detail * 0.05, 0.0, 1.0);
     }
     if (frozen_world) {
         vec2 cell = voronoi_f1_f2(warped_np * 3.5 + vec3(seed * 0.11));
@@ -1445,6 +1450,19 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
         smoothstep(0.40 - ice_sheet_cov * 0.14, 0.98, abs(sample_normal.y)),
         smoothstep(0.76, 0.95, elev) * (0.35 + ice_sheet_cov * 0.65));
     col = mix(col, ice_col, ice_sheet_mask * clamp(ice_sheet_cov + (temperature < 245.0 ? 0.25 : 0.0), 0.0, 1.0));
+
+    // Apply crater color darkening on non-gas surfaces (complements elevation change above)
+    if (!gas_world) {
+        float atmo_suppress = clamp(1.0 - hit.atmosphere_params.x * 0.55, 0.15, 1.0);
+        float crater_d = clamp(hit.terrain_params.w + 0.18, 0.0, 1.0) * atmo_suppress;
+        float crater_col_mask = crater_mask(sample_normal, seed * 1.17, crater_d);
+        // Darken crater floors and add exposed subsurface tone
+        vec3 crater_floor = col * 0.65;
+        vec3 crater_rim_col = mix(col, vec3(0.72, 0.68, 0.62), 0.25);
+        float rim_band = smoothstep(0.30, 0.55, crater_col_mask) - smoothstep(0.55, 0.80, crater_col_mask);
+        col = mix(col, crater_floor, crater_col_mask * 0.45 * land_mask);
+        col = mix(col, crater_rim_col, rim_band * 0.20 * land_mask);
+    }
 
     bool is_ocean = ocean_cov > 0.01 && elev < sea_level;
     float coast = smoothstep(sea_level + 0.01, sea_level + 0.09, elev) * land_mask;

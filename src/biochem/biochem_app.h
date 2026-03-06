@@ -103,6 +103,7 @@ private:
     bool  show_menu_popup_   = false;
     bool  settings_visible_  = true;
     bool  population_visible_ = true;
+    bool  genomics_visible_ = true;
     bool  event_log_visible_ = true;
     bool  event_log_auto_scroll_ = true;
     bool  event_log_dirty_ = false;

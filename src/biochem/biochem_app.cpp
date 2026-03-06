@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <array>
+#include <iomanip>
 #include <random>
 #include <set>
 #include <sstream>
@@ -386,6 +387,127 @@ static BioGenes type_gene_baseline(uint32_t type) {
     case BIO_JANITOR:     return {1.18f, 0.28f, 0.95f, 0.55f, 1.10f, 0.72f, 0.72f, 0.0f, 0.0f, 0.0f};
     default:              return {};
     }
+}
+
+struct BioGeneAggregate {
+    BioGenes sum{};
+    uint32_t count = 0;
+};
+
+static bool type_has_genomic_panel(uint32_t type) {
+    return type != BIO_NUTRIENT && type != BIO_TOXIN;
+}
+
+static void accumulate_gene_aggregate(BioGeneAggregate& agg, const BioGenes& genes) {
+    agg.sum.seek += genes.seek;
+    agg.sum.flee += genes.flee;
+    agg.sum.spacing += genes.spacing;
+    agg.sum.brownian += genes.brownian;
+    agg.sum.energy += genes.energy;
+    agg.sum.telomere += genes.telomere;
+    agg.sum.mitotic_clock += genes.mitotic_clock;
+    agg.sum.antibiotic_type += genes.antibiotic_type;
+    agg.sum.antibiotic_yield += genes.antibiotic_yield;
+    agg.sum.antibiotic_diversity += genes.antibiotic_diversity;
+    agg.count += 1;
+}
+
+static BioGenes average_genes(const BioGeneAggregate& agg) {
+    if (agg.count == 0)
+        return {};
+    float inv = 1.0f / static_cast<float>(agg.count);
+    BioGenes avg = agg.sum;
+    avg.seek *= inv;
+    avg.flee *= inv;
+    avg.spacing *= inv;
+    avg.brownian *= inv;
+    avg.energy *= inv;
+    avg.telomere *= inv;
+    avg.mitotic_clock *= inv;
+    avg.antibiotic_type *= inv;
+    avg.antibiotic_yield *= inv;
+    avg.antibiotic_diversity *= inv;
+    return avg;
+}
+
+static const char* gene_trait_name(int idx) {
+    static const char* names[] = {
+        "Seek", "Flee", "Spacing", "Brownian", "Energy",
+        "Telomere", "Mitotic Clock", "Antibiotic Type",
+        "Antibiotic Yield", "Antibiotic Diversity"
+    };
+    return names[idx];
+}
+
+static float gene_trait_value(const BioGenes& genes, int idx) {
+    switch (idx) {
+    case 0: return genes.seek;
+    case 1: return genes.flee;
+    case 2: return genes.spacing;
+    case 3: return genes.brownian;
+    case 4: return genes.energy;
+    case 5: return genes.telomere;
+    case 6: return genes.mitotic_clock;
+    case 7: return genes.antibiotic_type;
+    case 8: return genes.antibiotic_yield;
+    case 9: return genes.antibiotic_diversity;
+    default: return 0.0f;
+    }
+}
+
+static bool gene_trait_applicable(uint32_t type, int idx) {
+    if (idx >= 7)
+        return type == BIO_BACTERIUM;
+    if (idx == 5)
+        return type == BIO_CELL || type == BIO_WHITE_BLOOD || type == BIO_JANITOR || type == BIO_BACTERIUM;
+    return true;
+}
+
+static std::string dominant_traits_summary(uint32_t type, const BioGeneAggregate& agg, int limit = 3) {
+    if (agg.count == 0)
+        return "none";
+
+    struct RankedTrait {
+        const char* name = "";
+        float score = 0.0f;
+        float value = 0.0f;
+        float baseline = 0.0f;
+    };
+
+    BioGenes avg = average_genes(agg);
+    BioGenes baseline = type_gene_baseline(type);
+    std::array<RankedTrait, 10> ranked{};
+    size_t used = 0;
+    for (int idx = 0; idx < 10; ++idx) {
+        if (!gene_trait_applicable(type, idx))
+            continue;
+        float value = gene_trait_value(avg, idx);
+        float base = gene_trait_value(baseline, idx);
+        float score = (base > 0.001f) ? std::abs(value - base) / base : std::abs(value - base);
+        if (score < (base > 0.001f ? 0.06f : 0.10f))
+            continue;
+        ranked[used++] = {gene_trait_name(idx), score, value, base};
+    }
+    if (used == 0)
+        return "baseline-like";
+
+    std::sort(ranked.begin(), ranked.begin() + used,
+              [](const RankedTrait& a, const RankedTrait& b) { return a.score > b.score; });
+
+    std::ostringstream out;
+    size_t shown = std::min<size_t>(static_cast<size_t>(limit), used);
+    for (size_t i = 0; i < shown; ++i) {
+        if (i > 0)
+            out << ", ";
+        if (ranked[i].baseline > 0.001f) {
+            out << ranked[i].name << ' ' << (ranked[i].value >= ranked[i].baseline ? "high" : "low")
+                << " x" << std::fixed << std::setprecision(2)
+                << (ranked[i].value / ranked[i].baseline);
+        } else {
+            out << ranked[i].name << ' ' << std::fixed << std::setprecision(2) << ranked[i].value;
+        }
+    }
+    return out.str();
 }
 
 static void clamp_genes(BioGenes& genes) {
@@ -3459,6 +3581,83 @@ void BiochemApp::render_ui() {
     ImGui::End();
     } // population_visible_
 
+    if (genomics_visible_) {
+    ImGui::SetNextWindowPos({std::max(330.0f, io.DisplaySize.x - 590.0f), 46}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize({360, 440}, ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Genomic Stats", &genomics_visible_)) {
+        std::array<BioGeneAggregate, BIO_TYPE_COUNT> type_gene_stats{};
+        std::array<std::vector<BioGeneAggregate>, BIO_TYPE_COUNT> subtype_gene_stats;
+        size_t sampled_alive = 0;
+        for (int t = 0; t < BIO_TYPE_COUNT; ++t)
+            subtype_gene_stats[t].assign(type_variant_count(static_cast<uint32_t>(t)), {});
+
+        for (const auto& e : state.entities) {
+            if (!e.alive || !type_has_genomic_panel(e.type))
+                continue;
+            sampled_alive += 1;
+            uint32_t type = e.type % BIO_TYPE_COUNT;
+            accumulate_gene_aggregate(type_gene_stats[type], e.genes);
+            uint32_t subtype_count = type_variant_count(type);
+            if (subtype_count > 0)
+                accumulate_gene_aggregate(subtype_gene_stats[type][e.morphology % subtype_count], e.genes);
+        }
+
+        auto draw_avg_lines = [&](const BioGeneAggregate& agg, uint32_t type) {
+            BioGenes avg = average_genes(agg);
+            ImGui::Text("Seek %.2f  Flee %.2f  Space %.2f  Brown %.2f",
+                        avg.seek, avg.flee, avg.spacing, avg.brownian);
+            ImGui::Text("Energy %.2f  Tel %.2f  Cycle %.2f",
+                        avg.energy, avg.telomere, avg.mitotic_clock);
+            if (type == BIO_BACTERIUM) {
+                ImGui::Text("AntiType %.2f  AntiYield %.2f  AntiDiv %.2f",
+                            avg.antibiotic_type, avg.antibiotic_yield, avg.antibiotic_diversity);
+            }
+        };
+
+        ImGui::Text("Alive genomes sampled: %zu", sampled_alive);
+        ImGui::TextDisabled("Averages and dominant shifts across living organisms.");
+        ImGui::Separator();
+        ImGui::BeginChild("##GenomicRollup", ImVec2(0, 0), true);
+        for (int t = 0; t < BIO_TYPE_COUNT; ++t) {
+            if (type_gene_stats[t].count == 0)
+                continue;
+            ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen;
+            bool open = ImGui::TreeNodeEx((void*)(intptr_t)(1000 + t), flags, "%s", pop_type_names[t]);
+            ImGui::SameLine();
+            ImGui::TextColored(type_colors_v[t], "%u sampled", type_gene_stats[t].count);
+            if (open) {
+                ImGui::TextWrapped("Dominant: %s",
+                                   dominant_traits_summary(static_cast<uint32_t>(t), type_gene_stats[t]).c_str());
+                draw_avg_lines(type_gene_stats[t], static_cast<uint32_t>(t));
+                uint32_t subtype_count = type_variant_count(static_cast<uint32_t>(t));
+                if (subtype_count > 1) {
+                    ImGui::Separator();
+                    for (uint32_t subtype = 0; subtype < subtype_count; ++subtype) {
+                        const auto& agg = subtype_gene_stats[t][subtype];
+                        if (agg.count == 0)
+                            continue;
+                        ImGuiTreeNodeFlags subflags = ImGuiTreeNodeFlags_DefaultOpen;
+                        int sub_id = 2000 + t * 64 + static_cast<int>(subtype);
+                        bool subopen = ImGui::TreeNodeEx((void*)(intptr_t)sub_id, subflags, "%s",
+                                                         bio_entity_variant_name(static_cast<uint32_t>(t), subtype));
+                        ImGui::SameLine();
+                        ImGui::Text("%u sampled", agg.count);
+                        if (subopen) {
+                            ImGui::TextWrapped("Dominant: %s",
+                                               dominant_traits_summary(static_cast<uint32_t>(t), agg).c_str());
+                            draw_avg_lines(agg, static_cast<uint32_t>(t));
+                            ImGui::TreePop();
+                        }
+                    }
+                }
+                ImGui::TreePop();
+            }
+        }
+        ImGui::EndChild();
+    }
+    ImGui::End();
+    }
+
     if (event_log_visible_) {
     ImGui::SetNextWindowPos({10.0f, std::max(330.0f, io.DisplaySize.y - 300.0f)}, ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize({460, 250}, ImGuiCond_FirstUseEver);
@@ -3672,6 +3871,7 @@ void BiochemApp::draw_bottom_bar() {
                     nutrient_timer_ = 0.0f;
                     sim_time_ = 0.0f;
                     next_entity_id_ = 1;
+                    reset_population_metrics();
                     event_log_.clear();
                     event_log_dirty_ = false;
                     push_event(BIO_EVENT_SYSTEM, "Simulation cleared.");
@@ -3683,6 +3883,7 @@ void BiochemApp::draw_bottom_bar() {
                 ImGui::Separator();
                 ImGui::MenuItem("Settings Panel", nullptr, &settings_visible_);
                 ImGui::MenuItem("Population Panel", nullptr, &population_visible_);
+                ImGui::MenuItem("Genomic Stats", nullptr, &genomics_visible_);
                 ImGui::MenuItem("Event Log", nullptr, &event_log_visible_);
                 ImGui::MenuItem("Spawn Menu", nullptr, &spawn_menu_visible_);
 
@@ -3701,17 +3902,19 @@ void BiochemApp::draw_bottom_bar() {
             ImGui::PopStyleColor(2);
         }
 
-        // ── Center: Taskbar buttons ──
-        float center_start = W * 0.5f - 200.0f;
-        ImGui::SameLine(center_start);
-
         struct TaskBtn { const char* label; bool* vis; };
         TaskBtn btns[] = {
             {"Settings",   &settings_visible_},
             {"Spawn",      &spawn_menu_visible_},
             {"Population", &population_visible_},
+            {"Genomics",   &genomics_visible_},
             {"Events",     &event_log_visible_},
         };
+
+        // ── Center: Taskbar buttons ──
+        float total_btn_width = static_cast<float>(sizeof(btns) / sizeof(btns[0])) * 94.0f;
+        float center_start = std::max(120.0f, W * 0.5f - total_btn_width * 0.5f);
+        ImGui::SameLine(center_start);
 
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.10f, 0.25f, 0.14f, 0.6f));

@@ -300,8 +300,9 @@ int main() {
     bool renderer_ready = false;
 
     auto render_loading_frame = [&]() {
-        if (!renderer_ready) return;
+        // Always process window events to prevent the OS from marking us as unresponsive
         glfwPollEvents();
+        if (!renderer_ready) return;
         if (!app.renderer.begin_frame(app.vk, window)) return;
 
         ImGuiIO& io = ImGui::GetIO();

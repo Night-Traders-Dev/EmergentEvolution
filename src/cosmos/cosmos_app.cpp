@@ -284,15 +284,19 @@ void CosmosApp::init(GLFWwindow* window, ProgressCB progress_cb) {
 
     report(0.0f, "Initializing Vulkan...");
     vk.init(window);
+    glfwPollEvents(); // keep window responsive during init
 
     report(0.15f, "Creating renderer...");
     renderer.init(vk, window);
+    glfwPollEvents();
 
     report(0.30f, "Compiling shaders...");
     raytracer_.init(vk, renderer.render_pass());
+    glfwPollEvents();
 
     report(0.70f, "Initializing physics...");
     gravity_compute_.init(vk);
+    glfwPollEvents();
 
     report(0.90f, "Loading settings...");
     state.clear();
@@ -718,7 +722,7 @@ int CosmosApp::spawn_at(glm::vec3 pos) {
         const auto spawned = state.bodies[(size_t)host_idx];
         int ring_style = std::clamp(spawn_draft_.ring_layout_type, 0, 6);
         if (cfg.planetary_rings && spawned.ring_density > 0.001f &&
-            (spawned.type == CTYPE_PLANET || spawned.type == CTYPE_MOON)) {
+            body_can_host_rings(spawned)) {
             float annulus = std::max(spawned.ring_outer_radius * spawned.ring_outer_radius -
                                      spawned.ring_inner_radius * spawned.ring_inner_radius, 1.0f);
             float mass_hint = std::max(spawned.mass * spawned.ring_density * 0.00012f *
@@ -727,8 +731,8 @@ int CosmosApp::spawn_at(glm::vec3 pos) {
             spawn_dust_ring(host_idx, mass_hint, spawned.ring_inner_radius, spawned.ring_outer_radius,
                             spawned.ring_density, spawned.ring_ice_fraction, spawned.seed ^ 0xD05751EDu,
                             ring_style);
-            if (host_idx >= 0 && host_idx < (int)state.bodies.size())
-                clear_ring_system(state.bodies[(size_t)host_idx]);
+            // Keep ring visual data on host — shader renders the translucent ring overlay,
+            // particles provide the physical simulation. Don't clear_ring_system here.
         }
 
         if (spawn_draft_.spawn_moons && host_idx >= 0 && host_idx < (int)state.bodies.size()) {
@@ -944,7 +948,7 @@ int CosmosApp::spawn_preview_body(glm::vec3 pos) {
     const auto spawned = state.bodies[(size_t)host_idx];
     int ring_style = std::clamp(spawn_draft_.ring_layout_type, 0, 6);
     if (cfg.planetary_rings && spawned.ring_density > 0.001f &&
-        (spawned.type == CTYPE_PLANET || spawned.type == CTYPE_MOON)) {
+        body_can_host_rings(spawned)) {
         float annulus = std::max(spawned.ring_outer_radius * spawned.ring_outer_radius -
                                  spawned.ring_inner_radius * spawned.ring_inner_radius, 1.0f);
         float mass_hint = std::max(spawned.mass * spawned.ring_density * 0.00012f *
@@ -953,8 +957,7 @@ int CosmosApp::spawn_preview_body(glm::vec3 pos) {
         spawn_dust_ring(host_idx, mass_hint, spawned.ring_inner_radius, spawned.ring_outer_radius,
                         spawned.ring_density, spawned.ring_ice_fraction, spawned.seed ^ 0xD05751EDu,
                         ring_style);
-        if (host_idx >= 0 && host_idx < (int)state.bodies.size())
-            clear_ring_system(state.bodies[(size_t)host_idx]);
+        // Keep ring visual data on host for shader ring overlay
     }
     if (spawn_draft_.spawn_moons && host_idx >= 0 && host_idx < (int)state.bodies.size()) {
         spawn_moons_for_host(host_idx,
@@ -2531,7 +2534,7 @@ void CosmosApp::spawn_ring_for_host(int host_index, float inner_mult, float oute
                     host.ring_density, host.ring_ice_fraction,
                     hash_combine(host.seed, 0xA77A11u),
                     ring_style);
-    clear_ring_system(host);
+    // Keep ring visual data — shader renders translucent ring overlay
     host.props_valid = false;
     host.visuals_valid = false;
 }
