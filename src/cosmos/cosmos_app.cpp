@@ -861,6 +861,12 @@ void CosmosApp::step_physics(float dt) {
     cfg.dt_scale = (float)std::pow(10.0, cfg.time_exponent);
     float time_sign = reverse_time_ ? -1.0f : 1.0f;
     float scaled_dt_nominal = dt * cfg.dt_scale * time_sign;
+    if (std::abs(dt) > 1.0e-9f)
+        displayed_time_rate_ = (double)scaled_dt_nominal / (double)dt;
+    else
+        displayed_time_rate_ = (double)cfg.dt_scale * (double)time_sign;
+    if (!std::isfinite(displayed_time_rate_))
+        displayed_time_rate_ = 0.0;
     auto& bodies = state.bodies;
     size_t n = bodies.size();
     const size_t hw_threads = std::thread::hardware_concurrency() > 0
@@ -1256,6 +1262,10 @@ void CosmosApp::step_physics(float dt) {
     }
     if (!std::isfinite(scaled_dt))
         scaled_dt = 0.0f;
+    if (std::abs(dt) > 1.0e-9f)
+        displayed_time_rate_ = (double)scaled_dt / (double)dt;
+    if (!std::isfinite(displayed_time_rate_))
+        displayed_time_rate_ = 0.0;
     cfg.sim_time_accumulated += (double)scaled_dt;
 
     std::vector<glm::vec3> pos1(n, glm::vec3(0.0f));

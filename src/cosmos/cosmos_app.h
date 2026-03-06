@@ -121,6 +121,7 @@ private:
     CosmosGravityCompute gravity_compute_;
     float sim_time_ = 0.0f;
     float smoothed_fps_ = 60.0f;
+    double displayed_time_rate_ = 10.0;
     bool  reverse_time_ = false;
     std::vector<int> tracked_primary_;
     std::vector<int> tracked_children_count_;

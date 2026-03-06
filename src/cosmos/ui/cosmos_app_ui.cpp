@@ -2982,16 +2982,19 @@ void CosmosApp::draw_bottom_bar() {
         }
         ImGui::PopStyleVar(2);
 
-        char time_buf[64], rate_buf[64];
+        char time_buf[64], rate_buf[64], nominal_rate_buf[64];
+        double displayed_rate = paused ? 0.0 : displayed_time_rate_;
+        double nominal_rate = std::pow(10.0, cfg.time_exponent) * (reverse_time_ ? -1.0 : 1.0);
         format_sim_time(cfg.sim_time_accumulated, time_buf, sizeof(time_buf));
-        format_sim_time(std::pow(10.0, cfg.time_exponent), rate_buf, sizeof(rate_buf));
+        format_sim_time(std::abs(displayed_rate), rate_buf, sizeof(rate_buf));
+        format_sim_time(std::abs(nominal_rate), nominal_rate_buf, sizeof(nominal_rate_buf));
 
         char time_label[96];
         snprintf(time_label, sizeof(time_label), "T: %s###BottomTimeBtn", time_buf);
         char time_visible[64];
         snprintf(time_visible, sizeof(time_visible), "T: %s", time_buf);
         char rate_text[96];
-        snprintf(rate_text, sizeof(rate_text), "%s%s/s", reverse_time_ ? "-" : "", rate_buf);
+        snprintf(rate_text, sizeof(rate_text), "%s%s/s", displayed_rate < -1.0e-12 ? "-" : "", rate_buf);
         char bodies_text[64];
         snprintf(bodies_text, sizeof(bodies_text), "%zu bodies", state.count());
         int attracting_fragments = 0;
@@ -3045,10 +3048,12 @@ void CosmosApp::draw_bottom_bar() {
             if (ImGui::SliderFloat("Rate##Bottom", &exp_f, -9.0f, 21.0f, ""))
                 cfg.time_exponent = (double)exp_f;
             ImGui::Checkbox("Adaptive Time-Step##Bottom", &cfg.adaptive_time_step);
-            char popup_rate[64], popup_time[64];
-            format_sim_time(std::pow(10.0, cfg.time_exponent), popup_rate, sizeof(popup_rate));
+            char popup_rate[64], popup_nominal_rate[64], popup_time[64];
+            format_sim_time(std::abs(displayed_rate), popup_rate, sizeof(popup_rate));
+            format_sim_time(std::abs(nominal_rate), popup_nominal_rate, sizeof(popup_nominal_rate));
             format_sim_time(cfg.sim_time_accumulated, popup_time, sizeof(popup_time));
-            ImGui::Text("Rate: %s/s", popup_rate);
+            ImGui::Text("Rate: %s%s/s", displayed_rate < -1.0e-12 ? "-" : "", popup_rate);
+            ImGui::Text("Nominal Rate: %s%s/s", nominal_rate < -1.0e-12 ? "-" : "", popup_nominal_rate);
             ImGui::Text("Sim Time: %s", popup_time);
             draw_time_presets();
             ImGui::EndPopup();
@@ -3498,10 +3503,14 @@ void CosmosApp::draw_bottom_bar() {
                         ImGui::SliderFloat("Adaptive Max dt##Menu", &cfg.adaptive_step_max,
                                            0.01f, 1.0e7f, "%.2f", ImGuiSliderFlags_Logarithmic);
                     }
-                    char rate_buf[64], time_buf[64];
-                    format_sim_time(std::pow(10.0, cfg.time_exponent), rate_buf, sizeof(rate_buf));
+                    char rate_buf[64], nominal_rate_buf[64], time_buf[64];
+                    double displayed_rate = paused ? 0.0 : displayed_time_rate_;
+                    double nominal_rate = std::pow(10.0, cfg.time_exponent) * (reverse_time_ ? -1.0 : 1.0);
+                    format_sim_time(std::abs(displayed_rate), rate_buf, sizeof(rate_buf));
+                    format_sim_time(std::abs(nominal_rate), nominal_rate_buf, sizeof(nominal_rate_buf));
                     format_sim_time(cfg.sim_time_accumulated, time_buf, sizeof(time_buf));
-                    ImGui::Text("Rate: %s/s", rate_buf);
+                    ImGui::Text("Rate: %s%s/s", displayed_rate < -1.0e-12 ? "-" : "", rate_buf);
+                    ImGui::Text("Nominal Rate: %s%s/s", nominal_rate < -1.0e-12 ? "-" : "", nominal_rate_buf);
                     ImGui::Text("Sim Time: %s", time_buf);
                     draw_time_presets();
                 }
