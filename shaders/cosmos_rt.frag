@@ -641,7 +641,8 @@ vec3 sample_starfield(vec3 rd) {
 }
 
 vec3 background(vec3 rd) {
-    if (render_flags.x < 0.5) return vec3(0.0);
+    float bg_strength = max(render_flags.x, 0.0);
+    if (bg_strength <= 0.001) return vec3(0.0);
 
     int preset = int(quality_params.z + 0.5);
     float galactic_band = pow(clamp(1.0 - abs(rd.y * 0.80 + noise3D(rd * 2.1) * 0.12), 0.0, 1.0), 5.6);
@@ -736,7 +737,7 @@ vec3 background(vec3 rd) {
     } else { // Realistic
         bg += sample_starfield(rd);
     }
-    return bg;
+    return bg * bg_strength;
 }
 
 float grid_mask(vec2 p, float cell_size, float thickness) {
@@ -1105,7 +1106,8 @@ vec3 shade_star(vec3 normal, vec3 rd, Sphere hit) {
         sin(screen_info.w * (1.0 + flare_frequency * 0.7) + seed * 0.13);
     col *= global_flare;
 
-    if (render_flags.y > 0.5) {
+    float corona_scale = max(render_flags.y, 0.0);
+    if (corona_scale > 0.001) {
         float edge = pow(clamp(1.0 - mu, 0.0, 1.0), 2.0);
         float active_region = smoothstep(0.62, 0.84,
             fbm(vec3(lon * 6.0 + spin_phase * 0.65, lat * 10.0 - spin_phase * 0.18, seed * 0.41), 4)
@@ -1123,13 +1125,32 @@ vec3 shade_star(vec3 normal, vec3 rd, Sphere hit) {
                      seed * 0.71), 4) + active_region * 0.35);
         float cme = cme_ribbon * edge * storm_strength * (0.25 + 0.75 * flare_cycle);
         float storm_glow = storm_cells * edge * (0.10 + 0.32 * storm_strength);
+        float prominence_lat = 1.0 - smoothstep(0.05, 0.26 + differential_rotation * 0.10,
+                                                abs(abs(normal.y) - active_lat * 0.92));
+        float prominence_track = abs(sin(lon * (8.5 + flare_frequency * 2.4) +
+                                         seed * 0.83 - screen_info.w * (1.0 + flare_activity * 1.3)));
+        prominence_track = pow(prominence_track, 14.0);
+        float prominence_noise = smoothstep(0.54, 0.86,
+            fbm(vec3(lon * 10.5 - screen_info.w * (0.85 + storm_strength * 0.9),
+                     lat * 13.5 + screen_info.w * 0.22,
+                     seed * 0.93), 4) +
+            active_region * 0.32 + prominence_lat * 0.28);
+        float prominence_loop = pow(clamp(1.0 - mu, 0.0, 1.0), 0.62) *
+                                prominence_lat * prominence_track * prominence_noise;
+        float prominence_foot = edge * active_region * (0.35 + 0.65 * magnetic_band);
+        vec3 prominence_tint = mix(tint, vec3(1.0, 0.72, 0.58), 0.58 + 0.18 * flare_activity);
+        vec3 prominence_hot = mix(prominence_tint, vec3(1.0, 0.94, 0.86), 0.45);
 
-        col += tint * corona_strength * edge * (0.72 + 0.24 * pulsation);
-        col += mix(tint, vec3(1.00, 0.96, 0.88), 0.35) * streamer * (0.24 + flare_activity * 0.72);
-        col += vec3(1.0, 0.97, 0.92) * flare_fan * flare_activity * (0.18 + corona_strength * 0.40);
-        col += vec3(0.95, 0.98, 1.0) * flare_burst * edge * (0.32 + corona_strength * 0.78);
-        col += mix(tint, vec3(1.0, 0.88, 0.72), 0.62) * cme * (0.30 + flare_activity * 0.68);
-        col += tint * storm_glow;
+        col += tint * corona_strength * edge * (0.72 + 0.24 * pulsation) * corona_scale;
+        col += mix(tint, vec3(1.00, 0.96, 0.88), 0.35) * streamer * (0.24 + flare_activity * 0.72) * corona_scale;
+        col += vec3(1.0, 0.97, 0.92) * flare_fan * flare_activity * (0.18 + corona_strength * 0.40) * corona_scale;
+        col += vec3(0.95, 0.98, 1.0) * flare_burst * edge * (0.32 + corona_strength * 0.78) * corona_scale;
+        col += mix(tint, vec3(1.0, 0.88, 0.72), 0.62) * cme * (0.30 + flare_activity * 0.68) * corona_scale;
+        col += prominence_tint * prominence_loop *
+               (0.16 + flare_activity * 0.34 + corona_strength * 0.20) * corona_scale;
+        col += prominence_hot * prominence_foot * prominence_track *
+               (0.08 + flare_activity * 0.20) * corona_scale;
+        col += tint * storm_glow * corona_scale;
     }
 
     return col * (1.1 + hit.base_emit.a * 0.35);
@@ -2143,7 +2164,7 @@ vec3 black_hole_effect(vec3 ro, vec3 rd, Sphere bh, int body_count, bool hit_hor
     alpha_out = 0.0;
     if (!hit_horizon && influence > influence_radius) return vec3(0.0);
 
-    float lens = (render_flags.w > 0.5) ? bh.activity_params.w : 0.0;
+    float lens = bh.activity_params.w * max(render_flags.w, 0.0);
     vec3 center_dir = normalize(to_center);
     float bend = clamp((influence_radius - influence) / max(influence_radius, 0.001), 0.0, 1.0) * lens * 0.55;
     int warp_steps = int(3 + max(0.0, quality_params.x - 1.0) * 2.0);
@@ -2192,8 +2213,10 @@ void main() {
     float H = screen_info.y;
     int body_count = int(screen_info.z);
 
-    bool use_star_lighting = lighting_params.x > 0.5;
-    bool use_uniform_lighting = lighting_params.y > 0.5;
+    float star_light_strength = max(lighting_params.x, 0.0);
+    float uniform_light_strength = max(lighting_params.y, 0.0);
+    bool use_star_lighting = star_light_strength > 0.001;
+    bool use_uniform_lighting = uniform_light_strength > 0.001;
     float ambient = lighting_params.z;
     bool use_fast_star_lighting = lighting_params.w > 0.5;
 
@@ -2364,9 +2387,10 @@ void main() {
         float hemi = 0.5 + 0.5 * surf_normal.y;
         vec3 sky_color = vec3(0.62, 0.68, 0.78);
         vec3 ground_color = vec3(0.14, 0.12, 0.10);
-        final_color = base_color * mix(ground_color, sky_color, hemi);
+        final_color = base_color * mix(ground_color, sky_color, hemi) * uniform_light_strength;
         final_color += specular_term(surf_normal, normalize(vec3(0.4, 0.8, 0.2)), view_dir,
-                                     roughness, hit.material_params.z, hit.material_params.y, vec3(0.45));
+                                     roughness, hit.material_params.z, hit.material_params.y, vec3(0.45))
+            * uniform_light_strength;
     }
 
     if (use_star_lighting) {
@@ -2381,10 +2405,10 @@ void main() {
                 float atten = 1.0 / (1.0 + (light_dist * light_dist) /
                     (spheres[primary_light_idx].pos_radius.w * spheres[primary_light_idx].pos_radius.w * 400.0));
                 float ndl = max(dot(surf_normal, L), 0.0);
-                final_color += base_color * primary_light_color * ndl * atten;
+                final_color += base_color * primary_light_color * ndl * atten * star_light_strength;
                 final_color += specular_term(surf_normal, L, view_dir, roughness,
                                              hit.material_params.z, hit.material_params.y,
-                                             primary_light_color) * atten;
+                                             primary_light_color) * atten * star_light_strength;
             }
         } else if (!use_fast_star_lighting && quality_params.x >= 2.0) {
             for (int i = 0; i < body_count && i < MAX_TRACE_BODIES; i++) {
@@ -2398,7 +2422,7 @@ void main() {
                     (spheres[i].pos_radius.w * spheres[i].pos_radius.w * 400.0));
                 vec3 light_col = spheres[i].base_emit.rgb * spheres[i].base_emit.a;
                 float ndl = max(dot(surf_normal, L), 0.0);
-                final_color += base_color * light_col * ndl * atten;
+                final_color += base_color * light_col * ndl * atten * star_light_strength;
             }
         }
     }
@@ -2455,11 +2479,12 @@ void main() {
         float edge = pow(clamp(1.0 - max(dot(normal, -rd), 0.0), 0.0, 1.0), 2.0);
         float phase = phase_hg(0.55, dot(-rd, primary_light_dir));
         final_color += vec3(0.65, 0.78, 0.95) * hit.activity_params.y * edge * phase * 6.0;
-        if (render_flags.z > 0.5 && has_primary_light) {
+        if (render_flags.z > 0.001 && has_primary_light) {
             vec3 anti_sun = -primary_light_dir;
             float align = pow(max(dot(normalize(hit_pos - hit.pos_radius.xyz), anti_sun), 0.0), 2.0);
             float tail = pow(clamp(1.0 - max(dot(-rd, anti_sun), 0.0), 0.0, 1.0), 1.5);
-            final_color += vec3(0.55, 0.72, 0.95) * hit.activity_params.z * align * tail * 0.9;
+            final_color += vec3(0.55, 0.72, 0.95) * hit.activity_params.z * align * tail * 0.9 *
+                max(render_flags.z, 0.0);
         }
     }
 

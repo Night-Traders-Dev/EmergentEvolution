@@ -8,9 +8,9 @@
 namespace {
 
 constexpr uint32_t COSMOS_MAGIC   = 0x534D4F43; // "COSM"
-constexpr uint32_t COSMOS_VERSION = 13;
+constexpr uint32_t COSMOS_VERSION = 15;
 constexpr uint32_t COSMOS_SETTINGS_MAGIC   = 0x54475343; // "CSGT"
-constexpr uint32_t COSMOS_SETTINGS_VERSION = 4;
+constexpr uint32_t COSMOS_SETTINGS_VERSION = 5;
 constexpr const char* COSMOS_SETTINGS_PATH = "cosmos_settings.bin";
 
 struct PersistedUiSettingsV1 {
@@ -293,11 +293,13 @@ bool CosmosApp::save_simulation(const std::string& path) {
     if (cfg.dust_debug_non_attracting) flags |= 65536;
     if (cfg.adaptive_time_step) flags |= 131072;
     if (cfg.barnes_hut) flags |= 262144;
-    if (cfg.velocity_verlet) flags |= 524288;
+    if (cfg.integrator_type == INTEGRATOR_VELOCITY_VERLET) flags |= 524288;
     if (cfg.gpu_barnes_hut) flags |= 1048576;
     if (cfg.collision_sph) flags |= 2097152;
     if (cfg.collision_rigid_body_dynamics) flags |= 4194304;
     if (cfg.spin_fragmentation) flags |= 8388608;
+    if (cfg.adaptive_substepping) flags |= 16777216;
+    if (cfg.stellar_wind_pressure) flags |= 33554432;
     f.write(reinterpret_cast<const char*>(&flags), sizeof(uint32_t));
 
     f.write(reinterpret_cast<const char*>(&cfg.merge_speed_threshold), sizeof(float));
@@ -336,6 +338,33 @@ bool CosmosApp::save_simulation(const std::string& path) {
     f.write(reinterpret_cast<const char*>(&cfg.nebula_sink_consume_fraction), sizeof(float));
     uint8_t sink_flag = cfg.nebula_sink_formation ? 1u : 0u;
     f.write(reinterpret_cast<const char*>(&sink_flag), sizeof(uint8_t));
+    f.write(reinterpret_cast<const char*>(&cfg.physics_substeps), sizeof(int));
+    f.write(reinterpret_cast<const char*>(&cfg.parallel_min_batch), sizeof(int));
+    f.write(reinterpret_cast<const char*>(&cfg.orbit_line_alpha), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.orbit_line_width), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.trail_alpha_scale), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.trail_width_scale), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.body_label_opacity), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.body_label_max_count), sizeof(int));
+    f.write(reinterpret_cast<const char*>(&cfg.collision_sph_pressure), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.collision_sph_viscosity), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.collision_sph_heat), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.rigid_collision_restitution), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.rigid_collision_separation), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.tidal_heating_scale), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.roche_fluid_scale), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.roche_rigid_scale), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.material_phase_rate), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.star_light_strength), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.uniform_light_strength), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.background_starfield_intensity), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.corona_strength_scale), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.comet_tail_strength_scale), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.blackhole_lensing_strength), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.integrator_type), sizeof(int));
+    f.write(reinterpret_cast<const char*>(&cfg.adaptive_substep_tolerance), sizeof(float));
+    f.write(reinterpret_cast<const char*>(&cfg.adaptive_substep_max), sizeof(int));
+    f.write(reinterpret_cast<const char*>(&cfg.stellar_wind_pressure_scale), sizeof(float));
 
     uint32_t body_count = (uint32_t)state.bodies.size();
     f.write(reinterpret_cast<const char*>(&body_count), 4);
@@ -444,6 +473,10 @@ bool CosmosApp::load_simulation(const std::string& path) {
     else cfg.collision_rigid_body_dynamics = true;
     if (version >= 13) cfg.spin_fragmentation = (flags & 8388608) != 0;
     else cfg.spin_fragmentation = true;
+    if (version >= 15) cfg.adaptive_substepping = (flags & 16777216) != 0;
+    else cfg.adaptive_substepping = false;
+    if (version >= 15) cfg.stellar_wind_pressure = (flags & 33554432) != 0;
+    else cfg.stellar_wind_pressure = true;
     if (version < 3) {
         cfg.material_phases = true;
         cfg.planetary_rings = true;
@@ -568,6 +601,104 @@ bool CosmosApp::load_simulation(const std::string& path) {
     cfg.nebula_sink_min_mass = std::clamp(cfg.nebula_sink_min_mass, 1.0e-7f, 1.0f);
     cfg.nebula_sink_spawn_fraction = std::clamp(cfg.nebula_sink_spawn_fraction, 0.001f, 0.50f);
     cfg.nebula_sink_consume_fraction = std::clamp(cfg.nebula_sink_consume_fraction, 0.05f, 1.0f);
+    if (version >= 14) {
+        f.read(reinterpret_cast<char*>(&cfg.physics_substeps), sizeof(int));
+        f.read(reinterpret_cast<char*>(&cfg.parallel_min_batch), sizeof(int));
+        f.read(reinterpret_cast<char*>(&cfg.orbit_line_alpha), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.orbit_line_width), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.trail_alpha_scale), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.trail_width_scale), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.body_label_opacity), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.body_label_max_count), sizeof(int));
+        f.read(reinterpret_cast<char*>(&cfg.collision_sph_pressure), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.collision_sph_viscosity), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.collision_sph_heat), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.rigid_collision_restitution), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.rigid_collision_separation), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.tidal_heating_scale), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.roche_fluid_scale), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.roche_rigid_scale), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.material_phase_rate), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.star_light_strength), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.uniform_light_strength), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.background_starfield_intensity), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.corona_strength_scale), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.comet_tail_strength_scale), sizeof(float));
+        f.read(reinterpret_cast<char*>(&cfg.blackhole_lensing_strength), sizeof(float));
+        if (version >= 15) {
+            f.read(reinterpret_cast<char*>(&cfg.integrator_type), sizeof(int));
+            f.read(reinterpret_cast<char*>(&cfg.adaptive_substep_tolerance), sizeof(float));
+            f.read(reinterpret_cast<char*>(&cfg.adaptive_substep_max), sizeof(int));
+            f.read(reinterpret_cast<char*>(&cfg.stellar_wind_pressure_scale), sizeof(float));
+        } else {
+            cfg.integrator_type = cfg.velocity_verlet
+                ? INTEGRATOR_VELOCITY_VERLET
+                : INTEGRATOR_EULER_SEMI_IMPLICIT;
+            cfg.adaptive_substep_tolerance = 0.25f;
+            cfg.adaptive_substep_max = 32;
+            cfg.stellar_wind_pressure_scale = 1.0f;
+        }
+    } else {
+        cfg.physics_substeps = 1;
+        cfg.parallel_min_batch = 256;
+        cfg.orbit_line_alpha = 0.28f;
+        cfg.orbit_line_width = 1.0f;
+        cfg.trail_alpha_scale = 1.0f;
+        cfg.trail_width_scale = 1.0f;
+        cfg.body_label_opacity = 0.92f;
+        cfg.body_label_max_count = 64;
+        cfg.collision_sph_pressure = 1.0f;
+        cfg.collision_sph_viscosity = 1.0f;
+        cfg.collision_sph_heat = 1.0f;
+        cfg.rigid_collision_restitution = 0.35f;
+        cfg.rigid_collision_separation = 1.0f;
+        cfg.tidal_heating_scale = 1.0f;
+        cfg.roche_fluid_scale = 1.0f;
+        cfg.roche_rigid_scale = 1.0f;
+        cfg.material_phase_rate = 1.0f;
+        cfg.star_light_strength = 1.0f;
+        cfg.uniform_light_strength = 1.0f;
+        cfg.background_starfield_intensity = 1.0f;
+        cfg.corona_strength_scale = 1.0f;
+        cfg.comet_tail_strength_scale = 1.0f;
+        cfg.blackhole_lensing_strength = 1.0f;
+        cfg.integrator_type = cfg.velocity_verlet
+            ? INTEGRATOR_VELOCITY_VERLET
+            : INTEGRATOR_EULER_SEMI_IMPLICIT;
+        cfg.adaptive_substep_tolerance = 0.25f;
+        cfg.adaptive_substep_max = 32;
+        cfg.stellar_wind_pressure_scale = 1.0f;
+    }
+    cfg.physics_substeps = std::clamp(cfg.physics_substeps, 1, 16);
+    cfg.parallel_min_batch = std::clamp(cfg.parallel_min_batch, 32, 100000);
+    cfg.orbit_line_alpha = std::clamp(cfg.orbit_line_alpha, 0.0f, 1.0f);
+    cfg.orbit_line_width = std::clamp(cfg.orbit_line_width, 0.5f, 4.0f);
+    cfg.trail_alpha_scale = std::clamp(cfg.trail_alpha_scale, 0.0f, 4.0f);
+    cfg.trail_width_scale = std::clamp(cfg.trail_width_scale, 0.1f, 4.0f);
+    cfg.body_label_opacity = std::clamp(cfg.body_label_opacity, 0.05f, 1.0f);
+    cfg.body_label_max_count = std::clamp(cfg.body_label_max_count, 1, 512);
+    cfg.collision_sph_pressure = std::clamp(cfg.collision_sph_pressure, 0.0f, 4.0f);
+    cfg.collision_sph_viscosity = std::clamp(cfg.collision_sph_viscosity, 0.0f, 4.0f);
+    cfg.collision_sph_heat = std::clamp(cfg.collision_sph_heat, 0.0f, 4.0f);
+    cfg.rigid_collision_restitution = std::clamp(cfg.rigid_collision_restitution, 0.0f, 1.2f);
+    cfg.rigid_collision_separation = std::clamp(cfg.rigid_collision_separation, 0.0f, 3.0f);
+    cfg.tidal_heating_scale = std::clamp(cfg.tidal_heating_scale, 0.0f, 4.0f);
+    cfg.roche_fluid_scale = std::clamp(cfg.roche_fluid_scale, 0.25f, 4.0f);
+    cfg.roche_rigid_scale = std::clamp(cfg.roche_rigid_scale, 0.25f, 4.0f);
+    cfg.material_phase_rate = std::clamp(cfg.material_phase_rate, 0.1f, 4.0f);
+    cfg.star_light_strength = std::clamp(cfg.star_light_strength, 0.0f, 4.0f);
+    cfg.uniform_light_strength = std::clamp(cfg.uniform_light_strength, 0.0f, 4.0f);
+    cfg.background_starfield_intensity = std::clamp(cfg.background_starfield_intensity, 0.0f, 4.0f);
+    cfg.corona_strength_scale = std::clamp(cfg.corona_strength_scale, 0.0f, 4.0f);
+    cfg.comet_tail_strength_scale = std::clamp(cfg.comet_tail_strength_scale, 0.0f, 4.0f);
+    cfg.blackhole_lensing_strength = std::clamp(cfg.blackhole_lensing_strength, 0.0f, 4.0f);
+    cfg.integrator_type = std::clamp(cfg.integrator_type,
+                                     (int)INTEGRATOR_VELOCITY_VERLET,
+                                     (int)INTEGRATOR_PEFRL);
+    cfg.adaptive_substep_tolerance = std::clamp(cfg.adaptive_substep_tolerance, 1.0e-6f, 1.0e6f);
+    cfg.adaptive_substep_max = std::clamp(cfg.adaptive_substep_max, 1, 256);
+    cfg.stellar_wind_pressure_scale = std::clamp(cfg.stellar_wind_pressure_scale, 0.0f, 4.0f);
+    cfg.velocity_verlet = (cfg.integrator_type == INTEGRATOR_VELOCITY_VERLET);
     if (version <= 4 && cfg.min_fragment_mass >= 0.05f)
         cfg.min_fragment_mass = 1.0e-8f;
 
@@ -927,6 +1058,11 @@ void CosmosApp::load_persistent_settings() {
         if (cfg_size > copy_bytes)
             f.seekg((std::streamoff)(cfg_size - copy_bytes), std::ios::cur);
         cfg = loaded_cfg;
+        if (version < 5) {
+            cfg.integrator_type = cfg.velocity_verlet
+                ? INTEGRATOR_VELOCITY_VERLET
+                : INTEGRATOR_EULER_SEMI_IMPLICIT;
+        }
     } else {
         // Versions 1-3 wrote CosmosConfig as raw bytes while fields were being inserted
         // in the middle of the struct. Loading those bytes into the current layout corrupts
@@ -943,6 +1079,36 @@ void CosmosApp::load_persistent_settings() {
     cfg.body_label_min_distance = std::clamp(cfg.body_label_min_distance, 0.0f, 1.0e8f);
     cfg.body_label_max_distance = std::clamp(cfg.body_label_max_distance,
                                              std::max(cfg.body_label_min_distance, 1.0e-3f), 1.0e8f);
+    cfg.physics_substeps = std::clamp(cfg.physics_substeps, 1, 16);
+    cfg.parallel_min_batch = std::clamp(cfg.parallel_min_batch, 32, 100000);
+    cfg.orbit_line_alpha = std::clamp(cfg.orbit_line_alpha, 0.0f, 1.0f);
+    cfg.orbit_line_width = std::clamp(cfg.orbit_line_width, 0.5f, 4.0f);
+    cfg.trail_alpha_scale = std::clamp(cfg.trail_alpha_scale, 0.0f, 4.0f);
+    cfg.trail_width_scale = std::clamp(cfg.trail_width_scale, 0.1f, 4.0f);
+    cfg.body_label_opacity = std::clamp(cfg.body_label_opacity, 0.05f, 1.0f);
+    cfg.body_label_max_count = std::clamp(cfg.body_label_max_count, 1, 512);
+    cfg.collision_sph_pressure = std::clamp(cfg.collision_sph_pressure, 0.0f, 4.0f);
+    cfg.collision_sph_viscosity = std::clamp(cfg.collision_sph_viscosity, 0.0f, 4.0f);
+    cfg.collision_sph_heat = std::clamp(cfg.collision_sph_heat, 0.0f, 4.0f);
+    cfg.rigid_collision_restitution = std::clamp(cfg.rigid_collision_restitution, 0.0f, 1.2f);
+    cfg.rigid_collision_separation = std::clamp(cfg.rigid_collision_separation, 0.0f, 3.0f);
+    cfg.tidal_heating_scale = std::clamp(cfg.tidal_heating_scale, 0.0f, 4.0f);
+    cfg.roche_fluid_scale = std::clamp(cfg.roche_fluid_scale, 0.25f, 4.0f);
+    cfg.roche_rigid_scale = std::clamp(cfg.roche_rigid_scale, 0.25f, 4.0f);
+    cfg.material_phase_rate = std::clamp(cfg.material_phase_rate, 0.1f, 4.0f);
+    cfg.star_light_strength = std::clamp(cfg.star_light_strength, 0.0f, 4.0f);
+    cfg.uniform_light_strength = std::clamp(cfg.uniform_light_strength, 0.0f, 4.0f);
+    cfg.background_starfield_intensity = std::clamp(cfg.background_starfield_intensity, 0.0f, 4.0f);
+    cfg.corona_strength_scale = std::clamp(cfg.corona_strength_scale, 0.0f, 4.0f);
+    cfg.comet_tail_strength_scale = std::clamp(cfg.comet_tail_strength_scale, 0.0f, 4.0f);
+    cfg.blackhole_lensing_strength = std::clamp(cfg.blackhole_lensing_strength, 0.0f, 4.0f);
+    cfg.integrator_type = std::clamp(cfg.integrator_type,
+                                     (int)INTEGRATOR_VELOCITY_VERLET,
+                                     (int)INTEGRATOR_PEFRL);
+    cfg.adaptive_substep_tolerance = std::clamp(cfg.adaptive_substep_tolerance, 1.0e-6f, 1.0e6f);
+    cfg.adaptive_substep_max = std::clamp(cfg.adaptive_substep_max, 1, 256);
+    cfg.stellar_wind_pressure_scale = std::clamp(cfg.stellar_wind_pressure_scale, 0.0f, 4.0f);
+    cfg.velocity_verlet = (cfg.integrator_type == INTEGRATOR_VELOCITY_VERLET);
 
     if (version == 1) {
         PersistedUiSettingsV1 ui{};

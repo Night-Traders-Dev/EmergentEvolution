@@ -341,11 +341,60 @@ void CosmosApp::reset_simulation() {
     sim_time_ = 0.0f;
     cfg.sim_time_accumulated = 0.0;
     displayed_time_rate_ = 0.0;
+    adaptive_substeps_last_ = 1;
+    adaptive_substeps_required_ = 1;
+    adaptive_substeps_saturated_ = false;
+    adaptive_substep_refining_ = false;
+    escaped_mass_total_ = 0.0;
+    radiated_energy_total_ = 0.0;
+    escaped_energy_total_ = 0.0;
+    escaped_momentum_total_ = glm::dvec3(0.0);
     camera = OrbitCamera{};
     camera.distance = 600.0f;
     camera.target_distance = 600.0f;
     camera.elevation = 0.5f;
     paused = false;
+}
+
+void CosmosApp::reset_bottom_bar_menu_defaults() {
+    const int preserved_nebula_render_mode = cfg.nebula_render_mode;
+    const uint32_t preserved_body_count = static_cast<uint32_t>(state.count());
+    const double preserved_sim_time = cfg.sim_time_accumulated;
+
+    cfg = CosmosConfig{};
+    cfg.nebula_render_mode = preserved_nebula_render_mode;
+    cfg.body_count = preserved_body_count;
+    cfg.sim_time_accumulated = preserved_sim_time;
+    cfg.dt_scale = (float)std::pow(10.0, cfg.time_exponent);
+
+    camera = OrbitCamera{};
+    bottom_bar_autohide_ = true;
+    diagnostics_enabled_ = true;
+    diagnostics_pause_on_invalid_ = true;
+    displayed_time_rate_ = paused ? 0.0 : (double)cfg.dt_scale * (reverse_time_ ? -1.0 : 1.0);
+    adaptive_substeps_last_ = 1;
+    adaptive_substeps_required_ = 1;
+    adaptive_substeps_saturated_ = false;
+    adaptive_substep_refining_ = false;
+    escaped_mass_total_ = 0.0;
+    radiated_energy_total_ = 0.0;
+    escaped_energy_total_ = 0.0;
+    escaped_momentum_total_ = glm::dvec3(0.0);
+
+    apply_dust_debug_mode();
+    update_body_tracking_cache();
+}
+
+void CosmosApp::account_escaped_mass(const CelestialBody& source, float amount,
+                                     float thermal_energy) {
+    if (amount <= 0.0f || !std::isfinite(amount))
+        return;
+    double m = (double)amount;
+    glm::dvec3 v = glm::dvec3(source.vel);
+    escaped_mass_total_ += m;
+    escaped_momentum_total_ += v * m;
+    escaped_energy_total_ += 0.5 * m * (double)glm::dot(v, v) +
+                             std::max(0.0, (double)thermal_energy);
 }
 
 void CosmosApp::spawn_at(glm::vec3 pos) {
@@ -684,7 +733,10 @@ void CosmosApp::tick(GLFWwindow* window, float dt) {
 
     if (!paused && !show_splash) {
         try {
-            step_physics(dt);
+            int substeps = std::clamp(cfg.physics_substeps, 1, 16);
+            float step_dt = dt / (float)substeps;
+            for (int substep = 0; substep < substeps; ++substep)
+                step_physics(step_dt);
             sim_time_ += dt;
         } catch (const std::exception& e) {
             debug_logf("step_physics exception: %s", e.what());
@@ -868,14 +920,24 @@ void CosmosApp::step_physics(float dt) {
         displayed_time_rate_ = (double)cfg.dt_scale * (double)time_sign;
     if (!std::isfinite(displayed_time_rate_))
         displayed_time_rate_ = 0.0;
+    cfg.integrator_type = std::clamp(cfg.integrator_type,
+                                     (int)INTEGRATOR_VELOCITY_VERLET,
+                                     (int)INTEGRATOR_PEFRL);
+    cfg.velocity_verlet = (cfg.integrator_type == INTEGRATOR_VELOCITY_VERLET);
+    if (!adaptive_substep_refining_) {
+        adaptive_substeps_last_ = 1;
+        adaptive_substeps_required_ = 1;
+        adaptive_substeps_saturated_ = false;
+    }
     auto& bodies = state.bodies;
     size_t n = bodies.size();
     const size_t hw_threads = std::thread::hardware_concurrency() > 0
         ? static_cast<size_t>(std::thread::hardware_concurrency())
         : 1;
     const bool can_parallel = cfg.parallel_gravity && hw_threads > 1;
+    const size_t parallel_min_batch = static_cast<size_t>(std::clamp(cfg.parallel_min_batch, 32, 100000));
     auto parallel_for = [&](size_t count, size_t min_parallel, auto&& fn) {
-        if (!can_parallel || count < min_parallel) {
+        if (!can_parallel || count < std::max(min_parallel, parallel_min_batch)) {
             fn(0, count);
             return;
         }
@@ -1222,6 +1284,201 @@ void CosmosApp::step_physics(float dt) {
             compute_accel_direct(pos, vel, out_accel);
     };
 
+    auto integrate_kinematics = [&](float step_scaled_dt,
+                                    const std::vector<glm::vec3>& in_pos,
+                                    const std::vector<glm::vec3>& in_vel,
+                                    const std::vector<glm::vec3>* initial_accel,
+                                    std::vector<glm::vec3>& out_pos,
+                                    std::vector<glm::vec3>& out_vel) {
+        out_pos.assign(n, glm::vec3(0.0f));
+        out_vel.assign(n, glm::vec3(0.0f));
+        if (n == 0)
+            return;
+
+        auto ensure_accel = [&](std::vector<glm::vec3>& accel) {
+            if (initial_accel) accel = *initial_accel;
+            else compute_accel(in_pos, in_vel, accel);
+        };
+
+        switch (cfg.integrator_type) {
+        case INTEGRATOR_EULER_EXPLICIT: {
+            std::vector<glm::vec3> accel(n, glm::vec3(0.0f));
+            ensure_accel(accel);
+            parallel_for(n, 384, [&](size_t begin, size_t end) {
+                for (size_t i = begin; i < end; ++i) {
+                    if (bodies[i].marked_for_removal) {
+                        out_pos[i] = in_pos[i];
+                        out_vel[i] = in_vel[i];
+                        continue;
+                    }
+                    out_pos[i] = in_pos[i] + in_vel[i] * step_scaled_dt;
+                    out_vel[i] = in_vel[i] + accel[i] * step_scaled_dt;
+                }
+            });
+            break;
+        }
+        case INTEGRATOR_EULER_SEMI_IMPLICIT: {
+            std::vector<glm::vec3> accel(n, glm::vec3(0.0f));
+            ensure_accel(accel);
+            parallel_for(n, 384, [&](size_t begin, size_t end) {
+                for (size_t i = begin; i < end; ++i) {
+                    if (bodies[i].marked_for_removal) {
+                        out_pos[i] = in_pos[i];
+                        out_vel[i] = in_vel[i];
+                        continue;
+                    }
+                    out_vel[i] = in_vel[i] + accel[i] * step_scaled_dt;
+                    out_pos[i] = in_pos[i] + out_vel[i] * step_scaled_dt;
+                }
+            });
+            break;
+        }
+        case INTEGRATOR_RK2: {
+            std::vector<glm::vec3> accel0_local(n, glm::vec3(0.0f));
+            ensure_accel(accel0_local);
+            std::vector<glm::vec3> pos_mid(n, glm::vec3(0.0f));
+            std::vector<glm::vec3> vel_mid(n, glm::vec3(0.0f));
+            parallel_for(n, 384, [&](size_t begin, size_t end) {
+                for (size_t i = begin; i < end; ++i) {
+                    if (bodies[i].marked_for_removal) {
+                        pos_mid[i] = in_pos[i];
+                        vel_mid[i] = in_vel[i];
+                        continue;
+                    }
+                    pos_mid[i] = in_pos[i] + in_vel[i] * (step_scaled_dt * 0.5f);
+                    vel_mid[i] = in_vel[i] + accel0_local[i] * (step_scaled_dt * 0.5f);
+                }
+            });
+            std::vector<glm::vec3> accel_mid(n, glm::vec3(0.0f));
+            compute_accel(pos_mid, vel_mid, accel_mid);
+            parallel_for(n, 384, [&](size_t begin, size_t end) {
+                for (size_t i = begin; i < end; ++i) {
+                    if (bodies[i].marked_for_removal) {
+                        out_pos[i] = in_pos[i];
+                        out_vel[i] = in_vel[i];
+                        continue;
+                    }
+                    out_pos[i] = in_pos[i] + vel_mid[i] * step_scaled_dt;
+                    out_vel[i] = in_vel[i] + accel_mid[i] * step_scaled_dt;
+                }
+            });
+            break;
+        }
+        case INTEGRATOR_FOREST_RUTH: {
+            std::vector<glm::vec3> pos = in_pos;
+            std::vector<glm::vec3> vel = in_vel;
+            std::vector<glm::vec3> accel(n, glm::vec3(0.0f));
+            constexpr float theta = 1.0f / (2.0f - 1.2599210498948732f);
+            constexpr float c1 = theta * 0.5f;
+            constexpr float c2 = (1.0f - theta) * 0.5f;
+            constexpr float c3 = c2;
+            constexpr float c4 = c1;
+            constexpr float d1 = theta;
+            constexpr float d2 = 1.0f - 2.0f * theta;
+            constexpr float d3 = theta;
+            auto drift = [&](float coeff) {
+                parallel_for(n, 384, [&](size_t begin, size_t end) {
+                    for (size_t i = begin; i < end; ++i) {
+                        if (bodies[i].marked_for_removal) continue;
+                        pos[i] += vel[i] * (step_scaled_dt * coeff);
+                    }
+                });
+            };
+            auto kick = [&](float coeff) {
+                compute_accel(pos, vel, accel);
+                parallel_for(n, 384, [&](size_t begin, size_t end) {
+                    for (size_t i = begin; i < end; ++i) {
+                        if (bodies[i].marked_for_removal) continue;
+                        vel[i] += accel[i] * (step_scaled_dt * coeff);
+                    }
+                });
+            };
+            drift(c1); kick(d1);
+            drift(c2); kick(d2);
+            drift(c3); kick(d3);
+            drift(c4);
+            out_pos = std::move(pos);
+            out_vel = std::move(vel);
+            break;
+        }
+        case INTEGRATOR_PEFRL: {
+            std::vector<glm::vec3> pos = in_pos;
+            std::vector<glm::vec3> vel = in_vel;
+            std::vector<glm::vec3> accel(n, glm::vec3(0.0f));
+            constexpr float xi = 0.1786178958448091f;
+            constexpr float lambda = -0.2123418310626054f;
+            constexpr float chi = -0.06626458266981849f;
+            constexpr float c_half = (1.0f - 2.0f * lambda) * 0.5f;
+            constexpr float drift_mid = 1.0f - 2.0f * (chi + xi);
+            auto drift = [&](float coeff) {
+                parallel_for(n, 384, [&](size_t begin, size_t end) {
+                    for (size_t i = begin; i < end; ++i) {
+                        if (bodies[i].marked_for_removal) continue;
+                        pos[i] += vel[i] * (step_scaled_dt * coeff);
+                    }
+                });
+            };
+            auto kick = [&](float coeff) {
+                compute_accel(pos, vel, accel);
+                parallel_for(n, 384, [&](size_t begin, size_t end) {
+                    for (size_t i = begin; i < end; ++i) {
+                        if (bodies[i].marked_for_removal) continue;
+                        vel[i] += accel[i] * (step_scaled_dt * coeff);
+                    }
+                });
+            };
+            drift(xi);        kick(c_half);
+            drift(chi);       kick(lambda);
+            drift(drift_mid); kick(lambda);
+            drift(chi);       kick(c_half);
+            drift(xi);
+            out_pos = std::move(pos);
+            out_vel = std::move(vel);
+            break;
+        }
+        case INTEGRATOR_VELOCITY_VERLET:
+        default: {
+            std::vector<glm::vec3> accel0_local(n, glm::vec3(0.0f));
+            ensure_accel(accel0_local);
+            std::vector<glm::vec3> pos1_local(n, glm::vec3(0.0f));
+            std::vector<glm::vec3> vel_half_local(n, glm::vec3(0.0f));
+            float dt2 = step_scaled_dt * step_scaled_dt;
+            parallel_for(n, 384, [&](size_t begin, size_t end) {
+                for (size_t i = begin; i < end; ++i) {
+                    if (bodies[i].marked_for_removal) {
+                        pos1_local[i] = in_pos[i];
+                        vel_half_local[i] = in_vel[i];
+                        continue;
+                    }
+                    pos1_local[i] = in_pos[i] + in_vel[i] * step_scaled_dt + 0.5f * accel0_local[i] * dt2;
+                    vel_half_local[i] = in_vel[i] + 0.5f * accel0_local[i] * step_scaled_dt;
+                }
+            });
+            std::vector<glm::vec3> accel1(n, glm::vec3(0.0f));
+            compute_accel(pos1_local, vel_half_local, accel1);
+            parallel_for(n, 384, [&](size_t begin, size_t end) {
+                for (size_t i = begin; i < end; ++i) {
+                    if (bodies[i].marked_for_removal) {
+                        out_pos[i] = in_pos[i];
+                        out_vel[i] = in_vel[i];
+                        continue;
+                    }
+                    out_pos[i] = pos1_local[i];
+                    out_vel[i] = in_vel[i] + 0.5f * (accel0_local[i] + accel1[i]) * step_scaled_dt;
+                }
+            });
+            break;
+        }
+        }
+
+        parallel_for(n, 384, [&](size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i) {
+                if (bodies[i].marked_for_removal) continue;
+                out_vel[i] *= cfg.damping;
+            }
+        });
+    };
+
     std::vector<glm::vec3> accel0(n, glm::vec3(0.0f));
     compute_accel(pos0, vel0, accel0);
 
@@ -1263,52 +1520,77 @@ void CosmosApp::step_physics(float dt) {
     }
     if (!std::isfinite(scaled_dt))
         scaled_dt = 0.0f;
+    if (cfg.adaptive_substepping && !adaptive_substep_refining_ &&
+        n > 0 && std::abs(scaled_dt) > 1.0e-9f) {
+        auto estimate_segment_error = [&](float segment_scaled_dt) {
+            if (std::abs(segment_scaled_dt) <= 1.0e-9f)
+                return 0.0f;
+            std::vector<glm::vec3> full_pos, full_vel;
+            std::vector<glm::vec3> half_pos, half_vel;
+            std::vector<glm::vec3> half2_pos, half2_vel;
+            integrate_kinematics(segment_scaled_dt, pos0, vel0, &accel0, full_pos, full_vel);
+            integrate_kinematics(segment_scaled_dt * 0.5f, pos0, vel0, &accel0, half_pos, half_vel);
+            integrate_kinematics(segment_scaled_dt * 0.5f, half_pos, half_vel, nullptr, half2_pos, half2_vel);
+            float max_error = 0.0f;
+            for (size_t i = 0; i < n; ++i) {
+                if (bodies[i].marked_for_removal) continue;
+                float err = glm::length(full_pos[i] - half2_pos[i]);
+                if (std::isfinite(err))
+                    max_error = std::max(max_error, err);
+            }
+            return max_error;
+        };
+
+        float tolerance = std::clamp(cfg.adaptive_substep_tolerance, 1.0e-6f, 1.0e6f);
+        int required_substeps = 1;
+        constexpr int kSearchCap = 4096;
+        float segment_error = estimate_segment_error(scaled_dt);
+        while (segment_error > tolerance && required_substeps < kSearchCap) {
+            required_substeps *= 2;
+            segment_error = estimate_segment_error(scaled_dt / (float)required_substeps);
+        }
+
+        adaptive_substeps_required_ = std::max(required_substeps, 1);
+        adaptive_substeps_last_ = std::min(adaptive_substeps_required_,
+                                           std::max(cfg.adaptive_substep_max, 1));
+        adaptive_substeps_saturated_ = adaptive_substeps_last_ < adaptive_substeps_required_;
+
+        if (adaptive_substeps_required_ > 1 || adaptive_substeps_saturated_) {
+            float refined_scaled_dt = scaled_dt / (float)adaptive_substeps_required_;
+            float denom = cfg.dt_scale * time_sign;
+            float refined_real_dt = (std::abs(denom) > 1.0e-9f)
+                ? (refined_scaled_dt / denom)
+                : (dt / (float)adaptive_substeps_required_);
+            float applied_scaled_total = refined_scaled_dt * (float)adaptive_substeps_last_;
+            adaptive_substep_refining_ = true;
+            for (int substep = 0; substep < adaptive_substeps_last_; ++substep)
+                step_physics(refined_real_dt);
+            adaptive_substep_refining_ = false;
+            displayed_time_rate_ = (std::abs(dt) > 1.0e-9f)
+                ? (double)applied_scaled_total / (double)dt
+                : 0.0;
+            if (!std::isfinite(displayed_time_rate_))
+                displayed_time_rate_ = 0.0;
+            return;
+        }
+    }
     if (std::abs(dt) > 1.0e-9f)
         displayed_time_rate_ = (double)scaled_dt / (double)dt;
     if (!std::isfinite(displayed_time_rate_))
         displayed_time_rate_ = 0.0;
     cfg.sim_time_accumulated += (double)scaled_dt;
 
-    std::vector<glm::vec3> pos1(n, glm::vec3(0.0f));
-    std::vector<glm::vec3> vel_half(n, glm::vec3(0.0f));
-
-    if (cfg.velocity_verlet) {
-        float dt2 = scaled_dt * scaled_dt;
-        parallel_for(n, 384, [&](size_t begin, size_t end) {
-            for (size_t i = begin; i < end; ++i) {
-                if (bodies[i].marked_for_removal) {
-                    pos1[i] = pos0[i];
-                    vel_half[i] = vel0[i];
-                    continue;
-                }
-                pos1[i] = pos0[i] + vel0[i] * scaled_dt + 0.5f * accel0[i] * dt2;
-                vel_half[i] = vel0[i] + 0.5f * accel0[i] * scaled_dt;
-            }
-        });
-
-        std::vector<glm::vec3> accel1(n, glm::vec3(0.0f));
-        compute_accel(pos1, vel_half, accel1);
-        parallel_for(n, 384, [&](size_t begin, size_t end) {
-            for (size_t i = begin; i < end; ++i) {
-                if (bodies[i].marked_for_removal) continue;
-                bodies[i].mass_loss_rate = 0.0f;
-                glm::vec3 v1 = vel0[i] + 0.5f * (accel0[i] + accel1[i]) * scaled_dt;
-                bodies[i].vel = v1 * cfg.damping;
-                bodies[i].pos = pos1[i];
-                bodies[i].age += scaled_dt;
-            }
-        });
-    } else {
-        parallel_for(n, 384, [&](size_t begin, size_t end) {
-            for (size_t i = begin; i < end; ++i) {
-                if (bodies[i].marked_for_removal) continue;
-                bodies[i].mass_loss_rate = 0.0f;
-                bodies[i].vel = (vel0[i] + accel0[i] * scaled_dt) * cfg.damping;
-                bodies[i].pos = pos0[i] + bodies[i].vel * scaled_dt;
-                bodies[i].age += scaled_dt;
-            }
-        });
-    }
+    std::vector<glm::vec3> pos1, vel1;
+    integrate_kinematics(scaled_dt, pos0, vel0, &accel0, pos1, vel1);
+    parallel_for(n, 384, [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+            if (bodies[i].marked_for_removal) continue;
+            bodies[i].mass_loss_rate = 0.0f;
+            bodies[i].vel = vel1[i];
+            bodies[i].pos = pos1[i];
+            bodies[i].age += scaled_dt;
+        }
+    });
 
     // Physics subsystems
     if (cfg.roche_limit || cfg.tidal_forces) process_roche_limit(scaled_dt);
@@ -2040,8 +2322,9 @@ void CosmosApp::process_collisions(float dt) {
 
             // Immediate depenetration to avoid sticky overlap accumulation.
             if (use_rigid_response && overlap_now && overlap > 0.0f) {
-                bodies[i].pos -= normal * overlap * (bodies[j].mass / std::max(total_mass, 1.0e-6f));
-                bodies[j].pos += normal * overlap * (bodies[i].mass / std::max(total_mass, 1.0e-6f));
+                float separate_scale = std::clamp(cfg.rigid_collision_separation, 0.0f, 3.0f);
+                bodies[i].pos -= normal * overlap * separate_scale * (bodies[j].mass / std::max(total_mass, 1.0e-6f));
+                bodies[j].pos += normal * overlap * separate_scale * (bodies[i].mass / std::max(total_mass, 1.0e-6f));
             }
             float rel_speed = glm::length(rel_vel);
             float vel_along = glm::dot(rel_vel, normal);
@@ -2086,19 +2369,22 @@ void CosmosApp::process_collisions(float dt) {
                 float q = std::clamp(1.0f - contact_dist / std::max(h, 1.0e-6f), 0.0f, 1.0f);
                 if (q > 0.0f) {
                     float inv_total_mass = 1.0f / std::max(total_mass, 1.0e-6f);
-                    float pressure_term = q * q * (0.18f + overlap_fraction * 0.65f);
+                    float pressure_term = q * q * (0.18f + overlap_fraction * 0.65f) *
+                        std::clamp(cfg.collision_sph_pressure, 0.0f, 4.0f);
                     glm::vec3 pressure_push = normal * pressure_term;
                     bodies[i].vel -= pressure_push * (bodies[j].mass * inv_total_mass);
                     bodies[j].vel += pressure_push * (bodies[i].mass * inv_total_mass);
 
                     glm::vec3 post_rel = bodies[j].vel - bodies[i].vel;
-                    float viscosity_term = (0.10f + 0.65f * q) * std::max(dt, 1.0e-4f);
+                    float viscosity_term = (0.10f + 0.65f * q) * std::max(dt, 1.0e-4f) *
+                        std::clamp(cfg.collision_sph_viscosity, 0.0f, 4.0f);
                     glm::vec3 viscosity = post_rel * viscosity_term;
                     bodies[i].vel += viscosity * (bodies[j].mass * inv_total_mass);
                     bodies[j].vel -= viscosity * (bodies[i].mass * inv_total_mass);
 
                     if (cfg.temperature_system) {
-                        float sph_heat = impact_energy * q * (0.05f + overlap_fraction * 0.10f);
+                        float sph_heat = impact_energy * q * (0.05f + overlap_fraction * 0.10f) *
+                            std::clamp(cfg.collision_sph_heat, 0.0f, 4.0f);
                         bodies[i].internal_energy += sph_heat * 0.5f;
                         bodies[j].internal_energy += sph_heat * 0.5f;
                     }
@@ -2282,7 +2568,8 @@ void CosmosApp::process_collisions(float dt) {
 
             bool fragmenting = fragment_candidate;
             if (use_rigid_response) {
-                float restitution = fragmenting ? 0.0f : (soft_body_pair ? 0.0f : 0.28f);
+                float restitution = fragmenting ? 0.0f
+                    : (soft_body_pair ? 0.0f : std::clamp(cfg.rigid_collision_restitution, 0.0f, 1.2f));
                 float inv_mass_sum = (1.0f / std::max(bodies[i].mass, 1.0e-6f)) +
                                      (1.0f / std::max(bodies[j].mass, 1.0e-6f));
                 float impulse_speed = (vel_along < -1.0e-5f) ? vel_along : (soft_body_pair ? 0.0f : -impact_speed * 0.35f);
@@ -2523,8 +2810,10 @@ void CosmosApp::process_roche_limit(float dt) {
             glm::vec3 delta = bodies[j].pos - bodies[i].pos;
             float dist = glm::length(delta);
             bool fluid_like_secondary = roche_secondary_fluid_like(bodies[j]);
-            float roche_fluid = roche_distance_for_mode(bodies[i], bodies[j], true);
-            float roche_rigid = roche_distance_for_mode(bodies[i], bodies[j], false);
+            float roche_fluid = roche_distance_for_mode(bodies[i], bodies[j], true) *
+                std::clamp(cfg.roche_fluid_scale, 0.25f, 4.0f);
+            float roche_rigid = roche_distance_for_mode(bodies[i], bodies[j], false) *
+                std::clamp(cfg.roche_rigid_scale, 0.25f, 4.0f);
             float heating_limit = std::max(roche_fluid, roche_rigid);
 
             float disruption_limit = 0.0f;
@@ -2584,7 +2873,8 @@ void CosmosApp::process_roche_limit(float dt) {
             // Baseline tidal work/heat in Roche zone.
             float tide_strain = cfg.G * bodies[i].mass * bodies[j].radius /
                 std::max(eval_dist * eval_dist * eval_dist, 1.0e-6f);
-            float tidal_work = tide_strain * (0.45f + heating_overflow * 2.0f) * dt * 1400.0f;
+            float tidal_work = tide_strain * (0.45f + heating_overflow * 2.0f) * dt * 1400.0f *
+                std::clamp(cfg.tidal_heating_scale, 0.0f, 4.0f);
             if (tidal_work > 0.0f) {
                 bodies[j].internal_energy += tidal_work;
                 bodies[j].temperature += std::min(tidal_work / std::max(bodies[j].mass * 0.08f, 1.0e-7f), 4000.0f);
@@ -2865,8 +3155,10 @@ void CosmosApp::process_temperature(float dt) {
 
                 if (dist > std::max(big.radius * 1.05f, 1.0f) && big.mass > small.mass * 2.0f) {
                     bool fluid_like_small = roche_secondary_fluid_like(small);
-                    float roche_fluid = roche_distance_for_mode(big, small, true);
-                    float roche_rigid = roche_distance_for_mode(big, small, false);
+                    float roche_fluid = roche_distance_for_mode(big, small, true) *
+                        std::clamp(cfg.roche_fluid_scale, 0.25f, 4.0f);
+                    float roche_rigid = roche_distance_for_mode(big, small, false) *
+                        std::clamp(cfg.roche_rigid_scale, 0.25f, 4.0f);
                     float roche_dist = 0.0f;
                     if (cfg.roche_limit_fluid && cfg.roche_limit_rigid)
                         roche_dist = fluid_like_small ? roche_fluid : roche_rigid;
@@ -2887,7 +3179,8 @@ void CosmosApp::process_temperature(float dt) {
                         float strain = cfg.G * big.mass * small.radius / std::max(dist * dist * dist, 1.0e-6f);
                         float dissipation = strain * strain *
                             (0.20f + spin_mismatch * 3600.0f + shear_speed * 0.12f) *
-                            proximity * proximity * dt * 18000.0f;
+                            proximity * proximity * dt * 18000.0f *
+                            std::clamp(cfg.tidal_heating_scale, 0.0f, 4.0f);
                         if (dissipation > 0.0f) {
                             small.internal_energy += dissipation;
                             small.temperature += std::min(dissipation / std::max(small.mass * 0.08f, 1.0e-7f), 12000.0f);
@@ -2926,6 +3219,7 @@ void CosmosApp::process_temperature(float dt) {
 
 void CosmosApp::process_material_phases(float dt) {
     auto& bodies = state.bodies;
+    float phase_rate = std::clamp(cfg.material_phase_rate, 0.1f, 4.0f);
     struct PendingDustRing {
         int host_index = -1;
         float total_mass = 0.0f;
@@ -2973,10 +3267,11 @@ void CosmosApp::process_material_phases(float dt) {
                 (b.type == CTYPE_PLANET || b.type == CTYPE_MOON ||
                  b.type == CTYPE_ASTEROID || b.type == CTYPE_COMET || b.type == CTYPE_DUST)) {
                 float boiloff = std::clamp((b.temperature - 900.0f) / 1800.0f, 0.0f, 1.0f);
-                b.internal_energy += boiloff * dt * 1.8f;
+                b.internal_energy += boiloff * dt * 1.8f * phase_rate;
                 if (b.type == CTYPE_PLANET || b.type == CTYPE_MOON) {
                     float prev_retention = b.atmosphere_retention;
-                    b.atmosphere_retention = std::clamp(b.atmosphere_retention - boiloff * dt * 0.0012f, 0.0f, 1.0f);
+                    b.atmosphere_retention = std::clamp(
+                        b.atmosphere_retention - boiloff * dt * 0.0012f * phase_rate, 0.0f, 1.0f);
                     if (std::abs(prev_retention - b.atmosphere_retention) > 1.0e-6f)
                         b.props_valid = false;
                 }
@@ -2994,7 +3289,7 @@ void CosmosApp::process_material_phases(float dt) {
                                        temp_drive * 0.35f + energy_drive * 0.25f +
                                        (b.type == CTYPE_NEBULA ? 0.22f : 0.0f);
                 if (collapse_drive > 0.05f) {
-                    float advance = std::min(0.10f, dt * (0.0014f + collapse_drive * 0.0036f));
+                    float advance = std::min(0.10f, dt * (0.0014f + collapse_drive * 0.0036f) * phase_rate);
                     b.collapse_progress = std::clamp(b.collapse_progress + advance, 0.0f, 1.25f);
                     next_phase = PHASE_COLLAPSING;
                     next_intensity = std::max(next_intensity, std::clamp(b.collapse_progress, 0.15f, 1.0f));
@@ -3057,6 +3352,7 @@ void CosmosApp::process_material_phases(float dt) {
 
 void CosmosApp::process_space_weather(float dt) {
     auto& bodies = state.bodies;
+    constexpr float kPi = 3.14159265359f;
 
     for (size_t i = 0; i < bodies.size(); ++i) {
         CelestialBody& target = bodies[i];
@@ -3072,6 +3368,35 @@ void CosmosApp::process_space_weather(float dt) {
         float unshielded_flux = particle_flux * (1.0f - std::min(shielding, 1.0f) * 0.72f);
         float heating_flux = stellar_flux * (0.22f + (1.0f - std::min(shielding, 1.0f)) * 0.55f) +
                              quasar_flux * (0.95f + (1.0f - std::min(shielding, 1.0f)) * 0.85f);
+
+        if (cfg.stellar_wind_pressure) {
+            glm::vec3 wind_accel(0.0f);
+            float cross_section = kPi * std::max(target.radius * target.radius, 1.0e-4f);
+            float mass = std::max(target.mass, 1.0e-9f);
+            float shield_scale = std::clamp(1.0f - std::min(shielding, 1.25f) * 0.45f, 0.15f, 1.0f);
+            float type_scale = (target.type == CTYPE_DUST) ? 2.8f :
+                               (target.type == CTYPE_COMET ? 2.1f :
+                               (target.type == CTYPE_ASTEROID ? 1.3f :
+                               ((target.cached_props.surface == SURF_GAS) ? 0.45f : 0.85f)));
+            for (size_t j = 0; j < bodies.size(); ++j) {
+                if (i == j) continue;
+                const CelestialBody& source = bodies[j];
+                if (source.marked_for_removal || !is_star_type(source.type))
+                    continue;
+                glm::vec3 delta = target.pos - source.pos;
+                float dist2 = std::max(glm::dot(delta, delta), source.radius * source.radius * 4.0f);
+                float dist = std::sqrt(dist2);
+                if (dist <= 1.0e-5f)
+                    continue;
+                float luminosity = std::max(estimate_stellar_luminosity_units(source), 0.0f);
+                float pressure = cfg.stellar_wind_pressure_scale * luminosity /
+                                 std::max(4.0f * kPi * dist2 * std::max(cfg.speed_of_light, 1.0f), 1.0e-6f);
+                float accel_mag = pressure * cross_section * shield_scale * type_scale / mass;
+                wind_accel += (delta / dist) * accel_mag;
+            }
+            if (glm::dot(wind_accel, wind_accel) > 0.0f)
+                target.vel += wind_accel * dt;
+        }
 
         if (cfg.temperature_system) {
             float heat_gain = heating_flux * dt * std::max(target.radius, 0.5f) * 0.55f;

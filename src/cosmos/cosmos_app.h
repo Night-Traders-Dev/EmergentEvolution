@@ -82,6 +82,7 @@ private:
                                             const glm::vec3& impact_axis, float dt);
     void update_body_tracking_cache();
     int  dominant_primary_for(int body_index) const;
+    void reset_bottom_bar_menu_defaults();
     glm::vec3 verlet_auto_orbit_velocity(const CelestialBody& body, const CelestialBody& primary,
                                          float radial_scale, float tangential_scale) const;
     bool spawn_dust_ring(int host_index, float total_mass, float inner_radius, float outer_radius,
@@ -95,6 +96,8 @@ private:
                              float density, float ice_fraction, int ring_style = 4);
     void apply_dust_debug_mode();
     void cleanup_bodies();
+    void account_escaped_mass(const CelestialBody& source, float amount,
+                              float thermal_energy = 0.0f);
     bool validate_body_state(const char* context, bool pause_on_invalid = true);
     void debug_logf(const char* fmt, ...) const;
     void load_persistent_settings();
@@ -122,6 +125,14 @@ private:
     float sim_time_ = 0.0f;
     float smoothed_fps_ = 60.0f;
     double displayed_time_rate_ = 10.0;
+    int adaptive_substeps_last_ = 1;
+    int adaptive_substeps_required_ = 1;
+    bool adaptive_substeps_saturated_ = false;
+    bool adaptive_substep_refining_ = false;
+    double escaped_mass_total_ = 0.0;
+    double radiated_energy_total_ = 0.0;
+    double escaped_energy_total_ = 0.0;
+    glm::dvec3 escaped_momentum_total_{0.0};
     bool  reverse_time_ = false;
     std::vector<int> tracked_primary_;
     std::vector<int> tracked_children_count_;

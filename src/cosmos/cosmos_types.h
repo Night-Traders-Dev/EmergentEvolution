@@ -4,6 +4,7 @@
 #include "common/orbit_camera.h"
 #include <glm/glm.hpp>
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <cmath>
@@ -132,6 +133,16 @@ enum SmallBodyClass : uint8_t {
     SMALLBODY_ICY = 3,
 };
 
+enum IntegratorType : uint8_t {
+    INTEGRATOR_VELOCITY_VERLET = 0,
+    INTEGRATOR_EULER_EXPLICIT = 1,
+    INTEGRATOR_EULER_SEMI_IMPLICIT = 2,
+    INTEGRATOR_RK2 = 3,
+    INTEGRATOR_FOREST_RUTH = 4,
+    INTEGRATOR_PEFRL = 5,
+    INTEGRATOR_COUNT
+};
+
 // ── Procedurally generated planet properties ────────────────────────────────
 
 struct Atmosphere {
@@ -142,9 +153,31 @@ struct Atmosphere {
     float he_frac     = 0.0f;
     float ch4_frac    = 0.0f;
     float nh3_frac    = 0.0f;
+    float h2o_vapor_frac = 0.0f;
+    float ar_frac     = 0.0f;
+    float ne_frac     = 0.0f;
+    float so2_frac    = 0.0f;
+    float co_frac     = 0.0f;
+    float h2s_frac    = 0.0f;
     float pressure    = 0.0f;   // atmospheres
     bool  has_clouds  = false;
     float weather_intensity = 0.0f;
+    static constexpr int MAX_LAYERS = 8;
+    struct Layer {
+        float base_altitude_km = 0.0f;
+        float thickness_km = 0.0f;
+        float pressure_fraction = 0.0f;
+        float temperature_offset = 0.0f;
+        float opacity = 0.0f;
+        float infrared_emissivity = 0.0f;
+    };
+    int   layer_count = 0;
+    std::array<Layer, MAX_LAYERS> layers{};
+    float infrared_emissivity = 0.0f;
+    float greenhouse_factor = 1.0f;
+    float optical_depth = 0.0f;
+    float atmosphere_power = 0.0f;
+    float atmosphere_mass = 0.0f;
 };
 
 struct PlanetProperties {
@@ -177,6 +210,13 @@ struct PlanetProperties {
     float       cloud_coverage     = 0.0f;  // 0-100 %
     float       vegetation_coverage = 0.0f; // 0-100 %
 };
+
+struct CelestialBody;
+
+inline float atmosphere_total_fraction(const Atmosphere& atm);
+inline void normalize_atmosphere_composition(Atmosphere& atm);
+inline float atmosphere_layer_emissivity_factor(float emissivity, int layer_count);
+inline void rebuild_atmosphere_layers(CelestialBody& b);
 
 struct BodyVisualProperties {
     BodyRenderClass render_class = RENDER_PLANET;
@@ -337,8 +377,12 @@ inline PlanetProperties generate_planet_properties(uint32_t seed, float mass, fl
     float ha0 = hash_float(hash_combine(ha, 0));
     if (pp.surface == SURF_GAS) {
         pp.atmosphere.h2_frac  = 0.70f + hash_float(hash_combine(ha, 1)) * 0.20f;
-        pp.atmosphere.he_frac  = 1.0f - pp.atmosphere.h2_frac - 0.03f;
-        pp.atmosphere.ch4_frac = hash_float(hash_combine(ha, 2)) * 0.03f;
+        pp.atmosphere.he_frac  = 0.12f + hash_float(hash_combine(ha, 2)) * 0.14f;
+        pp.atmosphere.ch4_frac = hash_float(hash_combine(ha, 3)) * 0.035f;
+        pp.atmosphere.nh3_frac = hash_float(hash_combine(ha, 4)) * 0.020f;
+        pp.atmosphere.h2o_vapor_frac = hash_float(hash_combine(ha, 5)) * 0.018f;
+        pp.atmosphere.h2s_frac = hash_float(hash_combine(ha, 6)) * 0.015f;
+        pp.atmosphere.ne_frac = hash_float(hash_combine(ha, 7)) * 0.008f;
         pp.atmosphere.pressure = 10.0f + hash_float(hash_combine(ha, 3)) * 200.0f;
     } else if (mass_earth > (is_moon ? 0.01f : 0.08f) && temperature > 120.0f) {
         // Terrestrial atmosphere — wide variety
@@ -346,6 +390,8 @@ inline PlanetProperties generate_planet_properties(uint32_t seed, float mass, fl
         if (ha0 < atm_chance) {
             pp.atmosphere.n2_frac  = 0.1f + hash_float(hash_combine(ha, 4)) * 0.85f;
             pp.atmosphere.co2_frac = hash_float(hash_combine(ha, 5)) * 0.60f;
+            pp.atmosphere.ar_frac  = hash_float(hash_combine(ha, 15)) * 0.04f;
+            pp.atmosphere.h2o_vapor_frac = hash_float(hash_combine(ha, 16)) * 0.10f;
             if (temperature >= 220.0f && temperature <= 380.0f && h1 > 0.28f) {
                 pp.atmosphere.o2_frac = hash_float(hash_combine(ha, 6)) * 0.30f;
             }
@@ -354,21 +400,16 @@ inline PlanetProperties generate_planet_properties(uint32_t seed, float mass, fl
                 pp.atmosphere.co2_frac = 0.90f + hash_float(hash_combine(ha, 11)) * 0.08f;
                 pp.atmosphere.n2_frac  = 0.02f;
                 pp.atmosphere.o2_frac  = 0.0f;
+                pp.atmosphere.so2_frac = hash_float(hash_combine(ha, 17)) * 0.06f;
+                pp.atmosphere.co_frac = hash_float(hash_combine(ha, 18)) * 0.03f;
             }
             // Methane atmosphere for cold worlds
             if (temperature < 200.0f) {
                 pp.atmosphere.ch4_frac = hash_float(hash_combine(ha, 12)) * 0.15f;
                 pp.atmosphere.nh3_frac = hash_float(hash_combine(ha, 13)) * 0.05f;
+                pp.atmosphere.ne_frac = hash_float(hash_combine(ha, 19)) * 0.01f;
             }
-            float total = pp.atmosphere.n2_frac + pp.atmosphere.o2_frac +
-                          pp.atmosphere.co2_frac + pp.atmosphere.ch4_frac + pp.atmosphere.nh3_frac;
-            if (total > 0.01f) {
-                pp.atmosphere.n2_frac  /= total;
-                pp.atmosphere.o2_frac  /= total;
-                pp.atmosphere.co2_frac /= total;
-                pp.atmosphere.ch4_frac /= total;
-                pp.atmosphere.nh3_frac /= total;
-            }
+            normalize_atmosphere_composition(pp.atmosphere);
             // Pressure: thin to thick based on mass and seed
             float base_p = 0.02f + std::pow(std::min(mass_earth, 30.0f), 0.45f) * (is_moon ? 0.14f : 0.55f);
             pp.atmosphere.pressure = base_p + hash_float(hash_combine(ha, 7)) * base_p * 4.0f;
@@ -385,6 +426,8 @@ inline PlanetProperties generate_planet_properties(uint32_t seed, float mass, fl
         pp.atmosphere.has_clouds = true;
         pp.atmosphere.pressure = std::max(pp.atmosphere.pressure, 18.0f + ha0 * 120.0f);
     }
+
+    normalize_atmosphere_composition(pp.atmosphere);
 
     pp.atmosphere.has_clouds = ((pp.atmosphere.pressure > 0.3f &&
                                  hash_float(hash_combine(ha, 8)) > 0.25f) ||
@@ -685,6 +728,155 @@ struct CelestialBody {
     int                  cached_visual_temp_band = -1;  // transient, not serialized
 };
 
+inline float atmosphere_total_fraction(const Atmosphere& atm) {
+    return atm.n2_frac + atm.o2_frac + atm.co2_frac + atm.h2_frac + atm.he_frac +
+           atm.ch4_frac + atm.nh3_frac + atm.h2o_vapor_frac + atm.ar_frac +
+           atm.ne_frac + atm.so2_frac + atm.co_frac + atm.h2s_frac;
+}
+
+inline void normalize_atmosphere_composition(Atmosphere& atm) {
+    float total = atmosphere_total_fraction(atm);
+    if (total <= 1.0e-6f)
+        return;
+    atm.n2_frac /= total;
+    atm.o2_frac /= total;
+    atm.co2_frac /= total;
+    atm.h2_frac /= total;
+    atm.he_frac /= total;
+    atm.ch4_frac /= total;
+    atm.nh3_frac /= total;
+    atm.h2o_vapor_frac /= total;
+    atm.ar_frac /= total;
+    atm.ne_frac /= total;
+    atm.so2_frac /= total;
+    atm.co_frac /= total;
+    atm.h2s_frac /= total;
+}
+
+inline float atmosphere_layer_emissivity_factor(float emissivity, int layer_count) {
+    emissivity = std::clamp(emissivity, 0.0f, 0.999f);
+    layer_count = std::max(layer_count, 1);
+    if (layer_count == 1)
+        return emissivity * 0.5f;
+    float n = (float)layer_count;
+    float numer = (2.0f * n - 2.0f) - (n - 2.0f) * emissivity;
+    float denom = (2.0f * n) - (n - 1.0f) * emissivity;
+    return std::clamp(numer / std::max(denom, 1.0e-5f), 0.0f, 1.0f);
+}
+
+inline void rebuild_atmosphere_layers(CelestialBody& b) {
+    if (b.type != CTYPE_PLANET && b.type != CTYPE_MOON)
+        return;
+
+    constexpr float kSimUnitToKm = 6371.0f / 8.0f;
+    Atmosphere& atm = b.cached_props.atmosphere;
+    normalize_atmosphere_composition(atm);
+
+    if (atm.pressure <= 1.0e-4f || b.atmosphere_retention <= 1.0e-4f) {
+        atm.layer_count = 0;
+        atm.infrared_emissivity = 0.0f;
+        atm.greenhouse_factor = 1.0f;
+        atm.optical_depth = 0.0f;
+        atm.atmosphere_power = 0.0f;
+        atm.atmosphere_mass = 0.0f;
+        for (auto& layer : atm.layers) layer = {};
+        return;
+    }
+
+    int layer_count = 1;
+    if (b.cached_props.surface == SURF_GAS ||
+        b.cached_props.planet_class == PCLASS_GAS_GIANT ||
+        b.cached_props.planet_class == PCLASS_ICE_GIANT) {
+        layer_count = 3;
+    } else if (b.cached_props.surface == SURF_MIXED &&
+               atm.pressure > 0.20f &&
+               (atm.o2_frac > 0.05f || atm.n2_frac > 0.40f)) {
+        layer_count = 5;
+    } else if (b.cached_props.surface == SURF_LIQUID || b.cached_props.planet_class == PCLASS_OCEAN) {
+        layer_count = 5;
+    } else if (b.cached_props.planet_class == PCLASS_SUPER_EARTH || b.cached_props.surface == SURF_ROCKY) {
+        layer_count = (atm.pressure > 0.08f) ? 4 : 2;
+    } else if (b.cached_props.surface == SURF_FROZEN) {
+        layer_count = (atm.pressure > 0.04f) ? 3 : 2;
+    } else if (b.cached_props.planet_class == PCLASS_DWARF || b.type == CTYPE_MOON) {
+        layer_count = (atm.pressure > 0.03f) ? 2 : 1;
+    }
+    atm.layer_count = std::clamp(layer_count, 0, Atmosphere::MAX_LAYERS);
+
+    float greenhouse_gas = std::clamp(
+        atm.co2_frac * 0.95f + atm.ch4_frac * 0.90f + atm.nh3_frac * 0.72f +
+        atm.h2o_vapor_frac * 0.88f + atm.so2_frac * 0.82f + atm.co_frac * 0.38f +
+        atm.h2s_frac * 0.68f + atm.h2_frac * 0.24f + atm.he_frac * 0.06f,
+        0.0f, 1.6f);
+    float inert_mix = std::clamp(atm.n2_frac * 0.10f + atm.o2_frac * 0.08f +
+                                 atm.ar_frac * 0.06f + atm.ne_frac * 0.04f,
+                                 0.0f, 0.30f);
+    float pressure_term = std::clamp(std::log10(std::max(atm.pressure, 1.0e-4f) + 1.0f), 0.0f, 2.4f);
+    float cloud_term = std::clamp(b.cached_props.cloud_coverage / 100.0f, 0.0f, 1.0f);
+    float base_emissivity = std::clamp(
+        0.06f + greenhouse_gas * 0.52f + pressure_term * 0.16f + cloud_term * 0.20f + inert_mix,
+        0.02f, 0.98f);
+    float layer_factor = atmosphere_layer_emissivity_factor(base_emissivity, atm.layer_count);
+
+    atm.infrared_emissivity = base_emissivity;
+    atm.greenhouse_factor = 1.0f + layer_factor *
+        (0.10f + pressure_term * 0.16f + greenhouse_gas * 0.22f + cloud_term * 0.12f);
+    atm.optical_depth = std::clamp(layer_factor * (0.65f + greenhouse_gas * 0.55f + pressure_term * 0.40f),
+                                   0.0f, 4.0f);
+    atm.atmosphere_power = 0.0f;
+    atm.atmosphere_mass = 0.0f;
+
+    float radius_km = std::max(b.radius * kSimUnitToKm, 80.0f);
+    float scale_height_km = std::clamp(
+        (b.cached_props.surface == SURF_GAS ? 45.0f : 6.0f) +
+        b.temperature * (b.cached_props.surface == SURF_GAS ? 0.08f : 0.015f) +
+        atm.pressure * (b.cached_props.surface == SURF_GAS ? 0.40f : 1.8f),
+        b.cached_props.surface == SURF_GAS ? 35.0f : 4.0f,
+        b.cached_props.surface == SURF_GAS ? 420.0f : 160.0f);
+    float total_height_km = std::clamp(
+        scale_height_km * (b.cached_props.surface == SURF_GAS ? 10.0f : (2.5f + atm.layer_count * 1.35f)),
+        b.cached_props.surface == SURF_GAS ? 180.0f : 12.0f,
+        std::max(radius_km * (b.cached_props.surface == SURF_GAS ? 0.32f : 0.12f),
+                 b.cached_props.surface == SURF_GAS ? 2200.0f : 950.0f));
+
+    const float weights_1[] = {1.0f};
+    const float weights_2[] = {0.40f, 0.60f};
+    const float weights_3[] = {0.24f, 0.34f, 0.42f};
+    const float weights_4[] = {0.16f, 0.22f, 0.27f, 0.35f};
+    const float weights_5[] = {0.10f, 0.14f, 0.18f, 0.24f, 0.34f};
+    const float* weights = weights_1;
+    switch (atm.layer_count) {
+    case 2: weights = weights_2; break;
+    case 3: weights = weights_3; break;
+    case 4: weights = weights_4; break;
+    case 5: weights = weights_5; break;
+    default: weights = weights_1; break;
+    }
+
+    for (auto& layer : atm.layers) layer = {};
+    float running_alt = 0.0f;
+    for (int i = 0; i < atm.layer_count; ++i) {
+        Atmosphere::Layer layer{};
+        float thickness = total_height_km * weights[i];
+        float altitude_mid = running_alt + thickness * 0.5f;
+        float height_frac = altitude_mid / std::max(total_height_km, 1.0f);
+        layer.base_altitude_km = running_alt;
+        layer.thickness_km = thickness;
+        layer.pressure_fraction = std::exp(-height_frac * (b.cached_props.surface == SURF_GAS ? 1.8f : 3.2f));
+        layer.temperature_offset = (b.cached_props.surface == SURF_GAS)
+            ? (12.0f - height_frac * 55.0f)
+            : (-6.0f + 18.0f * std::max(height_frac - 0.55f, 0.0f));
+        layer.opacity = std::clamp(
+            layer.pressure_fraction * (0.45f + cloud_term * 0.35f + greenhouse_gas * 0.30f),
+            0.02f, 1.0f);
+        layer.infrared_emissivity = std::clamp(
+            base_emissivity * (0.95f - height_frac * 0.18f) + greenhouse_gas * 0.05f,
+            0.02f, 0.99f);
+        atm.layers[(size_t)i] = layer;
+        running_alt += thickness;
+    }
+}
+
 // ── Refresh cached planet properties (call after physics, not in renderer) ──
 
 inline void refresh_planet_props(CelestialBody& b) {
@@ -776,6 +968,8 @@ inline void refresh_planet_props(CelestialBody& b) {
         }
     }
 
+    normalize_atmosphere_composition(b.cached_props.atmosphere);
+    rebuild_atmosphere_layers(b);
     b.cached_temp_band = band;
     b.props_valid = true;
 }
@@ -896,6 +1090,35 @@ struct CosmosConfig {
     float    body_label_max_distance = 1.0e8f; // world-space distance from camera after labels are culled
     bool     spin_fragmentation      = true;   // rotational breakup when angular speed exceeds structural limit
     float    spin_fragmentation_threshold = 0.92f; // ratio of spin/breakup angular velocity that starts shedding mass
+    int      physics_substeps        = 1;      // number of physics substeps per rendered frame
+    int      parallel_min_batch      = 256;    // minimum item count before parallel work kicks in
+    float    orbit_line_alpha        = 0.28f;  // orbit line opacity scale
+    float    orbit_line_width        = 1.0f;   // orbit line width scale
+    float    trail_alpha_scale       = 1.0f;   // trail opacity scale
+    float    trail_width_scale       = 1.0f;   // trail width scale
+    float    body_label_opacity      = 0.92f;  // name label opacity scale
+    int      body_label_max_count    = 64;     // max labels drawn at once
+    float    collision_sph_pressure  = 1.0f;   // SPH pressure response multiplier
+    float    collision_sph_viscosity = 1.0f;   // SPH viscosity response multiplier
+    float    collision_sph_heat      = 1.0f;   // SPH heat generation multiplier
+    float    rigid_collision_restitution = 0.35f; // rigid-body bounce strength
+    float    rigid_collision_separation  = 1.0f;  // rigid-body depenetration scale
+    float    tidal_heating_scale     = 1.0f;   // tidal heating/disruption work multiplier
+    float    roche_fluid_scale       = 1.0f;   // fluid Roche distance multiplier
+    float    roche_rigid_scale       = 1.0f;   // rigid Roche distance multiplier
+    float    material_phase_rate     = 1.0f;   // material phase response multiplier
+    float    star_light_strength     = 1.0f;   // direct star-light intensity scale
+    float    uniform_light_strength  = 1.0f;   // uniform-light intensity scale
+    float    background_starfield_intensity = 1.0f; // background/starfield brightness scale
+    float    corona_strength_scale   = 1.0f;   // star-corona intensity scale
+    float    comet_tail_strength_scale = 1.0f; // comet tail intensity scale
+    float    blackhole_lensing_strength = 1.0f; // black-hole lensing strength scale
+    int      integrator_type         = INTEGRATOR_VELOCITY_VERLET; // runtime-selectable orbital integrator
+    bool     adaptive_substepping    = false;  // split a physics step until integration error fits tolerance
+    float    adaptive_substep_tolerance = 0.25f; // world-space position tolerance for step rejection
+    int      adaptive_substep_max    = 32;     // hardware cap for accepted substeps per requested step
+    bool     stellar_wind_pressure   = true;   // apply radiation/wind pressure from luminous stars
+    float    stellar_wind_pressure_scale = 1.0f; // scale stellar pressure acceleration
 };
 
 // ── Body collection ─────────────────────────────────────────────────────────

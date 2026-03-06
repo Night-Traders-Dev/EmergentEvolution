@@ -8,6 +8,7 @@
 #include <cstring>
 #include <filesystem>
 #include <random>
+#include <string_view>
 
 namespace {
 
@@ -95,6 +96,233 @@ const ImU32 CTYPE_COLORS[] = {
     IM_COL32(32, 32, 40, 255),     // Primordial BH
     IM_COL32(205, 185, 160, 255),  // Dust
 };
+
+std::string_view imgui_label_key(const char* label) {
+    if (!label) return {};
+    const char* marker = std::strstr(label, "##");
+    size_t len = marker ? static_cast<size_t>(marker - label) : std::strlen(label);
+    return std::string_view(label, len);
+}
+
+const char* bottom_bar_menu_tooltip(std::string_view key) {
+    struct Entry { const char* key; const char* tip; };
+    static const Entry kEntries[] = {
+        {"Menu", "Open the bottom-bar master menu with simulation, settings, diagnostics, and system tools."},
+        {"Simulation", "Simulation-wide session actions such as pause, reset, save, and load."},
+        {"Resume", "Continue simulation time from the current paused state."},
+        {"Pause (Space)", "Pause physics integration and rendering updates tied to simulation time."},
+        {"Resume (Space)", "Resume physics integration and simulation time after pausing."},
+        {"New Simulation", "Reset to a fresh default system and clear accumulated simulation time."},
+        {"Reset All Menu Parameters to Default", "Restore all tunable bottom-bar menu parameters to their startup defaults without clearing the current simulation."},
+        {"Empty Universe", "Remove all bodies and start from an empty simulation state."},
+        {"Save (Ctrl+S)", "Write the current simulation state to a .cssim save file."},
+        {"Load (Ctrl+L)", "Load a saved simulation from disk and replace the current state."},
+        {"Import Body...", "Import a single body definition into the current simulation."},
+        {"Export Selected Body...", "Export the currently selected body to a standalone body file."},
+        {"Panels", "Show or hide the major bottom-bar and side-panel UI windows."},
+        {"Spawn", "Toggle the spawn studio window."},
+        {"Bodies", "Toggle the bodies list window."},
+        {"Spawn Menu", "Toggle the spawn studio window."},
+        {"Body List", "Toggle the bodies list window."},
+        {"Inspector", "Toggle the selected-body inspector window."},
+        {"Show Orbits", "Draw derived orbit guides relative to each body's dominant primary."},
+        {"Show Trails", "Draw recent motion trails for visible bodies."},
+        {"Show Object Labels", "Draw body names next to visible objects in the viewport."},
+        {"Auto-hide Bottom Bar", "Hide the bottom bar when the cursor is away from the screen edge."},
+        {"System Management", "Apply system-wide orbital and structural transforms to all active bodies."},
+        {"Balance System Momentum", "Remove net linear momentum so the system center of mass stops drifting."},
+        {"Auto Orbit", "Recompute orbital velocities around each body's dominant primary using the auto-orbit solver."},
+        {"Expand System", "Scale the system outward and reduce orbital speeds to preserve rough stability."},
+        {"Shrink System", "Scale the system inward and increase orbital speeds accordingly."},
+        {"Increase Eccentricity", "Increase radial motion relative to tangential motion to make orbits less circular."},
+        {"Decrease Eccentricity", "Reduce radial motion and emphasize tangential motion to circularize orbits."},
+        {"Make 2D - Zero All Height Values", "Flatten all bodies into the reference plane by clearing Y position and velocity."},
+        {"Motion", "Apply bulk velocity, rotation, and time-direction edits to the active system."},
+        {"Reverse Time", "Run the simulation backward by negating the effective time direction."},
+        {"Reverse All Velocities", "Invert all linear velocities instantly."},
+        {"Halt All Velocities", "Zero every body's linear velocity."},
+        {"Halt All Rotations", "Zero every body's angular velocity."},
+        {"+2% All Speeds", "Increase every body's linear speed by 2%."},
+        {"-2% All Speeds", "Reduce every body's linear speed by 2%."},
+        {"+2% All Rotations", "Increase every body's spin rate by 2%."},
+        {"-2% All Rotations", "Reduce every body's spin rate by 2%."},
+        {"Add Velocity of 10 km/s on X", "Add +10 km/s to every body's X velocity."},
+        {"Add Velocity of -10 km/s on X", "Add -10 km/s to every body's X velocity."},
+        {"Add Velocity of 10 km/s on Y", "Add +10 km/s to every body's Y velocity."},
+        {"Add Velocity of -10 km/s on Y", "Add -10 km/s to every body's Y velocity."},
+        {"Add Velocity of 10 km/s on Z", "Add +10 km/s to every body's Z velocity."},
+        {"Add Velocity of -10 km/s on Z", "Add -10 km/s to every body's Z velocity."},
+        {"Performance Management", "Remove transient debris and runaway bodies to recover performance."},
+        {"Delete All Particles/Dust", "Delete non-attracting dust and dust-like transient debris."},
+        {"Delete All Fragments", "Delete all generated fragments while keeping original intact bodies."},
+        {"Delete All Escaping Bodies", "Cull bodies that are clearly unbound and leaving the dominant primary."},
+        {"Cosmos Settings", "Simulation, rendering, thermal, and gravity settings for the cosmos sandbox."},
+        {"General Physics", "Core gravity, integration, orbit-guide, trail, and label settings."},
+        {"G", "Global gravitational constant scale used by the simulation."},
+        {"Softening", "Minimum gravity smoothing distance used to avoid singular accelerations."},
+        {"Damping", "Velocity damping multiplier applied after integration. 1.0 means no damping."},
+        {"Collisions", "Enable collision detection and collision-response processing."},
+        {"Tidal Forces", "Enable tidal heating and strain calculations from close gravitational encounters."},
+        {"Tidal Heating Scale", "Scale the amount of tidal work converted into internal energy and temperature."},
+        {"Integrator", "Choose the active orbital integrator used for gravity-driven motion during the simulation."},
+        {"Velocity Verlet", "Use Velocity Verlet integration instead of the simpler fallback integrator."},
+        {"Physics Substeps", "Split each rendered frame into multiple smaller physics steps for stability."},
+        {"Barnes-Hut Gravity", "Approximate distant gravity sources with Barnes-Hut instead of direct N-body summation."},
+        {"GPU BH Compute", "Evaluate Barnes-Hut gravity using the Vulkan compute path when available."},
+        {"BH Theta", "Barnes-Hut opening angle. Lower values are slower and more accurate."},
+        {"BH Min Bodies", "Minimum active body count before Barnes-Hut engages."},
+        {"Parallel Min Batch", "Minimum work size before CPU-side parallel processing is used."},
+        {"Orbit Opacity", "Opacity scale for orbit-guide lines."},
+        {"Orbit Width", "Width scale for orbit-guide lines."},
+        {"Trail Length", "Maximum stored trail samples per body."},
+        {"Trail Opacity", "Opacity scale for motion trails."},
+        {"Trail Width", "Width scale for motion trails."},
+        {"Label Min Dist", "Closest camera distance at which object labels are allowed to appear."},
+        {"Label Max Dist", "Farthest camera distance at which object labels are still drawn."},
+        {"Label Opacity", "Opacity scale for viewport object labels."},
+        {"Label Max Count", "Maximum number of object labels drawn at once."},
+        {"Camera", "Viewport camera controls for the orbit camera."},
+        {"FOV", "Camera field of view in degrees."},
+        {"Distance", "Orbit-camera distance from its target point."},
+        {"Reset Camera", "Restore the orbit camera to its default state."},
+        {"Collision & Fragmentation", "Collision solver, fragmentation, and impact-response tuning."},
+        {"Smoothed Particle Hydrodynamics", "Enable SPH-like soft-body pressure and viscosity during impacts."},
+        {"Rigid Body Dynamics", "Enable rigid-body impulse and depenetration response during collisions."},
+        {"SPH Pressure", "Scale the SPH pressure push applied to soft-body collision pairs."},
+        {"SPH Viscosity", "Scale the SPH viscosity damping applied after soft-body contact."},
+        {"SPH Heat", "Scale the amount of collision energy converted into SPH heating."},
+        {"Rigid Restitution", "Bounce strength for rigid collisions that do not fragment."},
+        {"Rigid Separation", "How aggressively overlapping rigid bodies are pushed apart."},
+        {"Merging", "Allow sufficiently gentle impacts to merge bodies."},
+        {"Fragmentation", "Allow sufficiently energetic impacts to break bodies into fragments."},
+        {"Spin Fragmentation", "Allow excessive spin to shed mass or break bodies apart."},
+        {"Merge Speed", "Approximate impact-speed threshold below which collisions merge."},
+        {"Fragment Speed", "Approximate impact-speed threshold above which collisions fragment."},
+        {"Collision Heating", "Fraction of collision energy converted into thermal/internal energy."},
+        {"Spin Frag Threshold", "Fraction of critical breakup spin at which spin fragmentation starts."},
+        {"Fragment Count", "Target fragment count for breakup events."},
+        {"Min Frag Mass", "Minimum body mass that is still allowed to fragment."},
+        {"Max Frag Depth", "Maximum fragment-generation depth before further breakup is suppressed."},
+        {"Thermal & Roche", "Temperature, evaporation, Roche-limit, and ring-generation controls."},
+        {"Temperature", "Enable thermal balance, heating, and cooling updates."},
+        {"Cooling", "Radiative cooling rate that drives bodies back toward background temperature."},
+        {"Evaporation", "Allow hot bodies near strong heating sources to lose mass."},
+        {"Evaporation Rate", "Scale the mass-loss rate from thermal evaporation."},
+        {"Roche Limit", "Enable Roche-limit breakup logic during close tidal encounters."},
+        {"Fluid Roche Limit", "Use the fluid-body Roche formulation for weakly bound or fluid-like bodies."},
+        {"Fluid Roche Scale", "Scale the fluid Roche distance used for disruption checks."},
+        {"Rigid Roche Limit", "Use the rigid-body Roche formulation for stronger cohesive bodies."},
+        {"Rigid Roche Scale", "Scale the rigid Roche distance used for disruption checks."},
+        {"Material Phases", "Enable material phase transitions such as molten, gas, and collapsing states."},
+        {"Material Phase Rate", "Scale how quickly thermal state changes drive material phase effects."},
+        {"Planetary Rings", "Allow ring-system generation and maintenance from disrupted material."},
+        {"Ring Inner Scale", "Global multiplier for ring inner radius."},
+        {"Ring Outer Scale", "Global multiplier for ring outer radius."},
+        {"Ring Density Scale", "Global multiplier for ring density."},
+        {"Ring Thickness", "Global multiplier for ring thickness."},
+        {"Ring Particle Scale", "Global multiplier for spawned ring dust count."},
+        {"Ring Mass Scale", "Global multiplier for ring mass converted into dust."},
+        {"Stellar", "Stellar evolution and nebula-to-star formation controls."},
+        {"Stellar Evolution", "Enable long-timescale stellar evolution and fuel consumption."},
+        {"Star Timescale", "Scale the rate of stellar evolution."},
+        {"Stellar Wind Pressure", "Apply outward stellar wind and radiation pressure using luminosity over distance squared."},
+        {"Wind Pressure Scale", "Scale the acceleration applied by stellar wind pressure to bodies."},
+        {"Nebula Grav Advect", "How strongly gravitational acceleration steers nebula flow advection."},
+        {"Nebula Grav Collapse", "Extra collapse pressure applied to nebulae from gravity coupling."},
+        {"Nebula Grav Compress", "How strongly nebula density compresses under gravity coupling."},
+        {"Enable Sink Formation", "Allow dense converging nebula regions to spawn protostellar sink bodies."},
+        {"Sink Threshold", "Threshold for nebula density/collapse needed to form a sink."},
+        {"Sink Min Mass", "Minimum mass assigned to a newly formed sink body."},
+        {"Sink Spawn Fraction", "Fraction of host nebula mass allocated to each sink spawn."},
+        {"Sink Consume Fraction", "Fraction of sink mass consumed from the host nebula field."},
+        {"Rendering & Lighting", "Lighting, background, corona, comet-tail, and fabric-grid controls."},
+        {"Star Lighting", "Enable point-light illumination from stars."},
+        {"Star Light Strength", "Scale direct illumination from stellar light sources."},
+        {"Uniform Lighting", "Use a non-physical uniform hemispheric light model for readability."},
+        {"Uniform Light Strength", "Scale the uniform-light contribution."},
+        {"Fast Star Lighting", "Use the fast strongest-star lighting path instead of summing many stars."},
+        {"Ambient", "Ambient light floor added under star-light rendering."},
+        {"HQ Shading", "Enable higher-detail procedural shading paths."},
+        {"Background Starfield", "Render the background sky and starfield presets."},
+        {"Background Preset", "Choose the sky/background style used behind the simulation."},
+        {"Background Strength", "Scale the intensity of the background starfield and sky."},
+        {"Star Corona", "Render stellar coronae, flares, prominence loops, and storm glow around stars."},
+        {"Corona Strength", "Scale visible stellar corona and flare intensity."},
+        {"Comet Tails", "Render illuminated comet tails."},
+        {"Comet Tail Strength", "Scale comet-tail brightness and contribution."},
+        {"Black Hole Lensing", "Render black-hole lensing distortion."},
+        {"Lensing Strength", "Scale the strength of black-hole lensing."},
+        {"Space Fabric Grid", "Render the gravity-warped space-fabric guide grid."},
+        {"Fabric Square Size", "Grid spacing for the space-fabric overlay."},
+        {"Fabric Curvature", "Curvature strength of the space-fabric warp field."},
+        {"Snap Fabric View Isometric", "Snap the camera to an isometric angle that reads well with the fabric grid."},
+        {"Cosmos Quality", "Overall rendering quality level for the cosmos shader path."},
+        {"Time Control", "Target time-rate and adaptive timestep controls."},
+        {"Time Rate", "Nominal simulation seconds advanced per real second, expressed on a log scale."},
+        {"Rate", "Nominal simulation seconds advanced per real second, expressed on a log scale."},
+        {"Adaptive Time-Stepping", "Clamp the actual step size dynamically to maintain stability."},
+        {"Adaptive Time-Step", "Clamp the actual step size dynamically to maintain stability."},
+        {"Adaptive Safety", "Safety factor used when adaptive timestep chooses a smaller step."},
+        {"Adaptive Min dt", "Minimum simulation step allowed by adaptive stepping."},
+        {"Adaptive Max dt", "Maximum simulation step allowed by adaptive stepping."},
+        {"Adaptive Substepping", "Reject large physics steps and split them until the estimated position error fits the configured tolerance."},
+        {"Adaptive Tolerance", "Maximum allowed world-space position error for one accepted step."},
+        {"Adaptive Max Substeps", "Maximum number of accepted substeps before the sim slows down to preserve accuracy."},
+        {"Substeps Used", "Number of substeps actually executed for the last requested physics step."},
+        {"Required Substeps", "Number of substeps demanded by the error estimator for the last requested physics step."},
+        {"Nominal Rate", "Requested simulation rate before adaptive timestep reduces or clamps it."},
+        {"Sim Time", "Current accumulated simulated time in the active universe."},
+        {"1 s/s", "Set the nominal simulation rate to 1 simulated second per real second."},
+        {"1 min/s", "Set the nominal simulation rate to 1 simulated minute per real second."},
+        {"1 hr/s", "Set the nominal simulation rate to 1 simulated hour per real second."},
+        {"1 day/s", "Set the nominal simulation rate to 1 simulated day per real second."},
+        {"1 yr/s", "Set the nominal simulation rate to 1 simulated year per real second."},
+        {"1 Myr/s", "Set the nominal simulation rate to 1 simulated million years per real second."},
+        {"1 Gyr/s", "Set the nominal simulation rate to 1 simulated billion years per real second."},
+        {"General Relativity", "Relativistic correction controls for gravity and timing."},
+        {"GR Corrections", "Enable relativistic orbit and timing corrections."},
+        {"Parallel Gravity", "Allow multithreaded CPU-side gravity work and related packing tasks."},
+        {"Precession", "Scale periapsis precession strength."},
+        {"Time Dilation", "Scale gravitational time dilation strength."},
+        {"Frame Drag", "Scale frame-dragging strength."},
+        {"Speed of Light", "Simulation-space speed of light used by relativistic corrections."},
+        {"Performance", "Dynamic object budgeting and diagnostics."},
+        {"Dynamic Budget", "Automatically manage fragment and debris counts to hold performance targets."},
+        {"Object Budget", "Master toggle for dynamic fragment/debris budgeting."},
+        {"Target FPS", "Preferred framerate the dynamic budgeter tries to preserve."},
+        {"Max Fragments", "Maximum attracting fragments before new debris gets downgraded."},
+        {"Max Non-Attracting", "Maximum non-attracting debris pieces allowed at once."},
+        {"Explosion Density", "Maximum share of the debris budget that one event may consume."},
+        {"Reduction Percentage", "How aggressively debris is culled when the budget is exceeded."},
+        {"Dust Mode", "Choose whether dust bodies contribute gravity or remain non-attracting."},
+        {"Diagnostics", "Runtime validation and debug logging controls."},
+        {"Enable Runtime Diagnostics", "Enable periodic state validation and runtime diagnostics logging."},
+        {"Pause on Invalid State", "Pause simulation automatically when diagnostics detect invalid body state."},
+        {"Validate Now", "Run a manual state-validation pass immediately."},
+        {"Dump Snapshot", "Write a diagnostic snapshot of current body counts and timing to the debug log."},
+        {"Navigation", "Exit or return to the launcher."},
+        {"Return to Launcher", "Close the current app session and return to the launcher."},
+        {"Quit", "Exit the application."},
+    };
+    for (const auto& entry : kEntries) {
+        if (key == entry.key)
+            return entry.tip;
+    }
+    return nullptr;
+}
+
+void show_bottom_bar_tooltip(const char* label) {
+    const char* tip = bottom_bar_menu_tooltip(imgui_label_key(label));
+    if (tip && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%s", tip);
+}
+
+void show_hover_tooltip(const char* tip) {
+    if (tip && tip[0] &&
+        ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("%s", tip);
+    }
+}
 
 const char* format_sim_time(double seconds, char* buf, size_t buf_size) {
     double abs_s = std::abs(seconds);
@@ -444,8 +672,13 @@ void CosmosApp::render_overlay() {
             int cr = (c >> IM_COL32_R_SHIFT) & 0xFF;
             int cg = (c >> IM_COL32_G_SHIFT) & 0xFF;
             int cb = (c >> IM_COL32_B_SHIFT) & 0xFF;
-            int alpha = (i == selected_body) ? 190 : 72;
-            float width = (i == selected_body) ? 1.9f : 1.0f;
+            float orbit_alpha_scale = std::clamp(cfg.orbit_line_alpha, 0.0f, 1.0f);
+            int alpha = (i == selected_body)
+                ? (int)std::clamp(255.0f * std::max(orbit_alpha_scale * 2.4f, 0.18f), 0.0f, 255.0f)
+                : (int)std::clamp(255.0f * orbit_alpha_scale, 0.0f, 255.0f);
+            float width = (i == selected_body)
+                ? std::max(0.5f, cfg.orbit_line_width * 1.9f)
+                : std::max(0.5f, cfg.orbit_line_width);
             ImU32 orbit_col = IM_COL32(cr, cg, cb, alpha);
 
             glm::vec3 prev_world(0.0f);
@@ -530,8 +763,9 @@ void CosmosApp::render_overlay() {
                 if (!p0.visible || !p1.visible) continue;
 
                 float frac = (float)j / (float)trail.size();
-                int alpha = (int)(frac * 80.0f);
-                float width = 1.0f + frac * 1.5f;
+                int alpha = (int)std::clamp(frac * 80.0f * std::clamp(cfg.trail_alpha_scale, 0.0f, 4.0f),
+                                            0.0f, 255.0f);
+                float width = (1.0f + frac * 1.5f) * std::clamp(cfg.trail_width_scale, 0.1f, 4.0f);
                 fg->AddLine(ImVec2(p0.sx, p0.sy), ImVec2(p1.sx, p1.sy),
                             IM_COL32(cr, cg, cb, alpha), width);
             }
@@ -598,7 +832,8 @@ void CosmosApp::render_overlay() {
         };
 
         int drawn = 0;
-        int label_cap = std::min<int>((int)labels.size(), 64);
+        int label_cap = std::min<int>((int)labels.size(), std::clamp(cfg.body_label_max_count, 1, 512));
+        float label_alpha_scale = std::clamp(cfg.body_label_opacity, 0.05f, 1.0f);
         for (const auto& candidate : labels) {
             if (drawn >= label_cap) break;
             const auto& b = state.bodies[(size_t)candidate.index];
@@ -629,10 +864,13 @@ void CosmosApp::render_overlay() {
             int cb = (c >> IM_COL32_B_SHIFT) & 0xFF;
             ImU32 text_col = IM_COL32(std::min(cr + 48, 255),
                                       std::min(cg + 48, 255),
-                                      std::min(cb + 48, 255), 235);
+                                      std::min(cb + 48, 255),
+                                      (int)std::clamp(235.0f * label_alpha_scale, 0.0f, 255.0f));
             fg->AddRectFilled(ImVec2(rect.x, rect.y), ImVec2(rect.z, rect.w),
-                              IM_COL32(8, 10, 20, 140), 3.0f);
-            fg->AddText(ImVec2(label_x + 1.0f, label_y + 1.0f), IM_COL32(0, 0, 0, 150), name);
+                              IM_COL32(8, 10, 20,
+                                       (int)std::clamp(140.0f * label_alpha_scale, 0.0f, 255.0f)), 3.0f);
+            fg->AddText(ImVec2(label_x + 1.0f, label_y + 1.0f),
+                        IM_COL32(0, 0, 0, (int)std::clamp(150.0f * label_alpha_scale, 0.0f, 255.0f)), name);
             fg->AddText(ImVec2(label_x, label_y), text_col, name);
             occupied.push_back(rect);
             drawn++;
@@ -2900,6 +3138,7 @@ void CosmosApp::draw_bottom_bar() {
             if (i > 0) ImGui::SameLine();
             if (ImGui::SmallButton(presets[i].label))
                 cfg.time_exponent = presets[i].exp;
+            show_bottom_bar_tooltip(presets[i].label);
         }
     };
 
@@ -2935,6 +3174,7 @@ void CosmosApp::draw_bottom_bar() {
         if (ImGui::Button("Menu", ImVec2(70, 24))) {
             show_menu_popup_ = !show_menu_popup_;
         }
+        show_bottom_bar_tooltip("Menu");
         ImGui::PopStyleColor(3);
 
         ImGui::SameLine(0, 8);
@@ -2970,6 +3210,7 @@ void CosmosApp::draw_bottom_bar() {
             if (ImGui::Button(btn_id, ImVec2(0, 22))) {
                 *entries[i].visible = !(*entries[i].visible);
             }
+            show_bottom_bar_tooltip(entries[i].label);
 
             if (vis) {
                 ImVec2 rmin = ImGui::GetItemRectMin();
@@ -3029,34 +3270,57 @@ void CosmosApp::draw_bottom_bar() {
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.30f, 0.22f, 0.10f, 1.0f));
         if (ImGui::Button(time_label, ImVec2(time_btn_w, 22.0f)))
             ImGui::OpenPopup("##BottomTimeStepPopup");
+        show_hover_tooltip("Open compact time controls, time presets, and the live rate readout.");
         ImGui::PopStyleColor(3);
 
         ImGui::SameLine(0, 8);
         ImGui::TextColored(ImVec4(0.45f, 0.40f, 0.26f, 0.85f), "|");
         ImGui::SameLine(0, 8);
-        ImGui::TextColored(ImVec4(0.8f, 0.7f, 0.3f, 0.9f), "%s", rate_text);
+        ImVec4 live_rate_color = adaptive_substeps_saturated_
+            ? ImVec4(1.0f, 0.35f, 0.25f, 0.95f)
+            : ImVec4(0.8f, 0.7f, 0.3f, 0.9f);
+        ImGui::TextColored(live_rate_color, "%s", rate_text);
+        show_hover_tooltip("Actual realized simulation rate after pause state and adaptive timestep clamping.");
         ImGui::SameLine(0, 8);
         ImGui::TextColored(ImVec4(0.45f, 0.40f, 0.26f, 0.85f), "|");
         ImGui::SameLine(0, 8);
         ImGui::TextColored(ImVec4(0.8f, 0.7f, 0.3f, 0.9f), "%s", bodies_text);
+        show_hover_tooltip("Current active body count in the simulation.");
         ImGui::SameLine(0, 8);
         ImGui::TextColored(ImVec4(0.45f, 0.40f, 0.26f, 0.85f), "|");
         ImGui::SameLine(0, 8);
         ImGui::TextColored(ImVec4(0.74f, 0.78f, 0.82f, 0.95f), "%s", budget_text);
+        show_hover_tooltip("Live object-budget monitor showing FPS plus attracting and non-attracting fragment counts.");
 
         if (ImGui::BeginPopup("##BottomTimeStepPopup")) {
             ImGui::TextColored(ImVec4(0.92f, 0.82f, 0.56f, 1.0f), "Time Control");
             float exp_f = (float)cfg.time_exponent;
             if (ImGui::SliderFloat("Rate##Bottom", &exp_f, -9.0f, 21.0f, ""))
                 cfg.time_exponent = (double)exp_f;
+            show_bottom_bar_tooltip("Rate");
             ImGui::Checkbox("Adaptive Time-Step##Bottom", &cfg.adaptive_time_step);
+            show_bottom_bar_tooltip("Adaptive Time-Step");
+            ImGui::Checkbox("Adaptive Substepping##Bottom", &cfg.adaptive_substepping);
+            show_bottom_bar_tooltip("Adaptive Substepping");
             char popup_rate[64], popup_nominal_rate[64], popup_time[64];
             format_sim_time(std::abs(displayed_rate), popup_rate, sizeof(popup_rate));
             format_sim_time(std::abs(nominal_rate), popup_nominal_rate, sizeof(popup_nominal_rate));
             format_sim_time(cfg.sim_time_accumulated, popup_time, sizeof(popup_time));
-            ImGui::Text("Rate: %s%s/s", displayed_rate < -1.0e-12 ? "-" : "", popup_rate);
+            ImVec4 popup_rate_color = adaptive_substeps_saturated_
+                ? ImVec4(1.0f, 0.35f, 0.25f, 1.0f)
+                : ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+            ImGui::TextColored(popup_rate_color, "Rate: %s%s/s", displayed_rate < -1.0e-12 ? "-" : "", popup_rate);
+            show_hover_tooltip("Actual realized simulation rate after pause state and adaptive timestep clamping.");
             ImGui::Text("Nominal Rate: %s%s/s", nominal_rate < -1.0e-12 ? "-" : "", popup_nominal_rate);
+            show_bottom_bar_tooltip("Nominal Rate");
             ImGui::Text("Sim Time: %s", popup_time);
+            show_bottom_bar_tooltip("Sim Time");
+            if (cfg.adaptive_substepping) {
+                ImGui::Text("Substeps Used: %d", adaptive_substeps_last_);
+                show_bottom_bar_tooltip("Substeps Used");
+                ImGui::Text("Required Substeps: %d", adaptive_substeps_required_);
+                show_bottom_bar_tooltip("Required Substeps");
+            }
             draw_time_presets();
             ImGui::EndPopup();
         }
@@ -3142,14 +3406,72 @@ void CosmosApp::draw_bottom_bar() {
                 update_body_tracking_cache();
             };
 
-            if (ImGui::TreeNodeEx("Simulation")) {
-                if (ImGui::MenuItem(paused ? "Resume (Space)" : "Pause (Space)")) {
+            auto tree_node_tt = [&](const char* label) {
+                bool open = ImGui::TreeNodeEx(label);
+                show_bottom_bar_tooltip(label);
+                return open;
+            };
+            auto collapsing_header_tt = [&](const char* label) {
+                bool open = ImGui::CollapsingHeader(label);
+                show_bottom_bar_tooltip(label);
+                return open;
+            };
+            auto menu_item_tt = [&](const char* label) {
+                bool activated = ImGui::MenuItem(label);
+                show_bottom_bar_tooltip(label);
+                return activated;
+            };
+            auto menu_item_selected_tt = [&](const char* label, bool selected) {
+                bool activated = ImGui::MenuItem(label, nullptr, selected);
+                show_bottom_bar_tooltip(label);
+                return activated;
+            };
+            auto menu_item_toggle_tt = [&](const char* label, bool* selected) {
+                bool activated = ImGui::MenuItem(label, nullptr, selected);
+                show_bottom_bar_tooltip(label);
+                return activated;
+            };
+            auto checkbox_tt = [&](const char* label, bool* value) {
+                bool changed = ImGui::Checkbox(label, value);
+                show_bottom_bar_tooltip(label);
+                return changed;
+            };
+            auto slider_float_tt = [&](const char* label, float* value, float min_v, float max_v,
+                                       const char* fmt = "%.3f", ImGuiSliderFlags flags = 0) {
+                bool changed = ImGui::SliderFloat(label, value, min_v, max_v, fmt, flags);
+                show_bottom_bar_tooltip(label);
+                return changed;
+            };
+            auto slider_int_tt = [&](const char* label, int* value, int min_v, int max_v,
+                                     const char* fmt = "%d", ImGuiSliderFlags flags = 0) {
+                bool changed = ImGui::SliderInt(label, value, min_v, max_v, fmt, flags);
+                show_bottom_bar_tooltip(label);
+                return changed;
+            };
+            auto combo_tt = [&](const char* label, int* current_item, const char* const items[], int items_count) {
+                bool changed = ImGui::Combo(label, current_item, items, items_count);
+                show_bottom_bar_tooltip(label);
+                return changed;
+            };
+            auto button_tt = [&](const char* label, ImVec2 size = ImVec2(0, 0)) {
+                bool pressed = ImGui::Button(label, size);
+                show_bottom_bar_tooltip(label);
+                return pressed;
+            };
+
+            if (button_tt("Reset All Menu Parameters to Default##Menu", ImVec2(-1, 0))) {
+                reset_bottom_bar_menu_defaults();
+            }
+            ImGui::Separator();
+
+            if (tree_node_tt("Simulation")) {
+                if (menu_item_tt(paused ? "Resume (Space)" : "Pause (Space)")) {
                     paused = !paused; show_menu_popup_ = false;
                 }
-                if (ImGui::MenuItem("New Simulation")) {
+                if (menu_item_tt("New Simulation")) {
                     reset_simulation(); show_menu_popup_ = false;
                 }
-                if (ImGui::MenuItem("Empty Universe")) {
+                if (menu_item_tt("Empty Universe")) {
                     state.clear(); cfg.body_count = 0;
                     selected_body = -1; sim_time_ = 0.0f;
                     cfg.sim_time_accumulated = 0.0;
@@ -3157,38 +3479,38 @@ void CosmosApp::draw_bottom_bar() {
                     show_menu_popup_ = false;
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem("Save (Ctrl+S)")) {
+                if (menu_item_tt("Save (Ctrl+S)")) {
                     show_save_dialog_ = true; show_menu_popup_ = false;
                 }
-                if (ImGui::MenuItem("Load (Ctrl+L)")) {
+                if (menu_item_tt("Load (Ctrl+L)")) {
                     show_load_dialog_ = true; show_menu_popup_ = false;
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem("Import Body...")) {
+                if (menu_item_tt("Import Body...")) {
                     show_import_dialog_ = true; show_menu_popup_ = false;
                 }
-                if (selected_body >= 0 && ImGui::MenuItem("Export Selected Body...")) {
+                if (selected_body >= 0 && menu_item_tt("Export Selected Body...")) {
                     show_export_dialog_ = true; show_menu_popup_ = false;
                 }
                 ImGui::TreePop();
             }
-            if (ImGui::TreeNodeEx("Panels")) {
+            if (tree_node_tt("Panels")) {
                 bool tmp;
                 tmp = spawn_menu_visible_;
-                if (ImGui::MenuItem("Spawn Menu", nullptr, tmp)) { spawn_menu_visible_ = !spawn_menu_visible_; }
+                if (menu_item_selected_tt("Spawn Menu", tmp)) { spawn_menu_visible_ = !spawn_menu_visible_; }
                 tmp = body_list_visible_;
-                if (ImGui::MenuItem("Body List", nullptr, tmp)) { body_list_visible_ = !body_list_visible_; }
+                if (menu_item_selected_tt("Body List", tmp)) { body_list_visible_ = !body_list_visible_; }
                 tmp = inspector_visible_;
-                if (ImGui::MenuItem("Inspector", nullptr, tmp)) { inspector_visible_ = !inspector_visible_; }
+                if (menu_item_selected_tt("Inspector", tmp)) { inspector_visible_ = !inspector_visible_; }
                 ImGui::Separator();
-                ImGui::MenuItem("Show Orbits", nullptr, &cfg.show_orbits);
-                ImGui::MenuItem("Show Trails", nullptr, &cfg.show_trails);
-                ImGui::MenuItem("Show Object Labels", nullptr, &cfg.show_body_labels);
-                ImGui::MenuItem("Auto-hide Bottom Bar", nullptr, &bottom_bar_autohide_);
+                menu_item_toggle_tt("Show Orbits", &cfg.show_orbits);
+                menu_item_toggle_tt("Show Trails", &cfg.show_trails);
+                menu_item_toggle_tt("Show Object Labels", &cfg.show_body_labels);
+                menu_item_toggle_tt("Auto-hide Bottom Bar", &bottom_bar_autohide_);
                 ImGui::TreePop();
             }
-            if (ImGui::TreeNodeEx("System Management")) {
-                if (ImGui::MenuItem("Balance System Momentum")) {
+            if (tree_node_tt("System Management")) {
+                if (menu_item_tt("Balance System Momentum")) {
                     glm::dvec3 momentum(0.0);
                     double total_m = 0.0;
                     for (const auto& b : state.bodies) {
@@ -3202,22 +3524,22 @@ void CosmosApp::draw_bottom_bar() {
                         for_each_body([&](CelestialBody& b) { b.vel -= com_vel; });
                     }
                 }
-                if (ImGui::MenuItem("Auto Orbit")) {
+                if (menu_item_tt("Auto Orbit")) {
                     set_auto_orbit(0.0f, 1.0f);
                 }
-                if (ImGui::MenuItem("Expand System")) {
+                if (menu_item_tt("Expand System")) {
                     scale_system(1.05f);
                 }
-                if (ImGui::MenuItem("Shrink System")) {
+                if (menu_item_tt("Shrink System")) {
                     scale_system(0.95f);
                 }
-                if (ImGui::MenuItem("Increase Eccentricity")) {
+                if (menu_item_tt("Increase Eccentricity")) {
                     adjust_eccentricity(1.20f, 0.93f);
                 }
-                if (ImGui::MenuItem("Decrease Eccentricity")) {
+                if (menu_item_tt("Decrease Eccentricity")) {
                     adjust_eccentricity(0.80f, 1.05f);
                 }
-                if (ImGui::MenuItem("Make 2D - Zero All Height Values")) {
+                if (menu_item_tt("Make 2D - Zero All Height Values")) {
                     for_each_body([&](CelestialBody& b) {
                         b.pos.y = 0.0f;
                         b.vel.y = 0.0f;
@@ -3226,54 +3548,54 @@ void CosmosApp::draw_bottom_bar() {
                 }
                 ImGui::TreePop();
             }
-            if (ImGui::TreeNodeEx("Motion")) {
-                if (ImGui::MenuItem("Reverse Time", nullptr, reverse_time_)) {
+            if (tree_node_tt("Motion")) {
+                if (menu_item_selected_tt("Reverse Time", reverse_time_)) {
                     reverse_time_ = !reverse_time_;
                 }
-                if (ImGui::MenuItem("Reverse All Velocities")) {
+                if (menu_item_tt("Reverse All Velocities")) {
                     for_each_body([&](CelestialBody& b) { b.vel *= -1.0f; });
                 }
-                if (ImGui::MenuItem("Halt All Velocities")) {
+                if (menu_item_tt("Halt All Velocities")) {
                     for_each_body([&](CelestialBody& b) { b.vel = glm::vec3(0.0f); });
                 }
-                if (ImGui::MenuItem("Halt All Rotations")) {
+                if (menu_item_tt("Halt All Rotations")) {
                     for_each_body([&](CelestialBody& b) { b.angular_vel = 0.0f; });
                 }
-                if (ImGui::MenuItem("+2% All Speeds")) {
+                if (menu_item_tt("+2% All Speeds")) {
                     for_each_body([&](CelestialBody& b) { b.vel *= 1.02f; });
                 }
-                if (ImGui::MenuItem("-2% All Speeds")) {
+                if (menu_item_tt("-2% All Speeds")) {
                     for_each_body([&](CelestialBody& b) { b.vel *= 0.98f; });
                 }
-                if (ImGui::MenuItem("+2% All Rotations")) {
+                if (menu_item_tt("+2% All Rotations")) {
                     for_each_body([&](CelestialBody& b) { b.angular_vel *= 1.02f; });
                 }
-                if (ImGui::MenuItem("-2% All Rotations")) {
+                if (menu_item_tt("-2% All Rotations")) {
                     for_each_body([&](CelestialBody& b) { b.angular_vel *= 0.98f; });
                 }
                 float dv_10kms = 10.0f / SIM_UNIT_TO_KM;
-                if (ImGui::MenuItem("Add Velocity of 10 km/s on X")) {
+                if (menu_item_tt("Add Velocity of 10 km/s on X")) {
                     for_each_body([&](CelestialBody& b) { b.vel.x += dv_10kms; });
                 }
-                if (ImGui::MenuItem("Add Velocity of -10 km/s on X")) {
+                if (menu_item_tt("Add Velocity of -10 km/s on X")) {
                     for_each_body([&](CelestialBody& b) { b.vel.x -= dv_10kms; });
                 }
-                if (ImGui::MenuItem("Add Velocity of 10 km/s on Y")) {
+                if (menu_item_tt("Add Velocity of 10 km/s on Y")) {
                     for_each_body([&](CelestialBody& b) { b.vel.y += dv_10kms; });
                 }
-                if (ImGui::MenuItem("Add Velocity of -10 km/s on Y")) {
+                if (menu_item_tt("Add Velocity of -10 km/s on Y")) {
                     for_each_body([&](CelestialBody& b) { b.vel.y -= dv_10kms; });
                 }
-                if (ImGui::MenuItem("Add Velocity of 10 km/s on Z")) {
+                if (menu_item_tt("Add Velocity of 10 km/s on Z")) {
                     for_each_body([&](CelestialBody& b) { b.vel.z += dv_10kms; });
                 }
-                if (ImGui::MenuItem("Add Velocity of -10 km/s on Z")) {
+                if (menu_item_tt("Add Velocity of -10 km/s on Z")) {
                     for_each_body([&](CelestialBody& b) { b.vel.z -= dv_10kms; });
                 }
                 ImGui::TreePop();
             }
-            if (ImGui::TreeNodeEx("Performance Management")) {
-                if (ImGui::MenuItem("Delete All Particles/Dust")) {
+            if (tree_node_tt("Performance Management")) {
+                if (menu_item_tt("Delete All Particles/Dust")) {
                     for (auto& b : state.bodies) {
                         if (b.marked_for_removal) continue;
                         bool dust_like = b.non_attracting ||
@@ -3284,14 +3606,14 @@ void CosmosApp::draw_bottom_bar() {
                     }
                     cleanup_bodies();
                 }
-                if (ImGui::MenuItem("Delete All Fragments")) {
+                if (menu_item_tt("Delete All Fragments")) {
                     for (auto& b : state.bodies) {
                         if (b.marked_for_removal) continue;
                         if ((int)b.frag_generation > 0) b.marked_for_removal = true;
                     }
                     cleanup_bodies();
                 }
-                if (ImGui::MenuItem("Delete All Escaping Bodies")) {
+                if (menu_item_tt("Delete All Escaping Bodies")) {
                     int primary = -1;
                     float primary_mass = 0.0f;
                     for (int i = 0; i < (int)state.bodies.size(); ++i) {
@@ -3327,136 +3649,157 @@ void CosmosApp::draw_bottom_bar() {
                 }
                 ImGui::TreePop();
             }
-            if (ImGui::TreeNodeEx("Cosmos Settings")) {
-                if (ImGui::CollapsingHeader("General Physics")) {
-                    ImGui::SliderFloat("G##Menu", &cfg.G, 0.1f, 10.0f);
-                    ImGui::SliderFloat("Softening##Menu", &cfg.softening, 1.0f, 50.0f);
-                    ImGui::Checkbox("Collisions##Menu", &cfg.collisions);
-                    ImGui::Checkbox("Tidal Forces##Menu", &cfg.tidal_forces);
-                    ImGui::Checkbox("Velocity Verlet##Menu", &cfg.velocity_verlet);
-                    ImGui::Checkbox("Barnes-Hut Gravity##Menu", &cfg.barnes_hut);
-                    if (cfg.barnes_hut) {
-                        ImGui::Checkbox("GPU BH Compute##Menu", &cfg.gpu_barnes_hut);
-                        if (ImGui::IsItemHovered())
-                            ImGui::SetTooltip("Use Vulkan compute shader to evaluate Barnes-Hut gravity.");
-                        ImGui::SliderFloat("BH Theta##Menu", &cfg.barnes_hut_theta, 0.2f, 1.6f, "%.2f");
-                        ImGui::SliderInt("BH Min Bodies##Menu", &cfg.barnes_hut_min_bodies, 16, 2000);
+            if (tree_node_tt("Cosmos Settings")) {
+                if (collapsing_header_tt("General Physics")) {
+                    slider_float_tt("G##Menu", &cfg.G, 0.1f, 10.0f, "%.2f");
+                    slider_float_tt("Softening##Menu", &cfg.softening, 1.0f, 50.0f, "%.1f");
+                    slider_float_tt("Damping##Menu", &cfg.damping, 0.80f, 1.00f, "%.3f");
+                    checkbox_tt("Collisions##Menu", &cfg.collisions);
+                    checkbox_tt("Tidal Forces##Menu", &cfg.tidal_forces);
+                    slider_float_tt("Tidal Heating Scale##Menu", &cfg.tidal_heating_scale, 0.0f, 4.0f, "%.2f");
+                    static const char* INTEGRATOR_NAMES[] = {
+                        "Velocity Verlet",
+                        "Euler Explicit",
+                        "Euler Semi-Implicit",
+                        "RK2",
+                        "Forest-Ruth",
+                        "PEFRL"
+                    };
+                    combo_tt("Integrator##Menu", &cfg.integrator_type,
+                             INTEGRATOR_NAMES, IM_ARRAYSIZE(INTEGRATOR_NAMES));
+                    cfg.integrator_type = std::clamp(cfg.integrator_type, 0, (int)INTEGRATOR_PEFRL);
+                    cfg.velocity_verlet = (cfg.integrator_type == INTEGRATOR_VELOCITY_VERLET);
+                    slider_int_tt("Physics Substeps##Menu", &cfg.physics_substeps, 1, 16);
+                    checkbox_tt("Barnes-Hut Gravity##Menu", &cfg.barnes_hut);
+                    checkbox_tt("GPU BH Compute##Menu", &cfg.gpu_barnes_hut);
+                    slider_float_tt("BH Theta##Menu", &cfg.barnes_hut_theta, 0.2f, 1.6f, "%.2f");
+                    slider_int_tt("BH Min Bodies##Menu", &cfg.barnes_hut_min_bodies, 16, 2000);
+                    slider_int_tt("Parallel Min Batch##Menu", &cfg.parallel_min_batch, 32, 4096);
+                    checkbox_tt("Show Orbits##Menu", &cfg.show_orbits);
+                    slider_float_tt("Orbit Opacity##Menu", &cfg.orbit_line_alpha, 0.0f, 1.0f, "%.2f");
+                    slider_float_tt("Orbit Width##Menu", &cfg.orbit_line_width, 0.5f, 4.0f, "%.2f");
+                    checkbox_tt("Show Trails##Menu", &cfg.show_trails);
+                    {
+                        int trail_len = (int)cfg.trail_length;
+                        if (slider_int_tt("Trail Length##Menu", &trail_len, 0, 500))
+                            cfg.trail_length = (uint32_t)trail_len;
                     }
-                    ImGui::Checkbox("Show Orbits##Menu", &cfg.show_orbits);
-                    ImGui::Checkbox("Show Trails##Menu", &cfg.show_trails);
-                    ImGui::Checkbox("Show Object Labels##Menu", &cfg.show_body_labels);
-                    if (cfg.show_body_labels) {
-                        float label_min_log = std::log10(std::max(cfg.body_label_min_distance, 1.0e-3f));
-                        if (ImGui::SliderFloat("Label Min Dist##Menu", &label_min_log, -3.0f, 8.0f, "10^%.2f")) {
-                            cfg.body_label_min_distance = (label_min_log <= -2.95f)
-                                ? 0.0f
-                                : std::pow(10.0f, label_min_log);
-                        }
-                        float label_max_log = std::log10(std::max(cfg.body_label_max_distance, 1.0e-3f));
-                        if (ImGui::SliderFloat("Label Max Dist##Menu", &label_max_log, -2.0f, 8.0f, "10^%.2f"))
-                            cfg.body_label_max_distance = std::pow(10.0f, label_max_log);
-                        cfg.body_label_min_distance = std::clamp(cfg.body_label_min_distance, 0.0f, 1.0e8f);
-                        cfg.body_label_max_distance = std::clamp(cfg.body_label_max_distance,
-                                                                 std::max(cfg.body_label_min_distance, 1.0e-3f),
-                                                                 1.0e8f);
+                    slider_float_tt("Trail Opacity##Menu", &cfg.trail_alpha_scale, 0.0f, 4.0f, "%.2f");
+                    slider_float_tt("Trail Width##Menu", &cfg.trail_width_scale, 0.1f, 4.0f, "%.2f");
+                    checkbox_tt("Show Object Labels##Menu", &cfg.show_body_labels);
+                    float label_min_log = std::log10(std::max(cfg.body_label_min_distance, 1.0e-3f));
+                    if (slider_float_tt("Label Min Dist##Menu", &label_min_log, -3.0f, 8.0f, "10^%.2f")) {
+                        cfg.body_label_min_distance = (label_min_log <= -2.95f)
+                            ? 0.0f
+                            : std::pow(10.0f, label_min_log);
                     }
-                    int trail_len = (int)cfg.trail_length;
-                    if (ImGui::SliderInt("Trail Length##Menu", &trail_len, 0, 500))
-                        cfg.trail_length = (uint32_t)trail_len;
+                    float label_max_log = std::log10(std::max(cfg.body_label_max_distance, 1.0e-3f));
+                    if (slider_float_tt("Label Max Dist##Menu", &label_max_log, -2.0f, 8.0f, "10^%.2f"))
+                        cfg.body_label_max_distance = std::pow(10.0f, label_max_log);
+                    slider_float_tt("Label Opacity##Menu", &cfg.body_label_opacity, 0.05f, 1.0f, "%.2f");
+                    slider_int_tt("Label Max Count##Menu", &cfg.body_label_max_count, 1, 256);
+                    cfg.body_label_min_distance = std::clamp(cfg.body_label_min_distance, 0.0f, 1.0e8f);
+                    cfg.body_label_max_distance = std::clamp(cfg.body_label_max_distance,
+                                                             std::max(cfg.body_label_min_distance, 1.0e-3f),
+                                                             1.0e8f);
+                    cfg.trail_length = (uint32_t)std::clamp((int)cfg.trail_length, 0, 500);
                 }
 
-                if (ImGui::CollapsingHeader("Camera")) {
-                    ImGui::SliderFloat("FOV##Menu", &camera.fov, 20.0f, 90.0f);
+                if (collapsing_header_tt("Camera")) {
+                    slider_float_tt("FOV##Menu", &camera.fov, 20.0f, 90.0f, "%.1f");
                     float log_dist = std::log10(std::max(camera.distance, 0.01f));
-                    if (ImGui::SliderFloat("Distance##Menu", &log_dist, 1.0f, 3.7f, "10^%.1f"))
+                    if (slider_float_tt("Distance##Menu", &log_dist, 1.0f, 3.7f, "10^%.1f"))
                         camera.distance = std::pow(10.0f, log_dist);
-                    if (ImGui::Button("Reset Camera##Menu")) camera = OrbitCamera{};
+                    if (button_tt("Reset Camera##Menu")) camera = OrbitCamera{};
                 }
 
-                if (ImGui::CollapsingHeader("Collision & Fragmentation")) {
-                    ImGui::Checkbox("Smoothed Particle Hydrodynamics##Menu", &cfg.collision_sph);
-                    ImGui::Checkbox("Rigid Body Dynamics##Menu", &cfg.collision_rigid_body_dynamics);
+                if (collapsing_header_tt("Collision & Fragmentation")) {
+                    checkbox_tt("Smoothed Particle Hydrodynamics##Menu", &cfg.collision_sph);
+                    checkbox_tt("Rigid Body Dynamics##Menu", &cfg.collision_rigid_body_dynamics);
+                    slider_float_tt("SPH Pressure##Menu", &cfg.collision_sph_pressure, 0.0f, 4.0f, "%.2f");
+                    slider_float_tt("SPH Viscosity##Menu", &cfg.collision_sph_viscosity, 0.0f, 4.0f, "%.2f");
+                    slider_float_tt("SPH Heat##Menu", &cfg.collision_sph_heat, 0.0f, 4.0f, "%.2f");
+                    slider_float_tt("Rigid Restitution##Menu", &cfg.rigid_collision_restitution, 0.0f, 1.2f, "%.2f");
+                    slider_float_tt("Rigid Separation##Menu", &cfg.rigid_collision_separation, 0.0f, 3.0f, "%.2f");
                     if (!cfg.collision_sph && !cfg.collision_rigid_body_dynamics) {
                         ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
                                            "Enable SPH and/or Rigid Body Dynamics.");
                     }
-                    ImGui::Checkbox("Merging##Menu", &cfg.collision_merging);
-                    ImGui::Checkbox("Fragmentation##Menu", &cfg.collision_fragmentation);
-                    ImGui::Checkbox("Spin Fragmentation##Menu", &cfg.spin_fragmentation);
-                    ImGui::SliderFloat("Merge Speed##Menu", &cfg.merge_speed_threshold, 1.0f, 20.0f);
-                    ImGui::SliderFloat("Fragment Speed##Menu", &cfg.fragment_speed_threshold, 10.0f, 50.0f);
-                    ImGui::SliderFloat("Spin Frag Threshold##Menu", &cfg.spin_fragmentation_threshold, 0.70f, 1.50f, "%.2f x");
-                    ImGui::SliderInt("Fragment Count##Menu", &cfg.fragment_count, 1, 12);
-                    ImGui::SliderFloat("Min Frag Mass##Menu", &cfg.min_fragment_mass, 1.0e-9f, 1.0f, "%.6f",
-                                       ImGuiSliderFlags_Logarithmic);
-                    ImGui::SliderInt("Max Frag Depth##Menu", &cfg.max_frag_generation, 0, 5);
+                    checkbox_tt("Merging##Menu", &cfg.collision_merging);
+                    checkbox_tt("Fragmentation##Menu", &cfg.collision_fragmentation);
+                    checkbox_tt("Spin Fragmentation##Menu", &cfg.spin_fragmentation);
+                    slider_float_tt("Merge Speed##Menu", &cfg.merge_speed_threshold, 1.0f, 20.0f, "%.2f");
+                    slider_float_tt("Fragment Speed##Menu", &cfg.fragment_speed_threshold, 10.0f, 50.0f, "%.2f");
+                    slider_float_tt("Collision Heating##Menu", &cfg.collision_heating, 0.0f, 2.0f, "%.2f");
+                    slider_float_tt("Spin Frag Threshold##Menu", &cfg.spin_fragmentation_threshold, 0.70f, 1.50f, "%.2f x");
+                    slider_int_tt("Fragment Count##Menu", &cfg.fragment_count, 1, 12);
+                    slider_float_tt("Min Frag Mass##Menu", &cfg.min_fragment_mass, 1.0e-9f, 1.0f, "%.6f",
+                                    ImGuiSliderFlags_Logarithmic);
+                    slider_int_tt("Max Frag Depth##Menu", &cfg.max_frag_generation, 0, 5);
                 }
 
-                if (ImGui::CollapsingHeader("Thermal & Roche")) {
-                    ImGui::Checkbox("Temperature##Menu", &cfg.temperature_system);
-                    ImGui::Checkbox("Evaporation##Menu", &cfg.evaporation);
-                    ImGui::Checkbox("Roche Limit##Menu", &cfg.roche_limit);
-                    if (cfg.roche_limit) {
-                        ImGui::Checkbox("Fluid Roche Limit##Menu", &cfg.roche_limit_fluid);
-                        ImGui::Checkbox("Rigid Roche Limit##Menu", &cfg.roche_limit_rigid);
-                        if (!cfg.roche_limit_fluid && !cfg.roche_limit_rigid) {
-                            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
-                                               "Enable at least one Roche mode.");
-                        }
+                if (collapsing_header_tt("Thermal & Roche")) {
+                    checkbox_tt("Temperature##Menu", &cfg.temperature_system);
+                    slider_float_tt("Cooling##Menu", &cfg.radiative_cooling, 0.0f, 0.01f, "%.4f");
+                    checkbox_tt("Evaporation##Menu", &cfg.evaporation);
+                    slider_float_tt("Evaporation Rate##Menu", &cfg.evaporation_rate, 0.0f, 0.10f, "%.3f");
+                    checkbox_tt("Roche Limit##Menu", &cfg.roche_limit);
+                    checkbox_tt("Fluid Roche Limit##Menu", &cfg.roche_limit_fluid);
+                    slider_float_tt("Fluid Roche Scale##Menu", &cfg.roche_fluid_scale, 0.25f, 4.0f, "%.2f");
+                    checkbox_tt("Rigid Roche Limit##Menu", &cfg.roche_limit_rigid);
+                    slider_float_tt("Rigid Roche Scale##Menu", &cfg.roche_rigid_scale, 0.25f, 4.0f, "%.2f");
+                    if (!cfg.roche_limit_fluid && !cfg.roche_limit_rigid) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
+                                           "Enable at least one Roche mode.");
                     }
-                    ImGui::Checkbox("Material Phases##Menu", &cfg.material_phases);
-                    ImGui::Checkbox("Planetary Rings##Menu", &cfg.planetary_rings);
-                    if (cfg.planetary_rings) {
-                        ImGui::SliderFloat("Ring Inner Scale##Menu", &cfg.ring_inner_scale, 0.6f, 3.0f, "%.2f");
-                        ImGui::SliderFloat("Ring Outer Scale##Menu", &cfg.ring_outer_scale, 0.6f, 3.0f, "%.2f");
-                        ImGui::SliderFloat("Ring Density Scale##Menu", &cfg.ring_density_scale, 0.2f, 3.0f, "%.2f");
-                        ImGui::SliderFloat("Ring Thickness##Menu", &cfg.ring_thickness_scale, 0.3f, 4.0f, "%.2f");
-                        ImGui::SliderFloat("Ring Particle Scale##Menu", &cfg.ring_particle_scale, 0.2f, 5.0f, "%.2f");
-                        ImGui::SliderFloat("Ring Mass Scale##Menu", &cfg.ring_mass_scale, 0.1f, 5.0f, "%.2f");
-                    }
-                    if (cfg.temperature_system)
-                        ImGui::SliderFloat("Cooling##Menu", &cfg.radiative_cooling, 0.0f, 0.01f, "%.4f");
+                    checkbox_tt("Material Phases##Menu", &cfg.material_phases);
+                    slider_float_tt("Material Phase Rate##Menu", &cfg.material_phase_rate, 0.1f, 4.0f, "%.2f");
+                    checkbox_tt("Planetary Rings##Menu", &cfg.planetary_rings);
+                    slider_float_tt("Ring Inner Scale##Menu", &cfg.ring_inner_scale, 0.6f, 3.0f, "%.2f");
+                    slider_float_tt("Ring Outer Scale##Menu", &cfg.ring_outer_scale, 0.6f, 3.0f, "%.2f");
+                    slider_float_tt("Ring Density Scale##Menu", &cfg.ring_density_scale, 0.2f, 3.0f, "%.2f");
+                    slider_float_tt("Ring Thickness##Menu", &cfg.ring_thickness_scale, 0.3f, 4.0f, "%.2f");
+                    slider_float_tt("Ring Particle Scale##Menu", &cfg.ring_particle_scale, 0.2f, 5.0f, "%.2f");
+                    slider_float_tt("Ring Mass Scale##Menu", &cfg.ring_mass_scale, 0.1f, 5.0f, "%.2f");
                 }
 
-                if (ImGui::CollapsingHeader("Stellar")) {
-                    ImGui::Checkbox("Stellar Evolution##Menu", &cfg.stellar_evolution);
-                    if (cfg.stellar_evolution) {
-                        ImGui::SliderFloat("Star Timescale##Menu", &cfg.stellar_timescale, 10.0f, 500.0f);
-                        ImGui::Separator();
-                        ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Nebula Gravity Coupling");
-                        ImGui::SliderFloat("Nebula Grav Advect##Menu", &cfg.nebula_gravity_advection_scale,
-                                           0.0f, 0.25f, "%.3f");
-                        ImGui::SliderFloat("Nebula Grav Collapse##Menu", &cfg.nebula_gravity_collapse_scale,
-                                           0.0f, 0.30f, "%.3f");
-                        ImGui::SliderFloat("Nebula Grav Compress##Menu", &cfg.nebula_gravity_compress_scale,
-                                           0.0f, 1.50f, "%.3f");
-                        ImGui::Separator();
-                        ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Nebula Sink Formation");
-                        ImGui::Checkbox("Enable Sink Formation##Menu", &cfg.nebula_sink_formation);
-                        if (cfg.nebula_sink_formation) {
-                            ImGui::SliderFloat("Sink Threshold##Menu", &cfg.nebula_sink_threshold,
-                                               0.05f, 8.0f, "%.2f");
-                            ImGui::SliderFloat("Sink Min Mass##Menu", &cfg.nebula_sink_min_mass,
-                                               1.0e-7f, 1.0f, "%.6f", ImGuiSliderFlags_Logarithmic);
-                            ImGui::SliderFloat("Sink Spawn Fraction##Menu", &cfg.nebula_sink_spawn_fraction,
-                                               0.001f, 0.50f, "%.3f");
-                            ImGui::SliderFloat("Sink Consume Fraction##Menu", &cfg.nebula_sink_consume_fraction,
-                                               0.05f, 1.0f, "%.2f");
-                        }
-                    }
+                if (collapsing_header_tt("Stellar")) {
+                    checkbox_tt("Stellar Evolution##Menu", &cfg.stellar_evolution);
+                    slider_float_tt("Star Timescale##Menu", &cfg.stellar_timescale, 10.0f, 500.0f, "%.1f");
+                    checkbox_tt("Stellar Wind Pressure##Menu", &cfg.stellar_wind_pressure);
+                    slider_float_tt("Wind Pressure Scale##Menu", &cfg.stellar_wind_pressure_scale, 0.0f, 4.0f, "%.2f");
+                    ImGui::Separator();
+                    ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Nebula Gravity Coupling");
+                    slider_float_tt("Nebula Grav Advect##Menu", &cfg.nebula_gravity_advection_scale,
+                                    0.0f, 0.25f, "%.3f");
+                    slider_float_tt("Nebula Grav Collapse##Menu", &cfg.nebula_gravity_collapse_scale,
+                                    0.0f, 0.30f, "%.3f");
+                    slider_float_tt("Nebula Grav Compress##Menu", &cfg.nebula_gravity_compress_scale,
+                                    0.0f, 1.50f, "%.3f");
+                    ImGui::Separator();
+                    ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Nebula Sink Formation");
+                    checkbox_tt("Enable Sink Formation##Menu", &cfg.nebula_sink_formation);
+                    slider_float_tt("Sink Threshold##Menu", &cfg.nebula_sink_threshold,
+                                    0.05f, 8.0f, "%.2f");
+                    slider_float_tt("Sink Min Mass##Menu", &cfg.nebula_sink_min_mass,
+                                    1.0e-7f, 1.0f, "%.6f", ImGuiSliderFlags_Logarithmic);
+                    slider_float_tt("Sink Spawn Fraction##Menu", &cfg.nebula_sink_spawn_fraction,
+                                    0.001f, 0.50f, "%.3f");
+                    slider_float_tt("Sink Consume Fraction##Menu", &cfg.nebula_sink_consume_fraction,
+                                    0.05f, 1.0f, "%.2f");
                 }
 
-                if (ImGui::CollapsingHeader("Rendering & Lighting")) {
-                    ImGui::Checkbox("Star Lighting##Menu", &cfg.star_lighting);
-                    ImGui::Checkbox("Uniform Lighting##Menu", &cfg.uniform_lighting);
-                    if (cfg.star_lighting) {
-                        ImGui::Checkbox("Fast Star Lighting##Menu", &cfg.fast_star_lighting);
-                        ImGui::SliderFloat("Ambient##Menu", &cfg.ambient_strength, 0.0f, 0.5f);
-                    }
+                if (collapsing_header_tt("Rendering & Lighting")) {
+                    checkbox_tt("Star Lighting##Menu", &cfg.star_lighting);
+                    slider_float_tt("Star Light Strength##Menu", &cfg.star_light_strength, 0.0f, 4.0f, "%.2f");
+                    checkbox_tt("Uniform Lighting##Menu", &cfg.uniform_lighting);
+                    slider_float_tt("Uniform Light Strength##Menu", &cfg.uniform_light_strength, 0.0f, 4.0f, "%.2f");
+                    checkbox_tt("Fast Star Lighting##Menu", &cfg.fast_star_lighting);
+                    slider_float_tt("Ambient##Menu", &cfg.ambient_strength, 0.0f, 0.5f, "%.2f");
 
                     ImGui::Separator();
-                    ImGui::Checkbox("HQ Shading##Menu", &cfg.cosmos_hq_shading);
-                    ImGui::Checkbox("Background Starfield##Menu", &cfg.cosmos_background_starfield);
+                    checkbox_tt("HQ Shading##Menu", &cfg.cosmos_hq_shading);
+                    checkbox_tt("Background Starfield##Menu", &cfg.cosmos_background_starfield);
                     static const char* BG_PRESETS[] = {
                         "Realistic",
                         "Deep Black",
@@ -3471,82 +3814,99 @@ void CosmosApp::draw_bottom_bar() {
                         "Infrared Dust",
                         "Deep Field"
                     };
-                    ImGui::Combo("Background Preset##Menu", &cfg.cosmos_background_preset,
-                                 BG_PRESETS, IM_ARRAYSIZE(BG_PRESETS));
-                    ImGui::Checkbox("Star Corona##Menu", &cfg.cosmos_star_corona);
-                    ImGui::Checkbox("Comet Tails##Menu", &cfg.cosmos_comet_tails);
-                    ImGui::Checkbox("Black Hole Lensing##Menu", &cfg.cosmos_blackhole_lensing);
-                    ImGui::Checkbox("Space Fabric Grid##Menu", &cfg.cosmos_space_fabric);
-                    if (cfg.cosmos_space_fabric) {
-                        ImGui::SliderFloat("Fabric Square Size##Menu", &cfg.cosmos_space_fabric_grid_size,
-                                           5.0f, 200.0f, "%.1f u", ImGuiSliderFlags_Logarithmic);
-                        ImGui::SliderFloat("Fabric Curvature##Menu", &cfg.cosmos_space_fabric_strength,
-                                           0.1f, 3.0f, "%.2f");
-                        if (ImGui::Button("Snap Fabric View Isometric##Menu")) {
-                            camera.azimuth = glm::radians(45.0f);
-                            camera.elevation = glm::radians(35.2643897f);
-                            camera.target_distance = camera.distance;
-                        }
+                    combo_tt("Background Preset##Menu", &cfg.cosmos_background_preset,
+                             BG_PRESETS, IM_ARRAYSIZE(BG_PRESETS));
+                    slider_float_tt("Background Strength##Menu", &cfg.background_starfield_intensity, 0.0f, 4.0f, "%.2f");
+                    checkbox_tt("Star Corona##Menu", &cfg.cosmos_star_corona);
+                    slider_float_tt("Corona Strength##Menu", &cfg.corona_strength_scale, 0.0f, 4.0f, "%.2f");
+                    checkbox_tt("Comet Tails##Menu", &cfg.cosmos_comet_tails);
+                    slider_float_tt("Comet Tail Strength##Menu", &cfg.comet_tail_strength_scale, 0.0f, 4.0f, "%.2f");
+                    checkbox_tt("Black Hole Lensing##Menu", &cfg.cosmos_blackhole_lensing);
+                    slider_float_tt("Lensing Strength##Menu", &cfg.blackhole_lensing_strength, 0.0f, 4.0f, "%.2f");
+                    checkbox_tt("Space Fabric Grid##Menu", &cfg.cosmos_space_fabric);
+                    slider_float_tt("Fabric Square Size##Menu", &cfg.cosmos_space_fabric_grid_size,
+                                    5.0f, 200.0f, "%.1f u", ImGuiSliderFlags_Logarithmic);
+                    slider_float_tt("Fabric Curvature##Menu", &cfg.cosmos_space_fabric_strength,
+                                    0.1f, 3.0f, "%.2f");
+                    if (button_tt("Snap Fabric View Isometric##Menu")) {
+                        camera.azimuth = glm::radians(45.0f);
+                        camera.elevation = glm::radians(35.2643897f);
+                        camera.target_distance = camera.distance;
                     }
-                    ImGui::SliderInt("Cosmos Quality##Menu", &cfg.cosmos_quality, 0, 3,
-                                     cfg.cosmos_quality == 0 ? "Low" :
-                                     (cfg.cosmos_quality == 1 ? "Balanced" :
-                                      (cfg.cosmos_quality == 2 ? "High" : "Ultra")));
+                    slider_int_tt("Cosmos Quality##Menu", &cfg.cosmos_quality, 0, 3,
+                                  cfg.cosmos_quality == 0 ? "Low" :
+                                  (cfg.cosmos_quality == 1 ? "Balanced" :
+                                   (cfg.cosmos_quality == 2 ? "High" : "Ultra")));
                 }
 
-                if (ImGui::CollapsingHeader("Time Control")) {
+                if (collapsing_header_tt("Time Control")) {
                     float exp_f = (float)cfg.time_exponent;
-                    if (ImGui::SliderFloat("Time Rate##Menu", &exp_f, -9.0f, 21.0f, ""))
+                    if (slider_float_tt("Time Rate##Menu", &exp_f, -9.0f, 21.0f, ""))
                         cfg.time_exponent = (double)exp_f;
-                    ImGui::Checkbox("Adaptive Time-Stepping##Menu", &cfg.adaptive_time_step);
-                    if (cfg.adaptive_time_step) {
-                        ImGui::SliderFloat("Adaptive Safety##Menu", &cfg.adaptive_step_safety, 0.01f, 1.0f, "%.2f");
-                        ImGui::SliderFloat("Adaptive Min dt##Menu", &cfg.adaptive_step_min,
-                                           1.0e-6f, 1.0f, "%.6f", ImGuiSliderFlags_Logarithmic);
-                        ImGui::SliderFloat("Adaptive Max dt##Menu", &cfg.adaptive_step_max,
-                                           0.01f, 1.0e7f, "%.2f", ImGuiSliderFlags_Logarithmic);
-                    }
+                    checkbox_tt("Adaptive Time-Stepping##Menu", &cfg.adaptive_time_step);
+                    slider_float_tt("Adaptive Safety##Menu", &cfg.adaptive_step_safety, 0.01f, 1.0f, "%.2f");
+                    slider_float_tt("Adaptive Min dt##Menu", &cfg.adaptive_step_min,
+                                    1.0e-6f, 1.0f, "%.6f", ImGuiSliderFlags_Logarithmic);
+                    slider_float_tt("Adaptive Max dt##Menu", &cfg.adaptive_step_max,
+                                    0.01f, 1.0e7f, "%.2f", ImGuiSliderFlags_Logarithmic);
+                    checkbox_tt("Adaptive Substepping##Menu", &cfg.adaptive_substepping);
+                    float substep_tol_log = std::log10(std::max(cfg.adaptive_substep_tolerance, 1.0e-6f));
+                    if (slider_float_tt("Adaptive Tolerance##Menu", &substep_tol_log, -6.0f, 3.0f, "10^%.2f"))
+                        cfg.adaptive_substep_tolerance = std::pow(10.0f, substep_tol_log);
+                    slider_int_tt("Adaptive Max Substeps##Menu", &cfg.adaptive_substep_max, 1, 256);
                     char rate_buf[64], nominal_rate_buf[64], time_buf[64];
                     double displayed_rate = paused ? 0.0 : displayed_time_rate_;
                     double nominal_rate = std::pow(10.0, cfg.time_exponent) * (reverse_time_ ? -1.0 : 1.0);
                     format_sim_time(std::abs(displayed_rate), rate_buf, sizeof(rate_buf));
                     format_sim_time(std::abs(nominal_rate), nominal_rate_buf, sizeof(nominal_rate_buf));
                     format_sim_time(cfg.sim_time_accumulated, time_buf, sizeof(time_buf));
-                    ImGui::Text("Rate: %s%s/s", displayed_rate < -1.0e-12 ? "-" : "", rate_buf);
+                    ImVec4 rate_color = adaptive_substeps_saturated_
+                        ? ImVec4(1.0f, 0.35f, 0.25f, 1.0f)
+                        : ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+                    ImGui::TextColored(rate_color, "Rate: %s%s/s", displayed_rate < -1.0e-12 ? "-" : "", rate_buf);
                     ImGui::Text("Nominal Rate: %s%s/s", nominal_rate < -1.0e-12 ? "-" : "", nominal_rate_buf);
                     ImGui::Text("Sim Time: %s", time_buf);
+                    if (cfg.adaptive_substepping) {
+                        ImGui::Text("Substeps Used: %d", adaptive_substeps_last_);
+                        show_bottom_bar_tooltip("Substeps Used");
+                        ImGui::Text("Required Substeps: %d", adaptive_substeps_required_);
+                        show_bottom_bar_tooltip("Required Substeps");
+                        if (adaptive_substeps_saturated_) {
+                            ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f),
+                                               "Accuracy limited by substep cap; sim is slowing down.");
+                        }
+                    }
                     draw_time_presets();
                 }
 
-                if (ImGui::CollapsingHeader("General Relativity")) {
-                    ImGui::Checkbox("GR Corrections##Menu", &cfg.gr_enabled);
-                    ImGui::Checkbox("Parallel Gravity##Menu", &cfg.parallel_gravity);
-                    if (cfg.gr_enabled) {
-                        ImGui::SliderFloat("Precession##Menu", &cfg.gr_precession_scale, 0.0f, 10.0f);
-                        ImGui::SliderFloat("Time Dilation##Menu", &cfg.gr_time_dilation, 0.0f, 5.0f);
-                        ImGui::SliderFloat("Frame Drag##Menu", &cfg.gr_frame_dragging, 0.0f, 5.0f);
-                        ImGui::SliderFloat("Speed of Light##Menu", &cfg.speed_of_light, 50.0f, 1000.0f);
-                    }
+                if (collapsing_header_tt("General Relativity")) {
+                    checkbox_tt("GR Corrections##Menu", &cfg.gr_enabled);
+                    checkbox_tt("Parallel Gravity##Menu", &cfg.parallel_gravity);
+                    slider_float_tt("Precession##Menu", &cfg.gr_precession_scale, 0.0f, 10.0f, "%.2f");
+                    slider_float_tt("Time Dilation##Menu", &cfg.gr_time_dilation, 0.0f, 5.0f, "%.2f");
+                    slider_float_tt("Frame Drag##Menu", &cfg.gr_frame_dragging, 0.0f, 5.0f, "%.2f");
+                    slider_float_tt("Speed of Light##Menu", &cfg.speed_of_light, 50.0f, 1000.0f, "%.1f");
                 }
 
                 ImGui::TreePop();
             }
-            if (ImGui::TreeNodeEx("Performance")) {
-                if (ImGui::TreeNodeEx("Dynamic Budget")) {
-                    ImGui::Checkbox("Object Budget##Perf", &cfg.dynamic_budget_enabled);
+            if (tree_node_tt("Performance")) {
+                if (tree_node_tt("Dynamic Budget")) {
+                    checkbox_tt("Object Budget##Perf", &cfg.dynamic_budget_enabled);
                     ImGui::Text("Current FPS: %.1f", smoothed_fps_);
-                    ImGui::SliderFloat("Target FPS##Perf", &cfg.dynamic_target_fps, 20.0f, 240.0f, "%.0f");
-                    ImGui::SliderInt("Max Fragments##Perf", &cfg.dynamic_max_fragments, 0, 3000);
-                    ImGui::SliderInt("Max Non-Attracting##Perf", &cfg.dynamic_max_non_attracting, 0, 10000);
+                    show_hover_tooltip("Smoothed render performance used by the dynamic budgeter.");
+                    slider_float_tt("Target FPS##Perf", &cfg.dynamic_target_fps, 20.0f, 240.0f, "%.0f");
+                    slider_int_tt("Max Fragments##Perf", &cfg.dynamic_max_fragments, 0, 3000);
+                    slider_int_tt("Max Non-Attracting##Perf", &cfg.dynamic_max_non_attracting, 0, 10000);
                     float explosion_density_pct = cfg.dynamic_explosion_density * 100.0f;
-                    if (ImGui::SliderFloat("Explosion Density##Perf", &explosion_density_pct, 1.0f, 100.0f, "%.0f%%"))
+                    if (slider_float_tt("Explosion Density##Perf", &explosion_density_pct, 1.0f, 100.0f, "%.0f%%"))
                         cfg.dynamic_explosion_density = std::clamp(explosion_density_pct / 100.0f, 0.01f, 1.0f);
                     float reduction_pct = cfg.dynamic_reduction_percent * 100.0f;
-                    if (ImGui::SliderFloat("Reduction Percentage##Perf", &reduction_pct, 1.0f, 100.0f, "%.0f%%"))
+                    if (slider_float_tt("Reduction Percentage##Perf", &reduction_pct, 1.0f, 100.0f, "%.0f%%"))
                         cfg.dynamic_reduction_percent = std::clamp(reduction_pct / 100.0f, 0.01f, 1.0f);
                     int dust_mode = cfg.dust_debug_non_attracting ? 1 : 0;
                     const char* dust_modes[] = {"Standard", "Non-attracting"};
-                    if (ImGui::Combo("Dust Mode##Perf", &dust_mode, dust_modes, IM_ARRAYSIZE(dust_modes))) {
+                    if (combo_tt("Dust Mode##Perf", &dust_mode, dust_modes, IM_ARRAYSIZE(dust_modes))) {
                         cfg.dust_debug_non_attracting = (dust_mode == 1);
                         apply_dust_debug_mode();
                     }
@@ -3556,16 +3916,19 @@ void CosmosApp::draw_bottom_bar() {
                     }
                     ImGui::TreePop();
                 }
-                if (ImGui::TreeNodeEx("Diagnostics")) {
-                    ImGui::Checkbox("Enable Runtime Diagnostics##PerfDiag", &diagnostics_enabled_);
-                    ImGui::Checkbox("Pause on Invalid State##PerfDiag", &diagnostics_pause_on_invalid_);
+                if (tree_node_tt("Diagnostics")) {
+                    checkbox_tt("Enable Runtime Diagnostics##PerfDiag", &diagnostics_enabled_);
+                    checkbox_tt("Pause on Invalid State##PerfDiag", &diagnostics_pause_on_invalid_);
                     ImGui::Text("Step Counter: %llu", (unsigned long long)diagnostics_step_counter_);
+                    show_hover_tooltip("Monotonic counter of physics steps processed since launch.");
                     ImGui::TextWrapped("Logs: cosmos_debug.log and /tmp/cosmos_debug.log");
+                    show_hover_tooltip("Primary runtime diagnostics log files.");
                     ImGui::TextWrapped("Crash dump: /tmp/cosmos_crash.log");
-                    if (ImGui::Button("Validate Now##PerfDiag", ImVec2(-1, 0))) {
+                    show_hover_tooltip("Crash-handler output path used after fatal signals.");
+                    if (button_tt("Validate Now##PerfDiag", ImVec2(-1, 0))) {
                         validate_body_state("ui/manual_validate", true);
                     }
-                    if (ImGui::Button("Dump Snapshot##PerfDiag", ImVec2(-1, 0))) {
+                    if (button_tt("Dump Snapshot##PerfDiag", ImVec2(-1, 0))) {
                         int attracting = 0;
                         int non_attracting = 0;
                         for (const auto& b : state.bodies) {
@@ -3580,9 +3943,9 @@ void CosmosApp::draw_bottom_bar() {
                 }
                 ImGui::TreePop();
             }
-            if (ImGui::TreeNodeEx("Navigation")) {
-                if (ImGui::MenuItem("Return to Launcher")) { request_launcher = true; request_quit = true; }
-                if (ImGui::MenuItem("Quit")) { request_quit = true; }
+            if (tree_node_tt("Navigation")) {
+                if (menu_item_tt("Return to Launcher")) { request_launcher = true; request_quit = true; }
+                if (menu_item_tt("Quit")) { request_quit = true; }
                 ImGui::TreePop();
             }
         }

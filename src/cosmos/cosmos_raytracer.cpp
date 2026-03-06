@@ -401,8 +401,8 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     bool effective_uniform = cfg.uniform_lighting || (cfg.star_lighting && !has_stars);
 
     cam.lighting_params = glm::vec4(
-        (cfg.star_lighting && has_stars) ? 1.0f : 0.0f,
-        effective_uniform ? 1.0f : 0.0f,
+        (cfg.star_lighting && has_stars) ? std::max(cfg.star_light_strength, 0.0f) : 0.0f,
+        effective_uniform ? std::max(cfg.uniform_light_strength, 0.0f) : 0.0f,
         cfg.ambient_strength,
         cfg.fast_star_lighting ? 1.0f : 0.0f);
     cam.quality_params = glm::vec4(
@@ -411,10 +411,10 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
         (float)std::clamp(cfg.cosmos_background_preset, 0, 11),
         (float)cfg.sim_time_accumulated);
     cam.render_flags = glm::vec4(
-        cfg.cosmos_background_starfield ? 1.0f : 0.0f,
-        cfg.cosmos_star_corona ? 1.0f : 0.0f,
-        cfg.cosmos_comet_tails ? 1.0f : 0.0f,
-        cfg.cosmos_blackhole_lensing ? 1.0f : 0.0f);
+        cfg.cosmos_background_starfield ? std::max(cfg.background_starfield_intensity, 0.0f) : 0.0f,
+        cfg.cosmos_star_corona ? std::max(cfg.corona_strength_scale, 0.0f) : 0.0f,
+        cfg.cosmos_comet_tails ? std::max(cfg.comet_tail_strength_scale, 0.0f) : 0.0f,
+        cfg.cosmos_blackhole_lensing ? std::max(cfg.blackhole_lensing_strength, 0.0f) : 0.0f);
     cam.fabric_params = glm::vec4(
         cfg.cosmos_space_fabric ? 1.0f : 0.0f,
         std::max(cfg.cosmos_space_fabric_grid_size, 1.0f),
@@ -448,7 +448,8 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     const size_t hw_threads = std::thread::hardware_concurrency() > 0
         ? static_cast<size_t>(std::thread::hardware_concurrency())
         : 1;
-    const bool use_parallel_pack = cfg.parallel_gravity && hw_threads > 1 && n >= 256;
+    const bool use_parallel_pack = cfg.parallel_gravity && hw_threads > 1 &&
+        n >= std::clamp(cfg.parallel_min_batch, 32, 100000);
     auto pack_range = [&](int begin, int end) {
         for (int i = begin; i < end; ++i) {
             const auto& b = state.bodies[i];
