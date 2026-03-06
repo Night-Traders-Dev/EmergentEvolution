@@ -25,22 +25,29 @@ covalent bonding, chirality detection, hadronization, carrier exchange, and more
 **100,000 particles** in real time with O(n) spatial-grid neighbor queries and OpenMP parallelization.
 
 **Cosmic Sandbox** &mdash;
-3D celestial mechanics simulator with GPU-raytraced sphere rendering. 22 celestial body types
+3D celestial mechanics simulator with GPU-raytraced sphere rendering. 23 celestial body types
 including 11 star spectral classes (O through Y plus Wolf-Rayet), 4 black hole subtypes
 (stellar, intermediate, supermassive, primordial), and procedurally generated planets with
 terrain, oceans, clouds, vegetation, atmospheric rim lighting, and city lights on populated
-worlds. Bodies interact via Newtonian gravity with real-time orbital trails. Procedural GPU
+worlds. Bodies interact via N-body gravity (CPU or GPU Barnes-Hut compute shader) with
+optional general relativity corrections (perihelion precession, gravitational time dilation,
+frame dragging). 6 numerical integrators from Euler through fourth-order PEFRL. Nebulae
+spawn as gravitationally collapsing particle clouds of 40&ndash;300 dust bodies. Procedural GPU
 textures are driven by physical properties &mdash; changing a planet&rsquo;s temperature melts ice
-into oceans, and gas giants display Jupiter-like banding with great spots. A logarithmic
-timestep system scales from nanoseconds/s to trillions of years/s. Orbit camera with WASD
-panning, mouse drag, scroll zoom, and auto-hiding bottom taskbar.
+into oceans, and gas giants display Jupiter-like banding with great spots. Stellar evolution
+through 9 stages with supernova events, Roche limit tidal disruption, Hawking radiation,
+tidal locking, and collision physics (merging, fragmentation, SPH). A logarithmic timestep
+system spans 30 orders of magnitude from nanoseconds/s to trillions of years/s. Orbit
+camera with WASD panning, mouse drag, scroll zoom, and auto-hiding bottom taskbar.
 
 **Biochemical Simulator** &mdash;
-3D cellular biology sandbox with GPU-raytraced rendering and 8 entity types: cells, bacteria,
-viruses, nutrients, toxins, antibodies, red blood cells, and white blood cells. Features
-metabolism, cell division with mutations, viral infection, immune response, AI-driven entity
-movement (seek/flee/spacing behaviors), and fluid dynamics. Entities interact through
-proximity-based rules with configurable parameters. WASD camera panning and auto-hiding
+3D cellular biology sandbox with GPU SDF-raytraced rendering and 8 entity types (cells,
+bacteria, viruses, nutrients, toxins, antibodies, red blood cells, white blood cells), each
+with morphological variants and unique SDF shapes showing organelle interiors. Features
+metabolism, cell division with heritable gene mutations (5 behavioral traits), viral
+infection, immune response, AI-driven entity movement (seek/flee/spacing behaviors), and
+fluid dynamics. 4 environment presets (Human Lung, Pond Water, Petri Dish, Cat Brain) with
+distinct temperature, pH, oxygen, and immune conditions. WASD camera panning and auto-hiding
 bottom taskbar with panel management.
 
 ---

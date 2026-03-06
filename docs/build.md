@@ -44,8 +44,10 @@ The project produces five executables and one static library:
 | `particle_biochem` | 2D cellular biology sandbox |
 
 All application targets link against `pp_common`. Shader compilation (`physics.comp`,
-`fullscreen.vert/frag`, `overlay.vert/frag`, `cosmos_rt.vert/frag`) is handled by the
-`shaders` custom target, which all binaries depend on.
+`fullscreen.vert/frag`, `overlay.vert/frag`, `cosmos_rt.vert/frag`, `cosmos_bh.comp`,
+`cosmos_nebula.comp`, `biochem_rt.vert/frag`) is handled by the `shaders` custom target,
+which all binaries depend on. Compiled SPIR-V pipelines are cached to `pipeline_cache.bin`
+on first run, reducing subsequent startup times.
 
 ## Run
 

@@ -4,7 +4,7 @@ The project builds five executables from a shared Vulkan framework:
 
 | Target | Description |
 | --- | --- |
-| `pp_launcher` | Expansion picker — animated menu to launch any simulation |
+| `pp_launcher` | Expansion picker &mdash; animated menu to launch any simulation |
 | `particle_physics` | Full particle physics sandbox (282 types, compute shaders) |
 | `particle_cosmos` | 3D celestial mechanics with GPU raytraced rendering |
 | `particle_biochem` | 2D cellular biology sandbox |
@@ -13,8 +13,9 @@ The project builds five executables from a shared Vulkan framework:
 ```text
 EmergentEvolution/
 ├── src/common/                        # pp_common static library
-│   ├── vulkan_context.h/.cpp          # Vulkan instance, device, swapchain, buffers
+│   ├── vulkan_context.h/.cpp          # Vulkan instance, device, swapchain, buffers, pipeline cache
 │   ├── simple_renderer.h/.cpp         # Fullscreen-quad pipeline, ImGui integration (shared)
+│   ├── orbit_camera.h                 # Orbit camera shared by cosmos and biochem
 │   ├── audio.h/.cpp                   # Background music + SFX via miniaudio
 │   ├── error_dialog.h/.cpp            # Native OS error dialogs (MessageBox / zenity)
 │   ├── http_client.h/.cpp             # HTTP client for repository browser
@@ -69,13 +70,22 @@ EmergentEvolution/
 │   └── main.cpp                       # Physics entry point
 ├── src/cosmos/                        # Cosmic Sandbox application
 │   ├── cosmos_app.h/.cpp              # CosmosApp: init, tick, UI, bottom bar, spawn, timestep
-│   ├── cosmos_types.h                 # 22 celestial types, star/BH subtypes, PlanetProperties
+│   ├── cosmos_app_internal.h          # Internal helpers and forward declarations
+│   ├── cosmos_types.h                 # 23 celestial types, star/BH subtypes, PlanetProperties
 │   ├── cosmos_raytracer.h/.cpp        # GPU sphere raytracer (64-byte SphereGPU w/ planet data)
+│   ├── cosmos_gravity_compute.h/.cpp  # GPU Barnes-Hut N-body gravity (Vulkan compute)
+│   ├── cosmos_nebula_compute.h/.cpp   # GPU nebula particle advection (Vulkan compute)
+│   ├── core/
+│   │   └── cosmos_body_model.cpp      # Body initialization and property generation
+│   ├── ui/
+│   │   └── cosmos_app_ui.cpp          # UI panels, settings, inspector, debug window
+│   ├── io/
+│   │   └── cosmos_app_io.cpp          # Save/load (.cssim v16), body export/import
 │   └── main.cpp                       # Cosmos entry point
 ├── src/biochem/                       # Biochemical Simulator application
 │   ├── biochem_app.h/.cpp             # BiochemApp: init, tick, UI, bottom bar, AI movement
-│   ├── biochem_types.h                # BiochemConfig, BiochemState, BioEntity types
-│   ├── biochem_raytracer.h/.cpp       # GPU sphere raytracer for bio entities
+│   ├── biochem_types.h                # 8 entity types, morphologies, 4 environment presets, genes
+│   ├── biochem_raytracer.h/.cpp       # GPU SDF raytracer for bio entities
 │   └── main.cpp                       # Biochem entry point
 ├── src/third_party/                   # Vendored headers
 │   ├── miniaudio.h                    # Single-header audio (MP3 decode + playback)
@@ -87,7 +97,9 @@ EmergentEvolution/
 │   ├── fullscreen.vert/.frag          # Physics render pipeline
 │   ├── overlay.vert/.frag             # Physics overlay pipeline
 │   ├── cosmos_rt.vert/.frag           # Cosmos GPU sphere raytracer (procedural planet textures)
-│   ├── biochem_rt.vert/.frag         # Biochem GPU sphere raytracer
+│   ├── cosmos_bh.comp                 # Cosmos GPU Barnes-Hut gravity compute
+│   ├── cosmos_nebula.comp             # Cosmos GPU nebula particle compute
+│   ├── biochem_rt.vert/.frag         # Biochem GPU SDF raytracer (organelle interiors)
 ├── assets/                            # Icons, music, Windows resources
 │   ├── particles/                     # 67 custom particle texture PNGs (128x128 RGBA)
 │   └── sfx/                           # 10 procedural WAV sound effects
@@ -105,7 +117,7 @@ EmergentEvolution/
 ```
 
 <details>
-<summary><b>Compute shader bindings</b></summary>
+<summary><b>Compute shader bindings (physics.comp)</b></summary>
 
 | Binding | Buffer | R/W |
 |---|---|---|
@@ -133,3 +145,7 @@ Particle buffers use DEVICE_LOCAL memory on discrete GPUs with staging buffers f
 readback. A/B buffers ping-pong each tick.
 
 </details>
+
+## Pipeline Cache
+
+All Vulkan pipeline creation calls use a persistent `VkPipelineCache` stored in the `VulkanContext`. The cache is loaded from `pipeline_cache.bin` on startup and saved on shutdown, reducing subsequent launch times by avoiding redundant shader compilation.
