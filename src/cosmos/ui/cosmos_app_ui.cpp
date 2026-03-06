@@ -971,6 +971,8 @@ void CosmosApp::draw_pause_menu() {
             cfg.body_count = 0;
             selected_body = -1;
             sim_time_ = 0.0f;
+            cfg.sim_time_accumulated = 0.0;
+            displayed_time_rate_ = 0.0;
             show_pause_menu = false;
             paused = false;
         }
@@ -3151,6 +3153,7 @@ void CosmosApp::draw_bottom_bar() {
                     state.clear(); cfg.body_count = 0;
                     selected_body = -1; sim_time_ = 0.0f;
                     cfg.sim_time_accumulated = 0.0;
+                    displayed_time_rate_ = 0.0;
                     show_menu_popup_ = false;
                 }
                 ImGui::Separator();

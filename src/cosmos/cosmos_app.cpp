@@ -340,6 +340,7 @@ void CosmosApp::reset_simulation() {
     inspector_visible_ = false;
     sim_time_ = 0.0f;
     cfg.sim_time_accumulated = 0.0;
+    displayed_time_rate_ = 0.0;
     camera = OrbitCamera{};
     camera.distance = 600.0f;
     camera.target_distance = 600.0f;
