@@ -20,6 +20,7 @@ public:
     SimpleRenderer   renderer;
     BiochemConfig    cfg;
     BiochemState     state;
+    BiochemEnvironment environment_;
     OrbitCamera      camera;
     bool             paused = false;
 
@@ -35,6 +36,9 @@ public:
     double last_mouse_x = 0, last_mouse_y = 0;
 
 private:
+    void apply_environment_preset(BioEnvironmentType env, bool reseed_population);
+    void regenerate_environment(bool advance_seed);
+    void reset_camera_pose();
     void render_ui();
     void render_overlay();
     void step_simulation(float dt);
@@ -69,6 +73,7 @@ private:
     // Spawn menu
     bool spawn_menu_visible_ = true;
     int  spawn_bio_type_ = BIO_CELL;
+    int  spawn_variant_ = BIO_CELL_ANIMAL;
     float spawn_energy_ = 100.0f;
 
     // 3D rendering

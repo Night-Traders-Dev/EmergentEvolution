@@ -852,13 +852,22 @@ vec3 atmosphere_scatter(vec3 normal, vec3 view_dir, vec3 light_dir, vec3 base_co
                         float pressure, float haze_density, float rayleigh_strength, float mie_strength,
                         float temperature) {
     if (pressure < 0.01) return vec3(0.0);
-    float fresnel = pow(clamp(1.0 - max(dot(normal, -view_dir), 0.0), 0.0, 1.0), 2.5);
+    float ndv = max(dot(normal, -view_dir), 0.0);
+    float fresnel = pow(clamp(1.0 - ndv, 0.0, 1.0), 2.5);
     float forward = phase_hg(clamp(0.25 + mie_strength * 0.45, 0.0, 0.85), dot(-view_dir, light_dir));
     vec3 ray_col = mix(vec3(0.55, 0.70, 1.0), vec3(0.90, 0.55, 0.35), clamp((temperature - 240.0) / 600.0, 0.0, 1.0));
     ray_col *= 0.25 + rayleigh_strength * 0.9;
     vec3 mie_col = mix(vec3(1.0), base_col * 1.1, 0.35);
     float density = clamp(pressure * 0.05 + haze_density * 0.9, 0.0, 1.2);
-    return ray_col * fresnel * density + mie_col * forward * mie_strength * density * 0.8;
+    vec3 scatter = ray_col * fresnel * density + mie_col * forward * mie_strength * density * 0.8;
+    // Atmospheric rim glow — thick atmospheres produce a visible limb glow
+    float rim = pow(clamp(1.0 - ndv, 0.0, 1.0), 3.5);
+    float rim_strength = clamp(pressure * 0.12, 0.0, 0.6) * density;
+    float ndl = max(dot(normal, light_dir), 0.0);
+    float backscatter = 0.25 + 0.75 * ndl; // brighter on lit side
+    vec3 rim_col = ray_col * 1.4 + vec3(0.08);
+    scatter += rim_col * rim * rim_strength * backscatter;
+    return scatter;
 }
 
 vec3 magnetic_axis(float angle, float seed) {
@@ -1664,29 +1673,30 @@ mat3 nebula_basis(float seed) {
 vec3 nebula_shape_space(vec3 local, float seed, float expansion) {
     mat3 basis = nebula_basis(seed);
     vec3 q = transpose(basis) * local;
+    // Strong axis asymmetry — nebulae are elongated, not spherical.
+    // One axis is 2-3x longer than the others (filamentary stretching).
     vec3 axis = vec3(
-        0.64 + hash11(seed * 0.71) * (1.18 + expansion * 0.20),
-        0.52 + hash11(seed * 0.83) * (0.96 + expansion * 0.16),
-        0.68 + hash11(seed * 0.97) * (1.26 + expansion * 0.24));
-    q /= max(axis, vec3(0.15));
-    q.x += 0.20 * sin(q.z * 2.7 + seed * 0.013 + screen_info.w * 0.040);
-    q.y += 0.16 * sin(q.x * 2.3 - seed * 0.017 + screen_info.w * 0.055);
-    q.z += 0.14 * sin(q.y * 2.5 + seed * 0.021 - screen_info.w * 0.035);
+        0.40 + hash11(seed * 0.71) * (1.80 + expansion * 0.30),
+        0.30 + hash11(seed * 0.83) * (0.65 + expansion * 0.12),
+        0.45 + hash11(seed * 0.97) * (1.50 + expansion * 0.25));
+    q /= max(axis, vec3(0.12));
+    // Stronger sinusoidal warping for curving, tendril-like shapes.
+    q.x += 0.38 * sin(q.z * 2.1 + seed * 0.013 + screen_info.w * 0.030);
+    q.y += 0.32 * sin(q.x * 1.8 - seed * 0.017 + screen_info.w * 0.040);
+    q.z += 0.28 * sin(q.y * 2.3 + seed * 0.021 - screen_info.w * 0.025);
+    // Additional domain warp for organic irregularity.
+    q += vec3(
+        perlin3D(q * 1.2 + vec3(seed * 0.031)) * 0.35,
+        perlin3D(q * 1.4 + vec3(seed * 0.047)) * 0.30,
+        perlin3D(q * 1.1 + vec3(seed * 0.059)) * 0.35);
     return q;
 }
 
 float nebula_boundary_falloff(vec3 local_raw, vec3 local_shape, float seed, float expansion) {
-    vec3 dir = safe_normalize(local_shape, vec3(0.0, 1.0, 0.0));
-    vec3 seed_vec = vec3(seed * 0.019, seed * 0.013, seed * 0.017);
-    float coarse = 0.5 + 0.5 * perlin3D(dir * 3.1 + seed_vec);
-    float anis = 0.5 + 0.5 * perlin3D(dir.yzx * 4.9 + seed_vec.zxy + vec3(screen_info.w * 0.011));
-    float shell = 0.5 + 0.5 * perlin3D(local_raw * 2.1 + dir * 2.5 + seed_vec * 1.7 +
-                                        vec3(screen_info.w * 0.024));
-    float edge_radius = (0.62 + coarse * 0.58 + anis * 0.34) * (1.0 + expansion * 0.22);
-    float radius = length(local_shape);
-    float core = 1.0 - smoothstep(edge_radius * 0.78, edge_radius * 1.02, radius);
-    float veil = 1.0 - smoothstep(edge_radius * 0.98, edge_radius * 1.55, radius);
-    return clamp((core * 0.84 + veil * 0.22) * mix(0.80, 1.18, shell), 0.0, 1.0);
+    // No spherical falloff — return 1.0 always.
+    // The cloud shape is defined entirely by the multiplicative noise in
+    // nebula_density_sample. This function is kept for API compatibility.
+    return 1.0;
 }
 
 void nebula_palette(int palette, out vec3 hydro_a, out vec3 hydro_b, out vec3 dust_a, out vec3 dust_b, out vec3 cold) {
@@ -1758,6 +1768,26 @@ vec3 nebula_velocity_field(vec3 p, float seed, float flow, vec3 external_flow, f
     return curlish * mag + external_flow + voxel_vel * 0.35;
 }
 
+// Logistic transfer function — pushes [0,2] values toward extremes.
+float logistic_transfer_frag(float x, float k) {
+    return 2.0 / (1.0 + exp(-k * (x - 1.0)));
+}
+
+// Multiplicative Perlin noise for the fragment shader.
+// Multiplying octaves creates genuine voids (any octave near 0 => product near 0).
+float multiplicative_perlin_frag(vec3 p, int octaves, float k) {
+    float product = 1.0;
+    float freq = 1.0;
+    for (int i = 0; i < octaves; ++i) {
+        float n = perlin3D(p * freq);           // [-1, 1]
+        float shifted = n + 1.0;                // [0, 2]
+        float filtered = logistic_transfer_frag(shifted, k);
+        product *= filtered;
+        freq *= 2.03;
+    }
+    return product;
+}
+
 float nebula_density_sample(vec3 local, vec3 world_pos, float seed, float dust_frac, float metal_frac, float pressure,
                             float haze, float cloud_detail, float collapse, float flow,
                             vec3 external_flow, float turbulence) {
@@ -1769,18 +1799,7 @@ float nebula_density_sample(vec3 local, vec3 world_pos, float seed, float dust_f
     vec3 grav_drive = grav_acc * (grav_advect + collapse * grav_collapse);
     float adv_dt = 0.035 + cloud_detail * 0.022;
     vec3 advected_local = local - (vel + grav_drive) * adv_dt;
-    float envelope = 0.0;
-    for (int c = 0; c < 6; ++c) {
-        float cf = float(c);
-        vec3 center = (hash31(seed * (0.017 + cf * 0.011) + cf * 23.7) * 2.0 - 1.0) *
-                      (0.85 + cf * 0.20);
-        float rad = 0.46 + hash11(seed * 0.091 + cf * 4.37) * 1.20;
-        vec3 d = advected_local - center;
-        envelope += exp(-dot(d, d) / max(rad * rad, 1.0e-4));
-    }
-    envelope /= 6.0;
-    float halo = exp(-max(length(advected_local) - 2.6, 0.0) * 1.7);
-    envelope = clamp(envelope * 0.92 + halo * 0.28, 0.0, 1.6);
+
     vec3 seed_offset = hash31(seed) * 120.0;
     vec3 drift = vec3(screen_info.w * (0.010 + flow * 0.006),
                       screen_info.w * 0.006,
@@ -1788,22 +1807,47 @@ float nebula_density_sample(vec3 local, vec3 world_pos, float seed, float dust_f
     vec3 np = advected_local * (2.0 + cloud_detail * 2.5) + seed_offset * 0.04 + drift;
     vec3 wp = domain_warp(np, 0.22 + cloud_detail * 0.25);
 
-    // Multi-layer density blending with independent advection.
+    // Multiplicative Perlin noise — creates wispy filaments with genuine voids.
+    // Each octave is shifted to [0,2], passed through logistic transfer, then
+    // multiplied together. Any octave near 0 => product near 0 = void.
+    // k controls contrast: higher = sharper filaments, more empty space.
+    // Use low k (1.5-2.5) for broad structure, only 3 octaves per layer
+    // to avoid over-sparsification.
+    float k = 1.6 + collapse * 0.8 + cloud_detail * 0.4;
     vec3 layer_a = wp + vec3(0.11, -0.06, 0.08) * screen_info.w;
     vec3 layer_b = wp + vec3(-0.08, 0.09, -0.05) * screen_info.w;
-    float d_a = 0.5 + 0.5 * perlin3D(layer_a * 1.05);
-    float d_b = 0.5 + 0.5 * perlin3D(layer_b * 2.15 + vec3(4.1, 0.7, 2.3));
-    float filaments = ridged_fbm(layer_a * 1.85 + vec3(5.0, 1.5, 2.0), 4);
-    float wisps = billow_fbm(layer_b * 2.40 + vec3(-2.0, 3.0, 4.0), 4);
-    float additive = clamp(d_a * 0.70 + d_b * 0.55 + filaments * 0.30 + wisps * 0.20, 0.0, 1.0);
-    float condensed = 1.0 - smooth_min(1.0 - d_a, 1.0 - d_b, 0.30);
-    float condense_exp = mix(1.05, 3.2, clamp(collapse * 0.78 + envelope * 0.22, 0.0, 1.0));
-    vec4 voxel = sample_nebula_voxel(advected_local * (1.0 + cloud_detail * 0.35), seed);
-    float clump = pow(clamp(additive * 0.62 + condensed * 0.58, 0.0, 1.0), condense_exp);
-    clump *= (0.18 + voxel.x * 1.10);
 
-    float density = envelope * clump *
-        (0.18 + haze * 0.34 + pressure * 0.0013) *
+    // Layer A: 3 octaves at low frequency — defines large-scale cloud vs void.
+    float mp_a = multiplicative_perlin_frag(layer_a * 0.6, 3, k);
+    // Layer B: 3 octaves at medium frequency — adds detail and wispy tendrils.
+    float mp_b = multiplicative_perlin_frag(layer_b * 1.4 + vec3(4.1, 0.7, 2.3), 3, k * 1.1);
+
+    // Ridged noise for prominent filament ridges (additive, not multiplicative).
+    float filaments = ridged_fbm(layer_a * 1.2 + vec3(5.0, 1.5, 2.0), 3);
+
+    // Combine: multiply the two mult-noise layers for void creation,
+    // then add filament ridges to create bright ridgelines.
+    float combined = mp_a * mp_b;
+    // Normalize: each layer has E[1], so E[combined]=1.
+    // Add filament detail — ridges brighten the dense areas.
+    combined = combined + combined * filaments * 0.4;
+    // Gentle power remap to control density contrast.
+    float remap_exp = mix(0.45, 0.70, clamp(collapse * 0.6, 0.0, 1.0));
+    float clump = pow(max(combined, 0.0), remap_exp);
+    // Threshold: values below this become void, above become cloud.
+    // The smoothstep range controls how sharp the cloud-void boundary is.
+    clump = smoothstep(0.12, 1.2, clump);
+
+    // Incorporate voxel field from compute shader for temporal coherence.
+    vec4 voxel = sample_nebula_voxel(advected_local * (1.0 + cloud_detail * 0.35), seed);
+    clump *= (0.30 + voxel.x * 0.85);
+
+    // Only clip at the very far AABB boundary — no spherical envelope.
+    float radius = length(advected_local);
+    float far_cutoff = 1.0 - smoothstep(3.5, 5.0, radius);
+
+    float density = clump * far_cutoff *
+        (0.22 + haze * 0.34 + pressure * 0.0013) *
         (0.55 + collapse * 0.35);
     density *= (0.44 + dust_frac * 0.40 + metal_frac * 0.22);
     float grav_compress = clamp(length(grav_acc) * (0.06 + collapse * 0.10), 0.0, 2.2);
@@ -1815,10 +1859,10 @@ vec3 raymarch_nebula(vec3 ro, vec3 rd, Sphere hit, int body_index, vec3 light_di
                      out float transmittance_out) {
     float t_enter_local, t_exit_local;
     float expansion = max(hit.activity_params.w, 1.0);
-    float march_radius = hit.pos_radius.w * (1.65 + expansion * 0.65);
+    float march_radius = hit.pos_radius.w * (2.2 + expansion * 0.85);
     vec3 ro_local = (ro - hit.pos_radius.xyz) / max(march_radius, 1.0e-5);
     vec3 rd_local = rd / max(march_radius, 1.0e-5);
-    vec3 bounds = vec3(2.0 + expansion * 0.55);
+    vec3 bounds = vec3(2.8 + expansion * 0.70);
     if (!intersect_aabb(ro_local, rd_local, -bounds, bounds, t_enter_local, t_exit_local)) {
         transmittance_out = 1.0;
         return vec3(0.0);
@@ -1957,30 +2001,19 @@ vec3 render_nebula_particles(vec3 ro, vec3 rd, Sphere hit, int body_index, vec3 
         vec3 p_local = vec3(h0 * 2.0 - 1.0, h1 * 2.0 - 1.0, h2 * 2.0 - 1.0) *
                        (1.35 + expansion * 0.70);
 
-        // Multi-cluster envelope with elongated filamentary structure (non-spherical)
-        float envelope = 0.0;
-        for (int c = 0; c < 6; ++c) {
-            float cf = float(c);
-            vec3 center = (hash31(seed * (0.011 + cf * 0.007) + cf * 19.37) * 2.0 - 1.0) *
-                          (1.45 + expansion * 0.85);
-
-            // Create ellipsoidal clusters with strong elongation for filaments
-            vec3 stretch_axis = normalize(hash31(seed * 0.317 + cf * 11.3) * 2.0 - 1.0);
-            vec3 delta = p_local - center;
-            float along_axis = dot(delta, stretch_axis);
-            vec3 perpendicular = delta - stretch_axis * along_axis;
-
-            // Elongated: wide along main axis, narrow perpendicular (creates filaments)
-            float major_rad = 0.65 + hash11(seed * 0.213 + cf * 5.71) * 0.95;  // Long axis
-            float minor_rad = 0.16 + hash11(seed * 0.419 + cf * 7.93) * 0.22;  // Thin cross-section
-
-            float ellipse_dist = (along_axis * along_axis) / max(major_rad * major_rad, 0.01) +
-                                  dot(perpendicular, perpendicular) / max(minor_rad * minor_rad, 0.01);
-
-            envelope += exp(-ellipse_dist * 1.1);
-        }
-        envelope /= 6.0;
-        envelope += sample_nebula_voxel(p_local * 0.75, seed).x * 0.95;
+        // Multiplicative noise envelope — creates wispy, filamentary structure.
+        // Low k, few octaves = broad structure with genuine voids.
+        float k_env = 1.5 + collapse * 0.6;
+        float mp_env = multiplicative_perlin_frag(p_local * 0.7 + vec3(seed * 0.013), 3, k_env);
+        float mp_env2 = multiplicative_perlin_frag(p_local * 1.5 + vec3(seed * 0.021, fi * 0.03, 0.0), 3, k_env * 1.1);
+        float envelope = mp_env * mp_env2;
+        envelope = pow(max(envelope, 0.0), 0.45);
+        envelope = smoothstep(0.10, 1.1, envelope);
+        // Blend with voxel field for temporal coherence.
+        envelope *= (0.30 + sample_nebula_voxel(p_local * 0.75, seed).x * 0.95);
+        // Only clip at very far distance — no spherical shape.
+        float r = length(p_local) / (1.35 + expansion * 0.70);
+        envelope *= 1.0 - smoothstep(1.6, 2.5, r);
         if (envelope < 0.04) continue;
 
         vec3 swirl = nebula_velocity_field(p_local, seed + fi * 0.11, flow, flow_bias, nd.flow.w);
@@ -2142,13 +2175,61 @@ bool compute_primary_light(vec3 hit_pos, int body_count, int skip_idx,
     return primary_idx >= 0;
 }
 
-bool in_shadow(vec3 origin, vec3 light_dir, float light_dist, int body_count, int self_idx, int light_idx) {
+float shadow_factor(vec3 origin, vec3 light_dir, float light_dist, int body_count, int self_idx, int light_idx,
+                     float light_angular_radius) {
+    float factor = 1.0;
     for (int j = 0; j < body_count && j < MAX_TRACE_BODIES; j++) {
         if (j == self_idx || j == light_idx) continue;
-        float st = intersect_sphere(origin, light_dir, spheres[j].pos_radius.xyz, spheres[j].pos_radius.w);
-        if (st > 0.0 && st < light_dist) return true;
+        vec3 to_occluder = spheres[j].pos_radius.xyz - origin;
+        float proj = dot(to_occluder, light_dir);
+        if (proj <= 0.0 || proj > light_dist) continue;
+        vec3 closest = origin + light_dir * proj;
+        float sep = length(closest - spheres[j].pos_radius.xyz);
+        float occluder_r = spheres[j].pos_radius.w;
+        if (sep < occluder_r) return 0.0; // full umbra
+        // penumbra: angular overlap between light disk and occluder disk
+        float occluder_angular = occluder_r / max(proj, 0.001);
+        float penumbra_edge = occluder_angular + light_angular_radius;
+        float angular_sep = sep / max(proj, 0.001);
+        if (angular_sep < penumbra_edge) {
+            float pen = smoothstep(occluder_angular, penumbra_edge, angular_sep);
+            factor = min(factor, pen);
+        }
     }
-    return false;
+    return factor;
+}
+
+bool in_shadow(vec3 origin, vec3 light_dir, float light_dist, int body_count, int self_idx, int light_idx) {
+    return shadow_factor(origin, light_dir, light_dist, body_count, self_idx, light_idx, 0.0) < 0.01;
+}
+
+float ring_shadow_factor(vec3 surface_pos, vec3 light_dir, int body_count, int self_idx) {
+    float shadow = 1.0;
+    for (int i = 0; i < body_count && i < MAX_TRACE_BODIES; i++) {
+        if (i == self_idx) continue;
+        Sphere body = spheres[i];
+        float inner = body.ring_params.x;
+        float outer = body.ring_params.y;
+        float density = body.ring_params.z;
+        if (density < 0.01 || outer <= inner + 0.01) continue;
+        vec3 axis = ring_axis(max(body.ring_params.w, 0.02), body.class_seed_temp.x);
+        float denom = dot(light_dir, axis);
+        if (abs(denom) < 1.0e-4) continue;
+        float t = dot(body.pos_radius.xyz - surface_pos, axis) / denom;
+        if (t <= 0.0) continue;
+        vec3 hit = surface_pos + light_dir * t;
+        vec3 rel = hit - body.pos_radius.xyz;
+        vec3 planar = rel - axis * dot(rel, axis);
+        float radial = length(planar);
+        if (radial >= inner && radial <= outer) {
+            float ring_u = (radial - inner) / max(outer - inner, 1.0e-4);
+            float edge = max((outer - inner) * 0.06, body.pos_radius.w * 0.05);
+            float annulus = smoothstep(inner, inner + edge, radial) *
+                            (1.0 - smoothstep(outer - edge, outer, radial));
+            shadow *= 1.0 - density * annulus * 0.75;
+        }
+    }
+    return clamp(shadow, 0.0, 1.0);
 }
 
 vec3 black_hole_effect(vec3 ro, vec3 rd, Sphere bh, int body_count, bool hit_horizon, out float alpha_out) {
@@ -2400,15 +2481,18 @@ void main() {
             float light_dist = length(to_light);
             vec3 L = to_light / max(light_dist, 0.001);
             vec3 shadow_origin = hit_pos + surf_normal * 0.1;
-            bool shadowed = in_shadow(shadow_origin, L, light_dist, body_count, closest_idx, primary_light_idx);
-            if (!shadowed) {
+            float light_angular_r = spheres[primary_light_idx].pos_radius.w / max(light_dist, 0.001);
+            float sf = shadow_factor(shadow_origin, L, light_dist, body_count, closest_idx, primary_light_idx, light_angular_r);
+            float rsf = ring_shadow_factor(shadow_origin, L, body_count, closest_idx);
+            float combined_shadow = sf * rsf;
+            if (combined_shadow > 0.001) {
                 float atten = 1.0 / (1.0 + (light_dist * light_dist) /
                     (spheres[primary_light_idx].pos_radius.w * spheres[primary_light_idx].pos_radius.w * 400.0));
                 float ndl = max(dot(surf_normal, L), 0.0);
-                final_color += base_color * primary_light_color * ndl * atten * star_light_strength;
+                final_color += base_color * primary_light_color * ndl * atten * star_light_strength * combined_shadow;
                 final_color += specular_term(surf_normal, L, view_dir, roughness,
                                              hit.material_params.z, hit.material_params.y,
-                                             primary_light_color) * atten * star_light_strength;
+                                             primary_light_color) * atten * star_light_strength * combined_shadow;
             }
         } else if (!use_fast_star_lighting && quality_params.x >= 2.0) {
             for (int i = 0; i < body_count && i < MAX_TRACE_BODIES; i++) {
@@ -2417,12 +2501,16 @@ void main() {
                 float light_dist = length(to_light);
                 vec3 L = to_light / max(light_dist, 0.001);
                 vec3 shadow_origin = hit_pos + surf_normal * 0.1;
-                if (in_shadow(shadow_origin, L, light_dist, body_count, closest_idx, i)) continue;
+                float light_angular_r_i = spheres[i].pos_radius.w / max(light_dist, 0.001);
+                float sf_i = shadow_factor(shadow_origin, L, light_dist, body_count, closest_idx, i, light_angular_r_i);
+                float rsf_i = ring_shadow_factor(shadow_origin, L, body_count, closest_idx);
+                float combined_shadow_i = sf_i * rsf_i;
+                if (combined_shadow_i < 0.001) continue;
                 float atten = 1.0 / (1.0 + (light_dist * light_dist) /
                     (spheres[i].pos_radius.w * spheres[i].pos_radius.w * 400.0));
                 vec3 light_col = spheres[i].base_emit.rgb * spheres[i].base_emit.a;
                 float ndl = max(dot(surf_normal, L), 0.0);
-                final_color += base_color * light_col * ndl * atten * star_light_strength;
+                final_color += base_color * light_col * ndl * atten * star_light_strength * combined_shadow_i;
             }
         }
     }
@@ -2464,7 +2552,11 @@ void main() {
             float basin;
             float rim;
             float ejecta;
-            impact_masks(normal, hit, basin, rim, ejecta);
+            float imp_spin_phase = spin_phase_from_rate(hit.impact_axis.w);
+            vec3  imp_spin_axis  = ring_axis(max(hit.ring_params.w, 0.02), hit.class_seed_temp.x);
+            vec3  imp_sample_n   = (abs(imp_spin_phase) > 1.0e-8)
+                ? rotate_about_axis(normal, imp_spin_axis, imp_spin_phase) : normal;
+            impact_masks(imp_sample_n, hit, basin, rim, ejecta);
             vec3 impact_emission = mix(vec3(0.95, 0.30, 0.08), vec3(1.00, 0.72, 0.24),
                                        clamp(hit.impact_params.y * 1.2, 0.0, 1.0));
             emission += impact_emission * basin * hit.impact_params.y * (0.35 + 0.45 * hit.impact_params.x);
@@ -2476,14 +2568,26 @@ void main() {
     }
 
     if (render_class == RENDER_COMET) {
+        // Coma glow
         float edge = pow(clamp(1.0 - max(dot(normal, -rd), 0.0), 0.0, 1.0), 2.0);
         float phase = phase_hg(0.55, dot(-rd, primary_light_dir));
         final_color += vec3(0.65, 0.78, 0.95) * hit.activity_params.y * edge * phase * 6.0;
         if (render_flags.z > 0.001 && has_primary_light) {
             vec3 anti_sun = -primary_light_dir;
-            float align = pow(max(dot(normalize(hit_pos - hit.pos_radius.xyz), anti_sun), 0.0), 2.0);
-            float tail = pow(clamp(1.0 - max(dot(-rd, anti_sun), 0.0), 0.0, 1.0), 1.5);
-            final_color += vec3(0.55, 0.72, 0.95) * hit.activity_params.z * align * tail * 0.9 *
+            vec3 surf_dir = normalize(hit_pos - hit.pos_radius.xyz);
+            // Ion tail — straight anti-sunward (blue-white)
+            float ion_align = pow(max(dot(surf_dir, anti_sun), 0.0), 3.0);
+            float ion_tail = pow(clamp(1.0 - max(dot(-rd, anti_sun), 0.0), 0.0, 1.0), 1.5);
+            vec3 ion_col = vec3(0.45, 0.62, 1.0);
+            final_color += ion_col * hit.activity_params.z * ion_align * ion_tail * 1.1 *
+                max(render_flags.z, 0.0);
+            // Dust tail — curves away from orbital velocity (yellowish)
+            // Approximate orbital velocity direction as cross(anti_sun, up)
+            vec3 orbital_hint = normalize(cross(anti_sun, vec3(0.0, 1.0, 0.0)) + anti_sun * 0.6);
+            float dust_align = pow(max(dot(surf_dir, orbital_hint), 0.0), 1.8);
+            float dust_tail = pow(clamp(1.0 - max(dot(-rd, orbital_hint), 0.0), 0.0, 1.0), 1.2);
+            vec3 dust_col = vec3(0.85, 0.75, 0.50);
+            final_color += dust_col * hit.activity_params.z * dust_align * dust_tail * 0.7 *
                 max(render_flags.z, 0.0);
         }
     }

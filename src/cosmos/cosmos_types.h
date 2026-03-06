@@ -716,6 +716,15 @@ struct CelestialBody {
     float       custom_silicate = 0.0f;
     float       custom_water = 0.0f;
     float       custom_hydrogen = 0.0f;
+    float       axial_tilt = 0.0f;         // obliquity in radians (0 = no tilt)
+    float       tidal_lock_progress = 0.0f; // 0-1 progress toward tidal locking (1 = locked)
+    float       orbital_period = 0.0f;      // computed orbital period in sim-seconds
+    float       orbital_eccentricity = 0.0f; // computed eccentricity
+    float       orbital_semi_major = 0.0f;  // computed semi-major axis
+    float       habitable_zone_inner = 0.0f; // AU equivalent, computed for stars
+    float       habitable_zone_outer = 0.0f; // AU equivalent, computed for stars
+    float       hawking_temperature = 0.0f;  // Hawking temp for black holes (K)
+    float       season_phase = 0.0f;         // 0-2pi annual season cycle
     std::string name;                       // procedural or user-given name
 
     // Cached planet properties (computed once, refreshed only on major temp band changes)
@@ -1077,8 +1086,8 @@ struct CosmosConfig {
     float    nebula_gravity_collapse_scale  = 0.045f; // extra collapse amplification from gravity field
     float    nebula_gravity_compress_scale  = 0.220f; // density compression response to |gravity|
     bool     nebula_sink_formation = true;   // allow dense converging nebula cores to spawn protostars
-    float    nebula_sink_threshold = 1.05f;  // collapse metric threshold for sink spawning
-    float    nebula_sink_min_mass  = 2.0e-4f; // minimum sink/star spawn mass
+    float    nebula_sink_threshold = 6.0f;   // collapse metric threshold for sink spawning (high = slower)
+    float    nebula_sink_min_mass  = 5.0e-3f; // minimum sink/star spawn mass (must accumulate substantial mass)
     float    nebula_sink_spawn_fraction = 0.018f; // nominal host-mass fraction converted to each sink
     float    nebula_sink_consume_fraction = 0.95f; // fraction of sink mass consumed from host cloud
     float    barnes_hut_theta     = 0.72f;   // opening angle (smaller = more accurate)
@@ -1119,6 +1128,24 @@ struct CosmosConfig {
     int      adaptive_substep_max    = 32;     // hardware cap for accepted substeps per requested step
     bool     stellar_wind_pressure   = true;   // apply radiation/wind pressure from luminous stars
     float    stellar_wind_pressure_scale = 1.0f; // scale stellar pressure acceleration
+
+    // Tidal locking
+    bool     tidal_locking        = true;    // enable tidal locking synchronization
+    float    tidal_locking_rate   = 0.01f;   // angular velocity synchronization rate
+
+    // Orbital mechanics
+    bool     orbital_resonance_detection = true; // detect and display orbital resonances
+    bool     lagrange_points     = false;   // compute and display Lagrange points
+
+    // Hawking radiation
+    bool     hawking_radiation    = true;    // black holes lose mass via Hawking radiation
+    float    hawking_radiation_scale = 1.0f; // Hawking radiation rate multiplier
+
+    // Habitable zones
+    bool     show_habitable_zones = false;   // render habitable zone indicators
+
+    // Collision broadphase
+    bool     spatial_hash_collisions = true; // use spatial hashing for collision broadphase
 };
 
 // ── Body collection ─────────────────────────────────────────────────────────

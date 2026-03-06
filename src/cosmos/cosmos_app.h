@@ -74,6 +74,9 @@ private:
     void process_space_weather(float dt);
     void process_evaporation(float dt);
     void process_stellar_evolution(float dt);
+    void process_tidal_locking(float dt);
+    void process_orbital_elements();
+    void process_hawking_radiation(float dt);
     void trigger_stellar_supernova(size_t index, float dt, bool thermonuclear = false,
                                    glm::vec3 impact_axis = glm::vec3(0.0f),
                                    float ejecta_speed = 0.0f);
@@ -209,4 +212,8 @@ private:
     bool diagnostics_pause_on_invalid_ = true;
     uint64_t diagnostics_step_counter_ = 0;
     void  draw_file_dialog();
+
+    // Debug window
+    bool  debug_window_visible_ = false;
+    void  draw_debug_window();
 };

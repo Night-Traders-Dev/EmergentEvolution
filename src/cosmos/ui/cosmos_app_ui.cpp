@@ -2370,6 +2370,7 @@ void CosmosApp::render_ui() {
     draw_inspector();
     draw_spawn_menu();
     draw_file_dialog();
+    draw_debug_window();
 
     if (save_status_timer_ > 0.0f) {
         save_status_timer_ -= io.DeltaTime;
@@ -2608,6 +2609,53 @@ void CosmosApp::draw_inspector() {
         ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Spin");
         ImGui::NextColumn();
         ImGui::Text("%.3f rad/s", b.angular_vel);
+        ImGui::NextColumn();
+    }
+
+    if (b.tidal_lock_progress > 0.01f) {
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Tidal Lock");
+        ImGui::NextColumn();
+        ImGui::Text("%.0f%%", b.tidal_lock_progress * 100.0f);
+        ImGui::NextColumn();
+    }
+
+    if (b.orbital_period > 1.0e-3f) {
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Orbital Period");
+        ImGui::NextColumn();
+        char period_buf[64];
+        format_sim_time((double)b.orbital_period, period_buf, sizeof(period_buf));
+        ImGui::Text("%s", period_buf);
+        ImGui::NextColumn();
+
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Eccentricity");
+        ImGui::NextColumn();
+        ImGui::Text("%.4f", b.orbital_eccentricity);
+        ImGui::NextColumn();
+
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Semi-Major Axis");
+        ImGui::NextColumn();
+        ImGui::Text("%.1f", b.orbital_semi_major);
+        ImGui::NextColumn();
+    }
+
+    if (std::abs(b.axial_tilt) > 0.01f) {
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Axial Tilt");
+        ImGui::NextColumn();
+        ImGui::Text("%.1f deg", b.axial_tilt * 57.2957795f);
+        ImGui::NextColumn();
+    }
+
+    if (is_star_type(b.type) && b.habitable_zone_outer > 0.01f) {
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Habitable Zone");
+        ImGui::NextColumn();
+        ImGui::Text("%.1f - %.1f", b.habitable_zone_inner, b.habitable_zone_outer);
+        ImGui::NextColumn();
+    }
+
+    if (is_black_hole_type(b.type) && b.hawking_temperature > 0.0f) {
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.7f, 1.0f), "Hawking Temp");
+        ImGui::NextColumn();
+        ImGui::Text("%.3e K", b.hawking_temperature);
         ImGui::NextColumn();
     }
 
@@ -3502,6 +3550,8 @@ void CosmosApp::draw_bottom_bar() {
                 if (menu_item_selected_tt("Body List", tmp)) { body_list_visible_ = !body_list_visible_; }
                 tmp = inspector_visible_;
                 if (menu_item_selected_tt("Inspector", tmp)) { inspector_visible_ = !inspector_visible_; }
+                tmp = debug_window_visible_;
+                if (menu_item_selected_tt("Debug", tmp)) { debug_window_visible_ = !debug_window_visible_; }
                 ImGui::Separator();
                 menu_item_toggle_tt("Show Orbits", &cfg.show_orbits);
                 menu_item_toggle_tt("Show Trails", &cfg.show_trails);
@@ -3657,6 +3707,13 @@ void CosmosApp::draw_bottom_bar() {
                     checkbox_tt("Collisions##Menu", &cfg.collisions);
                     checkbox_tt("Tidal Forces##Menu", &cfg.tidal_forces);
                     slider_float_tt("Tidal Heating Scale##Menu", &cfg.tidal_heating_scale, 0.0f, 4.0f, "%.2f");
+                    checkbox_tt("Tidal Locking##Menu", &cfg.tidal_locking);
+                    slider_float_tt("Tidal Lock Rate##Menu", &cfg.tidal_locking_rate, 0.0f, 0.1f, "%.3f");
+                    checkbox_tt("Hawking Radiation##Menu", &cfg.hawking_radiation);
+                    slider_float_tt("Hawking Scale##Menu", &cfg.hawking_radiation_scale, 0.0f, 10.0f, "%.2f");
+                    checkbox_tt("Orbital Resonances##Menu", &cfg.orbital_resonance_detection);
+                    checkbox_tt("Habitable Zones##Menu", &cfg.show_habitable_zones);
+                    checkbox_tt("Spatial Hash Collisions##Menu", &cfg.spatial_hash_collisions);
                     static const char* INTEGRATOR_NAMES[] = {
                         "Velocity Verlet",
                         "Euler Explicit",
@@ -4041,4 +4098,141 @@ void CosmosApp::draw_file_dialog() {
         show_save_dialog_ = show_load_dialog_ = show_export_dialog_ = show_import_dialog_ = false;
         file_path_buf_[0] = '\0';
     }
+}
+
+void CosmosApp::draw_debug_window() {
+    if (!debug_window_visible_) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowSize(ImVec2(420, 560), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 440, 40), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowBgAlpha(0.92f);
+
+    if (!ImGui::Begin("Debug##CosmosDebug", &debug_window_visible_)) {
+        ImGui::End();
+        return;
+    }
+
+    // -- Performance --
+    if (ImGui::CollapsingHeader("Performance", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Text("FPS: %.1f (%.2f ms)", smoothed_fps_, 1000.0f / std::max(smoothed_fps_, 0.001f));
+        ImGui::Text("Bodies: %d / %d", (int)state.bodies.size(), cfg.body_count);
+        ImGui::Text("Sim Time: %.3f s", sim_time_);
+        ImGui::Text("Time Rate: %.4f", displayed_time_rate_);
+        ImGui::Text("Substeps: %d (required: %d)%s",
+                     adaptive_substeps_last_, adaptive_substeps_required_,
+                     adaptive_substeps_saturated_ ? " [SATURATED]" : "");
+        ImGui::Text("Diagnostics Step: %llu", (unsigned long long)diagnostics_step_counter_);
+    }
+
+    // -- Physics Config --
+    if (ImGui::CollapsingHeader("Physics Config")) {
+        ImGui::Text("G: %.6e", cfg.G);
+        ImGui::Text("DT Scale: %.4f", cfg.dt_scale);
+        ImGui::Text("Substeps: %d (adaptive max: %d)", cfg.physics_substeps, cfg.adaptive_substep_max);
+        ImGui::Text("Softening: %.4f", cfg.softening);
+        ImGui::Text("Collision Restitution: %.3f", cfg.rigid_collision_restitution);
+        ImGui::Separator();
+        ImGui::Text("Collisions: %s", cfg.collisions ? "ON" : "OFF");
+        ImGui::Text("Roche Limit: %s", cfg.roche_limit ? "ON" : "OFF");
+        ImGui::Text("Tidal Heating Scale: %.2f", cfg.tidal_heating_scale);
+        ImGui::Text("Tidal Locking: %s", cfg.tidal_locking ? "ON" : "OFF");
+        ImGui::Text("Stellar Evolution: %s", cfg.stellar_evolution ? "ON" : "OFF");
+        ImGui::Text("Hawking Radiation: %s", cfg.hawking_radiation ? "ON" : "OFF");
+        ImGui::Text("Stellar Wind: %s", cfg.stellar_wind_pressure ? "ON" : "OFF");
+        ImGui::Text("Spatial Hash: %s", cfg.spatial_hash_collisions ? "ON" : "OFF");
+    }
+
+    // -- Conservation --
+    if (ImGui::CollapsingHeader("Conservation / Bookkeeping")) {
+        double total_mass = 0.0, total_ke = 0.0;
+        glm::dvec3 total_momentum(0.0);
+        glm::dvec3 com(0.0);
+        int active_count = 0;
+        for (const auto& b : state.bodies) {
+            if (b.marked_for_removal) continue;
+            double m = std::max((double)b.mass, 0.0);
+            total_mass += m;
+            glm::dvec3 v(b.vel);
+            total_momentum += v * m;
+            total_ke += 0.5 * m * glm::dot(v, v);
+            com += glm::dvec3(b.pos) * m;
+            active_count++;
+        }
+        if (total_mass > 1.0e-15) com /= total_mass;
+        ImGui::Text("Active Bodies: %d", active_count);
+        ImGui::Text("Total Mass: %.6e", total_mass);
+        ImGui::Text("Escaped Mass: %.6e", escaped_mass_total_);
+        ImGui::Text("Kinetic Energy: %.6e", total_ke);
+        ImGui::Text("Radiated Energy: %.6e", radiated_energy_total_);
+        ImGui::Text("Escaped Energy: %.6e", escaped_energy_total_);
+        ImGui::Text("Momentum: (%.3e, %.3e, %.3e)",
+                     total_momentum.x, total_momentum.y, total_momentum.z);
+        ImGui::Text("|P|: %.6e", glm::length(total_momentum));
+        ImGui::Text("Escaped |P|: %.6e", glm::length(escaped_momentum_total_));
+        ImGui::Text("CoM: (%.2f, %.2f, %.2f)", com.x, com.y, com.z);
+    }
+
+    // -- Camera --
+    if (ImGui::CollapsingHeader("Camera")) {
+        ImGui::Text("Target: (%.2f, %.2f, %.2f)", camera.target.x, camera.target.y, camera.target.z);
+        ImGui::Text("Distance: %.2f", camera.distance);
+        ImGui::Text("Azimuth: %.1f  Elevation: %.1f", glm::degrees(camera.azimuth), glm::degrees(camera.elevation));
+        ImGui::Text("Selected Body: %d", selected_body);
+        if (selected_body >= 0 && selected_body < (int)state.bodies.size()) {
+            const auto& b = state.bodies[selected_body];
+            ImGui::Text("  Name: %s", b.name.c_str());
+            ImGui::Text("  Pos: (%.2f, %.2f, %.2f)", b.pos.x, b.pos.y, b.pos.z);
+            ImGui::Text("  Vel: (%.2f, %.2f, %.2f) |v|=%.4f", b.vel.x, b.vel.y, b.vel.z, glm::length(b.vel));
+        }
+    }
+
+    // -- Body Type Census --
+    if (ImGui::CollapsingHeader("Body Type Census")) {
+        int type_counts[16] = {};
+        const char* type_names[] = {
+            "Star", "Planet", "Moon", "Asteroid", "Comet",
+            "Dwarf Planet", "Nebula", "Black Hole", "White Dwarf",
+            "Neutron Star", "Dust", "Gas Giant", "Ice Giant",
+            "Brown Dwarf", "Protostar", "Ring Particle"
+        };
+        for (const auto& b : state.bodies) {
+            if (b.marked_for_removal) continue;
+            int t = b.type;
+            if (t >= 0 && t < 16) type_counts[t]++;
+        }
+        for (int i = 0; i < 16; i++) {
+            if (type_counts[i] > 0) {
+                ImGui::Text("  %s: %d", (i < 16 ? type_names[i] : "Unknown"), type_counts[i]);
+            }
+        }
+    }
+
+    // -- Render --
+    if (ImGui::CollapsingHeader("Render")) {
+        ImGui::Text("Swapchain: %dx%d", vk.swapchain_extent.width, vk.swapchain_extent.height);
+        ImGui::Text("Display: %.0fx%.0f", io.DisplaySize.x, io.DisplaySize.y);
+        ImGui::Text("Paused: %s", paused ? "YES" : "NO");
+        ImGui::Text("Reverse Time: %s", reverse_time_ ? "YES" : "NO");
+    }
+
+    // -- Diagnostics --
+    if (ImGui::CollapsingHeader("Diagnostics")) {
+        ImGui::Checkbox("Enable Runtime Diagnostics", &diagnostics_enabled_);
+        ImGui::Checkbox("Pause on Invalid State", &diagnostics_pause_on_invalid_);
+        if (ImGui::Button("Validate State Now")) {
+            validate_body_state("manual_debug_check", diagnostics_pause_on_invalid_);
+        }
+        if (ImGui::Button("Log All Bodies")) {
+            for (size_t i = 0; i < state.bodies.size(); i++) {
+                const auto& b = state.bodies[i];
+                if (b.marked_for_removal) continue;
+                debug_logf("[%zu] %s type=%d mass=%.4e r=%.2f T=%.1f pos=(%.2f,%.2f,%.2f)",
+                           i, b.name.c_str(), b.type, b.mass, b.radius, b.temperature,
+                           b.pos.x, b.pos.y, b.pos.z);
+            }
+        }
+    }
+
+    ImGui::End();
 }

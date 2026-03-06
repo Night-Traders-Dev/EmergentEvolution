@@ -8,7 +8,7 @@
 namespace {
 
 constexpr uint32_t COSMOS_MAGIC   = 0x534D4F43; // "COSM"
-constexpr uint32_t COSMOS_VERSION = 15;
+constexpr uint32_t COSMOS_VERSION = 16;
 constexpr uint32_t COSMOS_SETTINGS_MAGIC   = 0x54475343; // "CSGT"
 constexpr uint32_t COSMOS_SETTINGS_VERSION = 5;
 constexpr const char* COSMOS_SETTINGS_PATH = "cosmos_settings.bin";
@@ -407,6 +407,16 @@ bool CosmosApp::save_simulation(const std::string& path) {
         f.write(reinterpret_cast<const char*>(&pod), sizeof(BodyPOD));
         if (pod.name_len > 0)
             f.write(b.name.data(), pod.name_len);
+        // v16 extended fields
+        f.write(reinterpret_cast<const char*>(&b.axial_tilt), sizeof(float));
+        f.write(reinterpret_cast<const char*>(&b.tidal_lock_progress), sizeof(float));
+        f.write(reinterpret_cast<const char*>(&b.orbital_period), sizeof(float));
+        f.write(reinterpret_cast<const char*>(&b.orbital_eccentricity), sizeof(float));
+        f.write(reinterpret_cast<const char*>(&b.orbital_semi_major), sizeof(float));
+        f.write(reinterpret_cast<const char*>(&b.habitable_zone_inner), sizeof(float));
+        f.write(reinterpret_cast<const char*>(&b.habitable_zone_outer), sizeof(float));
+        f.write(reinterpret_cast<const char*>(&b.hawking_temperature), sizeof(float));
+        f.write(reinterpret_cast<const char*>(&b.season_phase), sizeof(float));
     }
 
     f.write(reinterpret_cast<const char*>(&camera.azimuth), sizeof(float));
@@ -864,6 +874,17 @@ bool CosmosApp::load_simulation(const std::string& path) {
             b.name.resize(name_len);
             f.read(b.name.data(), name_len);
         }
+        if (version >= 16) {
+            f.read(reinterpret_cast<char*>(&b.axial_tilt), sizeof(float));
+            f.read(reinterpret_cast<char*>(&b.tidal_lock_progress), sizeof(float));
+            f.read(reinterpret_cast<char*>(&b.orbital_period), sizeof(float));
+            f.read(reinterpret_cast<char*>(&b.orbital_eccentricity), sizeof(float));
+            f.read(reinterpret_cast<char*>(&b.orbital_semi_major), sizeof(float));
+            f.read(reinterpret_cast<char*>(&b.habitable_zone_inner), sizeof(float));
+            f.read(reinterpret_cast<char*>(&b.habitable_zone_outer), sizeof(float));
+            f.read(reinterpret_cast<char*>(&b.hawking_temperature), sizeof(float));
+            f.read(reinterpret_cast<char*>(&b.season_phase), sizeof(float));
+        }
         state.bodies.push_back(std::move(b));
         state.trails.emplace_back();
     }
@@ -917,6 +938,12 @@ bool CosmosApp::export_body(int index, const std::string& path) {
     f << "parent " << b.parent << "\n";
     f << "frag_generation " << b.frag_generation << "\n";
     f << "non_attracting " << (b.non_attracting ? 1 : 0) << "\n";
+    f << "axial_tilt " << b.axial_tilt << "\n";
+    f << "tidal_lock " << b.tidal_lock_progress << "\n";
+    f << "orbital " << b.orbital_period << " " << b.orbital_eccentricity << " " << b.orbital_semi_major << "\n";
+    f << "habitable_zone " << b.habitable_zone_inner << " " << b.habitable_zone_outer << "\n";
+    f << "hawking_temp " << b.hawking_temperature << "\n";
+    f << "season_phase " << b.season_phase << "\n";
 
     return f.good();
 }
@@ -967,6 +994,12 @@ bool CosmosApp::import_body(const std::string& path) {
             f >> v;
             b.non_attracting = (v != 0);
         }
+        else if (key == "axial_tilt") { f >> b.axial_tilt; }
+        else if (key == "tidal_lock") { f >> b.tidal_lock_progress; }
+        else if (key == "orbital") { f >> b.orbital_period >> b.orbital_eccentricity >> b.orbital_semi_major; }
+        else if (key == "habitable_zone") { f >> b.habitable_zone_inner >> b.habitable_zone_outer; }
+        else if (key == "hawking_temp") { f >> b.hawking_temperature; }
+        else if (key == "season_phase") { f >> b.season_phase; }
     }
 
     if (b.name == "Unnamed") b.name.clear();

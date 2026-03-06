@@ -16,6 +16,7 @@
 #include <mutex>
 #include <numeric>
 #include <random>
+#include <unordered_map>
 #include <thread>
 #include <ctime>
 
@@ -1601,6 +1602,9 @@ void CosmosApp::step_physics(float dt) {
     if (cfg.material_phases)    process_material_phases(scaled_dt);
     if (cfg.evaporation)        process_evaporation(scaled_dt);
     if (cfg.stellar_evolution)  process_stellar_evolution(scaled_dt);
+    if (cfg.tidal_locking)      process_tidal_locking(scaled_dt);
+    if (cfg.hawking_radiation)  process_hawking_radiation(scaled_dt);
+    process_orbital_elements();
     cleanup_bodies();
 
     n = bodies.size();
@@ -2223,10 +2227,103 @@ void CosmosApp::process_collisions(float dt) {
     auto& bodies = state.bodies;
     size_t n = bodies.size();
 
-    for (size_t i = 0; i < n; ++i) {
-        if (bodies[i].marked_for_removal) continue;
-        for (size_t j = i + 1; j < n; ++j) {
-            if (bodies[j].marked_for_removal) continue;
+    // Build candidate pair list -- spatial hash grid for n >= 64, brute force otherwise.
+    std::vector<std::pair<size_t, size_t>> pairs;
+
+    if (n < 64 || !cfg.spatial_hash_collisions) {
+        // Brute-force: O(n^2) is cheaper than grid overhead for tiny counts.
+        for (size_t i = 0; i < n; ++i) {
+            if (bodies[i].marked_for_removal) continue;
+            for (size_t j = i + 1; j < n; ++j) {
+                if (bodies[j].marked_for_removal) continue;
+                pairs.emplace_back(i, j);
+            }
+        }
+    } else {
+        // Find max radius to set cell size.
+        float max_radius = 0.0f;
+        for (size_t i = 0; i < n; ++i) {
+            if (!bodies[i].marked_for_removal)
+                max_radius = std::max(max_radius, bodies[i].radius);
+        }
+        float cell_size = std::max(2.0f * max_radius, 1.0e-6f);
+        float inv_cell = 1.0f / cell_size;
+
+        // Spatial hash: cell coord -> list of body indices.
+        auto cell_hash = [](int cx, int cy, int cz) -> int64_t {
+            // Combine three 21-bit signed cell coords into a single int64.
+            return (int64_t(cx) * int64_t(73856093)) ^
+                   (int64_t(cy) * int64_t(19349663)) ^
+                   (int64_t(cz) * int64_t(83492791));
+        };
+
+        std::unordered_map<int64_t, std::vector<size_t>> grid;
+        grid.reserve(n);
+
+        for (size_t i = 0; i < n; ++i) {
+            if (bodies[i].marked_for_removal) continue;
+            int cx = (int)std::floor(bodies[i].pos.x * inv_cell);
+            int cy = (int)std::floor(bodies[i].pos.y * inv_cell);
+            int cz = (int)std::floor(bodies[i].pos.z * inv_cell);
+            grid[cell_hash(cx, cy, cz)].push_back(i);
+        }
+
+        // Collect unique candidate pairs from 27-cell neighborhoods.
+        // To avoid duplicates: for each cell, check the 13 "forward" neighbors
+        // plus the cell itself (self-pairs within the cell).
+        const int offsets[14][3] = {
+            { 0, 0, 0},  // self
+            { 1, 0, 0},  { 0, 1, 0},  { 0, 0, 1},
+            { 1, 1, 0},  { 1,-1, 0},  { 1, 0, 1},  { 1, 0,-1},
+            { 0, 1, 1},  { 0, 1,-1},  { 1, 1, 1},  { 1, 1,-1},
+            { 1,-1, 1},  { 1,-1,-1}
+        };
+
+        for (auto& [key, cell] : grid) {
+            if (cell.empty()) continue;
+            // Recover cell coords from first body in the cell.
+            size_t rep = cell[0];
+            int cx = (int)std::floor(bodies[rep].pos.x * inv_cell);
+            int cy = (int)std::floor(bodies[rep].pos.y * inv_cell);
+            int cz = (int)std::floor(bodies[rep].pos.z * inv_cell);
+
+            // Self-pairs within this cell.
+            for (size_t a = 0; a < cell.size(); ++a) {
+                for (size_t b = a + 1; b < cell.size(); ++b) {
+                    size_t ii = cell[a], jj = cell[b];
+                    if (ii > jj) std::swap(ii, jj);
+                    pairs.emplace_back(ii, jj);
+                }
+            }
+
+            // Cross-pairs with 13 forward-neighbor cells.
+            for (int d = 1; d < 14; ++d) {
+                int64_t nkey = cell_hash(cx + offsets[d][0],
+                                         cy + offsets[d][1],
+                                         cz + offsets[d][2]);
+                auto it = grid.find(nkey);
+                if (it == grid.end()) continue;
+                const auto& ncell = it->second;
+                for (size_t ai : cell) {
+                    for (size_t bi : ncell) {
+                        size_t ii = ai, jj = bi;
+                        if (ii == jj) continue;
+                        if (ii > jj) std::swap(ii, jj);
+                        pairs.emplace_back(ii, jj);
+                    }
+                }
+            }
+        }
+
+        // Deduplicate pairs (hash collisions can produce the same cell key for
+        // different actual grid cells, yielding duplicate pairs).
+        std::sort(pairs.begin(), pairs.end());
+        pairs.erase(std::unique(pairs.begin(), pairs.end()), pairs.end());
+    }
+
+    // Process all candidate pairs.
+    for (auto& [i, j] : pairs) {
+        if (bodies[i].marked_for_removal || bodies[j].marked_for_removal) continue;
 
             glm::vec3 rel_vel = bodies[j].vel - bodies[i].vel;
             glm::vec3 diff = bodies[j].pos - bodies[i].pos;
@@ -2778,7 +2875,6 @@ void CosmosApp::process_collisions(float dt) {
                     std::clamp(impact_energy * cfg.collision_heating / std::max(bodies[j].mass, 1.0e-6f), 0.0f, 0.9f),
                     std::clamp(bodies[i].radius / std::max(bodies[j].radius, 0.1f), 0.08f, 0.80f));
             }
-        }
     }
 }
 
@@ -3287,16 +3383,18 @@ void CosmosApp::process_material_phases(float dt) {
                 float energy_drive = std::clamp(b.internal_energy / std::max(b.mass * 30.0f, 0.04f), 0.0f, 1.4f);
                 float collapse_drive = mass_drive * 0.70f + gravity_drive * 0.30f +
                                        temp_drive * 0.35f + energy_drive * 0.25f +
-                                       (b.type == CTYPE_NEBULA ? 0.22f : 0.0f);
-                if (collapse_drive > 0.05f) {
-                    float advance = std::min(0.10f, dt * (0.0014f + collapse_drive * 0.0036f) * phase_rate);
+                                       (b.type == CTYPE_NEBULA ? 0.08f : 0.0f);
+                if (collapse_drive > 0.15f) {
+                    // Slow collapse — nebulae should persist as clouds for a long time.
+                    float advance = std::min(0.04f, dt * (0.00035f + collapse_drive * 0.0012f) * phase_rate);
                     b.collapse_progress = std::clamp(b.collapse_progress + advance, 0.0f, 1.25f);
                     next_phase = PHASE_COLLAPSING;
                     next_intensity = std::max(next_intensity, std::clamp(b.collapse_progress, 0.15f, 1.0f));
 
                     float proto_temp = std::max(250.0f,
                         expected_main_sequence_temperature(std::max(b.mass, 0.003f)) * 0.88f);
-                    b.temperature += (proto_temp - b.temperature) * std::min(0.18f * dt, 0.30f);
+                    // Very gradual heating — cloud should stay cool for extended periods.
+                    b.temperature += (proto_temp - b.temperature) * std::min(0.012f * dt, 0.06f);
 
                     CelestialBody proto = b;
                     proto.type = classify_star_spectral(proto_temp, std::max(proto.mass, 0.003f));
@@ -3305,7 +3403,7 @@ void CosmosApp::process_material_phases(float dt) {
                     b.radius = glm::mix(b.radius, target_radius, std::min(0.10f * dt, 0.22f));
                     b.internal_energy += collapse_drive * dt * 2.8f;
 
-                    if (b.collapse_progress >= 1.0f || b.temperature >= 2200.0f) {
+                    if (b.collapse_progress >= 1.0f && b.temperature >= 4500.0f) {
                         b.type = classify_star_spectral(std::max(b.temperature, proto_temp), std::max(b.mass, 0.003f));
                         b.stellar_stage = SSTAGE_MAIN_SEQUENCE;
                         b.fuel = std::max(b.fuel, 0.92f);
@@ -3545,11 +3643,11 @@ void CosmosApp::process_stellar_evolution(float dt) {
         float density = body_density(host);
         float gravity_drive = cfg.G * host.mass / std::max(host.radius * host.radius, 1.0e-6f);
         float collapse_metric =
-            density * 8.0e6f +
-            converging * 0.12f +
-            gravity_drive * 0.90f +
-            host.collapse_progress * 1.10f +
-            host.phase_intensity * 0.35f;
+            density * 2.0e6f +
+            converging * 0.20f +
+            gravity_drive * 0.50f +
+            host.collapse_progress * 1.50f +
+            host.phase_intensity * 0.15f;
         if (collapse_metric < cfg.nebula_sink_threshold) continue;
 
         float spawn_frac = std::clamp(cfg.nebula_sink_spawn_fraction, 0.001f, 0.50f);
@@ -3590,9 +3688,9 @@ void CosmosApp::process_stellar_evolution(float dt) {
 
         float consumed = spawn_mass * std::clamp(cfg.nebula_sink_consume_fraction, 0.05f, 1.0f);
         host.mass = std::max(host.mass - consumed, 1.0e-8f);
-        host.collapse_progress = std::clamp(host.collapse_progress + 0.12f, 0.0f, 1.35f);
-        host.internal_energy += consumed * 8.0f;
-        host.temperature = std::clamp(host.temperature + collapse_metric * 28.0f, 15.0f, 60000.0f);
+        host.collapse_progress = std::clamp(host.collapse_progress + 0.04f, 0.0f, 1.35f);
+        host.internal_energy += consumed * 2.5f;
+        host.temperature = std::clamp(host.temperature + collapse_metric * 6.0f, 15.0f, 60000.0f);
         host.props_valid = false;
         host.visuals_valid = false;
         register_mass_loss(host, consumed, std::max(dt_step, 1.0e-4f));
@@ -3673,11 +3771,11 @@ void CosmosApp::process_stellar_evolution(float dt) {
         float gain_ratio = mass_gain / std::max(host_mass_before, 1.0e-8f);
         float concentration_ratio = concentration_gain / std::max(host_mass_before, 1.0e-8f);
         host.temperature = std::clamp(host.temperature +
-            std::min(1800.0f * gain_ratio + concentration_ratio * 340.0f, 9000.0f),
+            std::min(200.0f * gain_ratio + concentration_ratio * 60.0f, 1500.0f),
             15.0f, 60000.0f);
-        host.internal_energy += mass_gain * (12.0f + concentration_ratio * 9.0f);
+        host.internal_energy += mass_gain * (4.0f + concentration_ratio * 3.0f);
         host.collapse_progress = std::clamp(
-            host.collapse_progress + gain_ratio * 0.58f + concentration_ratio * 0.18f + dt_step * 0.00035f,
+            host.collapse_progress + gain_ratio * 0.12f + concentration_ratio * 0.06f + dt_step * 0.00008f,
             0.0f, 1.35f);
 
         if (host.type != CTYPE_NEBULA && host.mass > 8.0e-4f) {
@@ -3691,9 +3789,8 @@ void CosmosApp::process_stellar_evolution(float dt) {
 
         float proto_threshold = HYDROGEN_BURNING_MASS_SOLAR * 0.92f;
         bool ignite = host.mass >= proto_threshold &&
-            (host.collapse_progress > 0.72f ||
-             host.temperature > 1700.0f ||
-             host.internal_energy > std::max(host.mass * 9.0f, 0.05f));
+            host.collapse_progress > 0.85f &&
+            host.temperature > 3500.0f;
         if (ignite) {
             float proto_temp = std::max(expected_main_sequence_temperature(std::max(host.mass, 0.003f)) * 0.96f, 250.0f);
             host.type = classify_star_spectral(std::max(host.temperature, proto_temp), std::max(host.mass, 0.003f));
@@ -3904,6 +4001,138 @@ void CosmosApp::process_stellar_evolution(float dt) {
 
         b.luminosity = expected_stellar_luminosity(b.mass, b.temperature, b.radius,
                                                    b.stellar_stage, b.fuel);
+    }
+}
+
+// ── Tidal locking ────────────────────────────────────────────────────────────
+
+void CosmosApp::process_tidal_locking(float dt) {
+    auto& bodies = state.bodies;
+    const size_t n = bodies.size();
+    const float rate = std::max(cfg.tidal_locking_rate, 0.0f);
+    if (rate <= 0.0f) return;
+
+    for (size_t i = 0; i < n; ++i) {
+        auto& b = bodies[i];
+        if (b.marked_for_removal || b.non_attracting) continue;
+        if (is_star_type(b.type) || is_black_hole_type(b.type) || b.type == CTYPE_NEBULA) continue;
+
+        int primary = (tracked_primary_.size() > i) ? tracked_primary_[i] : -1;
+        if (primary < 0 || primary >= (int)n) continue;
+        const auto& host = bodies[(size_t)primary];
+        if (host.marked_for_removal) continue;
+
+        glm::vec3 diff = host.pos - b.pos;
+        float dist = glm::length(diff);
+        if (dist < 1.0e-3f) continue;
+
+        // Tidal torque ∝ (M_host * R_body²) / dist³
+        float tidal_strength = (host.mass * b.radius * b.radius) /
+                               (dist * dist * dist);
+        tidal_strength *= rate * 50.0f;
+
+        // Target: synchronous rotation = orbital angular velocity
+        float orbital_speed = glm::length(b.vel - host.vel);
+        float target_angular_vel = orbital_speed / std::max(dist, 0.01f);
+
+        float delta = target_angular_vel - std::abs(b.angular_vel);
+        float adjustment = std::clamp(tidal_strength * std::abs(dt), 0.0f, 1.0f);
+        float sign = (b.angular_vel >= 0.0f) ? 1.0f : -1.0f;
+
+        b.angular_vel += sign * delta * adjustment;
+        b.tidal_lock_progress = std::clamp(
+            1.0f - std::abs(delta) / std::max(target_angular_vel, 1.0e-6f),
+            0.0f, 1.0f);
+    }
+}
+
+// ── Orbital elements computation ─────────────────────────────────────────────
+
+void CosmosApp::process_orbital_elements() {
+    auto& bodies = state.bodies;
+    const size_t n = bodies.size();
+
+    for (size_t i = 0; i < n; ++i) {
+        auto& b = bodies[i];
+        if (b.marked_for_removal) continue;
+
+        int primary = (tracked_primary_.size() > i) ? tracked_primary_[i] : -1;
+        if (primary < 0 || primary >= (int)n) {
+            b.orbital_period = 0.0f;
+            b.orbital_eccentricity = 0.0f;
+            b.orbital_semi_major = 0.0f;
+            continue;
+        }
+        const auto& host = bodies[(size_t)primary];
+        if (host.marked_for_removal) continue;
+
+        glm::vec3 r_vec = b.pos - host.pos;
+        glm::vec3 v_vec = b.vel - host.vel;
+        float r = glm::length(r_vec);
+        float v = glm::length(v_vec);
+        if (r < 1.0e-6f) continue;
+
+        float mu = cfg.G * (host.mass + b.mass);
+        if (mu < 1.0e-12f) continue;
+
+        float energy = 0.5f * v * v - mu / r;
+
+        if (energy < -1.0e-9f)
+            b.orbital_semi_major = -mu / (2.0f * energy);
+        else
+            b.orbital_semi_major = r;
+
+        glm::vec3 h = glm::cross(r_vec, v_vec);
+        glm::vec3 e_vec = glm::cross(v_vec, h) / mu - r_vec / r;
+        b.orbital_eccentricity = std::clamp(glm::length(e_vec), 0.0f, 10.0f);
+
+        if (b.orbital_semi_major > 0.0f && energy < -1.0e-9f) {
+            float a3 = b.orbital_semi_major * b.orbital_semi_major * b.orbital_semi_major;
+            b.orbital_period = 6.283185f * std::sqrt(a3 / mu);
+        } else {
+            b.orbital_period = 0.0f;
+        }
+
+        if (b.orbital_period > 1.0e-3f) {
+            float dt_fraction = sim_time_ / b.orbital_period;
+            b.season_phase = std::fmod(dt_fraction * 6.283185f, 6.283185f);
+        }
+
+        if (is_star_type(b.type) && b.luminosity > 0.0f) {
+            b.habitable_zone_inner = std::sqrt(b.luminosity / 1.1f);
+            b.habitable_zone_outer = std::sqrt(b.luminosity / 0.53f);
+        }
+
+        if (is_black_hole_type(b.type) && b.mass > 0.0f)
+            b.hawking_temperature = 6.17e-8f / b.mass;
+    }
+}
+
+// ── Hawking radiation ────────────────────────────────────────────────────────
+
+void CosmosApp::process_hawking_radiation(float dt) {
+    auto& bodies = state.bodies;
+    const float scale = std::max(cfg.hawking_radiation_scale, 0.0f);
+    if (scale <= 0.0f) return;
+
+    for (auto& b : bodies) {
+        if (b.marked_for_removal) continue;
+        if (!is_black_hole_type(b.type)) continue;
+        if (b.mass <= 0.0f) continue;
+
+        float abs_dt = std::abs(dt);
+        float dm = scale * 1.0e-12f / (b.mass * b.mass) * abs_dt;
+        dm = std::min(dm, b.mass * 0.5f);
+
+        b.mass -= dm;
+        b.mass_loss_rate += dm / std::max(abs_dt, 1.0e-9f);
+        b.mass_loss_total += dm;
+        b.temperature += dm * 1.0e6f / std::max(b.mass, 1.0e-12f);
+
+        if (b.type == CTYPE_BH_PRIMORDIAL && b.mass < 1.0e-10f) {
+            b.marked_for_removal = true;
+            b.temperature = 1.0e12f;
+        }
     }
 }
 

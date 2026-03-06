@@ -15,6 +15,7 @@ public:
     // Must be called while a render pass is active on `cmd`.
     void update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
                          const BiochemState& state,
+                         const BiochemEnvironment& environment,
                          const OrbitCamera& camera,
                          const BiochemConfig& cfg,
                          float screen_w, float screen_h, float time);
@@ -28,6 +29,8 @@ private:
 
     Buffer camera_ubo_;
     Buffer sphere_ssbo_;
+    Buffer feature_ssbo_;
 
     static constexpr int MAX_SPHERES = 1024;
+    static constexpr int MAX_ENV_FEATURES = 128;
 };

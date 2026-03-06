@@ -7,15 +7,26 @@
 // ── GPU data layout (must match biochem_rt.frag) ────────────────────────────
 
 struct alignas(16) BioCameraUBOData {
-    glm::mat4 inv_vp;           // 64 bytes
-    glm::vec4 eye_pos;          // 16 bytes
-    glm::vec4 screen_info;      // 16 bytes (w,h,count,time)
-    glm::vec4 lighting_params;  // 16 bytes (unused,unused,ambient,unused)
-};                              // Total: 112 bytes
+    glm::mat4 inv_vp;             // 64 bytes
+    glm::vec4 eye_pos;            // 16 bytes
+    glm::vec4 screen_info;        // 16 bytes (w,h,count,time)
+    glm::vec4 lighting_params;    // 16 bytes (unused,unused,ambient,unused)
+    glm::vec4 environment_color;  // 16 bytes (rgb = tint, a = haze density)
+    glm::vec4 environment_factors;// 16 bytes (oxygen,nutrients,pH,toxicity)
+};                                // Total: 144 bytes
 
 struct BioSphereGPU {
-    glm::vec4 pos_radius;   // xyz = position, w = radius
-    glm::vec4 color_emit;   // rgb = color (0-1), a = entity type
+    glm::vec4 pos_radius;    // xyz = position, w = bounding radius
+    glm::vec4 axis_morph;    // xyz = orientation axis, w = morphology
+    glm::vec4 color_type;    // rgb = base color (0-1), a = entity type
+    glm::vec4 shape_params;  // x = aspect, y = noise, z = phase, w = reserved
+};
+
+struct BioEnvironmentFeatureGPU {
+    glm::vec4 pos_radius;     // xyz = world position, w = radius
+    glm::vec4 axis_strength;  // xyz = dominant direction, w = strength
+    glm::vec4 tint_type;      // rgb = tint, a = feature type
+    glm::vec4 meta;           // x = falloff, y = noise, z = unused, w = unused
 };
 
 // ── Entity type colors (0-1 range) ─────────────────────────────────────────
@@ -38,7 +49,7 @@ static glm::vec3 bio_type_color(uint32_t type) {
 
 void BiochemRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     // ── Descriptor set layout ──────────────────────────────────────────────
-    VkDescriptorSetLayoutBinding bindings[2]{};
+    VkDescriptorSetLayoutBinding bindings[3]{};
     bindings[0].binding         = 0;
     bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -47,9 +58,13 @@ void BiochemRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[2].binding         = 2;
+    bindings[2].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutCreateInfo layout_ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layout_ci.bindingCount = 2;
+    layout_ci.bindingCount = 3;
     layout_ci.pBindings    = bindings;
     vkCreateDescriptorSetLayout(vk.device, &layout_ci, nullptr, &desc_layout_);
 
@@ -145,14 +160,20 @@ void BiochemRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
+    feature_ssbo_ = vk.create_buffer(
+        MAX_ENV_FEATURES * sizeof(BioEnvironmentFeatureGPU),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
     // ── Descriptor pool + set ──────────────────────────────────────────────
     VkDescriptorPoolSize pool_sizes[] = {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,  1},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,  1},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,  1},
     };
     VkDescriptorPoolCreateInfo dp_ci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     dp_ci.maxSets       = 1;
-    dp_ci.poolSizeCount = 2;
+    dp_ci.poolSizeCount = 3;
     dp_ci.pPoolSizes    = pool_sizes;
     vkCreateDescriptorPool(vk.device, &dp_ci, nullptr, &desc_pool_);
 
@@ -173,7 +194,12 @@ void BiochemRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     ssbo_info.offset = 0;
     ssbo_info.range  = MAX_SPHERES * sizeof(BioSphereGPU);
 
-    VkWriteDescriptorSet writes[2]{};
+    VkDescriptorBufferInfo feature_info{};
+    feature_info.buffer = feature_ssbo_.handle;
+    feature_info.offset = 0;
+    feature_info.range  = MAX_ENV_FEATURES * sizeof(BioEnvironmentFeatureGPU);
+
+    VkWriteDescriptorSet writes[3]{};
     writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet          = desc_set_;
     writes[0].dstBinding      = 0;
@@ -188,7 +214,14 @@ void BiochemRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[1].pBufferInfo     = &ssbo_info;
 
-    vkUpdateDescriptorSets(vk.device, 2, writes, 0, nullptr);
+    writes[2].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet          = desc_set_;
+    writes[2].dstBinding      = 2;
+    writes[2].descriptorCount = 1;
+    writes[2].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[2].pBufferInfo     = &feature_info;
+
+    vkUpdateDescriptorSets(vk.device, 3, writes, 0, nullptr);
 }
 
 // ── Destroy ─────────────────────────────────────────────────────────────────
@@ -200,12 +233,14 @@ void BiochemRaytracer::destroy(VulkanContext& vk) {
     vkDestroyDescriptorSetLayout(vk.device, desc_layout_, nullptr);
     vk.destroy_buffer(camera_ubo_);
     vk.destroy_buffer(sphere_ssbo_);
+    vk.destroy_buffer(feature_ssbo_);
 }
 
 // ── Update + draw ───────────────────────────────────────────────────────────
 
 void BiochemRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
                                         const BiochemState& state,
+                                        const BiochemEnvironment& environment,
                                         const OrbitCamera& camera,
                                         const BiochemConfig& cfg,
                                         float screen_w, float screen_h,
@@ -220,13 +255,21 @@ void BiochemRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     for (const auto& e : state.entities)
         if (e.alive) alive_count++;
     int n = std::min(alive_count, MAX_SPHERES);
+    int feature_count = std::min(static_cast<int>(environment.features.size()), MAX_ENV_FEATURES);
 
     // ── Upload camera UBO ──────────────────────────────────────────────────
     BioCameraUBOData cam{};
     cam.inv_vp         = glm::inverse(vp);
     cam.eye_pos        = glm::vec4(camera.eye_position(), 0.0f);
     cam.screen_info    = glm::vec4(screen_w, screen_h, (float)n, time);
-    cam.lighting_params = glm::vec4(0.0f, 0.0f, cfg.ambient_strength, 0.0f);
+    cam.lighting_params = glm::vec4((float)feature_count, 0.0f, cfg.ambient_strength, 0.0f);
+    cam.environment_color = glm::vec4(cfg.environment_tint,
+        0.010f + cfg.flow_strength * 0.0007f + cfg.nutrient_density * 0.0025f);
+    cam.environment_factors = glm::vec4(
+        cfg.oxygen_level,
+        cfg.nutrient_density,
+        cfg.acidity_ph,
+        cfg.toxicity);
 
     void* mapped = nullptr;
     vkMapMemory(vk.device, camera_ubo_.memory, 0, sizeof(BioCameraUBOData), 0, &mapped);
@@ -243,7 +286,9 @@ void BiochemRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
         glm::vec3 col = bio_type_color(e.type);
         BioSphereGPU s;
         s.pos_radius = glm::vec4(e.pos, e.radius);
-        s.color_emit = glm::vec4(col, (float)e.type);
+        s.axis_morph = glm::vec4(e.axis, (float)e.morphology);
+        s.color_type = glm::vec4(col, (float)e.type);
+        s.shape_params = glm::vec4(e.shape_aspect, e.shape_noise, e.shape_phase, 0.0f);
         spheres.push_back(s);
     }
 
@@ -252,6 +297,26 @@ void BiochemRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
                     spheres.size() * sizeof(BioSphereGPU), 0, &mapped);
         memcpy(mapped, spheres.data(), spheres.size() * sizeof(BioSphereGPU));
         vkUnmapMemory(vk.device, sphere_ssbo_.memory);
+    }
+
+    std::vector<BioEnvironmentFeatureGPU> features;
+    features.reserve(feature_count);
+    for (const auto& feature : environment.features) {
+        if ((int)features.size() >= MAX_ENV_FEATURES) break;
+
+        BioEnvironmentFeatureGPU gpu{};
+        gpu.pos_radius = glm::vec4(feature.pos, feature.radius);
+        gpu.axis_strength = glm::vec4(feature.axis, feature.strength);
+        gpu.tint_type = glm::vec4(feature.tint, (float)feature.type);
+        gpu.meta = glm::vec4(feature.falloff, feature.noise, 0.0f, 0.0f);
+        features.push_back(gpu);
+    }
+
+    if (!features.empty()) {
+        vkMapMemory(vk.device, feature_ssbo_.memory, 0,
+                    features.size() * sizeof(BioEnvironmentFeatureGPU), 0, &mapped);
+        memcpy(mapped, features.data(), features.size() * sizeof(BioEnvironmentFeatureGPU));
+        vkUnmapMemory(vk.device, feature_ssbo_.memory);
     }
 
     // ── Draw fullscreen triangle ───────────────────────────────────────────

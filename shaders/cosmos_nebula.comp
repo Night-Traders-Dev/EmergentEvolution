@@ -67,6 +67,30 @@ float fbm3(vec3 p) {
     return sum * 0.5 + 0.5;
 }
 
+// Logistic transfer function from the multiplicative Perlin noise paper.
+// Shifts noise from [0,2] toward extremes (near 0 or near 2), controlled by k.
+float logistic_transfer(float x, float k) {
+    return 2.0 / (1.0 + exp(-k * (x - 1.0)));
+}
+
+// Multiplicative Perlin noise: multiply octaves (each in [0,2]) instead of adding.
+// Creates genuine empty zones where any octave near 0 drives the product to 0,
+// producing wispy filamentary structures with natural voids.
+float multiplicative_perlin(vec3 p, int octaves, float k) {
+    float product = 1.0;
+    float freq = 1.0;
+    for (int i = 0; i < octaves; ++i) {
+        float n = perlin3(p * freq);        // [-1, 1]
+        float shifted = n + 1.0;            // [0, 2]
+        float filtered = logistic_transfer(shifted, k);  // contrast-enhanced [0, 2]
+        product *= filtered;
+        freq *= 2.03;
+    }
+    // Normalize: E[product] = 1^octaves = 1, so product is already ~[0, 2^octaves]
+    // but practically values cluster near 0 due to multiplication.
+    return product;
+}
+
 float smooth_min(float a, float b, float k) {
     float h = clamp(0.5 + 0.5 * (b - a) / max(k, 1.0e-4), 0.0, 1.0);
     return mix(b, a, h) - k * h * (1.0 - h);
@@ -96,7 +120,7 @@ void aggregate_nebula_params(out float seed, out float dust, out float pressure,
     cloud_detail = 0.0;
     collapse = 0.0;
     float wsum = 0.0;
-    uint limit = min(pc.body_count, 16u);
+    uint limit = min(pc.body_count, 64u);
     for (uint i = 0u; i < limit; ++i) {
         NebulaComputeInput e = entries[i];
         if (int(e.seed_class_temp.y + 0.5) != RENDER_NEBULA) continue;
@@ -133,12 +157,19 @@ void aggregate_nebula_params(out float seed, out float dust, out float pressure,
 float layered_density(vec3 p, float seed, float t, vec3 v_a, vec3 v_b, float collapse) {
     vec3 p_a = p + v_a * t + vec3(seed * 0.013, seed * 0.009, seed * 0.017);
     vec3 p_b = p + v_b * t + vec3(seed * 0.021, seed * 0.015, seed * 0.011);
-    float d_a = fbm3(p_a * 2.2);
-    float d_b = fbm3(p_b * 3.6);
-    float additive = clamp(d_a * 0.72 + d_b * 0.58, 0.0, 1.0);
-    float condense = 1.0 - smooth_min(1.0 - d_a, 1.0 - d_b, 0.32);
-    float exponent = mix(1.15, 3.9, clamp(collapse * 0.6, 0.0, 1.0));
-    return pow(clamp(additive * 0.62 + condense * 0.55, 0.0, 1.0), exponent);
+
+    // Multiplicative Perlin noise: each octave in [0,2], multiplied together.
+    // Low k + few octaves = broad cloud structure with genuine voids.
+    float k = 1.6 + collapse * 0.8;
+    float mp_a = multiplicative_perlin(p_a * 1.2, 3, k);
+    float mp_b = multiplicative_perlin(p_b * 2.0, 3, k * 1.1);
+
+    // Combine two layers — multiplicative preserves voids.
+    float combined = mp_a * mp_b;
+    combined += combined * fbm3(p_a * 1.5) * 0.35; // filament detail
+    float density = pow(max(combined, 0.0), mix(0.45, 0.70, clamp(collapse * 0.6, 0.0, 1.0)));
+    density = smoothstep(0.10, 1.1, density);
+    return density;
 }
 
 vec3 base_velocity(vec3 p, float seed, float flow_strength, float t, out vec3 v_a, out vec3 v_b) {
@@ -209,14 +240,20 @@ void main() {
     vec3 vel = mix(prev_vel, vel_base, 0.18 + cloud_detail * 0.06);
     vel += vort * (0.015 + cloud_detail * 0.020);
     vel += attract * (0.010 + collapse * 0.035);
+    // Velocity damping to prevent runaway advection
+    vel *= 0.995;
 
     float d_layer = layered_density(p, seed, pc.sim_time, va, vb, collapse);
     float density_target = d_layer *
         (0.55 + haze * 0.38 + pressure * 0.0012 + cloud_detail * 0.20) *
         (0.72 + dust * 0.42);
 
-    float density = mix(advected_density, density_target, 0.14 + collapse * 0.08);
-    density = mix(density, prev_density, 0.12);
+    // Blend advected density with target — use multiplicative blend to preserve voids.
+    // Where either advected or target is near zero, result stays near zero.
+    float density = mix(advected_density, density_target, 0.18 + collapse * 0.10);
+    density = mix(density, prev_density, 0.10);
+    // Suppress very low densities to maintain clean voids.
+    density *= smoothstep(0.02, 0.12, density);
     density = clamp(density, 0.0, 4.0);
 
     imageStore(outField, gid, vec4(density, vel));
