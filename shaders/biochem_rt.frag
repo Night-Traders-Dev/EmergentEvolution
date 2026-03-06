@@ -252,11 +252,27 @@ float sd_phage(vec3 p, float noise, float phase) {
     return min(min(head, tail), min(base, legs));
 }
 
+float sd_influenza(vec3 p, float noise, float phase) {
+    float body = sd_ellipsoid(p, vec3(0.60, 0.54, 0.60));
+    for (int i = 0; i < 12; ++i) {
+        float fi = float(i);
+        float z = 1.0 - 2.0 * (fi + 0.5) / 12.0;
+        float r = sqrt(max(1.0 - z * z, 0.0));
+        float a = fi * 2.39996323 + phase * 0.7;
+        vec3 dir = normalize(vec3(cos(a) * r, sin(a) * r, z));
+        float spike = sd_capsule(p, dir * 0.42, dir * (0.62 + noise * 0.05), 0.032 + noise * 0.015);
+        body = min(body, spike);
+    }
+    return body;
+}
+
 float sd_virus_shape(vec3 p, int morph, float aspect, float noise, float phase) {
     if (morph == 1)
         return sd_corona(p, noise, phase);
     if (morph == 2)
         return sd_phage(vec3(p.xy, p.z * clamp(aspect / 2.8, 0.8, 1.15)), noise, phase);
+    if (morph == 3)
+        return sd_influenza(p, noise, phase);
 
     float capsid = mix(sd_sphere(p, 0.68), sd_octahedron(p, 1.08) * 0.74, 0.78);
     float ridge = sin((p.x + p.y + p.z) * 18.0 + phase * 2.0) * (0.02 + noise * 0.04);
@@ -452,6 +468,8 @@ vec4 sample_viral_replication_overlay(vec3 p0, vec3 p1, vec3 p2, float progress,
     vec3 virus_col = mix(vec3(0.90, 0.20, 0.24), vec3(1.0, 0.56, 0.24), float(virus_morph == 1));
     if (virus_morph == 2)
         virus_col = vec3(0.56, 0.94, 0.82);
+    else if (virus_morph == 3)
+        virus_col = vec3(0.84, 0.42, 0.18);
 
     vec3 entry_tangent = normalize(abs(entry_axis.y) < 0.92
         ? cross(entry_axis, vec3(0.0, 1.0, 0.0))
@@ -1028,6 +1046,7 @@ void main() {
     } else if (entity_type == 2) {
         if (morphology == 1) base_color = mix(base_color, vec3(0.96, 0.42, 0.18), 0.38);
         else if (morphology == 2) base_color = mix(base_color, vec3(0.48, 0.96, 0.82), 0.58);
+        else if (morphology == 3) base_color = mix(base_color, vec3(0.88, 0.52, 0.20), 0.36);
         else base_color = mix(base_color, vec3(0.88, 0.22, 0.44), 0.24);
     } else if (entity_type == 7) {
         base_color = mix(base_color, vec3(0.82, 0.92, 0.76), 0.36);

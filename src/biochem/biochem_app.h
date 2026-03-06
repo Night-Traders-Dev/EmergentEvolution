@@ -4,8 +4,10 @@
 #include "biochem/biochem_types.h"
 #include "biochem/biochem_raytracer.h"
 #include "common/simple_renderer.h"
+#include <array>
 #include <deque>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 struct GLFWwindow;
@@ -49,6 +51,7 @@ private:
     void assign_entity_identity(BioEntity& e, uint32_t generation = 0, uint32_t parent_id = 0);
     void push_event(uint32_t type, const std::string& text);
     void mark_entity_corpse(BioEntity& e, uint32_t event_type, const std::string& reason);
+    void reset_population_metrics();
 
     // Fullscreen overlay screens
     void draw_splash_screen();
@@ -59,6 +62,8 @@ private:
     // Simulation subsystems
     void process_cell_division(float dt);
     void process_bacteria_antibiotics(float dt);
+    void process_bacterial_colonization(float dt);
+    void process_gene_exchange(float dt);
     void process_virus_infection(float dt);
     void process_antibody_response(float dt);
     void process_phagocyte_cleanup(float dt);
@@ -67,6 +72,10 @@ private:
 
     float nutrient_timer_ = 0.0f;
     uint32_t next_entity_id_ = 1;
+    uint32_t next_species_key_ = 1024;
+    uint32_t ever_infected_total_ = 0;
+    std::array<uint32_t, BIO_TYPE_COUNT> ever_infected_by_type_{};
+    std::unordered_map<uint64_t, uint32_t> ever_infected_by_subtype_;
 
     // Splash + menu background particles
     float splash_time_ = 0.0f;
@@ -82,7 +91,7 @@ private:
     // Spawn menu
     bool spawn_menu_visible_ = true;
     int  spawn_bio_type_ = BIO_CELL;
-    int  spawn_variant_ = BIO_CELL_ANIMAL;
+    int  spawn_variant_ = BIO_CELL_GENERIC_ANIMAL;
     float spawn_energy_ = 100.0f;
 
     // 3D rendering

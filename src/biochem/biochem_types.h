@@ -22,24 +22,53 @@ enum BioEntityType : uint32_t {
 };
 
 enum BioCellMorphology : uint32_t {
-    BIO_CELL_ANIMAL     = 0,
-    BIO_CELL_EPITHELIAL = 1,
-    BIO_CELL_AMOEBOID   = 2,
+    BIO_CELL_GENERIC_ANIMAL      = 0,
+    BIO_CELL_TYPE_II_PNEUMOCYTE  = 1,
+    BIO_CELL_CILIATED_EPITHELIAL = 2,
+    BIO_CELL_ENTEROCYTE          = 3,
+    BIO_CELL_NEURON              = 4,
+    BIO_CELL_ASTROCYTE           = 5,
+    BIO_CELL_FIBROBLAST          = 6,
+    BIO_CELL_AMOEBOID            = 7,
     BIO_CELL_VARIANT_COUNT
 };
 
 enum BioBacteriaMorphology : uint32_t {
-    BIO_BACTERIA_COCCI   = 0,
-    BIO_BACTERIA_BACILLI = 1,
-    BIO_BACTERIA_SPIRAL  = 2,
+    BIO_BACTERIA_STAPHYLOCOCCUS_AUREUS   = 0,
+    BIO_BACTERIA_STREPTOCOCCUS_PNEUMONIAE = 1,
+    BIO_BACTERIA_ESCHERICHIA_COLI        = 2,
+    BIO_BACTERIA_PSEUDOMONAS_AERUGINOSA  = 3,
+    BIO_BACTERIA_BACILLUS_SUBTILIS       = 4,
+    BIO_BACTERIA_VIBRIO_CHOLERAE         = 5,
     BIO_BACTERIA_VARIANT_COUNT
 };
 
 enum BioVirusMorphology : uint32_t {
-    BIO_VIRUS_CLASSICAL = 0,
-    BIO_VIRUS_CORONA    = 1,
-    BIO_VIRUS_PHAGE     = 2,
+    BIO_VIRUS_ADENOVIRUS_C5        = 0,
+    BIO_VIRUS_SARS_COV_2           = 1,
+    BIO_VIRUS_INFLUENZA_A_H1N1     = 2,
+    BIO_VIRUS_INFLUENZA_A_H3N2     = 3,
+    BIO_VIRUS_BACTERIOPHAGE_T4     = 4,
     BIO_VIRUS_VARIANT_COUNT
+};
+
+enum BioCellVisualFamily : uint32_t {
+    BIO_CELL_FAMILY_ANIMAL = 0,
+    BIO_CELL_FAMILY_EPITHELIAL = 1,
+    BIO_CELL_FAMILY_AMOEBOID = 2
+};
+
+enum BioBacteriaVisualFamily : uint32_t {
+    BIO_BACTERIA_FAMILY_COCCI = 0,
+    BIO_BACTERIA_FAMILY_BACILLI = 1,
+    BIO_BACTERIA_FAMILY_SPIRAL = 2
+};
+
+enum BioVirusVisualFamily : uint32_t {
+    BIO_VIRUS_FAMILY_CAPSID = 0,
+    BIO_VIRUS_FAMILY_CORONA = 1,
+    BIO_VIRUS_FAMILY_PHAGE = 2,
+    BIO_VIRUS_FAMILY_INFLUENZA = 3
 };
 
 enum BioEnvironmentType : uint32_t {
@@ -148,24 +177,87 @@ inline const char* bio_entity_variant_name(uint32_t type, uint32_t morphology) {
     switch (type) {
     case BIO_CELL: {
         static const char* names[BIO_CELL_VARIANT_COUNT] = {
-            "Animal Cell", "Epithelial Cell", "Amoeboid Cell"
+            "Generic Animal Cell",
+            "Type II Pneumocyte",
+            "Ciliated Epithelial Cell",
+            "Enterocyte",
+            "Neuron",
+            "Astrocyte",
+            "Fibroblast",
+            "Amoeboid Cell"
         };
         return names[morphology % BIO_CELL_VARIANT_COUNT];
     }
     case BIO_BACTERIUM: {
         static const char* names[BIO_BACTERIA_VARIANT_COUNT] = {
-            "Cocci", "Bacilli", "Spiral"
+            "Staphylococcus aureus",
+            "Streptococcus pneumoniae",
+            "Escherichia coli",
+            "Pseudomonas aeruginosa",
+            "Bacillus subtilis",
+            "Vibrio cholerae"
         };
         return names[morphology % BIO_BACTERIA_VARIANT_COUNT];
     }
     case BIO_VIRUS: {
         static const char* names[BIO_VIRUS_VARIANT_COUNT] = {
-            "Classical Capsid", "Coronavirus", "Bacteriophage"
+            "Human adenovirus C5",
+            "SARS-CoV-2",
+            "Influenza A virus subtype H1N1 (swine flu)",
+            "Influenza A virus subtype H3N2",
+            "Enterobacteria phage T4"
         };
         return names[morphology % BIO_VIRUS_VARIANT_COUNT];
     }
     default:
         return "Default";
+    }
+}
+
+inline uint32_t bio_cell_visual_family(uint32_t morphology) {
+    switch (morphology % BIO_CELL_VARIANT_COUNT) {
+    case BIO_CELL_TYPE_II_PNEUMOCYTE:
+    case BIO_CELL_CILIATED_EPITHELIAL:
+    case BIO_CELL_ENTEROCYTE:
+        return BIO_CELL_FAMILY_EPITHELIAL;
+    case BIO_CELL_ASTROCYTE:
+    case BIO_CELL_AMOEBOID:
+        return BIO_CELL_FAMILY_AMOEBOID;
+    case BIO_CELL_GENERIC_ANIMAL:
+    case BIO_CELL_NEURON:
+    case BIO_CELL_FIBROBLAST:
+    default:
+        return BIO_CELL_FAMILY_ANIMAL;
+    }
+}
+
+inline uint32_t bio_bacteria_visual_family(uint32_t morphology) {
+    switch (morphology % BIO_BACTERIA_VARIANT_COUNT) {
+    case BIO_BACTERIA_STAPHYLOCOCCUS_AUREUS:
+    case BIO_BACTERIA_STREPTOCOCCUS_PNEUMONIAE:
+        return BIO_BACTERIA_FAMILY_COCCI;
+    case BIO_BACTERIA_VIBRIO_CHOLERAE:
+        return BIO_BACTERIA_FAMILY_SPIRAL;
+    case BIO_BACTERIA_ESCHERICHIA_COLI:
+    case BIO_BACTERIA_PSEUDOMONAS_AERUGINOSA:
+    case BIO_BACTERIA_BACILLUS_SUBTILIS:
+    default:
+        return BIO_BACTERIA_FAMILY_BACILLI;
+    }
+}
+
+inline uint32_t bio_virus_visual_family(uint32_t morphology) {
+    switch (morphology % BIO_VIRUS_VARIANT_COUNT) {
+    case BIO_VIRUS_SARS_COV_2:
+        return BIO_VIRUS_FAMILY_CORONA;
+    case BIO_VIRUS_BACTERIOPHAGE_T4:
+        return BIO_VIRUS_FAMILY_PHAGE;
+    case BIO_VIRUS_INFLUENZA_A_H1N1:
+    case BIO_VIRUS_INFLUENZA_A_H3N2:
+        return BIO_VIRUS_FAMILY_INFLUENZA;
+    case BIO_VIRUS_ADENOVIRUS_C5:
+    default:
+        return BIO_VIRUS_FAMILY_CAPSID;
     }
 }
 
@@ -231,13 +323,17 @@ struct BioEntity {
     uint32_t    entity_id = 0;
     uint32_t    parent_id = 0;
     uint32_t    infection_source_id = 0;
+    uint32_t    infection_source_type = BIO_TYPE_COUNT;
+    uint32_t    infection_species_key = 0;
     uint32_t    generation = 0;
     uint32_t    infection_generation = 0;
     uint32_t    division_count = 0;
+    uint32_t    species_key = 0;
     uint32_t    genome    = 0;          // simple genome tag for mutations
     uint32_t    infection_genome = 0;
     bool        alive     = true;
     bool        corpse    = false;
+    bool        ever_infected = false;
 };
 
 // ── Simulation config ───────────────────────────────────────────────────────

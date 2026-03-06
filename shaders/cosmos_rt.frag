@@ -358,13 +358,24 @@ float ridged_fbm(vec3 p, int octaves) {
     return val;
 }
 
+// CIE 1931 Planck-based blackbody approximation (Tanner Helland / Charity)
 vec3 blackbody_tint(float temperature) {
-    float t = clamp((temperature - 1200.0) / 32000.0, 0.0, 1.0);
-    return vec3(
-        clamp(1.25 - t * 0.95, 0.0, 1.0),
-        clamp(0.45 + t * 0.60, 0.0, 1.0),
-        clamp(-0.10 + t * 1.25, 0.0, 1.0)
-    );
+    float t = clamp(temperature, 1000.0, 40000.0) / 100.0;
+    float r, g, b;
+    if (t <= 66.0) {
+        r = 1.0;
+        g = clamp((99.4708 * log(t) - 161.1196) / 255.0, 0.0, 1.0);
+    } else {
+        r = clamp(329.698727 * pow(t - 60.0, -0.1332047592) / 255.0, 0.0, 1.0);
+        g = clamp(288.1221695 * pow(t - 60.0, -0.0755148492) / 255.0, 0.0, 1.0);
+    }
+    if (t >= 66.0)
+        b = 1.0;
+    else if (t <= 19.0)
+        b = 0.0;
+    else
+        b = clamp((138.5177312 * log(t - 10.0) - 305.0447927) / 255.0, 0.0, 1.0);
+    return vec3(r, g, b);
 }
 
 vec3 star_surface_tint(float temperature, float mass, float radius, float stage_f, float luminosity) {
@@ -2245,14 +2256,28 @@ vec3 black_hole_effect(vec3 ro, vec3 rd, Sphere bh, int body_count, bool hit_hor
     alpha_out = 0.0;
     if (!hit_horizon && influence > influence_radius) return vec3(0.0);
 
+    // Improved gravitational lensing: approximate geodesic bending
+    // Deflection angle α ≈ 4GM/(c²b) where b is impact parameter
     float lens = bh.activity_params.w * max(render_flags.w, 0.0);
-    vec3 center_dir = normalize(to_center);
-    float bend = clamp((influence_radius - influence) / max(influence_radius, 0.001), 0.0, 1.0) * lens * 0.55;
-    int warp_steps = int(3 + max(0.0, quality_params.x - 1.0) * 2.0);
+    float b = max(influence, radius * 0.5); // impact parameter
+    // Schwarzschild bending: stronger at small b, falls off as 1/b
+    float deflection = lens * radius * 2.0 / max(b, radius * 0.3);
+    deflection = clamp(deflection, 0.0, 3.14159);
+    vec3 bend_dir = normalize(center - closest);
+    // Step along curved path for better approximation
+    int warp_steps = int(4 + max(0.0, quality_params.x - 1.0) * 3.0);
     vec3 lensed_dir = rd;
-    for (int i = 0; i < 5; i++) {
+    vec3 pos = closest;
+    float step_deflect = deflection / max(float(warp_steps), 1.0);
+    for (int i = 0; i < 8; i++) {
         if (i >= warp_steps) break;
-        lensed_dir = normalize(mix(lensed_dir, center_dir, bend * 0.35));
+        vec3 to_bh = center - pos;
+        float r2 = dot(to_bh, to_bh);
+        vec3 grav_dir = to_bh / max(sqrt(r2), 0.001);
+        // Deflection ∝ 1/r² (geodesic curvature)
+        float local_bend = step_deflect * radius * radius / max(r2, radius * radius * 0.1);
+        lensed_dir = normalize(lensed_dir + grav_dir * local_bend);
+        pos += lensed_dir * radius * 0.3;
     }
 
     vec3 col = background(lensed_dir);
@@ -2261,19 +2286,34 @@ vec3 black_hole_effect(vec3 ro, vec3 rd, Sphere bh, int body_count, bool hit_hor
     float fabric_t = -1.0;
     if (sample_space_fabric(ro, lensed_dir, body_count, fabric_col, fabric_alpha, fabric_t))
         col = mix(col, col + fabric_col, fabric_alpha);
+
+    // Accretion disk with Shakura-Sunyaev temperature gradient T ∝ r^(-3/4)
     float disk_plane = abs(rel.y);
     float disk_rad = length(rel.xz);
-    float inner = smoothstep(radius * 1.15, radius * 1.7, disk_rad);
+    float r_isco = radius * 3.0; // innermost stable circular orbit = 3 R_s
+    float inner = smoothstep(r_isco * 0.9, r_isco * 1.1, disk_rad);
     float outer = 1.0 - smoothstep(radius * 3.9, radius * 4.8, disk_rad);
     float plane = 1.0 - smoothstep(radius * 0.04, radius * 0.34, disk_plane);
     float disk_mask = inner * outer * plane;
     vec3 disk_tangent = normalize(vec3(-rel.z, 0.0, rel.x) + vec3(1.0e-4));
-    float doppler = 0.65 + 0.55 * clamp(dot(disk_tangent, -rd), -1.0, 1.0);
-    vec3 disk_col = mix(vec3(1.00, 0.30, 0.04), vec3(1.00, 0.95, 0.82), smoothstep(radius * 1.5, radius * 3.8, disk_rad));
-    disk_col *= bh.activity_params.y * doppler;
-    col += disk_col * disk_mask * 1.8;
+    // Relativistic Doppler beaming
+    float v_orbital = sqrt(radius / max(disk_rad, radius * 0.5)); // v/c ~ sqrt(rs/r)
+    float doppler_shift = 1.0 / (1.0 - v_orbital * clamp(dot(disk_tangent, -rd), -1.0, 1.0));
+    float doppler = clamp(doppler_shift, 0.3, 3.0);
+    // Temperature profile: T ∝ r^(-3/4) from ISCO outward
+    float r_ratio = max(disk_rad / r_isco, 1.0);
+    float disk_temp_norm = pow(r_ratio, -0.75); // Shakura-Sunyaev
+    // Map temperature to blackbody color (inner hot → white/blue, outer → red/orange)
+    float disk_T = 40000.0 * disk_temp_norm * bh.activity_params.y;
+    vec3 disk_col = blackbody_tint(clamp(disk_T, 1500.0, 40000.0));
+    disk_col *= doppler * bh.activity_params.y;
+    // Apply lensing to disk too — disk behind BH curves around
+    float disk_lens_boost = 1.0 + deflection * 0.3;
+    col += disk_col * disk_mask * 1.8 * disk_lens_boost;
 
-    float ring = exp(-pow((influence - radius * 1.18) / max(radius * 0.14, 0.001), 2.0));
+    // Photon ring at ~1.5 R_s (photon sphere)
+    float photon_r = radius * 1.5;
+    float ring = exp(-pow((influence - photon_r) / max(radius * 0.08, 0.001), 2.0));
     col += vec3(1.0, 0.92, 0.82) * ring * (0.8 + bh.activity_params.y);
 
     float jet_axis = 1.0 - smoothstep(radius * 0.10, radius * 0.7, length(rel.xz));
@@ -2616,21 +2656,31 @@ void main() {
         final_color += vec3(0.65, 0.78, 0.95) * hit.activity_params.y * edge * phase * 6.0;
         if (render_flags.z > 0.001 && has_primary_light) {
             vec3 anti_sun = -primary_light_dir;
-            vec3 surf_dir = normalize(hit_pos - hit.pos_radius.xyz);
+            // Use position relative to body center (not surface normal) for tail direction
+            vec3 pos_dir = normalize(hit_pos - hit.pos_radius.xyz);
+            // Distance-based fadeout: tails weaken far from the star
+            vec3 to_star = (primary_light_idx >= 0)
+                ? spheres[primary_light_idx].pos_radius.xyz - hit.pos_radius.xyz
+                : -primary_light_dir * 100.0;
+            float star_dist = length(to_star);
+            float dist_fade = clamp(3.0 / max(star_dist / max(hit.pos_radius.w * 50.0, 1.0), 0.1), 0.0, 1.0);
             // Ion tail — straight anti-sunward (blue-white)
-            float ion_align = pow(max(dot(surf_dir, anti_sun), 0.0), 3.0);
+            float ion_align = pow(max(dot(pos_dir, anti_sun), 0.0), 3.0);
             float ion_tail = pow(clamp(1.0 - max(dot(-rd, anti_sun), 0.0), 0.0, 1.0), 1.5);
             vec3 ion_col = vec3(0.45, 0.62, 1.0);
             final_color += ion_col * hit.activity_params.z * ion_align * ion_tail * 1.1 *
-                max(render_flags.z, 0.0);
-            // Dust tail — curves away from orbital velocity (yellowish)
-            // Approximate orbital velocity direction as cross(anti_sun, up)
-            vec3 orbital_hint = normalize(cross(anti_sun, vec3(0.0, 1.0, 0.0)) + anti_sun * 0.6);
-            float dust_align = pow(max(dot(surf_dir, orbital_hint), 0.0), 1.8);
-            float dust_tail = pow(clamp(1.0 - max(dot(-rd, orbital_hint), 0.0), 0.0, 1.0), 1.2);
+                max(render_flags.z, 0.0) * dist_fade;
+            // Dust tail — curves behind orbital motion (yellowish)
+            // Use comet-to-star vector to derive approximate orbital plane
+            vec3 radial = normalize(to_star);
+            vec3 orbit_normal = normalize(cross(radial, vec3(0.0, 1.0, 0.0)));
+            vec3 orbital_vel_hint = normalize(cross(orbit_normal, radial));
+            vec3 dust_dir = normalize(anti_sun * 0.6 - orbital_vel_hint * 0.4);
+            float dust_align = pow(max(dot(pos_dir, dust_dir), 0.0), 1.8);
+            float dust_tail = pow(clamp(1.0 - max(dot(-rd, dust_dir), 0.0), 0.0, 1.0), 1.2);
             vec3 dust_col = vec3(0.85, 0.75, 0.50);
             final_color += dust_col * hit.activity_params.z * dust_align * dust_tail * 0.7 *
-                max(render_flags.z, 0.0);
+                max(render_flags.z, 0.0) * dist_fade;
         }
     }
 

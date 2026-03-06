@@ -5,7 +5,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <array>
 #include <random>
+#include <set>
+#include <sstream>
 
 // ── Entity type colors / names ──────────────────────────────────────────────
 
@@ -65,10 +68,15 @@ static ImVec4 bio_event_type_color(uint32_t type) {
 }
 
 static std::string bio_entity_label(const BioEntity& e) {
-    char label[96];
-    std::snprintf(label, sizeof(label), "%s #%u", BIO_TYPE_NAMES[e.type % BIO_TYPE_COUNT], e.entity_id);
+    const char* base = BIO_TYPE_NAMES[e.type % BIO_TYPE_COUNT];
+    if (e.type == BIO_CELL || e.type == BIO_BACTERIUM || e.type == BIO_VIRUS)
+        base = bio_entity_variant_name(e.type, e.morphology);
+    char label[160];
+    std::snprintf(label, sizeof(label), "%s #%u", base, e.entity_id);
     return std::string(label);
 }
+
+static uint32_t type_variant_count(uint32_t type);
 
 static const char* bio_lifecycle_stage_name(const BioEntity& e) {
     if (e.corpse) return "Dead Husk";
@@ -76,6 +84,224 @@ static const char* bio_lifecycle_stage_name(const BioEntity& e) {
     if (e.organelle_health <= 0.55f || e.telomere_state <= 0.42f) return "Aging";
     if (e.age < 18.0f) return "Young";
     return "Mature";
+}
+
+enum BioPathogenEntryMode : uint32_t {
+    BIO_ENTRY_NONE = 0,
+    BIO_ENTRY_RECEPTOR_ENDOCYTOSIS,
+    BIO_ENTRY_MEMBRANE_FUSION,
+    BIO_ENTRY_SIALIC_ENDOCYTOSIS,
+    BIO_ENTRY_GENOME_INJECTION,
+    BIO_ENTRY_FIMBRIAL_ADHESION,
+    BIO_ENTRY_BIOFILM_COLONIZATION,
+    BIO_ENTRY_TOXIN_MEDIATED
+};
+
+struct CellSubtypeTraits {
+    const char* lineage;
+    uint32_t exchange_group;
+    float infection_susceptibility;
+};
+
+struct BacteriaSubtypeTraits {
+    const char* lineage;
+    const char* infection_mode;
+    BioPathogenEntryMode entry_mode;
+    uint32_t exchange_group;
+    float colonization_rate;
+    float antibiotic_bonus;
+    uint32_t preferred_host_subtype;
+    float host_tropism_bonus;
+};
+
+struct VirusSubtypeTraits {
+    const char* lineage;
+    const char* receptor;
+    BioPathogenEntryMode entry_mode;
+    uint32_t exchange_group;
+    uint32_t preferred_host_type;
+    uint32_t preferred_host_subtype;
+    float infection_multiplier;
+    float host_tropism_bonus;
+};
+
+static const CellSubtypeTraits& cell_traits(uint32_t morphology) {
+    static const CellSubtypeTraits traits[BIO_CELL_VARIANT_COUNT] = {
+        {"Animal lineage", 1u, 1.00f},
+        {"Alveolar epithelium", 2u, 1.22f},
+        {"Airway epithelium", 2u, 1.28f},
+        {"Absorptive epithelium", 2u, 0.92f},
+        {"Neural lineage", 3u, 0.72f},
+        {"Glial lineage", 3u, 0.88f},
+        {"Connective tissue lineage", 4u, 0.86f},
+        {"Amoeboid lineage", 5u, 0.82f},
+    };
+    return traits[morphology % BIO_CELL_VARIANT_COUNT];
+}
+
+static const BacteriaSubtypeTraits& bacteria_traits(uint32_t morphology) {
+    static const BacteriaSubtypeTraits traits[BIO_BACTERIA_VARIANT_COUNT] = {
+        {"Gram-positive cocci", "adhesin-driven biofilm colonization", BIO_ENTRY_BIOFILM_COLONIZATION, 10u, 0.82f, 1.10f, BIO_CELL_GENERIC_ANIMAL, 0.16f},
+        {"Encapsulated cocci", "capsular adhesion and mucosal invasion", BIO_ENTRY_FIMBRIAL_ADHESION, 10u, 0.92f, 0.96f, BIO_CELL_CILIATED_EPITHELIAL, 0.28f},
+        {"Enteric bacilli", "fimbrial adhesion", BIO_ENTRY_FIMBRIAL_ADHESION, 11u, 0.94f, 0.90f, BIO_CELL_ENTEROCYTE, 0.26f},
+        {"Opportunistic bacilli", "biofilm colonization", BIO_ENTRY_BIOFILM_COLONIZATION, 11u, 0.88f, 1.18f, BIO_CELL_TYPE_II_PNEUMOCYTE, 0.22f},
+        {"Spore-forming bacilli", "spore persistence", BIO_ENTRY_NONE, 12u, 0.58f, 0.82f, BIO_CELL_GENERIC_ANIMAL, 0.08f},
+        {"Curved vibrios", "toxin-mediated colonization", BIO_ENTRY_TOXIN_MEDIATED, 13u, 1.06f, 0.72f, BIO_CELL_ENTEROCYTE, 0.32f},
+    };
+    return traits[morphology % BIO_BACTERIA_VARIANT_COUNT];
+}
+
+static const VirusSubtypeTraits& virus_traits(uint32_t morphology) {
+    static const VirusSubtypeTraits traits[BIO_VIRUS_VARIANT_COUNT] = {
+        {"Mastadenovirus", "CAR/integrin-mediated endocytosis", BIO_ENTRY_RECEPTOR_ENDOCYTOSIS,
+         20u, BIO_CELL, BIO_CELL_CILIATED_EPITHELIAL, 0.86f, 0.18f},
+        {"Betacoronavirus", "ACE2-mediated fusion/endocytosis", BIO_ENTRY_MEMBRANE_FUSION,
+         21u, BIO_CELL, BIO_CELL_TYPE_II_PNEUMOCYTE, 1.18f, 0.34f},
+        {"Orthomyxovirus", "sialic-acid endocytosis", BIO_ENTRY_SIALIC_ENDOCYTOSIS,
+         22u, BIO_CELL, BIO_CELL_CILIATED_EPITHELIAL, 1.02f, 0.24f},
+        {"Orthomyxovirus", "sialic-acid endocytosis", BIO_ENTRY_SIALIC_ENDOCYTOSIS,
+         22u, BIO_CELL, BIO_CELL_CILIATED_EPITHELIAL, 0.94f, 0.18f},
+        {"Tequatrovirus", "tail-fiber adsorption and genome injection", BIO_ENTRY_GENOME_INJECTION,
+         23u, BIO_BACTERIUM, BIO_BACTERIA_ESCHERICHIA_COLI, 1.12f, 0.42f},
+    };
+    return traits[morphology % BIO_VIRUS_VARIANT_COUNT];
+}
+
+static uint64_t type_subtype_key(uint32_t type, uint32_t morphology) {
+    return (static_cast<uint64_t>(type) << 32) | static_cast<uint64_t>(morphology);
+}
+
+static uint32_t base_species_key(uint32_t type, uint32_t morphology) {
+    return 1u + type * 256u + (morphology % std::max(1u, type_variant_count(type)));
+}
+
+static uint32_t subtype_exchange_group(uint32_t type, uint32_t morphology) {
+    switch (type) {
+    case BIO_CELL:      return cell_traits(morphology).exchange_group;
+    case BIO_BACTERIUM: return bacteria_traits(morphology).exchange_group;
+    case BIO_VIRUS:     return virus_traits(morphology).exchange_group;
+    default:            return 0u;
+    }
+}
+
+static bool type_supports_gene_exchange(uint32_t type) {
+    return type == BIO_CELL || type == BIO_BACTERIUM || type == BIO_VIRUS;
+}
+
+static void blend_gene_block(BioGenes& dst, const BioGenes& src, float weight) {
+    dst.seek += (src.seek - dst.seek) * weight;
+    dst.flee += (src.flee - dst.flee) * weight;
+    dst.spacing += (src.spacing - dst.spacing) * weight;
+    dst.brownian += (src.brownian - dst.brownian) * weight;
+    dst.energy += (src.energy - dst.energy) * weight;
+    dst.telomere += (src.telomere - dst.telomere) * weight;
+    dst.mitotic_clock += (src.mitotic_clock - dst.mitotic_clock) * weight;
+    dst.antibiotic_type += (src.antibiotic_type - dst.antibiotic_type) * weight;
+    dst.antibiotic_yield += (src.antibiotic_yield - dst.antibiotic_yield) * weight;
+    dst.antibiotic_diversity += (src.antibiotic_diversity - dst.antibiotic_diversity) * weight;
+}
+
+static bool virus_targets_host(const BioEntity& virus, const BioEntity& host) {
+    const auto& traits = virus_traits(virus.morphology);
+    if (host.type != traits.preferred_host_type)
+        return false;
+    if (traits.preferred_host_type == BIO_BACTERIUM)
+        return host.morphology % BIO_BACTERIA_VARIANT_COUNT == traits.preferred_host_subtype;
+    return true;
+}
+
+static float virus_host_tropism(const BioEntity& virus, const BioEntity& host) {
+    const auto& traits = virus_traits(virus.morphology);
+    float tropism = traits.infection_multiplier;
+    if (!virus_targets_host(virus, host))
+        return 0.0f;
+    if (host.type == BIO_CELL) {
+        tropism *= cell_traits(host.morphology).infection_susceptibility;
+        if (host.morphology % BIO_CELL_VARIANT_COUNT == traits.preferred_host_subtype)
+            tropism *= 1.0f + traits.host_tropism_bonus;
+    } else if (host.type == BIO_BACTERIUM) {
+        if (host.morphology % BIO_BACTERIA_VARIANT_COUNT == traits.preferred_host_subtype)
+            tropism *= 1.0f + traits.host_tropism_bonus;
+        tropism *= bacteria_traits(host.morphology).colonization_rate;
+    }
+    return tropism;
+}
+
+static bool entity_has_active_infection(const BioEntity& e) {
+    return e.infection_progress > 0.0f;
+}
+
+static bool entity_has_viral_infection(const BioEntity& e) {
+    return e.infection_progress > 0.0f && e.infection_source_type == BIO_VIRUS;
+}
+
+static bool entity_has_bacterial_infection(const BioEntity& e) {
+    return e.infection_progress > 0.0f && e.infection_source_type == BIO_BACTERIUM;
+}
+
+static const char* infection_variant_name(const BioEntity& e) {
+    if (e.infection_source_type == BIO_VIRUS)
+        return bio_entity_variant_name(BIO_VIRUS, e.infection_morphology);
+    if (e.infection_source_type == BIO_BACTERIUM)
+        return bio_entity_variant_name(BIO_BACTERIUM, e.infection_morphology);
+    return "Unknown pathogen";
+}
+
+static const char* infection_mechanism_name(const BioEntity& e) {
+    if (e.infection_source_type == BIO_VIRUS)
+        return virus_traits(e.infection_morphology).receptor;
+    if (e.infection_source_type == BIO_BACTERIUM)
+        return bacteria_traits(e.infection_morphology).infection_mode;
+    return "unspecified infection pathway";
+}
+
+static float pathogen_entry_bias(BioPathogenEntryMode mode) {
+    switch (mode) {
+    case BIO_ENTRY_MEMBRANE_FUSION:       return 1.16f;
+    case BIO_ENTRY_SIALIC_ENDOCYTOSIS:    return 1.08f;
+    case BIO_ENTRY_GENOME_INJECTION:      return 1.18f;
+    case BIO_ENTRY_FIMBRIAL_ADHESION:     return 1.06f;
+    case BIO_ENTRY_BIOFILM_COLONIZATION:  return 0.96f;
+    case BIO_ENTRY_TOXIN_MEDIATED:        return 1.12f;
+    case BIO_ENTRY_RECEPTOR_ENDOCYTOSIS:  return 1.00f;
+    case BIO_ENTRY_NONE:
+    default:                              return 0.78f;
+    }
+}
+
+static float bacteria_host_tropism(const BioEntity& bacterium, const BioEntity& host) {
+    if (host.type != BIO_CELL)
+        return 0.0f;
+    const auto& traits = bacteria_traits(bacterium.morphology);
+    float tropism = traits.colonization_rate * pathogen_entry_bias(traits.entry_mode);
+    tropism *= cell_traits(host.morphology).infection_susceptibility;
+    if (host.morphology % BIO_CELL_VARIANT_COUNT == traits.preferred_host_subtype)
+        tropism *= 1.0f + traits.host_tropism_bonus;
+    return std::clamp(tropism, 0.0f, 2.75f);
+}
+
+static std::string format_generation_set(const std::set<uint32_t>& generations) {
+    if (generations.empty())
+        return "none";
+    std::ostringstream out;
+    auto it = generations.begin();
+    while (it != generations.end()) {
+        uint32_t start = *it;
+        uint32_t end = start;
+        auto next = std::next(it);
+        while (next != generations.end() && *next == end + 1) {
+            end = *next;
+            ++next;
+        }
+        if (out.tellp() > 0)
+            out << ", ";
+        if (start == end)
+            out << start;
+        else
+            out << start << "-" << end;
+        it = next;
+    }
+    return out.str();
 }
 
 static glm::vec3 normalized_or(glm::vec3 v, glm::vec3 fallback);
@@ -191,39 +417,51 @@ static void randomize_entity_genes(BioEntity& e, std::mt19937& rng) {
 
     switch (e.type) {
     case BIO_CELL:
-        if (e.morphology % BIO_CELL_VARIANT_COUNT == BIO_CELL_EPITHELIAL) {
+        if (bio_cell_visual_family(e.morphology) == BIO_CELL_FAMILY_EPITHELIAL) {
             e.genes.spacing *= 1.20f;
             e.genes.brownian *= 0.72f;
-        } else if (e.morphology % BIO_CELL_VARIANT_COUNT == BIO_CELL_AMOEBOID) {
+        } else if (bio_cell_visual_family(e.morphology) == BIO_CELL_FAMILY_AMOEBOID) {
             e.genes.seek *= 1.18f;
             e.genes.brownian *= 1.28f;
             e.genes.flee *= 0.92f;
+        }
+        if (e.morphology % BIO_CELL_VARIANT_COUNT == BIO_CELL_NEURON) {
+            e.genes.seek *= 0.72f;
+            e.genes.energy *= 1.08f;
+        } else if (e.morphology % BIO_CELL_VARIANT_COUNT == BIO_CELL_TYPE_II_PNEUMOCYTE) {
+            e.genes.spacing *= 1.08f;
+            e.genes.energy *= 1.04f;
         }
         break;
     case BIO_BACTERIUM:
         e.genes.antibiotic_type = std::uniform_real_distribution<float>(0.0f, 1.0f)(rng);
         e.genes.antibiotic_yield *= jitter(0.30f);
         e.genes.antibiotic_diversity *= jitter(0.45f);
-        if (e.morphology % BIO_BACTERIA_VARIANT_COUNT == BIO_BACTERIA_BACILLI) {
+        if (bio_bacteria_visual_family(e.morphology) == BIO_BACTERIA_FAMILY_BACILLI) {
             e.genes.seek *= 1.12f;
             e.genes.spacing *= 1.08f;
             e.genes.antibiotic_yield *= 1.10f;
-        } else if (e.morphology % BIO_BACTERIA_VARIANT_COUNT == BIO_BACTERIA_SPIRAL) {
+        } else if (bio_bacteria_visual_family(e.morphology) == BIO_BACTERIA_FAMILY_SPIRAL) {
             e.genes.brownian *= 1.20f;
             e.genes.flee *= 1.10f;
             e.genes.antibiotic_diversity *= 1.12f;
         }
+        e.genes.antibiotic_yield *= bacteria_traits(e.morphology).antibiotic_bonus;
         break;
     case BIO_VIRUS:
         e.genes.antibiotic_type = 0.0f;
         e.genes.antibiotic_yield = 0.0f;
         e.genes.antibiotic_diversity = 0.0f;
-        if (e.morphology % BIO_VIRUS_VARIANT_COUNT == BIO_VIRUS_CORONA) {
+        if (e.morphology % BIO_VIRUS_VARIANT_COUNT == BIO_VIRUS_SARS_COV_2) {
             e.genes.seek *= 1.18f;
             e.genes.energy *= 1.06f;
-        } else if (e.morphology % BIO_VIRUS_VARIANT_COUNT == BIO_VIRUS_PHAGE) {
+        } else if (e.morphology % BIO_VIRUS_VARIANT_COUNT == BIO_VIRUS_BACTERIOPHAGE_T4) {
             e.genes.spacing *= 0.82f;
             e.genes.seek *= 1.10f;
+        } else if (e.morphology % BIO_VIRUS_VARIANT_COUNT == BIO_VIRUS_INFLUENZA_A_H1N1 ||
+                   e.morphology % BIO_VIRUS_VARIANT_COUNT == BIO_VIRUS_INFLUENZA_A_H3N2) {
+            e.genes.seek *= 1.08f;
+            e.genes.spacing *= 0.90f;
         }
         break;
     case BIO_WHITE_BLOOD:
@@ -332,6 +570,8 @@ static void reset_infection_state(BioEntity& e) {
     e.infection_axis = glm::vec3(1.0f, 0.0f, 0.0f);
     e.infection_morphology = 0;
     e.infection_source_id = 0;
+    e.infection_source_type = BIO_TYPE_COUNT;
+    e.infection_species_key = 0;
     e.infection_generation = 0;
     e.infection_genome = 0;
     e.infection_genes = {};
@@ -386,10 +626,10 @@ static float viral_burst_capacity(const BioEntity& host) {
     float radius_ratio = host.radius / std::max(type_default_radius(BIO_VIRUS), 0.1f);
     float capacity = 4.5f + radius_ratio * (2.35f + std::clamp(host.infection_genes.energy, 0.35f, 2.25f) * 0.65f);
     switch (host.infection_morphology % BIO_VIRUS_VARIANT_COUNT) {
-    case BIO_VIRUS_CORONA:
+    case BIO_VIRUS_SARS_COV_2:
         capacity *= 1.12f;
         break;
-    case BIO_VIRUS_PHAGE:
+    case BIO_VIRUS_BACTERIOPHAGE_T4:
         capacity *= 0.88f;
         break;
     default:
@@ -412,6 +652,8 @@ static void initialize_entity_lifecycle(BioEntity& e, std::mt19937& rng) {
     e.division_cooldown = std::max(0.0f, type_cycle_cooldown_base(e.type) / std::max(e.genes.mitotic_clock, 0.25f) * randf(0.15f, 0.65f));
     e.division_count = 0;
     e.antibiotic_film = 0.0f;
+    e.species_key = base_species_key(e.type, e.morphology);
+    e.ever_infected = false;
     reset_infection_state(e);
 }
 
@@ -449,23 +691,45 @@ static uint32_t random_morphology_for(uint32_t type, BioEnvironmentType env, std
 
     switch (type) {
     case BIO_CELL: {
-        float weights[BIO_CELL_VARIANT_COUNT] = {0.55f, 0.25f, 0.20f};
-        if (env == BIO_ENV_HUMAN_LUNG) { weights[0] = 0.35f; weights[1] = 0.50f; weights[2] = 0.15f; }
-        else if (env == BIO_ENV_POND_WATER) { weights[0] = 0.20f; weights[1] = 0.10f; weights[2] = 0.70f; }
-        else if (env == BIO_ENV_CAT_BRAIN) { weights[0] = 0.65f; weights[1] = 0.20f; weights[2] = 0.15f; }
+        float weights[BIO_CELL_VARIANT_COUNT] = {0.18f, 0.12f, 0.12f, 0.10f, 0.14f, 0.12f, 0.12f, 0.10f};
+        if (env == BIO_ENV_HUMAN_LUNG) {
+            float lung[BIO_CELL_VARIANT_COUNT] = {0.08f, 0.30f, 0.32f, 0.04f, 0.04f, 0.04f, 0.10f, 0.08f};
+            std::copy(lung, lung + BIO_CELL_VARIANT_COUNT, weights);
+        } else if (env == BIO_ENV_POND_WATER) {
+            float pond[BIO_CELL_VARIANT_COUNT] = {0.10f, 0.04f, 0.02f, 0.02f, 0.06f, 0.12f, 0.08f, 0.56f};
+            std::copy(pond, pond + BIO_CELL_VARIANT_COUNT, weights);
+        } else if (env == BIO_ENV_CAT_BRAIN) {
+            float brain[BIO_CELL_VARIANT_COUNT] = {0.06f, 0.02f, 0.02f, 0.02f, 0.40f, 0.28f, 0.14f, 0.06f};
+            std::copy(brain, brain + BIO_CELL_VARIANT_COUNT, weights);
+        }
         return weighted_pick(weights, BIO_CELL_VARIANT_COUNT);
     }
     case BIO_BACTERIUM: {
-        float weights[BIO_BACTERIA_VARIANT_COUNT] = {0.30f, 0.50f, 0.20f};
-        if (env == BIO_ENV_POND_WATER) { weights[0] = 0.20f; weights[1] = 0.30f; weights[2] = 0.50f; }
-        else if (env == BIO_ENV_HUMAN_LUNG) { weights[0] = 0.45f; weights[1] = 0.45f; weights[2] = 0.10f; }
+        float weights[BIO_BACTERIA_VARIANT_COUNT] = {0.18f, 0.16f, 0.20f, 0.16f, 0.12f, 0.18f};
+        if (env == BIO_ENV_POND_WATER) {
+            float pond[BIO_BACTERIA_VARIANT_COUNT] = {0.06f, 0.06f, 0.22f, 0.16f, 0.10f, 0.40f};
+            std::copy(pond, pond + BIO_BACTERIA_VARIANT_COUNT, weights);
+        } else if (env == BIO_ENV_HUMAN_LUNG) {
+            float lung[BIO_BACTERIA_VARIANT_COUNT] = {0.26f, 0.28f, 0.12f, 0.18f, 0.06f, 0.10f};
+            std::copy(lung, lung + BIO_BACTERIA_VARIANT_COUNT, weights);
+        } else if (env == BIO_ENV_PETRI_DISH) {
+            float dish[BIO_BACTERIA_VARIANT_COUNT] = {0.12f, 0.10f, 0.30f, 0.18f, 0.18f, 0.12f};
+            std::copy(dish, dish + BIO_BACTERIA_VARIANT_COUNT, weights);
+        }
         return weighted_pick(weights, BIO_BACTERIA_VARIANT_COUNT);
     }
     case BIO_VIRUS: {
-        float weights[BIO_VIRUS_VARIANT_COUNT] = {0.40f, 0.35f, 0.25f};
-        if (env == BIO_ENV_HUMAN_LUNG) { weights[0] = 0.15f; weights[1] = 0.70f; weights[2] = 0.15f; }
-        else if (env == BIO_ENV_POND_WATER) { weights[0] = 0.30f; weights[1] = 0.15f; weights[2] = 0.55f; }
-        else if (env == BIO_ENV_CAT_BRAIN) { weights[0] = 0.45f; weights[1] = 0.40f; weights[2] = 0.15f; }
+        float weights[BIO_VIRUS_VARIANT_COUNT] = {0.20f, 0.22f, 0.20f, 0.18f, 0.20f};
+        if (env == BIO_ENV_HUMAN_LUNG) {
+            float lung[BIO_VIRUS_VARIANT_COUNT] = {0.10f, 0.42f, 0.28f, 0.16f, 0.04f};
+            std::copy(lung, lung + BIO_VIRUS_VARIANT_COUNT, weights);
+        } else if (env == BIO_ENV_POND_WATER) {
+            float pond[BIO_VIRUS_VARIANT_COUNT] = {0.12f, 0.08f, 0.08f, 0.08f, 0.64f};
+            std::copy(pond, pond + BIO_VIRUS_VARIANT_COUNT, weights);
+        } else if (env == BIO_ENV_CAT_BRAIN) {
+            float brain[BIO_VIRUS_VARIANT_COUNT] = {0.24f, 0.26f, 0.18f, 0.22f, 0.10f};
+            std::copy(brain, brain + BIO_VIRUS_VARIANT_COUNT, weights);
+        }
         return weighted_pick(weights, BIO_VIRUS_VARIANT_COUNT);
     }
     default:
@@ -486,39 +750,45 @@ static void configure_entity_shape(BioEntity& e, std::mt19937& rng) {
 
     switch (e.type) {
     case BIO_CELL:
-        switch (e.morphology % BIO_CELL_VARIANT_COUNT) {
-        case BIO_CELL_ANIMAL:
+        switch (bio_cell_visual_family(e.morphology)) {
+        case BIO_CELL_FAMILY_ANIMAL:
             e.radius *= randf(0.95f, 1.10f);
             e.shape_aspect = randf(0.95f, 1.10f);
             e.shape_noise = randf(0.16f, 0.24f);
             break;
-        case BIO_CELL_EPITHELIAL:
+        case BIO_CELL_FAMILY_EPITHELIAL:
             e.radius *= randf(1.05f, 1.20f);
             e.shape_aspect = randf(0.58f, 0.78f);
             e.shape_noise = randf(0.08f, 0.15f);
             e.axis = normalized_or(glm::mix(e.axis, glm::vec3(0.0f, 1.0f, 0.0f), 0.55f), glm::vec3(0.0f, 1.0f, 0.0f));
             break;
-        case BIO_CELL_AMOEBOID:
+        case BIO_CELL_FAMILY_AMOEBOID:
         default:
             e.radius *= randf(0.95f, 1.15f);
             e.shape_aspect = randf(0.90f, 1.12f);
             e.shape_noise = randf(0.26f, 0.42f);
             break;
         }
+        if (e.morphology % BIO_CELL_VARIANT_COUNT == BIO_CELL_NEURON) {
+            e.radius *= 0.92f;
+            e.shape_aspect *= 1.05f;
+        } else if (e.morphology % BIO_CELL_VARIANT_COUNT == BIO_CELL_FIBROBLAST) {
+            e.shape_aspect *= 1.10f;
+        }
         break;
     case BIO_BACTERIUM:
-        switch (e.morphology % BIO_BACTERIA_VARIANT_COUNT) {
-        case BIO_BACTERIA_COCCI:
+        switch (bio_bacteria_visual_family(e.morphology)) {
+        case BIO_BACTERIA_FAMILY_COCCI:
             e.radius *= randf(0.90f, 1.02f);
             e.shape_aspect = randf(0.95f, 1.08f);
             e.shape_noise = randf(0.05f, 0.10f);
             break;
-        case BIO_BACTERIA_BACILLI:
+        case BIO_BACTERIA_FAMILY_BACILLI:
             e.radius *= randf(1.12f, 1.28f);
             e.shape_aspect = randf(1.70f, 2.25f);
             e.shape_noise = randf(0.03f, 0.08f);
             break;
-        case BIO_BACTERIA_SPIRAL:
+        case BIO_BACTERIA_FAMILY_SPIRAL:
         default:
             e.radius *= randf(1.18f, 1.35f);
             e.shape_aspect = randf(2.10f, 2.90f);
@@ -527,22 +797,27 @@ static void configure_entity_shape(BioEntity& e, std::mt19937& rng) {
         }
         break;
     case BIO_VIRUS:
-        switch (e.morphology % BIO_VIRUS_VARIANT_COUNT) {
-        case BIO_VIRUS_CLASSICAL:
+        switch (bio_virus_visual_family(e.morphology)) {
+        case BIO_VIRUS_FAMILY_CAPSID:
             e.radius *= randf(0.92f, 1.02f);
             e.shape_aspect = randf(0.94f, 1.04f);
             e.shape_noise = randf(0.05f, 0.10f);
             break;
-        case BIO_VIRUS_CORONA:
+        case BIO_VIRUS_FAMILY_CORONA:
             e.radius *= randf(1.00f, 1.10f);
             e.shape_aspect = randf(0.95f, 1.05f);
             e.shape_noise = randf(0.09f, 0.16f);
             break;
-        case BIO_VIRUS_PHAGE:
-        default:
+        case BIO_VIRUS_FAMILY_PHAGE:
             e.radius *= randf(1.12f, 1.26f);
             e.shape_aspect = randf(2.55f, 3.25f);
             e.shape_noise = randf(0.02f, 0.05f);
+            break;
+        case BIO_VIRUS_FAMILY_INFLUENZA:
+        default:
+            e.radius *= randf(0.96f, 1.08f);
+            e.shape_aspect = randf(0.95f, 1.10f);
+            e.shape_noise = randf(0.06f, 0.12f);
             break;
         }
         break;
@@ -1082,11 +1357,19 @@ void BiochemApp::init(GLFWwindow* window) {
     reset_camera_pose();
 
     next_entity_id_ = 1;
+    reset_population_metrics();
     event_log_.clear();
     event_log_dirty_ = false;
     seed_default_population(state, cfg, environment_, next_entity_id_);
     cfg.entity_count = static_cast<uint32_t>(state.count_alive());
     push_event(BIO_EVENT_SYSTEM, "Simulation initialized.");
+}
+
+void BiochemApp::reset_population_metrics() {
+    next_species_key_ = 1024;
+    ever_infected_total_ = 0;
+    ever_infected_by_type_.fill(0);
+    ever_infected_by_subtype_.clear();
 }
 
 void BiochemApp::destroy() {
@@ -1099,6 +1382,7 @@ void BiochemApp::reset_simulation() {
     regenerate_environment(true);
     state.clear();
     next_entity_id_ = 1;
+    reset_population_metrics();
     event_log_.clear();
     event_log_dirty_ = false;
     seed_default_population(state, cfg, environment_, next_entity_id_);
@@ -1342,7 +1626,7 @@ void BiochemApp::step_simulation(float dt) {
             e.organelle_health += (target_health - e.organelle_health) * std::min(1.0f, scaled_dt * 1.8f);
 
             if (e.energy <= 0.0f) {
-                if (e.type == BIO_CELL && e.infection_progress > 0.0f) {
+                if ((e.type == BIO_CELL || e.type == BIO_BACTERIUM) && entity_has_viral_infection(e)) {
                     e.energy = 0.0f;
                     continue;
                 }
@@ -1398,9 +1682,11 @@ void BiochemApp::step_simulation(float dt) {
 
     // Subsystems
     process_bacteria_antibiotics(scaled_dt);
+    process_gene_exchange(scaled_dt);
     process_repulsion();
     process_cell_division(scaled_dt);
     process_virus_infection(scaled_dt);
+    process_bacterial_colonization(scaled_dt);
     if (cfg.immune_system)
         process_antibody_response(scaled_dt);
     process_phagocyte_cleanup(scaled_dt);
@@ -1438,7 +1724,7 @@ void BiochemApp::process_cell_division(float dt) {
         auto& e = ents[i];
         if (!e.alive) continue;
         if (e.type != BIO_CELL && e.type != BIO_BACTERIUM && e.type != BIO_WHITE_BLOOD) continue;
-        if (e.type == BIO_CELL && e.infection_progress > 0.0f)
+        if ((e.type == BIO_CELL || e.type == BIO_BACTERIUM) && e.infection_progress > 0.0f)
             continue;
         if (type_uses_telomeres(e.type) && e.telomere_state <= 0.08f)
             continue;
@@ -1515,6 +1801,7 @@ void BiochemApp::process_cell_division(float dt) {
         child.mitosis_progress = 0.0f;
         e.mitosis_progress = 0.0f;
         initialize_entity_lifecycle(child, rng);
+        child.species_key = e.species_key;
         if (type_uses_telomeres(e.type)) {
             float attrition = 1.0f / telomere_division_capacity(e);
             float next_telomere = std::max(0.0f, std::min(e.telomere_state, child.telomere_state) - attrition);
@@ -1529,6 +1816,8 @@ void BiochemApp::process_cell_division(float dt) {
         float cooldown = type_cycle_cooldown_base(e.type) / std::max(e.genes.mitotic_clock, 0.25f);
         e.division_cooldown = cooldown;
         child.division_cooldown = cooldown;
+        if (child.morphology != e.morphology || child.genome != e.genome)
+            child.species_key = next_species_key_++;
         assign_entity_identity(child, e.generation + 1, e.entity_id);
         configure_entity_shape(child, rng);
 
@@ -1636,6 +1925,64 @@ void BiochemApp::process_bacteria_antibiotics(float dt) {
     }
 }
 
+void BiochemApp::process_gene_exchange(float dt) {
+    auto& ents = state.entities;
+    size_t n = ents.size();
+    if (n < 2)
+        return;
+
+    for (size_t i = 0; i < n; ++i) {
+        auto& a = ents[i];
+        if (!a.alive || !type_supports_gene_exchange(a.type))
+            continue;
+
+        for (size_t j = i + 1; j < n; ++j) {
+            auto& b = ents[j];
+            if (!b.alive || b.type != a.type || !type_supports_gene_exchange(b.type))
+                continue;
+            if (subtype_exchange_group(a.type, a.morphology) != subtype_exchange_group(b.type, b.morphology))
+                continue;
+
+            float dist = glm::length(a.pos - b.pos);
+            float range = (a.radius + b.radius) * 1.9f;
+            if (dist > range)
+                continue;
+
+            float genome_similarity = 1.0f - std::min(1.0f,
+                static_cast<float>(__builtin_popcount(static_cast<unsigned int>(a.genome ^ b.genome))) / 18.0f);
+            float subtype_mix = (a.morphology == b.morphology) ? 0.20f : 0.42f;
+            float chance = dt * (0.010f + subtype_mix * 0.028f) * (0.55f + genome_similarity * 0.45f);
+            if (randf_range(0.0f, 1.0f) > chance)
+                continue;
+
+            BioEntity* recipient = (randf_range(0.0f, 1.0f) < 0.5f) ? &a : &b;
+            const BioEntity* donor = (recipient == &a) ? &b : &a;
+            blend_gene_block(recipient->genes, donor->genes, 0.28f);
+            recipient->genome ^= (donor->genome & 0x00FF00FFu);
+
+            bool subtype_shift = (recipient->morphology != donor->morphology &&
+                                  randf_range(0.0f, 1.0f) < 0.18f);
+            if (subtype_shift)
+                recipient->morphology = donor->morphology;
+            clamp_genes(recipient->genes);
+
+            bool speciation = subtype_shift || randf_range(0.0f, 1.0f) < 0.14f;
+            if (speciation) {
+                recipient->species_key = next_species_key_++;
+                char msg[256];
+                std::snprintf(msg, sizeof(msg),
+                              "%s exchanged genes with %s and diverged into species cluster %u.",
+                              bio_entity_label(*recipient).c_str(), bio_entity_label(*donor).c_str(),
+                              recipient->species_key);
+                push_event(BIO_EVENT_DIVISION, msg);
+            }
+
+            std::mt19937 rng(recipient->genome ^ recipient->species_key ^ static_cast<uint32_t>(i * 977u + j * 131u));
+            configure_entity_shape(*recipient, rng);
+        }
+    }
+}
+
 // ── Virus Infection ─────────────────────────────────────────────────────────
 
 void BiochemApp::process_virus_infection(float dt) {
@@ -1648,7 +1995,7 @@ void BiochemApp::process_virus_infection(float dt) {
 
     for (size_t i = 0; i < n; ++i) {
         auto& host = ents[i];
-        if (!host.alive || host.type != BIO_CELL || host.infection_progress <= 0.0f)
+        if (!host.alive || (host.type != BIO_CELL && host.type != BIO_BACTERIUM) || !entity_has_viral_infection(host))
             continue;
 
         float local_shelter = sample_feature_density(environment_, BIO_ENV_FEATURE_MEMBRANE, host.pos);
@@ -1681,6 +2028,7 @@ void BiochemApp::process_virus_infection(float dt) {
         std::string host_label = bio_entity_label(host);
         uint32_t source_generation = host.infection_generation;
         uint32_t source_id = host.infection_source_id;
+        uint32_t source_species = host.infection_species_key;
         uint32_t source_genome = host.infection_genome;
         uint32_t source_morphology = host.infection_morphology % BIO_VIRUS_VARIANT_COUNT;
         BioGenes source_genes = host.infection_genes;
@@ -1688,7 +2036,7 @@ void BiochemApp::process_virus_infection(float dt) {
         glm::vec3 burst_velocity = host.vel;
         int burst_count = std::clamp(
             static_cast<int>(std::round(host.infection_load * (0.88f + source_genes.energy * 0.10f) +
-                                        (source_morphology == BIO_VIRUS_PHAGE ? 1.0f : 0.0f))),
+                                        (source_morphology == BIO_VIRUS_BACTERIOPHAGE_T4 ? 1.0f : 0.0f))),
             6, 22);
 
         mark_entity_corpse(host, BIO_EVENT_INFECTION, "was lysed into a dead husk");
@@ -1710,6 +2058,8 @@ void BiochemApp::process_virus_infection(float dt) {
                 mutate_entity_genes(v, vrng, cfg.mutation_rate * 1.2f);
             v.energy = type_default_energy(BIO_VIRUS) * std::clamp(v.genes.energy, 0.45f, 1.8f);
             initialize_entity_lifecycle(v, vrng);
+            v.species_key = (v.genome != source_genome) ? next_species_key_++ :
+                (source_species != 0 ? source_species : base_species_key(BIO_VIRUS, v.morphology));
             assign_entity_identity(v, source_generation + 1, source_id);
             configure_entity_shape(v, vrng);
             ents.push_back(v);
@@ -1735,9 +2085,11 @@ void BiochemApp::process_virus_infection(float dt) {
             if (i == j)
                 continue;
             auto& host = ents[j];
-            if (!host.alive || host.type != BIO_CELL)
+            if (!host.alive || (host.type != BIO_CELL && host.type != BIO_BACTERIUM))
                 continue;
             if (host.infection_progress > 0.0f)
+                continue;
+            if (!virus_targets_host(virus, host))
                 continue;
 
             float dist = glm::length(host.pos - virus.pos);
@@ -1753,7 +2105,10 @@ void BiochemApp::process_virus_infection(float dt) {
 
         auto& host = ents[best_host];
         float local_shelter = sample_feature_density(environment_, BIO_ENV_FEATURE_MEMBRANE, host.pos);
-        float local_factor = std::clamp(1.0f - local_shelter * 0.18f, 0.45f, 1.0f);
+        float tropism = virus_host_tropism(virus, host);
+        if (tropism <= 0.0f)
+            continue;
+        float local_factor = std::clamp(1.0f - local_shelter * 0.18f, 0.45f, 1.0f) * tropism;
         float contact_radius = std::min(cfg.infection_radius, virus.radius + host.radius * 1.02f + 0.8f);
         float chance = std::clamp(effective_rate * local_factor * (1.0f - best_contact / std::max(contact_radius, 1.0f)) * dt * 3.5f,
                                   0.0f, 0.95f);
@@ -1766,9 +2121,17 @@ void BiochemApp::process_virus_infection(float dt) {
             host.infection_axis = normalized_or(virus.pos - host.pos, host.axis);
             host.infection_morphology = virus.morphology;
             host.infection_source_id = virus.entity_id;
+            host.infection_source_type = BIO_VIRUS;
+            host.infection_species_key = virus.species_key;
             host.infection_generation = virus.generation;
             host.infection_genome = virus.genome;
             host.infection_genes = virus.genes;
+            if (!host.ever_infected) {
+                host.ever_infected = true;
+                ever_infected_total_ += 1;
+                ever_infected_by_type_[host.type % BIO_TYPE_COUNT] += 1;
+                ever_infected_by_subtype_[type_subtype_key(host.type, host.morphology)] += 1;
+            }
 
             char msg[224];
             std::snprintf(msg, sizeof(msg), "%s entered %s and began replicating.",
@@ -1781,6 +2144,8 @@ void BiochemApp::process_virus_infection(float dt) {
                 host.infection_axis = normalized_or(glm::mix(host.infection_axis, virus.pos - host.pos, 0.65f), host.axis);
                 host.infection_morphology = virus.morphology;
                 host.infection_source_id = virus.entity_id;
+                host.infection_source_type = BIO_VIRUS;
+                host.infection_species_key = virus.species_key;
                 host.infection_generation = virus.generation;
                 host.infection_genome = virus.genome;
                 host.infection_genes = virus.genes;
@@ -1791,6 +2156,162 @@ void BiochemApp::process_virus_infection(float dt) {
     }
 }
 
+void BiochemApp::process_bacterial_colonization(float dt) {
+    auto& ents = state.entities;
+    size_t n = ents.size();
+    if (n == 0)
+        return;
+
+    float acidity_bias = 1.0f - std::min(std::abs(cfg.acidity_ph - 7.0f), 2.1f) / 2.1f * 0.28f;
+    float nutrient_bias = 0.72f + cfg.nutrient_density * 0.34f;
+    float oxygen_bias = 0.85f + std::max(0.0f, 0.85f - cfg.oxygen_level) * 0.20f;
+    float effective_rate = cfg.infection_rate * acidity_bias * nutrient_bias * oxygen_bias * 0.58f;
+
+    for (size_t i = 0; i < n; ++i) {
+        auto& host = ents[i];
+        if (!host.alive || host.type != BIO_CELL || !entity_has_bacterial_infection(host))
+            continue;
+
+        const auto& traits = bacteria_traits(host.infection_morphology);
+        float nutrient_field = sample_feature_density(environment_, BIO_ENV_FEATURE_NUTRIENT, host.pos);
+        float toxin_field = sample_feature_density(environment_, BIO_ENV_FEATURE_TOXIN, host.pos);
+        float entry_bias = pathogen_entry_bias(traits.entry_mode);
+        float growth_rate = effective_rate * traits.colonization_rate * entry_bias *
+                            (0.68f + nutrient_field * 0.42f) *
+                            (0.70f + std::clamp(host.infection_genes.energy, 0.35f, 2.25f) * 0.22f);
+        float host_drag = 0.78f + cell_traits(host.morphology).infection_susceptibility * 0.22f;
+
+        host.infection_progress = std::min(1.18f, host.infection_progress + growth_rate * dt * 0.26f);
+        host.infection_load += dt * (0.55f + growth_rate * 1.8f + toxin_field * 0.18f);
+        host.energy -= dt * (2.1f + host.infection_load * 0.62f + toxin_field * 0.85f) * host_drag;
+        host.starvation = std::min(1.6f, host.starvation + dt * host.infection_progress * 0.12f);
+        host.organelle_health = std::max(0.0f, host.organelle_health -
+            dt * (0.010f + host.infection_progress * 0.048f + toxin_field * 0.020f));
+        host.vel *= 0.994f;
+
+        bool overwhelmed = host.infection_load >= (4.4f + traits.colonization_rate * 3.2f);
+        bool host_failed = overwhelmed || host.infection_progress >= 1.04f ||
+                           (host.energy <= 9.0f && host.infection_progress >= 0.68f) ||
+                           (host.organelle_health <= 0.08f && host.infection_progress >= 0.62f);
+        if (!host_failed)
+            continue;
+
+        std::string host_label = bio_entity_label(host);
+        uint32_t source_generation = host.infection_generation;
+        uint32_t source_id = host.infection_source_id;
+        uint32_t source_species = host.infection_species_key;
+        uint32_t source_genome = host.infection_genome;
+        uint32_t source_morphology = host.infection_morphology % BIO_BACTERIA_VARIANT_COUNT;
+        BioGenes source_genes = host.infection_genes;
+        glm::vec3 release_origin = host.pos;
+        glm::vec3 release_velocity = host.vel;
+
+        mark_entity_corpse(host, BIO_EVENT_INFECTION, "succumbed to bacterial colonization and collapsed into a dead husk");
+
+        int spawned = std::clamp(
+            static_cast<int>(std::round(1.0f + host.infection_load * 0.40f +
+                                        std::clamp(source_genes.antibiotic_yield, 0.0f, 2.5f) * 0.35f)),
+            1, 4);
+        int released = 0;
+        for (int k = 0; k < spawned && ents.size() < 1200; ++k) {
+            BioEntity bacterium;
+            float a = static_cast<float>(rand()) / RAND_MAX * 6.2832f;
+            float p = static_cast<float>(rand()) / RAND_MAX * 3.1416f - 1.5708f;
+            glm::vec3 d(cosf(p) * cosf(a), sinf(p), cosf(p) * sinf(a));
+            bacterium.pos = release_origin + d * (type_default_radius(BIO_BACTERIUM) * 1.8f + 0.14f * released);
+            bacterium.vel = release_velocity * 0.28f + d * randf_range(12.0f, 28.0f);
+            bacterium.type = BIO_BACTERIUM;
+            bacterium.morphology = source_morphology;
+            bacterium.genes = source_genes;
+            bacterium.genome = source_genome ? source_genome : static_cast<uint32_t>(rand());
+            std::mt19937 brng(bacterium.genome ^ (uint32_t)(k * 733u + i * 193u));
+            if (randf_range(0.0f, 1.0f) < cfg.mutation_rate)
+                mutate_entity_genes(bacterium, brng, cfg.mutation_rate);
+            bacterium.energy = type_default_energy(BIO_BACTERIUM) * std::clamp(bacterium.genes.energy, 0.45f, 1.9f);
+            initialize_entity_lifecycle(bacterium, brng);
+            bacterium.species_key = (bacterium.genome != source_genome) ? next_species_key_++ :
+                (source_species != 0 ? source_species : base_species_key(BIO_BACTERIUM, bacterium.morphology));
+            assign_entity_identity(bacterium, source_generation + 1, source_id);
+            configure_entity_shape(bacterium, brng);
+            ents.push_back(bacterium);
+            released++;
+        }
+
+        char msg[320];
+        std::snprintf(msg, sizeof(msg),
+                      "%s was overrun by %s and shed %d daughter bacteria at generation %u.",
+                      host_label.c_str(), bio_entity_variant_name(BIO_BACTERIUM, source_morphology), released,
+                      source_generation + 1);
+        push_event(BIO_EVENT_INFECTION, msg);
+    }
+
+    n = ents.size();
+    for (size_t i = 0; i < n; ++i) {
+        auto& bacterium = ents[i];
+        if (!bacterium.alive || bacterium.type != BIO_BACTERIUM)
+            continue;
+
+        int best_host = -1;
+        float best_contact = cfg.infection_radius * 0.92f;
+        for (size_t j = 0; j < n; ++j) {
+            if (i == j)
+                continue;
+            auto& host = ents[j];
+            if (!host.alive || host.type != BIO_CELL)
+                continue;
+            if (entity_has_active_infection(host))
+                continue;
+
+            float dist = glm::length(host.pos - bacterium.pos);
+            float contact_radius = std::min(cfg.infection_radius * 0.92f, bacterium.radius + host.radius * 1.02f + 1.4f);
+            if (dist < contact_radius && dist < best_contact) {
+                best_contact = dist;
+                best_host = static_cast<int>(j);
+            }
+        }
+
+        if (best_host < 0)
+            continue;
+
+        auto& host = ents[best_host];
+        float tropism = bacteria_host_tropism(bacterium, host);
+        if (tropism <= 0.0f)
+            continue;
+        float membrane_cover = sample_feature_density(environment_, BIO_ENV_FEATURE_MEMBRANE, host.pos);
+        float nutrient_field = sample_feature_density(environment_, BIO_ENV_FEATURE_NUTRIENT, host.pos);
+        float contact_radius = std::min(cfg.infection_radius * 0.92f, bacterium.radius + host.radius * 1.02f + 1.4f);
+        float local_factor = std::clamp((0.74f + nutrient_field * 0.30f) * (1.0f - membrane_cover * 0.12f) * tropism, 0.25f, 2.25f);
+        float chance = std::clamp(effective_rate * local_factor *
+                                  (1.0f - best_contact / std::max(contact_radius, 1.0f)) * dt * 2.4f,
+                                  0.0f, 0.88f);
+        if (randf_range(0.0f, 1.0f) > chance)
+            continue;
+
+        host.infection_progress = 0.01f;
+        host.infection_load = 1.0f;
+        host.infection_axis = normalized_or(bacterium.pos - host.pos, host.axis);
+        host.infection_morphology = bacterium.morphology;
+        host.infection_source_id = bacterium.entity_id;
+        host.infection_source_type = BIO_BACTERIUM;
+        host.infection_species_key = bacterium.species_key;
+        host.infection_generation = bacterium.generation;
+        host.infection_genome = bacterium.genome;
+        host.infection_genes = bacterium.genes;
+        if (!host.ever_infected) {
+            host.ever_infected = true;
+            ever_infected_total_ += 1;
+            ever_infected_by_type_[host.type % BIO_TYPE_COUNT] += 1;
+            ever_infected_by_subtype_[type_subtype_key(host.type, host.morphology)] += 1;
+        }
+
+        char msg[320];
+        std::snprintf(msg, sizeof(msg), "%s colonized %s via %s.",
+                      bio_entity_label(bacterium).c_str(), bio_entity_label(host).c_str(),
+                      bacteria_traits(bacterium.morphology).infection_mode);
+        push_event(BIO_EVENT_INFECTION, msg);
+    }
+}
+
 // ── Antibody / Immune Response ──────────────────────────────────────────────
 
 void BiochemApp::process_antibody_response(float dt) {
@@ -1798,14 +2319,17 @@ void BiochemApp::process_antibody_response(float dt) {
     float wr = cfg.world_radius;
     float effective_immune = cfg.immune_strength * (0.45f + cfg.immune_pressure);
 
-    size_t virus_count = 0, wbc_count = 0;
+    size_t virus_count = 0, bacteria_count = 0, infected_host_count = 0, wbc_count = 0;
     for (auto& e : ents) {
         if (!e.alive) continue;
         if (e.type == BIO_VIRUS) virus_count++;
+        if (e.type == BIO_BACTERIUM) bacteria_count++;
+        if ((e.type == BIO_CELL || e.type == BIO_BACTERIUM) && entity_has_active_infection(e)) infected_host_count++;
         if (e.type == BIO_WHITE_BLOOD) wbc_count++;
     }
 
-    if (virus_count > wbc_count && ents.size() < 1200 &&
+    size_t immune_threat_count = virus_count + bacteria_count / 2 + infected_host_count;
+    if (immune_threat_count > wbc_count && ents.size() < 1200 &&
         randf_range(0.0f, 1.0f) < std::min(0.65f, 0.10f + cfg.immune_pressure * 0.12f)) {
         BioEntity wbc;
         wbc.pos = {randf_range(-wr * 0.8f, wr * 0.8f),
@@ -1854,7 +2378,10 @@ void BiochemApp::process_antibody_response(float dt) {
         int best_idx = -1;
         for (size_t j = 0; j < ents.size(); j++) {
             if (!ents[j].alive) continue;
-            if (ents[j].type != BIO_VIRUS && ents[j].type != BIO_TOXIN) continue;
+            bool is_target = ents[j].type == BIO_VIRUS || ents[j].type == BIO_TOXIN || ents[j].type == BIO_BACTERIUM;
+            if (!is_target && (ents[j].type == BIO_CELL || ents[j].type == BIO_BACTERIUM))
+                is_target = entity_has_active_infection(ents[j]);
+            if (!is_target) continue;
             float d = glm::length(ents[j].pos - wbc.pos);
             if (d < best_dist) {
                 best_dist = d;
@@ -1877,7 +2404,10 @@ void BiochemApp::process_antibody_response(float dt) {
             float touch = wbc.radius + ents[best_idx].radius;
             if (dist < touch) {
                 std::string target_label = bio_entity_label(ents[best_idx]);
-                ents[best_idx].alive = false;
+                if (ents[best_idx].type == BIO_CELL || ents[best_idx].type == BIO_BACTERIUM)
+                    mark_entity_corpse(ents[best_idx], BIO_EVENT_IMMUNE, "was cleared by a white blood cell");
+                else
+                    ents[best_idx].alive = false;
                 wbc.energy += 10.0f;
                 char msg[224];
                 std::snprintf(msg, sizeof(msg), "%s neutralized %s.",
@@ -2023,7 +2553,7 @@ void BiochemApp::process_ai_movement(float dt) {
             spacing_force *= 0.65f + 0.35f * slowdown;
             brownian_force *= 0.45f + 0.55f * slowdown;
         }
-        if (e.type == BIO_CELL && e.infection_progress > 0.0f) {
+        if ((e.type == BIO_CELL || e.type == BIO_BACTERIUM) && e.infection_progress > 0.0f) {
             float infection_slow = 1.0f - std::min(0.72f, e.infection_progress * 0.72f);
             seek_force *= infection_slow;
             flee_force *= 0.85f * infection_slow;
@@ -2049,12 +2579,41 @@ void BiochemApp::process_ai_movement(float dt) {
                     e.vel += glm::normalize(dir) * seek_force * dt;
             }
 
+            if (e.type == BIO_BACTERIUM) {
+                float best_host_score = 0.0f;
+                int best_host = -1;
+                for (size_t j = 0; j < n; j++) {
+                    if (!ents[j].alive || ents[j].type != BIO_CELL) continue;
+                    if (entity_has_active_infection(ents[j])) continue;
+                    float tropism = bacteria_host_tropism(e, ents[j]);
+                    if (tropism <= 0.0f) continue;
+                    float d = glm::length(ents[j].pos - e.pos);
+                    if (d <= 1.0f || d > 180.0f) continue;
+                    float score = tropism * (1.0f - d / 180.0f);
+                    if (score > best_host_score) {
+                        best_host_score = score;
+                        best_host = (int)j;
+                    }
+                }
+                if (best_host >= 0) {
+                    glm::vec3 dir = ents[best_host].pos - e.pos;
+                    float d = glm::length(dir);
+                    if (d > 1.0f) {
+                        float colonize_bias = 0.14f + (1.0f - std::min(1.0f, e.nutrient_reserve)) * 0.26f;
+                        e.vel += glm::normalize(dir) * seek_force * colonize_bias * dt;
+                    }
+                }
+            }
+
             // Flee nearest virus/toxin
             float best_threat_dist = 100.0f;
             int best_threat = -1;
             for (size_t j = 0; j < n; j++) {
                 if (!ents[j].alive) continue;
-                if (ents[j].type != BIO_VIRUS && ents[j].type != BIO_TOXIN) continue;
+                bool is_threat = (ents[j].type == BIO_VIRUS || ents[j].type == BIO_TOXIN);
+                if (!is_threat && e.type == BIO_CELL && ents[j].type == BIO_BACTERIUM)
+                    is_threat = bacteria_host_tropism(ents[j], e) > 0.85f;
+                if (!is_threat) continue;
                 float d = glm::length(ents[j].pos - e.pos);
                 if (d < best_threat_dist) { best_threat_dist = d; best_threat = (int)j; }
             }
@@ -2083,7 +2642,8 @@ void BiochemApp::process_ai_movement(float dt) {
             int best_infected = -1;
             float best_infected_dist = 80.0f;
             for (size_t j = 0; j < n; j++) {
-                if (!ents[j].alive || ents[j].type != BIO_CELL) continue;
+                if (!ents[j].alive || (ents[j].type != BIO_CELL && ents[j].type != BIO_BACTERIUM)) continue;
+                if (!virus_targets_host(e, ents[j])) continue;
                 float d = glm::length(ents[j].pos - e.pos);
                 if (ents[j].infection_progress > 0.0f) {
                     if (d < best_infected_dist) {
@@ -2820,18 +3380,82 @@ void BiochemApp::render_ui() {
     // Population stats
     if (population_visible_) {
     ImGui::SetNextWindowPos({io.DisplaySize.x - 220.0f, 46}, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize({210, 220}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize({360, 440}, ImGuiCond_FirstUseEver);
     ImGui::Begin("Population");
+    using GenSet = std::set<uint32_t>;
+    std::array<size_t, BIO_TYPE_COUNT> alive_counts{};
+    std::array<size_t, BIO_TYPE_COUNT> infected_counts{};
+    std::array<GenSet, BIO_TYPE_COUNT> generation_sets;
+    std::array<std::vector<size_t>, BIO_TYPE_COUNT> subtype_alive;
+    std::array<std::vector<size_t>, BIO_TYPE_COUNT> subtype_infected;
+    std::array<std::vector<GenSet>, BIO_TYPE_COUNT> subtype_generations;
+    for (int t = 0; t < BIO_TYPE_COUNT; ++t) {
+        uint32_t count = type_variant_count(static_cast<uint32_t>(t));
+        subtype_alive[t].assign(count, 0);
+        subtype_infected[t].assign(count, 0);
+        subtype_generations[t].assign(count, {});
+    }
+
     size_t total_alive = 0;
-    for (int t = 0; t < BIO_TYPE_COUNT; t++) {
-        size_t n = state.count_type(static_cast<BioEntityType>(t));
-        total_alive += n;
-        if (n > 0)
-            ImGui::TextColored(type_colors_v[t], "%s: %zu", pop_type_names[t], n);
+    size_t current_infected_total = 0;
+    for (const auto& e : state.entities) {
+        if (!e.alive)
+            continue;
+        int type = static_cast<int>(e.type % BIO_TYPE_COUNT);
+        alive_counts[type] += 1;
+        total_alive += 1;
+        generation_sets[type].insert(e.generation);
+        uint32_t subtype_count = type_variant_count(e.type);
+        if (subtype_count > 0) {
+            uint32_t subtype = e.morphology % subtype_count;
+            subtype_alive[type][subtype] += 1;
+            subtype_generations[type][subtype].insert(e.generation);
+            if (e.infection_progress > 0.0f) {
+                subtype_infected[type][subtype] += 1;
+            }
+        }
+        if (e.infection_progress > 0.0f) {
+            infected_counts[type] += 1;
+            current_infected_total += 1;
+        }
     }
     ImGui::Separator();
-    ImGui::Text("Total: %zu alive", total_alive);
+    ImGui::Text("Alive: %zu", total_alive);
+    ImGui::Text("Current infected: %zu", current_infected_total);
+    ImGui::Text("Ever infected: %u", ever_infected_total_);
     ImGui::Text("Husks: %zu", state.count_corpses());
+    ImGui::Separator();
+    ImGui::BeginChild("##PopulationRollup", ImVec2(0, 0), true);
+    for (int t = 0; t < BIO_TYPE_COUNT; ++t) {
+        if (alive_counts[t] == 0 && ever_infected_by_type_[t] == 0)
+            continue;
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen;
+        bool open = ImGui::TreeNodeEx((void*)(intptr_t)t, flags, "%s", pop_type_names[t]);
+        ImGui::SameLine();
+        ImGui::TextColored(type_colors_v[t], "%zu alive", alive_counts[t]);
+        if (open) {
+            ImGui::Text("Current infected: %zu", infected_counts[t]);
+            ImGui::Text("Ever infected: %u", ever_infected_by_type_[t]);
+            ImGui::TextWrapped("Alive generations: %s", format_generation_set(generation_sets[t]).c_str());
+            uint32_t subtype_count = type_variant_count(static_cast<uint32_t>(t));
+            for (uint32_t subtype = 0; subtype < subtype_count; ++subtype) {
+                uint32_t ever = 0;
+                auto it = ever_infected_by_subtype_.find(type_subtype_key(static_cast<uint32_t>(t), subtype));
+                if (it != ever_infected_by_subtype_.end())
+                    ever = it->second;
+                if (subtype_alive[t][subtype] == 0 && ever == 0)
+                    continue;
+                ImGui::BulletText("%s | alive %zu | infected %zu | ever %u | gens %s",
+                    bio_entity_variant_name(static_cast<uint32_t>(t), subtype),
+                    subtype_alive[t][subtype],
+                    subtype_infected[t][subtype],
+                    ever,
+                    format_generation_set(subtype_generations[t][subtype]).c_str());
+            }
+            ImGui::TreePop();
+        }
+    }
+    ImGui::EndChild();
     ImGui::End();
     } // population_visible_
 
@@ -2876,6 +3500,15 @@ void BiochemApp::render_ui() {
                 "%s #%u", BIO_TYPE_NAMES[e.type % BIO_TYPE_COUNT], e.entity_id);
             if (e.type == BIO_CELL || e.type == BIO_BACTERIUM || e.type == BIO_VIRUS)
                 ImGui::Text("%s", bio_entity_variant_name(e.type, e.morphology));
+            if (e.type == BIO_CELL)
+                ImGui::TextDisabled("%s", cell_traits(e.morphology).lineage);
+            else if (e.type == BIO_BACTERIUM) {
+                ImGui::TextDisabled("%s", bacteria_traits(e.morphology).lineage);
+                ImGui::TextWrapped("%s", bacteria_traits(e.morphology).infection_mode);
+            } else if (e.type == BIO_VIRUS) {
+                ImGui::TextDisabled("%s", virus_traits(e.morphology).lineage);
+                ImGui::TextWrapped("%s", virus_traits(e.morphology).receptor);
+            }
             if (e.corpse)
                 ImGui::TextColored(ImVec4(0.82f, 0.66f, 0.52f, 1.0f), "Dead Husk");
             ImGui::Separator();
@@ -2883,6 +3516,7 @@ void BiochemApp::render_ui() {
             ImGui::Text("Age:     %.1f s", e.age);
             ImGui::Text("ID:      %u", e.entity_id);
             ImGui::Text("Gen:     %u", e.generation);
+            ImGui::Text("Species: %u", e.species_key);
             if (e.parent_id != 0)
                 ImGui::Text("Parent:  %u", e.parent_id);
             else
@@ -2898,10 +3532,11 @@ void BiochemApp::render_ui() {
             ImGui::Text("Stage:   %s", bio_lifecycle_stage_name(e));
             ImGui::Text("Cycle CD %.1f s", e.division_cooldown);
             ImGui::Text("Divides: %u", e.division_count);
-            if (e.type == BIO_CELL && e.infection_progress > 0.0f) {
+            if ((e.type == BIO_CELL || e.type == BIO_BACTERIUM) && entity_has_active_infection(e)) {
                 ImGui::TextColored(ImVec4(0.96f, 0.48f, 0.44f, 1.0f), "Infection: %s (%.0f%%)",
-                    bio_entity_variant_name(BIO_VIRUS, e.infection_morphology), e.infection_progress * 100.0f);
-                ImGui::Text("Virion Load: %.1f", e.infection_load);
+                    infection_variant_name(e), e.infection_progress * 100.0f);
+                ImGui::Text("%s Load: %.1f", e.infection_source_type == BIO_VIRUS ? "Virion" : "Bacterial", e.infection_load);
+                ImGui::TextWrapped("Mechanism: %s", infection_mechanism_name(e));
                 if (e.infection_source_id != 0)
                     ImGui::Text("Infected By: %u", e.infection_source_id);
             }

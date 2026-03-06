@@ -50,6 +50,15 @@ static glm::vec3 bio_type_color(uint32_t type) {
     }
 }
 
+static uint32_t render_morphology_for(const BioEntity& e) {
+    switch (e.type) {
+    case BIO_CELL:      return bio_cell_visual_family(e.morphology);
+    case BIO_BACTERIUM: return bio_bacteria_visual_family(e.morphology);
+    case BIO_VIRUS:     return bio_virus_visual_family(e.morphology);
+    default:            return e.morphology;
+    }
+}
+
 // ── Init ────────────────────────────────────────────────────────────────────
 
 void BiochemRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
@@ -298,11 +307,14 @@ void BiochemRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
             ? (1.0f + std::min(1.35f, e.antibiotic_film * (0.85f + e.genes.antibiotic_yield * 0.28f)))
             : 1.0f;
         s.pos_radius = glm::vec4(e.pos, e.radius * corpse_shrink * infection_swelling * antibiotic_cloud);
-        s.axis_morph = glm::vec4(e.axis, (float)e.morphology);
+        s.axis_morph = glm::vec4(e.axis, (float)render_morphology_for(e));
         s.color_type = glm::vec4(col, (float)e.type);
         s.shape_params = glm::vec4(e.shape_aspect, e.shape_noise, e.shape_phase, e.mitosis_progress);
         s.life_params = glm::vec4(e.organelle_health, e.nutrient_reserve, e.corpse ? 1.0f : 0.0f, e.telomere_state);
-        s.signal_params = glm::vec4(e.infection_progress, e.infection_load, (float)e.infection_morphology, e.antibiotic_film);
+        float infection_render_morph = (e.infection_progress > 0.0f && e.infection_source_type == BIO_VIRUS)
+            ? static_cast<float>(bio_virus_visual_family(e.infection_morphology))
+            : 0.0f;
+        s.signal_params = glm::vec4(e.infection_progress, e.infection_load, infection_render_morph, e.antibiotic_film);
         s.gene_params = glm::vec4(e.genes.antibiotic_type, e.genes.antibiotic_diversity, e.genes.antibiotic_yield, 0.0f);
         s.aux_params = glm::vec4(glm::normalize(e.infection_axis), 0.0f);
         spheres.push_back(s);

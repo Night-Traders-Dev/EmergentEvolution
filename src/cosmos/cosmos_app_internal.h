@@ -84,6 +84,7 @@ enum StellarRemnantKind {
 StellarRemnantKind stellar_remnant_kind(float progenitor_mass, bool thermonuclear = false);
 
 float body_gravitational_binding_energy(const CelestialBody& b, float G);
+float body_albedo_for_type(const CelestialBody& b);
 float body_escape_speed(const CelestialBody& a, const CelestialBody& b, float G);
 void register_mass_loss(CelestialBody& b, float amount, float dt);
 void apply_impact_signature(CelestialBody& target, glm::vec3 impact_normal,

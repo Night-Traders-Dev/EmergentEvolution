@@ -91,6 +91,7 @@ private:
     void process_tidal_locking(float dt);
     void process_orbital_elements();
     void process_hawking_radiation(float dt);
+    void process_yarkovsky(float dt);
     void trigger_stellar_supernova(size_t index, float dt, bool thermonuclear = false,
                                    glm::vec3 impact_axis = glm::vec3(0.0f),
                                    float ejecta_speed = 0.0f);

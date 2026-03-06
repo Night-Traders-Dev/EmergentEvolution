@@ -688,7 +688,7 @@ float expected_stellar_luminosity(float mass, float temperature, float radius,
     float stefan = r_solar * r_solar * t_term;
     float mass_law;
     if (mass < 0.43f) mass_law = 0.23f * std::pow(std::max(mass, 0.01f), 2.3f);
-    else if (mass < 2.0f) mass_law = std::pow(mass, 4.0f);
+    else if (mass < 2.0f) mass_law = std::pow(mass, 3.5f);
     else if (mass < 20.0f) mass_law = 1.5f * std::pow(mass, 3.5f);
     else mass_law = 3200.0f * std::pow(mass / 20.0f, 2.2f);
 
@@ -1042,14 +1042,54 @@ float stellar_luminosity_units(const CelestialBody& b) {
     return std::max(b.luminosity, physical);
 }
 
+float body_albedo_for_type(const CelestialBody& b) {
+    switch (b.type) {
+        case CTYPE_STAR: case CTYPE_STAR_M: case CTYPE_STAR_K: case CTYPE_STAR_G:
+        case CTYPE_STAR_F: case CTYPE_STAR_A: case CTYPE_STAR_B: case CTYPE_STAR_O:
+            return 0.0f; // Stars emit, don't reflect
+        case CTYPE_ASTEROID:
+            return 0.10f; // C-type ~0.06, S-type ~0.20
+        case CTYPE_COMET:
+            return 0.04f; // Very dark surfaces
+        case CTYPE_DUST:
+            return 0.05f;
+        case CTYPE_MOON:
+            return 0.12f; // Moon ~0.12
+        default: break;
+    }
+    // Planet types: check cached planet class if available
+    if (b.type == CTYPE_PLANET) {
+        switch (b.cached_props.planet_class) {
+            case PCLASS_GAS_GIANT:   return 0.50f;  // Jupiter ~0.52
+            case PCLASS_ICE_GIANT:   return 0.30f;  // Neptune ~0.29
+            case PCLASS_TERRESTRIAL: return 0.30f;  // Earth ~0.30
+            case PCLASS_SUPER_EARTH: return 0.32f;
+            case PCLASS_OCEAN:       return 0.06f;  // Water is dark
+            case PCLASS_DWARF:       return 0.15f;  // Small rocky
+            default: break;
+        }
+    }
+    return 0.30f; // Default Earth-like
+}
+
 float equilibrium_temperature_from_star(const CelestialBody& body,
                                         const CelestialBody& star) {
     float dist = glm::length(star.pos - body.pos);
     if (dist <= 1.0e-3f) return body.temperature;
 
-    float albedo = 0.35f;
+    // Proper formula: T_eq = T_star * sqrt(R_star / (2*d)) * (1-A)^(1/4) * L^(1/4)
+    // where L is luminosity relative to a star of same T and R
+    float albedo = body_albedo_for_type(body);
+    float L = std::max(stellar_luminosity_units(star), 0.01f);
+    // T_eq = (L / (16π σ d²))^(1/4) ≈ T_star * sqrt(R_star/(2d)) * L^(1/4) correction
     float ratio = std::sqrt(std::max(star.radius, 1.0f) / (2.0f * std::max(dist, 1.0f)));
-    float lum_boost = std::clamp(1.0f + 0.08f * std::log10(std::max(stellar_luminosity_units(star), 1.0f)), 1.0f, 1.6f);
-    return std::max(star.temperature, 50.0f) * ratio *
-           std::pow(std::max(1.0f - albedo, 0.05f), 0.25f) * lum_boost;
+    float lum_correction = std::pow(L, 0.25f);
+    // Normalize: for a 1 L_sun star, lum_correction=1 at proper T/R
+    float T_eff = std::max(star.temperature, 50.0f);
+    float ms_lum = std::pow(T_eff / 5778.0f, 4.0f) *
+                   std::pow(std::max(star.radius / std::max(solar_radius_sim_units(), 1.0f), 1.0e-4f), 2.0f);
+    float correction = (ms_lum > 0.01f) ? std::pow(L / ms_lum, 0.25f) : 1.0f;
+    correction = std::clamp(correction, 0.5f, 3.0f);
+    return T_eff * ratio *
+           std::pow(std::max(1.0f - albedo, 0.05f), 0.25f) * correction;
 }
