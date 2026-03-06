@@ -55,6 +55,22 @@ bottom taskbar with panel management.
   - [Steam Integration](docs/build.md#steam-integration-optional)
 - [Architecture](docs/architecture.md)
 
+**Cosmic Sandbox**
+
+- [Cosmic Sandbox](docs/cosmos.md)
+  - [Celestial Body Types](docs/cosmos.md#celestial-body-types)
+  - [Stellar Evolution](docs/cosmos.md#stellar-evolution)
+  - [Procedural Planet Generation](docs/cosmos.md#procedural-planet-generation)
+  - [Physics Systems](docs/cosmos.md#physics-systems)
+  - [Rendering](docs/cosmos.md#rendering)
+
+**Biochemical Simulator**
+
+- [Biochemical Simulator](docs/biochem.md)
+  - [Entity Types](docs/biochem.md#entity-types)
+  - [Simulation Systems](docs/biochem.md#simulation-systems)
+  - [Configuration](docs/biochem.md#configuration)
+
 **Particle Physics**
 
 - [Physics Engine](docs/physics-engine.md)

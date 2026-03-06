@@ -70,4 +70,4 @@ The repository ships with:
 ## File Formats
 
 - **`.ppel`** — Binary element format (magic `0x4C455050`, version 1). Contains protons, neutrons, and electrons with positions and genome data.
-- **`.ppmol`** — Binary molecule format (magic `0x4D505050`, version 2). Contains multiple atoms with bond connectivity, formula, and name metadata.
+- **`.ppmol`** — Binary molecule format (magic `0x4D505050`, version 3). Contains multiple atoms with bond connectivity, formula, name metadata, and chirality fields.
