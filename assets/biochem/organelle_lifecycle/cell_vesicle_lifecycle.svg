@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 320">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#112130"/>
+      <stop offset="100%" stop-color="#081018"/>
+    </linearGradient>
+    <radialGradient id="cell" cx="45%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#b0f4ff" stop-opacity="0.26"/>
+      <stop offset="100%" stop-color="#6fc7de" stop-opacity="0.08"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="320" fill="url(#bg)"/>
+  <text x="28" y="34" fill="#ddf8ff" font-size="24" font-family="Arial, sans-serif">Cell Vesicle Lifecycle</text>
+  <g font-family="Arial, sans-serif" font-size="18" fill="#d3eef6">
+    <text x="84" y="70">Young</text>
+    <text x="332" y="70">Mature</text>
+    <text x="572" y="70">Senescent</text>
+    <text x="820" y="70">Dead Husk</text>
+  </g>
+  <g stroke="#2b4f66" stroke-width="2" fill="none" opacity="0.55">
+    <rect x="28" y="84" width="220" height="208" rx="24"/>
+    <rect x="276" y="84" width="220" height="208" rx="24"/>
+    <rect x="524" y="84" width="220" height="208" rx="24"/>
+    <rect x="772" y="84" width="220" height="208" rx="24"/>
+  </g>
+  <g>
+    <circle cx="138" cy="188" r="76" fill="url(#cell)" stroke="#9defff" stroke-width="6"/>
+    <circle cx="114" cy="177" r="18" fill="#7cc7e8" fill-opacity="0.46" stroke="#d5fbff" stroke-width="4"/>
+    <circle cx="156" cy="200" r="15" fill="#8bdef3" fill-opacity="0.42" stroke="#dffcff" stroke-width="4"/>
+    <circle cx="176" cy="171" r="10" fill="#b0f0ff" fill-opacity="0.34" stroke="#eafcff" stroke-width="3"/>
+  </g>
+  <g>
+    <circle cx="386" cy="188" r="76" fill="url(#cell)" stroke="#9defff" stroke-width="6"/>
+    <circle cx="354" cy="176" r="19" fill="#7fbbd8" fill-opacity="0.44" stroke="#d7f8ff" stroke-width="4"/>
+    <circle cx="393" cy="198" r="16" fill="#8ccde6" fill-opacity="0.42" stroke="#e3fbff" stroke-width="4"/>
+    <circle cx="425" cy="173" r="11" fill="#9bd8ef" fill-opacity="0.34" stroke="#eefbff" stroke-width="3"/>
+    <circle cx="413" cy="217" r="9" fill="#b8ebff" fill-opacity="0.30" stroke="#eefbff" stroke-width="3"/>
+  </g>
+  <g>
+    <circle cx="634" cy="188" r="76" fill="url(#cell)" stroke="#9defff" stroke-width="6"/>
+    <circle cx="604" cy="180" r="17" fill="#857c6c" fill-opacity="0.34" stroke="#d7c6bd" stroke-width="4"/>
+    <circle cx="640" cy="201" r="14" fill="#8d8778" fill-opacity="0.30" stroke="#d7cec0" stroke-width="4"/>
+    <circle cx="669" cy="177" r="10" fill="#9e9486" fill-opacity="0.26" stroke="#e2d9cb" stroke-width="3"/>
+  </g>
+  <g>
+    <circle cx="882" cy="188" r="76" fill="#8d978f" fill-opacity="0.10" stroke="#847a72" stroke-width="6" stroke-dasharray="9 8"/>
+    <circle cx="856" cy="181" r="15" fill="#5e544a" fill-opacity="0.32" stroke="#a58e7f" stroke-width="4"/>
+    <circle cx="893" cy="199" r="12" fill="#564d46" fill-opacity="0.28" stroke="#988777" stroke-width="4"/>
+    <circle cx="918" cy="176" r="9" fill="#4c463f" fill-opacity="0.24" stroke="#877869" stroke-width="3"/>
+  </g>
+</svg>

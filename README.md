@@ -31,23 +31,33 @@ including 11 star spectral classes (O through Y plus Wolf-Rayet), 4 black hole s
 terrain, oceans, clouds, vegetation, atmospheric rim lighting, and city lights on populated
 worlds. Bodies interact via N-body gravity (CPU or GPU Barnes-Hut compute shader) with
 optional general relativity corrections (perihelion precession, gravitational time dilation,
-frame dragging). 6 numerical integrators from Euler through fourth-order PEFRL. Nebulae
-spawn as gravitationally collapsing particle clouds of 40&ndash;300 dust bodies. Procedural GPU
-textures are driven by physical properties &mdash; changing a planet&rsquo;s temperature melts ice
-into oceans, and gas giants display Jupiter-like banding with great spots. Stellar evolution
-through 9 stages with supernova events, Roche limit tidal disruption, Hawking radiation,
-tidal locking, and collision physics (merging, fragmentation, SPH). A logarithmic timestep
-system spans 30 orders of magnitude from nanoseconds/s to trillions of years/s. Orbit
-camera with WASD panning, mouse drag, scroll zoom, and auto-hiding bottom taskbar.
+frame dragging). 6 numerical integrators from Euler through fourth-order PEFRL with adaptive
+substepping. Nebulae spawn as gravitationally collapsing particle clouds of 40&ndash;300 dust
+bodies with protostar sink formation. Procedural GPU textures are driven by physical
+properties &mdash; changing a planet&rsquo;s temperature melts ice into oceans, and gas giants display
+Jupiter-like banding with great spots. Stellar evolution through 9 stages with supernova
+events, magnetic field signatures (magnetospheres, pulsars, particle jets), Roche limit
+tidal disruption, Hawking radiation, tidal locking, stellar wind pressure, and collision
+physics (merging, fragmentation, SPH, rigid-body dynamics). 7 planetary ring styles from
+Saturn-like to resonance gaps. A logarithmic timestep system spans 30 orders of magnitude
+from nanoseconds/s to trillions of years/s. Spawn Studio with 5 catalog tabs, live 3D ghost
+preview, planet look presets, moon/ring spawning, and known astronomical objects. Orbit
+camera with WASD panning, mouse drag, scroll zoom, body tracking, and auto-hiding bottom
+taskbar. Loading screen with progress bar.
 
 **Biochemical Simulator** &mdash;
-3D cellular biology sandbox with GPU SDF-raytraced rendering and 8 entity types (cells,
-bacteria, viruses, nutrients, toxins, antibodies, red blood cells, white blood cells), each
-with morphological variants and unique SDF shapes showing organelle interiors. Features
-metabolism, cell division with heritable gene mutations (5 behavioral traits), viral
-infection, immune response, AI-driven entity movement (seek/flee/spacing behaviors), and
-fluid dynamics. 4 environment presets (Human Lung, Pond Water, Petri Dish, Cat Brain) with
-distinct temperature, pH, oxygen, and immune conditions. WASD camera panning and auto-hiding
+3D cellular biology sandbox with GPU SDF-raytraced rendering and 9 entity types (cells,
+bacteria, viruses, nutrients, toxins, antibodies, red blood cells, white blood cells,
+phagocytes), each with morphological variants and unique SDF shapes showing organelle
+interiors. Features metabolism with telomere tracking and senescence, cell division with
+heritable gene mutations (10 traits including metabolic efficiency, telomere length, mitotic
+clock, and antibiotic spectrum), multi-stage viral infection with replication gates and lysis
+bursts, bacterial antibiotic film warfare with quorum-sensing-like defense, immune response
+with WBC/antibody spawning, phagocyte corpse cleanup, AI-driven entity movement
+(seek/flee/spacing behaviors), and fluid dynamics. 4 environment presets (Human Lung, Pond
+Water, Petri Dish, Cat Brain) with distinct temperature, pH, oxygen, immune conditions, and
+placed features (membranes, nutrient zones, toxin zones, currents). Color-coded event log
+tracks division, infection, immune, and lifecycle events. WASD camera panning and auto-hiding
 bottom taskbar with panel management.
 
 ---
@@ -69,14 +79,18 @@ bottom taskbar with panel management.
   - [Stellar Evolution](docs/cosmos.md#stellar-evolution)
   - [Procedural Planet Generation](docs/cosmos.md#procedural-planet-generation)
   - [Physics Systems](docs/cosmos.md#physics-systems)
+  - [Spawn Studio](docs/cosmos.md#spawn-studio)
   - [Rendering](docs/cosmos.md#rendering)
 
 **Biochemical Simulator**
 
 - [Biochemical Simulator](docs/biochem.md)
   - [Entity Types](docs/biochem.md#entity-types)
+  - [Gene System](docs/biochem.md#gene-system)
+  - [Environment Presets](docs/biochem.md#environment-presets)
   - [Simulation Systems](docs/biochem.md#simulation-systems)
   - [Configuration](docs/biochem.md#configuration)
+  - [Rendering](docs/biochem.md#rendering)
 
 **Particle Physics**
 

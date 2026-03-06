@@ -387,8 +387,11 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     CameraUBOData cam{};
     cam.inv_vp         = glm::mat4(glm::inverse(vp));
     cam.eye_pos        = glm::vec4(glm::vec3(eye_rel), 0.0f);
+    int body_sphere_count = std::min((int)state.bodies.size(), MAX_SPHERES);
+    int total_sphere_count = body_sphere_count +
+        ((preview.active() && body_sphere_count < MAX_SPHERES) ? 1 : 0);
     cam.screen_info    = glm::vec4(screen_w, screen_h,
-                                    (float)std::min((int)state.bodies.size(), MAX_SPHERES),
+                                    (float)total_sphere_count,
                                     time);
     // Auto-enable uniform lighting if star_lighting is on but no stars exist,
     // otherwise planets are nearly invisible (only 8% ambient).
@@ -651,6 +654,106 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
         pack_range(0, n);
     }
 
+    // ── Inject ghost spawn preview sphere ────────────────────────────────
+    const int body_count = n;  // real bodies (for state.bodies access)
+    if (preview.active() && n < MAX_SPHERES) {
+        const CelestialBody& b = *preview.body;
+        SphereGPU gs{};
+
+        // Color + emissive — use -2.0 sentinel for ghost mode
+        glm::vec3 col = body_color_vec3(b);
+        float emissive = 0.0f;
+        if (is_star_type(b.type))
+            emissive = 1.4f + b.cached_visuals.corona_strength * 0.45f;
+        if (is_black_hole_type(b.type))
+            emissive = -1.0f;
+
+        float render_radius = b.radius;
+        if (b.type == CTYPE_NEBULA) {
+            float cloud_scale = 1.75f +
+                std::clamp(b.cached_visuals.cloud_detail, 0.0f, 1.8f) * 0.55f;
+            render_radius *= cloud_scale;
+        }
+        gs.pos_radius = glm::vec4(b.pos - glm::vec3(target_origin), render_radius);
+        gs.base_emit = glm::vec4(col, -2.0f); // ghost sentinel
+
+        float shader_seed = (float)(b.seed & 0xFFFFu) +
+                            (float)((b.seed >> 16) & 0xFFFFu) * 0.0001f;
+
+        const PlanetProperties& pp = b.cached_props;
+        const BodyVisualProperties& vp = b.cached_visuals;
+        int render_class = (int)vp.render_class;
+        int render_subtype = (int)vp.subtype;
+        if (b.type == CTYPE_NEBULA) render_class = RENDER_NEBULA;
+        bool physical_planet = (b.type == CTYPE_PLANET || b.type == CTYPE_MOON);
+        bool planet_like_visual = (render_class == RENDER_PLANET || render_class == RENDER_MOON);
+        bool nebula_visual = (render_class == RENDER_NEBULA);
+
+        gs.class_seed_temp = glm::vec4(shader_seed, (float)render_class,
+                                        (float)render_subtype, b.temperature);
+        gs.terrain_params = glm::vec4(vp.terrain_amp, vp.terrain_freq,
+                                       vp.ridge_amp, vp.crater_density);
+        gs.material_params = glm::vec4(vp.roughness, vp.metallic,
+                                        vp.specular, vp.normal_strength);
+        gs.feature_params = glm::vec4(vp.continent_coverage, vp.island_coverage,
+                                       vp.river_density, vp.ice_sheet_coverage);
+        float comp_w = vp.dust_frac;
+        if (physical_planet && planet_like_visual)
+            comp_w = pp.ocean_coverage / 100.0f;
+        if (render_class == RENDER_STAR) {
+            gs.composition_params = glm::vec4(vp.star_spot_coverage, vp.star_flare_frequency,
+                                               vp.star_pulsation, vp.star_differential_rotation);
+        } else {
+            gs.composition_params = glm::vec4(vp.rock_frac, vp.ice_frac,
+                                               vp.metal_frac, comp_w);
+        }
+        float cloud_cov = physical_planet ? (pp.cloud_coverage / 100.0f)
+            : (b.type == CTYPE_NEBULA ? vp.cloud_detail : 0.0f);
+        float pressure = physical_planet ? pp.atmosphere.pressure
+            : (b.type == CTYPE_NEBULA ? 35.0f : 0.0f);
+        gs.atmosphere_params = glm::vec4(cloud_cov, pressure, vp.haze_density,
+                                          vp.rayleigh_strength);
+        if (planet_like_visual) {
+            gs.activity_params = glm::vec4(vp.weather_strength, vp.aurora_strength,
+                                            vp.volcanic_activity, vp.mie_strength);
+        } else if (nebula_visual) {
+            gs.activity_params = glm::vec4(vp.weather_strength, vp.cloud_detail, 0.0f, 1.0f);
+        } else if (render_class == RENDER_STAR) {
+            gs.activity_params = glm::vec4(vp.flare_activity, vp.corona_strength,
+                                            vp.spin_visual, vp.star_spot_coverage);
+        } else if (render_class == RENDER_COMET) {
+            gs.activity_params = glm::vec4(0.0f, vp.coma_strength, vp.tail_strength, 0.0f);
+        } else if (render_class == RENDER_BLACK_HOLE) {
+            gs.activity_params = glm::vec4(vp.spin_visual, vp.accretion_strength,
+                                            vp.jet_strength, vp.lensing_strength);
+        } else {
+            gs.activity_params = glm::vec4(0.0f);
+        }
+        gs.magnetosphere_params = glm::vec4(0.0f); // no magnetosphere for preview
+        if (planet_like_visual) {
+            gs.gravity_params = glm::vec4(std::max(b.mass, 0.0f), 0.0f,
+                                           std::clamp(b.atmosphere_retention, 0.0f, 1.0f), 0.0f);
+        } else {
+            gs.gravity_params = glm::vec4(std::max(b.mass, 0.0f), (float)b.stellar_stage,
+                                           std::clamp(b.fuel, 0.0f, 1.0f),
+                                           std::max(b.luminosity, 0.0f));
+        }
+        gs.ring_params = glm::vec4(std::max(b.ring_inner_radius, 0.0f),
+                                    std::max(b.ring_outer_radius, 0.0f),
+                                    std::clamp(b.ring_density, 0.0f, 1.0f),
+                                    std::clamp(b.ring_tilt, 0.0f, 1.30f));
+        gs.phase_params = glm::vec4((float)b.material_phase,
+                                     std::clamp(b.phase_intensity, 0.0f, 1.0f),
+                                     std::clamp(b.collapse_progress, 0.0f, 1.0f),
+                                     std::clamp(b.ring_ice_fraction, 0.0f, 1.0f));
+        gs.impact_axis = glm::vec4(0.0f, 1.0f, 0.0f,
+                                    std::isfinite(b.angular_vel) ? b.angular_vel : 0.0f);
+        gs.impact_params = glm::vec4(0.0f); // no impact for preview
+
+        spheres.push_back(gs);
+        n++;
+    }
+
     if (n > 0) {
         mapped = nullptr;
         if (vkMapMemory(vk.device, sphere_ssbo_.memory, 0,
@@ -724,8 +827,8 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
 
     // Build dominant attracting wells and expose them to nebula shading.
     std::vector<int> attractor_idx;
-    attractor_idx.reserve((size_t)n);
-    for (int i = 0; i < n; ++i) {
+    attractor_idx.reserve((size_t)body_count);
+    for (int i = 0; i < body_count; ++i) {
         const auto& b = state.bodies[(size_t)i];
         if (b.marked_for_removal || b.non_attracting) continue;
         if (b.mass <= 1.0e-12f) continue;

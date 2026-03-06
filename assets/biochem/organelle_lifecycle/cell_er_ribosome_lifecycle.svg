@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 320">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#102030"/>
+      <stop offset="100%" stop-color="#081018"/>
+    </linearGradient>
+    <radialGradient id="cell" cx="45%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#b0f4ff" stop-opacity="0.26"/>
+      <stop offset="100%" stop-color="#6fc7de" stop-opacity="0.08"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="320" fill="url(#bg)"/>
+  <text x="28" y="34" fill="#ddf8ff" font-size="24" font-family="Arial, sans-serif">Cell ER and Ribosome Lifecycle</text>
+  <g font-family="Arial, sans-serif" font-size="18" fill="#d3eef6">
+    <text x="84" y="70">Young</text>
+    <text x="332" y="70">Mature</text>
+    <text x="572" y="70">Senescent</text>
+    <text x="820" y="70">Dead Husk</text>
+  </g>
+  <g stroke="#2b4f66" stroke-width="2" fill="none" opacity="0.55">
+    <rect x="28" y="84" width="220" height="208" rx="24"/>
+    <rect x="276" y="84" width="220" height="208" rx="24"/>
+    <rect x="524" y="84" width="220" height="208" rx="24"/>
+    <rect x="772" y="84" width="220" height="208" rx="24"/>
+  </g>
+  <g>
+    <circle cx="138" cy="188" r="76" fill="url(#cell)" stroke="#9defff" stroke-width="6"/>
+    <path d="M88 170 C104 160, 121 180, 140 170 C158 160, 177 180, 189 170" fill="none" stroke="#84d0bb" stroke-width="5" stroke-linecap="round"/>
+    <path d="M88 188 C104 178, 121 198, 140 188 C158 178, 177 198, 189 188" fill="none" stroke="#99e0ca" stroke-width="5" stroke-linecap="round"/>
+    <path d="M91 206 C108 196, 124 214, 144 206 C160 198, 176 214, 187 206" fill="none" stroke="#b6f2df" stroke-width="5" stroke-linecap="round"/>
+    <g fill="#ffe7b4">
+      <circle cx="103" cy="166" r="4"/><circle cx="121" cy="183" r="4"/><circle cx="161" cy="167" r="4"/>
+      <circle cx="179" cy="184" r="4"/><circle cx="110" cy="209" r="4"/><circle cx="169" cy="206" r="4"/>
+    </g>
+  </g>
+  <g>
+    <circle cx="386" cy="188" r="76" fill="url(#cell)" stroke="#9defff" stroke-width="6"/>
+    <path d="M336 168 C352 154, 374 181, 392 166 C410 152, 432 178, 446 164" fill="none" stroke="#77c4af" stroke-width="6" stroke-linecap="round"/>
+    <path d="M336 188 C352 175, 375 201, 394 186 C412 173, 433 199, 446 185" fill="none" stroke="#8ad6be" stroke-width="6" stroke-linecap="round"/>
+    <path d="M340 208 C357 197, 377 217, 397 205 C415 194, 432 214, 443 205" fill="none" stroke="#ace9d5" stroke-width="6" stroke-linecap="round"/>
+    <g fill="#ffe0ab">
+      <circle cx="349" cy="164" r="4"/><circle cx="367" cy="178" r="4"/><circle cx="392" cy="163" r="4"/><circle cx="423" cy="181" r="4"/>
+      <circle cx="348" cy="204" r="4"/><circle cx="380" cy="214" r="4"/><circle cx="423" cy="205" r="4"/>
+    </g>
+  </g>
+  <g>
+    <circle cx="634" cy="188" r="76" fill="url(#cell)" stroke="#9defff" stroke-width="6"/>
+    <path d="M590 174 C604 168, 620 182, 638 174 C653 167, 673 183, 683 176" fill="none" stroke="#7f927f" stroke-width="5" stroke-linecap="round"/>
+    <path d="M592 192 C606 187, 622 201, 641 192 C656 185, 672 198, 681 192" fill="none" stroke="#95a493" stroke-width="5" stroke-linecap="round"/>
+    <path d="M598 209 C612 205, 625 218, 642 210 C655 204, 667 214, 675 208" fill="none" stroke="#b4c0af" stroke-width="5" stroke-linecap="round"/>
+    <g fill="#cdb98e">
+      <circle cx="603" cy="171" r="3"/><circle cx="621" cy="180" r="3"/><circle cx="650" cy="171" r="3"/><circle cx="669" cy="181" r="3"/>
+      <circle cx="610" cy="208" r="3"/><circle cx="642" cy="212" r="3"/><circle cx="668" cy="206" r="3"/>
+    </g>
+  </g>
+  <g>
+    <circle cx="882" cy="188" r="76" fill="#8d978f" fill-opacity="0.10" stroke="#847a72" stroke-width="6" stroke-dasharray="9 8"/>
+    <path d="M842 178 C856 176, 870 186, 888 181 C901 177, 913 186, 921 184" fill="none" stroke="#7a695c" stroke-width="5" stroke-linecap="round"/>
+    <path d="M848 197 C861 196, 874 204, 891 199 C905 195, 915 201, 920 201" fill="none" stroke="#695b51" stroke-width="5" stroke-linecap="round"/>
+    <path d="M856 214 C868 213, 879 218, 894 214 C905 211, 914 215, 918 216" fill="none" stroke="#5c5149" stroke-width="5" stroke-linecap="round"/>
+    <g fill="#8d7a68">
+      <circle cx="854" cy="177" r="3"/><circle cx="879" cy="181" r="3"/><circle cx="908" cy="183" r="3"/><circle cx="864" cy="212" r="3"/><circle cx="899" cy="214" r="3"/>
+    </g>
+  </g>
+</svg>

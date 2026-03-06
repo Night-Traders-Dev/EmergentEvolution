@@ -2,6 +2,7 @@
 #include "imgui.h"
 #include <GLFW/glfw3.h>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <algorithm>
 #include <random>
@@ -10,7 +11,7 @@
 
 static const char* const BIO_TYPE_NAMES[] = {
     "Cell", "Bacterium", "Virus", "Nutrient",
-    "Toxin", "Antibody", "Red Blood Cell", "White Blood Cell"
+    "Toxin", "Antibody", "Red Blood Cell", "White Blood Cell", "Phagocyte"
 };
 
 static const ImU32 TYPE_COLORS[] = {
@@ -22,6 +23,7 @@ static const ImU32 TYPE_COLORS[] = {
     IM_COL32(255, 255, 70, 255),   // Antibody - yellow
     IM_COL32(220, 70, 70, 255),    // Red blood - red
     IM_COL32(240, 240, 255, 255),  // White blood - white
+    IM_COL32(120, 220, 180, 255),  // Phagocyte - seafoam
 };
 
 static const char* const BIO_ENVIRONMENT_NAMES[] = {
@@ -30,6 +32,51 @@ static const char* const BIO_ENVIRONMENT_NAMES[] = {
     "Petri Dish",
     "Cat Brain"
 };
+
+enum BioEventType : uint32_t {
+    BIO_EVENT_SYSTEM = 0,
+    BIO_EVENT_DIVISION,
+    BIO_EVENT_INFECTION,
+    BIO_EVENT_IMMUNE,
+    BIO_EVENT_LIFECYCLE,
+    BIO_EVENT_USER
+};
+
+static const char* bio_event_type_name(uint32_t type) {
+    switch (type) {
+    case BIO_EVENT_DIVISION:  return "Division";
+    case BIO_EVENT_INFECTION: return "Infection";
+    case BIO_EVENT_IMMUNE:    return "Immune";
+    case BIO_EVENT_LIFECYCLE: return "Lifecycle";
+    case BIO_EVENT_USER:      return "User";
+    default:                  return "System";
+    }
+}
+
+static ImVec4 bio_event_type_color(uint32_t type) {
+    switch (type) {
+    case BIO_EVENT_DIVISION:  return {0.90f, 0.62f, 0.98f, 1.0f};
+    case BIO_EVENT_INFECTION: return {1.00f, 0.44f, 0.44f, 1.0f};
+    case BIO_EVENT_IMMUNE:    return {0.98f, 0.94f, 0.46f, 1.0f};
+    case BIO_EVENT_LIFECYCLE: return {0.62f, 0.92f, 0.70f, 1.0f};
+    case BIO_EVENT_USER:      return {0.60f, 0.88f, 1.0f, 1.0f};
+    default:                  return {0.64f, 0.96f, 0.72f, 1.0f};
+    }
+}
+
+static std::string bio_entity_label(const BioEntity& e) {
+    char label[96];
+    std::snprintf(label, sizeof(label), "%s #%u", BIO_TYPE_NAMES[e.type % BIO_TYPE_COUNT], e.entity_id);
+    return std::string(label);
+}
+
+static const char* bio_lifecycle_stage_name(const BioEntity& e) {
+    if (e.corpse) return "Dead Husk";
+    if (e.telomere_state <= 0.08f || e.organelle_health <= 0.20f) return "Senescent";
+    if (e.organelle_health <= 0.55f || e.telomere_state <= 0.42f) return "Aging";
+    if (e.age < 18.0f) return "Young";
+    return "Mature";
+}
 
 static glm::vec3 normalized_or(glm::vec3 v, glm::vec3 fallback);
 static glm::vec3 sample_local_offset(std::mt19937& rng, float radius);
@@ -67,12 +114,13 @@ static float type_default_radius(uint32_t type) {
     switch (type) {
     case BIO_CELL:        return 12.0f;
     case BIO_BACTERIUM:   return 6.0f;
-    case BIO_VIRUS:       return 4.0f;
+    case BIO_VIRUS:       return 2.6f;
     case BIO_NUTRIENT:    return 3.0f;
     case BIO_TOXIN:       return 4.0f;
     case BIO_ANTIBODY:    return 5.0f;
     case BIO_RED_BLOOD:   return 5.0f;
     case BIO_WHITE_BLOOD: return 12.0f;
+    case BIO_JANITOR:     return 11.0f;
     default:              return 8.0f;
     }
 }
@@ -96,18 +144,20 @@ static float type_default_energy(uint32_t type) {
     case BIO_ANTIBODY:    return 80.0f;
     case BIO_RED_BLOOD:   return 90.0f;
     case BIO_WHITE_BLOOD: return 200.0f;
+    case BIO_JANITOR:     return 160.0f;
     default:              return 100.0f;
     }
 }
 
 static BioGenes type_gene_baseline(uint32_t type) {
     switch (type) {
-    case BIO_CELL:        return {1.00f, 1.00f, 1.05f, 0.80f, 1.00f};
-    case BIO_BACTERIUM:   return {1.15f, 0.80f, 0.85f, 1.30f, 0.90f};
-    case BIO_VIRUS:       return {1.20f, 0.30f, 0.55f, 0.55f, 0.75f};
-    case BIO_ANTIBODY:    return {1.10f, 0.40f, 0.90f, 0.45f, 0.95f};
-    case BIO_RED_BLOOD:   return {0.10f, 0.05f, 0.60f, 1.10f, 1.05f};
-    case BIO_WHITE_BLOOD: return {1.30f, 0.75f, 1.10f, 0.70f, 1.20f};
+    case BIO_CELL:        return {1.00f, 1.00f, 1.05f, 0.80f, 1.00f, 1.00f, 1.00f, 0.0f, 0.0f, 0.0f};
+    case BIO_BACTERIUM:   return {1.15f, 0.80f, 0.85f, 1.30f, 0.90f, 0.00f, 1.30f, 0.50f, 0.90f, 0.50f};
+    case BIO_VIRUS:       return {1.20f, 0.30f, 0.55f, 0.55f, 0.75f, 0.00f, 0.40f, 0.0f, 0.0f, 0.0f};
+    case BIO_ANTIBODY:    return {1.10f, 0.40f, 0.90f, 0.45f, 0.95f, 0.00f, 0.65f, 0.0f, 0.0f, 0.0f};
+    case BIO_RED_BLOOD:   return {0.10f, 0.05f, 0.60f, 1.10f, 1.05f, 0.00f, 0.55f, 0.0f, 0.0f, 0.0f};
+    case BIO_WHITE_BLOOD: return {1.30f, 0.75f, 1.10f, 0.70f, 1.20f, 0.82f, 0.78f, 0.0f, 0.0f, 0.0f};
+    case BIO_JANITOR:     return {1.18f, 0.28f, 0.95f, 0.55f, 1.10f, 0.72f, 0.72f, 0.0f, 0.0f, 0.0f};
     default:              return {};
     }
 }
@@ -118,6 +168,11 @@ static void clamp_genes(BioGenes& genes) {
     genes.spacing = std::clamp(genes.spacing, 0.05f, 2.50f);
     genes.brownian = std::clamp(genes.brownian, 0.00f, 2.50f);
     genes.energy = std::clamp(genes.energy, 0.35f, 2.25f);
+    genes.telomere = std::clamp(genes.telomere, 0.00f, 2.25f);
+    genes.mitotic_clock = std::clamp(genes.mitotic_clock, 0.25f, 2.50f);
+    genes.antibiotic_type = std::clamp(genes.antibiotic_type, 0.00f, 1.00f);
+    genes.antibiotic_yield = std::clamp(genes.antibiotic_yield, 0.00f, 2.50f);
+    genes.antibiotic_diversity = std::clamp(genes.antibiotic_diversity, 0.00f, 1.00f);
 }
 
 static void randomize_entity_genes(BioEntity& e, std::mt19937& rng) {
@@ -131,6 +186,8 @@ static void randomize_entity_genes(BioEntity& e, std::mt19937& rng) {
     e.genes.spacing *= jitter(0.24f);
     e.genes.brownian *= jitter(0.35f);
     e.genes.energy *= jitter(0.22f);
+    e.genes.telomere *= jitter(0.20f);
+    e.genes.mitotic_clock *= jitter(0.26f);
 
     switch (e.type) {
     case BIO_CELL:
@@ -144,15 +201,23 @@ static void randomize_entity_genes(BioEntity& e, std::mt19937& rng) {
         }
         break;
     case BIO_BACTERIUM:
+        e.genes.antibiotic_type = std::uniform_real_distribution<float>(0.0f, 1.0f)(rng);
+        e.genes.antibiotic_yield *= jitter(0.30f);
+        e.genes.antibiotic_diversity *= jitter(0.45f);
         if (e.morphology % BIO_BACTERIA_VARIANT_COUNT == BIO_BACTERIA_BACILLI) {
             e.genes.seek *= 1.12f;
             e.genes.spacing *= 1.08f;
+            e.genes.antibiotic_yield *= 1.10f;
         } else if (e.morphology % BIO_BACTERIA_VARIANT_COUNT == BIO_BACTERIA_SPIRAL) {
             e.genes.brownian *= 1.20f;
             e.genes.flee *= 1.10f;
+            e.genes.antibiotic_diversity *= 1.12f;
         }
         break;
     case BIO_VIRUS:
+        e.genes.antibiotic_type = 0.0f;
+        e.genes.antibiotic_yield = 0.0f;
+        e.genes.antibiotic_diversity = 0.0f;
         if (e.morphology % BIO_VIRUS_VARIANT_COUNT == BIO_VIRUS_CORONA) {
             e.genes.seek *= 1.18f;
             e.genes.energy *= 1.06f;
@@ -161,7 +226,25 @@ static void randomize_entity_genes(BioEntity& e, std::mt19937& rng) {
             e.genes.seek *= 1.10f;
         }
         break;
+    case BIO_WHITE_BLOOD:
+        e.genes.antibiotic_type = 0.0f;
+        e.genes.antibiotic_yield = 0.0f;
+        e.genes.antibiotic_diversity = 0.0f;
+        e.genes.telomere *= 0.92f;
+        e.genes.mitotic_clock *= 0.82f;
+        break;
+    case BIO_JANITOR:
+        e.genes.antibiotic_type = 0.0f;
+        e.genes.antibiotic_yield = 0.0f;
+        e.genes.antibiotic_diversity = 0.0f;
+        e.genes.seek *= 1.08f;
+        e.genes.flee *= 0.55f;
+        e.genes.telomere *= 0.88f;
+        break;
     default:
+        e.genes.antibiotic_type = 0.0f;
+        e.genes.antibiotic_yield = 0.0f;
+        e.genes.antibiotic_diversity = 0.0f;
         break;
     }
 
@@ -181,7 +264,161 @@ static void mutate_entity_genes(BioEntity& e, std::mt19937& rng, float mutation_
     mutate_trait(e.genes.spacing, 0.05f, 2.50f);
     mutate_trait(e.genes.brownian, 0.00f, 2.50f);
     mutate_trait(e.genes.energy, 0.35f, 2.25f);
+    mutate_trait(e.genes.telomere, 0.00f, 2.25f);
+    mutate_trait(e.genes.mitotic_clock, 0.25f, 2.50f);
+    mutate_trait(e.genes.antibiotic_type, 0.00f, 1.00f);
+    mutate_trait(e.genes.antibiotic_yield, 0.00f, 2.50f);
+    mutate_trait(e.genes.antibiotic_diversity, 0.00f, 1.00f);
     clamp_genes(e.genes);
+}
+
+static bool type_feeds_on_nutrients(uint32_t type) {
+    switch (type) {
+    case BIO_CELL:
+    case BIO_BACTERIUM:
+    case BIO_RED_BLOOD:
+    case BIO_WHITE_BLOOD:
+    case BIO_ANTIBODY:
+    case BIO_JANITOR:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool type_leaves_corpse(uint32_t type) {
+    switch (type) {
+    case BIO_CELL:
+    case BIO_BACTERIUM:
+    case BIO_RED_BLOOD:
+    case BIO_WHITE_BLOOD:
+    case BIO_ANTIBODY:
+    case BIO_JANITOR:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool type_uses_telomeres(uint32_t type) {
+    return type == BIO_CELL || type == BIO_WHITE_BLOOD;
+}
+
+static float type_cycle_cooldown_base(uint32_t type) {
+    switch (type) {
+    case BIO_CELL:        return 9.0f;
+    case BIO_WHITE_BLOOD: return 15.0f;
+    case BIO_BACTERIUM:   return 4.0f;
+    default:              return 0.0f;
+    }
+}
+
+static float telomere_division_capacity(const BioEntity& e) {
+    if (!type_uses_telomeres(e.type))
+        return 0.0f;
+    float base = e.type == BIO_WHITE_BLOOD ? 7.0f : 10.0f;
+    return std::max(3.0f, base + e.genes.telomere * 8.0f);
+}
+
+static float telomere_fraction_remaining(const BioEntity& e) {
+    if (!type_uses_telomeres(e.type))
+        return 1.0f;
+    return std::clamp(e.telomere_state, 0.0f, 1.0f);
+}
+
+static void reset_infection_state(BioEntity& e) {
+    e.infection_progress = 0.0f;
+    e.infection_load = 0.0f;
+    e.infection_axis = glm::vec3(1.0f, 0.0f, 0.0f);
+    e.infection_morphology = 0;
+    e.infection_source_id = 0;
+    e.infection_generation = 0;
+    e.infection_genome = 0;
+    e.infection_genes = {};
+}
+
+static int antibiotic_type_count(const BioEntity& e) {
+    if (e.type != BIO_BACTERIUM)
+        return 0;
+    return 1 + static_cast<int>(std::floor(std::clamp(e.genes.antibiotic_diversity, 0.0f, 0.999f) * 4.0f));
+}
+
+static float wrap_unit(float v) {
+    v = std::fmod(v, 1.0f);
+    return (v < 0.0f) ? (v + 1.0f) : v;
+}
+
+static float circular_distance01(float a, float b) {
+    float d = std::fabs(a - b);
+    return std::min(d, 1.0f - d);
+}
+
+static float antibiotic_spectrum_overlap(const BioEntity& producer, const BioEntity& target) {
+    int band_count = antibiotic_type_count(producer);
+    if (producer.type != BIO_BACTERIUM || target.type != BIO_BACTERIUM || band_count <= 0)
+        return 0.0f;
+
+    float best = 0.0f;
+    float spread = 0.07f + producer.genes.antibiotic_diversity * 0.08f;
+    float band_width = 0.09f + producer.genes.antibiotic_diversity * 0.10f + target.genes.antibiotic_diversity * 0.05f;
+    for (int band = 0; band < band_count; ++band) {
+        float centered = static_cast<float>(band) - static_cast<float>(band_count - 1) * 0.5f;
+        float signature = wrap_unit(producer.genes.antibiotic_type + centered * spread);
+        float d = circular_distance01(signature, target.genes.antibiotic_type);
+        best = std::max(best, 1.0f - d / std::max(0.02f, band_width));
+    }
+    return std::clamp(best, 0.0f, 1.0f);
+}
+
+static float antibiotic_range(const BioEntity& e) {
+    return e.radius * (2.4f + e.genes.antibiotic_yield * 0.9f + e.genes.antibiotic_diversity * 0.45f);
+}
+
+static float antibiotic_film_target(const BioEntity& e, float local_pressure) {
+    if (e.type != BIO_BACTERIUM)
+        return 0.0f;
+    float yield = std::clamp(e.genes.antibiotic_yield, 0.0f, 2.5f);
+    float pressure = std::clamp(local_pressure, 0.0f, 1.0f);
+    return std::clamp((0.16f + yield * 0.30f) * (0.25f + pressure * 0.95f), 0.0f, 1.0f);
+}
+
+static float viral_burst_capacity(const BioEntity& host) {
+    float radius_ratio = host.radius / std::max(type_default_radius(BIO_VIRUS), 0.1f);
+    float capacity = 4.5f + radius_ratio * (2.35f + std::clamp(host.infection_genes.energy, 0.35f, 2.25f) * 0.65f);
+    switch (host.infection_morphology % BIO_VIRUS_VARIANT_COUNT) {
+    case BIO_VIRUS_CORONA:
+        capacity *= 1.12f;
+        break;
+    case BIO_VIRUS_PHAGE:
+        capacity *= 0.88f;
+        break;
+    default:
+        break;
+    }
+    return std::clamp(capacity, 6.0f, 18.0f);
+}
+
+static void initialize_entity_lifecycle(BioEntity& e, std::mt19937& rng) {
+    auto randf = [&](float lo, float hi) {
+        return std::uniform_real_distribution<float>(lo, hi)(rng);
+    };
+
+    e.corpse = false;
+    e.corpse_age = 0.0f;
+    e.starvation = 0.0f;
+    e.nutrient_reserve = type_feeds_on_nutrients(e.type) ? randf(0.60f, 1.0f) : 0.0f;
+    e.organelle_health = 1.0f;
+    e.telomere_state = type_uses_telomeres(e.type) ? std::clamp(e.genes.telomere * randf(0.88f, 1.08f), 0.28f, 1.25f) : 1.0f;
+    e.division_cooldown = std::max(0.0f, type_cycle_cooldown_base(e.type) / std::max(e.genes.mitotic_clock, 0.25f) * randf(0.15f, 0.65f));
+    e.division_count = 0;
+    e.antibiotic_film = 0.0f;
+    reset_infection_state(e);
+}
+
+static void feed_entity(BioEntity& e, float reserve_gain, float energy_gain) {
+    e.nutrient_reserve = std::clamp(e.nutrient_reserve + reserve_gain, 0.0f, 1.35f);
+    e.starvation = std::max(0.0f, e.starvation - reserve_gain * 0.9f);
+    e.energy += energy_gain;
 }
 
 static float metabolic_gene_scale(const BioEntity& e) {
@@ -292,25 +529,30 @@ static void configure_entity_shape(BioEntity& e, std::mt19937& rng) {
     case BIO_VIRUS:
         switch (e.morphology % BIO_VIRUS_VARIANT_COUNT) {
         case BIO_VIRUS_CLASSICAL:
-            e.radius *= randf(1.00f, 1.15f);
-            e.shape_aspect = randf(0.95f, 1.08f);
-            e.shape_noise = randf(0.04f, 0.10f);
+            e.radius *= randf(0.92f, 1.02f);
+            e.shape_aspect = randf(0.94f, 1.04f);
+            e.shape_noise = randf(0.05f, 0.10f);
             break;
         case BIO_VIRUS_CORONA:
-            e.radius *= randf(1.08f, 1.22f);
-            e.shape_aspect = randf(0.95f, 1.06f);
-            e.shape_noise = randf(0.10f, 0.18f);
+            e.radius *= randf(1.00f, 1.10f);
+            e.shape_aspect = randf(0.95f, 1.05f);
+            e.shape_noise = randf(0.09f, 0.16f);
             break;
         case BIO_VIRUS_PHAGE:
         default:
-            e.radius *= randf(1.35f, 1.55f);
-            e.shape_aspect = randf(2.50f, 3.20f);
-            e.shape_noise = randf(0.02f, 0.06f);
+            e.radius *= randf(1.12f, 1.26f);
+            e.shape_aspect = randf(2.55f, 3.25f);
+            e.shape_noise = randf(0.02f, 0.05f);
             break;
         }
         break;
     case BIO_WHITE_BLOOD:
         e.shape_noise = randf(0.22f, 0.34f);
+        break;
+    case BIO_JANITOR:
+        e.radius *= randf(0.92f, 1.08f);
+        e.shape_aspect = randf(0.92f, 1.08f);
+        e.shape_noise = randf(0.18f, 0.28f);
         break;
     default:
         break;
@@ -321,6 +563,7 @@ static float type_temperature_preference(uint32_t type) {
     switch (type) {
     case BIO_CELL:
     case BIO_WHITE_BLOOD:
+    case BIO_JANITOR:
     case BIO_RED_BLOOD:
     case BIO_ANTIBODY:
         return 37.0f;
@@ -339,6 +582,7 @@ static float type_ph_preference(uint32_t type) {
     switch (type) {
     case BIO_CELL:
     case BIO_WHITE_BLOOD:
+    case BIO_JANITOR:
     case BIO_RED_BLOOD:
     case BIO_ANTIBODY:
         return 7.25f;
@@ -357,6 +601,7 @@ static float type_oxygen_need(uint32_t type) {
     switch (type) {
     case BIO_CELL:        return 0.72f;
     case BIO_WHITE_BLOOD: return 0.68f;
+    case BIO_JANITOR:     return 0.64f;
     case BIO_RED_BLOOD:   return 0.65f;
     case BIO_ANTIBODY:    return 0.55f;
     case BIO_BACTERIUM:   return 0.35f;
@@ -369,6 +614,7 @@ static float type_toxicity_sensitivity(uint32_t type) {
     switch (type) {
     case BIO_CELL:
     case BIO_WHITE_BLOOD:
+    case BIO_JANITOR:
     case BIO_RED_BLOOD:
         return 1.0f;
     case BIO_ANTIBODY:
@@ -472,6 +718,11 @@ static float division_threshold_for(const BiochemConfig& cfg, const BioEntity& e
         float oxygen_penalty = std::max(0.0f, 0.8f - cfg.oxygen_level) * 0.45f;
         float acidity_penalty = std::max(0.0f, std::abs(cfg.acidity_ph - 7.25f) - 0.15f) * 0.22f;
         threshold *= 1.0f + oxygen_penalty + acidity_penalty + cfg.toxicity * 0.25f;
+    } else if (e.type == BIO_WHITE_BLOOD) {
+        float immune_drive = std::max(0.0f, cfg.immune_pressure - 0.45f) * 0.10f;
+        float toxicity_penalty = cfg.toxicity * 0.22f;
+        float oxygen_penalty = std::max(0.0f, 0.72f - cfg.oxygen_level) * 0.28f;
+        threshold *= 1.38f - immune_drive + toxicity_penalty + oxygen_penalty;
     }
 
     threshold *= std::clamp(0.85f + e.genes.energy * 0.22f, 0.70f, 1.30f);
@@ -500,7 +751,8 @@ static glm::vec3 environment_flow(const BiochemConfig& cfg,
 
 static void seed_default_population(BiochemState& state,
                                     const BiochemConfig& cfg,
-                                    const BiochemEnvironment& environment) {
+                                    const BiochemEnvironment& environment,
+                                    uint32_t& next_entity_id) {
     state.clear();
 
     std::mt19937 rng(42);
@@ -537,7 +789,9 @@ static void seed_default_population(BiochemState& state,
             e.genome = (uint32_t)rng();
             randomize_entity_genes(e, rng);
             e.energy = type_default_energy(type) * e.genes.energy * energy_scale * randf(0.85f, 1.15f);
+            initialize_entity_lifecycle(e, rng);
             configure_entity_shape(e, rng);
+            e.entity_id = next_entity_id++;
             state.entities.push_back(e);
         }
     };
@@ -580,6 +834,42 @@ static void seed_default_population(BiochemState& state,
         spawn_group(BIO_ANTIBODY, 4, 22.0f, mid, 1.0f, BIO_ENV_FEATURE_NUTRIENT);
         break;
     }
+}
+
+void BiochemApp::assign_entity_identity(BioEntity& e, uint32_t generation, uint32_t parent_id) {
+    e.entity_id = next_entity_id_++;
+    e.parent_id = parent_id;
+    e.generation = generation;
+}
+
+void BiochemApp::push_event(uint32_t type, const std::string& text) {
+    event_log_.push_back({sim_time_, type, text});
+    while (event_log_.size() > 160)
+        event_log_.pop_front();
+    event_log_dirty_ = true;
+}
+
+void BiochemApp::mark_entity_corpse(BioEntity& e, uint32_t event_type, const std::string& reason) {
+    if (!type_leaves_corpse(e.type)) {
+        e.alive = false;
+        e.corpse = false;
+    } else {
+        e.alive = false;
+        e.corpse = true;
+        e.corpse_age = 0.0f;
+        e.mitosis_progress = 0.0f;
+        e.energy = 0.0f;
+        e.nutrient_reserve = 0.0f;
+        e.starvation = 1.25f;
+        e.organelle_health = 0.0f;
+        e.antibiotic_film = 0.0f;
+        reset_infection_state(e);
+        e.vel *= 0.35f;
+    }
+
+    char msg[256];
+    std::snprintf(msg, sizeof(msg), "%s %s.", bio_entity_label(e).c_str(), reason.c_str());
+    push_event(event_type, msg);
 }
 
 void BiochemApp::regenerate_environment(bool advance_seed) {
@@ -791,8 +1081,12 @@ void BiochemApp::init(GLFWwindow* window) {
     apply_environment_preset(BIO_ENV_HUMAN_LUNG, false);
     reset_camera_pose();
 
-    seed_default_population(state, cfg, environment_);
+    next_entity_id_ = 1;
+    event_log_.clear();
+    event_log_dirty_ = false;
+    seed_default_population(state, cfg, environment_, next_entity_id_);
     cfg.entity_count = static_cast<uint32_t>(state.count_alive());
+    push_event(BIO_EVENT_SYSTEM, "Simulation initialized.");
 }
 
 void BiochemApp::destroy() {
@@ -803,12 +1097,21 @@ void BiochemApp::destroy() {
 
 void BiochemApp::reset_simulation() {
     regenerate_environment(true);
-    seed_default_population(state, cfg, environment_);
+    state.clear();
+    next_entity_id_ = 1;
+    event_log_.clear();
+    event_log_dirty_ = false;
+    seed_default_population(state, cfg, environment_, next_entity_id_);
     cfg.entity_count = static_cast<uint32_t>(state.count_alive());
     selected_entity = -1;
     nutrient_timer_ = 0.0f;
     sim_time_ = 0.0f;
     paused = false;
+
+    char msg[192];
+    std::snprintf(msg, sizeof(msg), "Simulation seeded in %s with %zu living entities.",
+                  BIO_ENVIRONMENT_NAMES[cfg.environment % BIO_ENV_COUNT], state.count_alive());
+    push_event(BIO_EVENT_SYSTEM, msg);
 }
 
 void BiochemApp::spawn_at(glm::vec3 pos) {
@@ -822,10 +1125,20 @@ void BiochemApp::spawn_at(glm::vec3 pos) {
     e.genome = (uint32_t)rand();
     std::mt19937 rng(e.genome ^ (uint32_t)t * 747796405u);
     randomize_entity_genes(e, rng);
+    initialize_entity_lifecycle(e, rng);
     configure_entity_shape(e, rng);
+    assign_entity_identity(e);
 
     state.entities.push_back(e);
     cfg.entity_count = static_cast<uint32_t>(state.count_alive());
+
+    char msg[224];
+    const char* variant = (e.type == BIO_CELL || e.type == BIO_BACTERIUM || e.type == BIO_VIRUS)
+        ? bio_entity_variant_name(e.type, e.morphology) : "Default";
+    std::snprintf(msg, sizeof(msg),
+                  "Spawned %s at generation %u (%s) at (%.0f, %.0f, %.0f).",
+                  bio_entity_label(e).c_str(), e.generation, variant, e.pos.x, e.pos.y, e.pos.z);
+    push_event(BIO_EVENT_USER, msg);
 }
 
 // ── Tick ─────────────────────────────────────────────────────────────────────
@@ -906,7 +1219,9 @@ void BiochemApp::spawn_nutrient() {
     std::mt19937 rng(e.genome ^ 0xA341316Cu);
     randomize_entity_genes(e, rng);
     e.energy = type_default_energy(BIO_NUTRIENT) * e.genes.energy * (0.75f + cfg.nutrient_density * 0.35f);
+    initialize_entity_lifecycle(e, rng);
     configure_entity_shape(e, rng);
+    assign_entity_identity(e);
     state.entities.push_back(e);
 }
 
@@ -926,7 +1241,27 @@ void BiochemApp::step_simulation(float dt) {
 
     // Update each entity
     for (auto& e : ents) {
-        if (!e.alive) continue;
+        if (!e.alive) {
+            if (!e.corpse)
+                continue;
+
+            e.age += scaled_dt;
+            e.corpse_age += scaled_dt;
+            e.vel += environment_flow(cfg, environment_, e, sim_time_) * scaled_dt * 0.018f;
+            e.pos += e.vel * scaled_dt;
+            e.vel *= 0.992f;
+
+            float dist_from_center = glm::length(e.pos);
+            if (dist_from_center > wr) {
+                glm::vec3 norm = e.pos / dist_from_center;
+                e.pos = norm * wr;
+                e.vel -= 2.0f * glm::dot(e.vel, norm) * norm;
+                e.vel *= 0.75f;
+            }
+            continue;
+        }
+
+        e.division_cooldown = std::max(0.0f, e.division_cooldown - scaled_dt);
 
         // Environment flow + movement
         e.vel += environment_flow(cfg, environment_, e, sim_time_) * scaled_dt * 0.08f;
@@ -944,33 +1279,82 @@ void BiochemApp::step_simulation(float dt) {
             e.vel *= 0.8f;
         }
 
-        // Metabolism
+        // Metabolism + starvation + organelle aging
         if (e.type == BIO_CELL || e.type == BIO_BACTERIUM ||
             e.type == BIO_WHITE_BLOOD || e.type == BIO_RED_BLOOD ||
-            e.type == BIO_ANTIBODY) {
+            e.type == BIO_ANTIBODY || e.type == BIO_JANITOR) {
             float base_metabolism = cfg.metabolism_rate;
             if (e.type == BIO_BACTERIUM) base_metabolism *= 0.75f;
-            if (e.type == BIO_WHITE_BLOOD || e.type == BIO_ANTIBODY) base_metabolism *= 1.20f;
+            if (e.type == BIO_WHITE_BLOOD || e.type == BIO_ANTIBODY || e.type == BIO_JANITOR) base_metabolism *= 1.15f;
             if (e.type == BIO_RED_BLOOD) base_metabolism *= 0.55f;
             base_metabolism *= metabolic_gene_scale(e);
 
-            float stress = compute_environment_stress(cfg, environment_, e);
-            e.energy -= base_metabolism * scaled_dt * (1.0f + stress);
+            float nutrient_field = sample_feature_density(environment_, BIO_ENV_FEATURE_NUTRIENT, e.pos);
+            float toxin_field = sample_feature_density(environment_, BIO_ENV_FEATURE_TOXIN, e.pos);
+            float reserve_gain = 0.0f;
+            float energy_gain = 0.0f;
 
             if (e.type == BIO_BACTERIUM) {
-                float scavenging = std::max(0.0f, cfg.nutrient_density - 0.8f) * 0.55f;
-                scavenging += std::max(0.0f, 0.65f - cfg.oxygen_level) * 0.25f;
-                scavenging += sample_feature_density(environment_, BIO_ENV_FEATURE_NUTRIENT, e.pos) * 1.5f;
-                scavenging -= sample_feature_density(environment_, BIO_ENV_FEATURE_TOXIN, e.pos) * 0.9f;
-                e.energy += scavenging * scaled_dt * 8.0f * energy_gain_gene_scale(e);
-            } else if (e.type == BIO_CELL) {
-                float gain_scale = energy_gain_gene_scale(e);
-                e.energy += std::max(0.0f, cfg.oxygen_level - 0.65f) * scaled_dt * 2.0f * gain_scale;
-                e.energy += sample_feature_density(environment_, BIO_ENV_FEATURE_NUTRIENT, e.pos) * scaled_dt * 2.0f * gain_scale;
+                float scavenging = std::max(0.0f, cfg.nutrient_density - 0.8f) * 0.35f;
+                scavenging += nutrient_field * 0.85f;
+                scavenging -= toxin_field * 0.22f;
+                reserve_gain = std::max(0.0f, scavenging) * scaled_dt * 0.18f;
+                energy_gain = reserve_gain * 5.5f * energy_gain_gene_scale(e);
+            } else if (type_feeds_on_nutrients(e.type)) {
+                float uptake = nutrient_field * scaled_dt;
+                if (e.type == BIO_CELL) uptake *= 0.11f;
+                else if (e.type == BIO_WHITE_BLOOD) uptake *= 0.08f;
+                else if (e.type == BIO_JANITOR) uptake *= 0.10f;
+                else if (e.type == BIO_RED_BLOOD) uptake *= 0.05f;
+                else if (e.type == BIO_ANTIBODY) uptake *= 0.03f;
+                reserve_gain = uptake;
+                energy_gain = uptake * 3.8f * energy_gain_gene_scale(e);
+            }
+            if (reserve_gain > 0.0f || energy_gain > 0.0f)
+                feed_entity(e, reserve_gain, energy_gain);
+
+            float reserve_drain = base_metabolism * scaled_dt * 0.055f;
+            e.nutrient_reserve = std::max(0.0f, e.nutrient_reserve - reserve_drain);
+
+            if (e.nutrient_reserve < 0.18f)
+                e.starvation = std::min(1.6f, e.starvation + scaled_dt * (0.16f + (0.18f - e.nutrient_reserve) * 1.8f));
+            else
+                e.starvation = std::max(0.0f, e.starvation - scaled_dt * (0.20f + e.nutrient_reserve * 0.30f));
+
+            float stress = compute_environment_stress(cfg, environment_, e);
+            float telomere_frac = telomere_fraction_remaining(e);
+            float replicative_age = 0.0f;
+            if (type_uses_telomeres(e.type)) {
+                float division_capacity = telomere_division_capacity(e);
+                if (division_capacity > 0.0f)
+                    replicative_age = std::clamp(static_cast<float>(e.division_count) / division_capacity, 0.0f, 1.25f);
+            }
+            float division_wear = glm::smoothstep(0.28f, 1.0f, replicative_age);
+            float senescence = (type_uses_telomeres(e.type) && telomere_frac <= 0.12f)
+                ? (0.18f + (0.12f - telomere_frac) * 3.2f) : 0.0f;
+            senescence += division_wear * 0.30f;
+            e.energy -= base_metabolism * scaled_dt * (1.0f + stress + e.starvation * 1.45f + senescence);
+
+            float target_health = 0.20f + std::clamp(e.nutrient_reserve, 0.0f, 1.0f) * 0.42f;
+            target_health += std::clamp(telomere_frac, 0.0f, 1.0f) * 0.33f;
+            target_health -= e.starvation * 0.34f + senescence * 0.22f + division_wear * 0.24f;
+            target_health = std::clamp(target_health, 0.0f, 1.0f);
+            e.organelle_health += (target_health - e.organelle_health) * std::min(1.0f, scaled_dt * 1.8f);
+
+            if (e.energy <= 0.0f) {
+                if (e.type == BIO_CELL && e.infection_progress > 0.0f) {
+                    e.energy = 0.0f;
+                    continue;
+                }
+                std::string reason = (e.starvation > 0.65f || e.nutrient_reserve <= 0.01f)
+                    ? "starved and collapsed into a dead husk"
+                    : "metabolically failed and collapsed into a dead husk";
+                mark_entity_corpse(e, BIO_EVENT_LIFECYCLE, reason);
+                continue;
             }
 
-            if (e.energy <= 0) {
-                e.alive = false;
+            if (type_uses_telomeres(e.type) && e.telomere_state <= 0.05f && e.organelle_health <= 0.08f) {
+                mark_entity_corpse(e, BIO_EVENT_LIFECYCLE, "reached telomere exhaustion and senesced into a dead husk");
                 continue;
             }
         }
@@ -991,7 +1375,7 @@ void BiochemApp::step_simulation(float dt) {
     // Eating nutrients
     for (size_t i = 0; i < ents.size(); i++) {
         if (!ents[i].alive) continue;
-        if (ents[i].type != BIO_CELL && ents[i].type != BIO_BACTERIUM) continue;
+        if (!type_feeds_on_nutrients(ents[i].type)) continue;
 
         for (size_t j = 0; j < ents.size(); j++) {
             if (i == j || !ents[j].alive) continue;
@@ -1001,8 +1385,10 @@ void BiochemApp::step_simulation(float dt) {
             float touch = ents[i].radius + ents[j].radius;
 
             if (ents[j].type == BIO_NUTRIENT && dist < touch) {
-                float uptake = 0.75f + cfg.nutrient_density * 0.25f;
-                ents[i].energy += ents[j].energy * uptake * energy_gain_gene_scale(ents[i]);
+                float uptake = 0.35f + cfg.nutrient_density * 0.18f;
+                float reserve_gain = ents[j].energy * uptake * 0.020f;
+                float energy_gain = ents[j].energy * uptake * 0.24f * energy_gain_gene_scale(ents[i]);
+                feed_entity(ents[i], reserve_gain, energy_gain);
                 ents[j].alive = false;
             } else if (ents[j].type == BIO_TOXIN && dist < touch) {
                 ents[i].energy -= ents[j].energy * (0.10f + cfg.toxicity * 0.08f);
@@ -1011,29 +1397,31 @@ void BiochemApp::step_simulation(float dt) {
     }
 
     // Subsystems
+    process_bacteria_antibiotics(scaled_dt);
     process_repulsion();
-    process_cell_division();
+    process_cell_division(scaled_dt);
     process_virus_infection(scaled_dt);
     if (cfg.immune_system)
         process_antibody_response(scaled_dt);
+    process_phagocyte_cleanup(scaled_dt);
 
     // Remove dead entities periodically
     size_t dead = 0;
     for (const auto& e : ents)
-        if (!e.alive) dead++;
+        if (!e.alive && !e.corpse) dead++;
     if (dead > 50) {
         if (selected_entity >= 0) {
             int new_idx = 0;
             for (int i = 0; i < selected_entity && i < (int)ents.size(); i++) {
-                if (ents[i].alive) new_idx++;
+                if (ents[i].alive || ents[i].corpse) new_idx++;
             }
-            if (selected_entity < (int)ents.size() && ents[selected_entity].alive)
+            if (selected_entity < (int)ents.size() && (ents[selected_entity].alive || ents[selected_entity].corpse))
                 selected_entity = new_idx;
             else
                 selected_entity = -1;
         }
         ents.erase(std::remove_if(ents.begin(), ents.end(),
-            [](const BioEntity& e) { return !e.alive; }), ents.end());
+            [](const BioEntity& e) { return !e.alive && !e.corpse; }), ents.end());
     }
 
     cfg.entity_count = static_cast<uint32_t>(state.count_alive());
@@ -1041,7 +1429,7 @@ void BiochemApp::step_simulation(float dt) {
 
 // ── Cell Division ───────────────────────────────────────────────────────────
 
-void BiochemApp::process_cell_division() {
+void BiochemApp::process_cell_division(float dt) {
     auto& ents = state.entities;
     size_t n = ents.size();
     if (n > 1000) return;
@@ -1049,8 +1437,50 @@ void BiochemApp::process_cell_division() {
     for (size_t i = 0; i < n; i++) {
         auto& e = ents[i];
         if (!e.alive) continue;
-        if (e.type != BIO_CELL && e.type != BIO_BACTERIUM) continue;
-        if (e.energy < division_threshold_for(cfg, e)) continue;
+        if (e.type != BIO_CELL && e.type != BIO_BACTERIUM && e.type != BIO_WHITE_BLOOD) continue;
+        if (e.type == BIO_CELL && e.infection_progress > 0.0f)
+            continue;
+        if (type_uses_telomeres(e.type) && e.telomere_state <= 0.08f)
+            continue;
+        float threshold = division_threshold_for(cfg, e);
+        float previous_mitosis = e.mitosis_progress;
+        bool uses_mitosis = (e.type == BIO_CELL || e.type == BIO_WHITE_BLOOD);
+        bool uses_binary_fission = (e.type == BIO_BACTERIUM);
+        bool uses_staged_division = uses_mitosis || uses_binary_fission;
+
+        if (uses_staged_division) {
+            float duration_base = 3.6f;
+            if (e.type == BIO_WHITE_BLOOD)
+                duration_base = 4.9f;
+            else if (e.type == BIO_BACTERIUM)
+                duration_base = 2.45f;
+            float division_duration = duration_base /
+                std::clamp(e.genes.energy * e.genes.mitotic_clock, 0.55f, 2.20f);
+            bool cycle_ready = (e.division_cooldown <= 0.0f);
+            if (e.mitosis_progress > 0.0f || (cycle_ready && e.energy >= threshold)) {
+                if (cycle_ready && e.energy >= threshold * 0.92f)
+                    e.mitosis_progress = std::min(1.0f, e.mitosis_progress + dt / division_duration);
+                else
+                    e.mitosis_progress = std::max(0.0f, e.mitosis_progress - dt / (division_duration * 0.7f));
+            }
+
+            if (previous_mitosis <= 0.02f && e.mitosis_progress > 0.02f) {
+                char msg[192];
+                if (uses_binary_fission) {
+                    std::snprintf(msg, sizeof(msg), "%s entered binary fission at generation %u.",
+                                  bio_entity_label(e).c_str(), e.generation);
+                } else {
+                    std::snprintf(msg, sizeof(msg), "%s entered mitosis at generation %u.",
+                                  bio_entity_label(e).c_str(), e.generation);
+                }
+                push_event(BIO_EVENT_DIVISION, msg);
+            }
+
+            if (e.mitosis_progress < 1.0f)
+                continue;
+        } else if (e.energy < threshold || e.division_cooldown > 0.0f) {
+            continue;
+        }
 
         BioEntity child;
         child.type = e.type;
@@ -1082,8 +1512,127 @@ void BiochemApp::process_cell_division() {
 
         child.alive = true;
         child.age = 0.0f;
+        child.mitosis_progress = 0.0f;
+        e.mitosis_progress = 0.0f;
+        initialize_entity_lifecycle(child, rng);
+        if (type_uses_telomeres(e.type)) {
+            float attrition = 1.0f / telomere_division_capacity(e);
+            float next_telomere = std::max(0.0f, std::min(e.telomere_state, child.telomere_state) - attrition);
+            e.telomere_state = next_telomere;
+            child.telomere_state = next_telomere;
+            e.division_count += 1;
+            child.division_count = e.division_count;
+        } else {
+            child.division_count = e.division_count + 1;
+            e.division_count = child.division_count;
+        }
+        float cooldown = type_cycle_cooldown_base(e.type) / std::max(e.genes.mitotic_clock, 0.25f);
+        e.division_cooldown = cooldown;
+        child.division_cooldown = cooldown;
+        assign_entity_identity(child, e.generation + 1, e.entity_id);
         configure_entity_shape(child, rng);
+
+        std::string parent_label = bio_entity_label(e);
+        std::string child_label = bio_entity_label(child);
+        char msg[256];
+        if (uses_binary_fission) {
+            std::snprintf(msg, sizeof(msg), "%s completed binary fission and produced %s at generation %u.",
+                          parent_label.c_str(), child_label.c_str(), child.generation);
+        } else if (uses_mitosis) {
+            std::snprintf(msg, sizeof(msg), "%s completed mitosis and produced %s at generation %u.",
+                          parent_label.c_str(), child_label.c_str(), child.generation);
+        } else {
+            std::snprintf(msg, sizeof(msg), "%s divided and produced %s at generation %u.",
+                          parent_label.c_str(), child_label.c_str(), child.generation);
+        }
         ents.push_back(child);
+        push_event(BIO_EVENT_DIVISION, msg);
+
+        if (type_uses_telomeres(e.type) && e.telomere_state <= 0.14f) {
+            char telomere_msg[224];
+            std::snprintf(telomere_msg, sizeof(telomere_msg),
+                          "%s and %s entered late-life senescence as telomeres shortened to %.0f%%.",
+                          parent_label.c_str(), child_label.c_str(), e.telomere_state * 100.0f);
+            push_event(BIO_EVENT_LIFECYCLE, telomere_msg);
+        }
+    }
+}
+
+void BiochemApp::process_bacteria_antibiotics(float dt) {
+    auto& ents = state.entities;
+    size_t n = ents.size();
+    if (n == 0)
+        return;
+
+    std::vector<float> film_targets(n, 0.0f);
+    std::vector<float> damage_accum(n, 0.0f);
+    std::vector<float> strongest_hit(n, 0.0f);
+    std::vector<int> damage_source(n, -1);
+
+    for (size_t i = 0; i < n; ++i) {
+        const auto& producer = ents[i];
+        if (!producer.alive || producer.type != BIO_BACTERIUM)
+            continue;
+
+        float local_pressure = 0.0f;
+        float range = antibiotic_range(producer);
+        for (size_t j = 0; j < n; ++j) {
+            if (i == j)
+                continue;
+            const auto& target = ents[j];
+            if (!target.alive || target.type != BIO_BACTERIUM)
+                continue;
+
+            float dist = glm::length(target.pos - producer.pos);
+            if (dist > range)
+                continue;
+
+            float overlap = antibiotic_spectrum_overlap(producer, target);
+            float genomic_mismatch = std::min(1.0f,
+                static_cast<float>(__builtin_popcount(static_cast<unsigned int>(producer.genome ^ target.genome))) / 10.0f);
+            float hostility = std::clamp((1.0f - overlap) * (0.25f + genomic_mismatch * 0.75f), 0.0f, 1.0f);
+            if (hostility <= 0.04f)
+                continue;
+
+            float falloff = 1.0f - dist / std::max(range, 1.0f);
+            float pressure = hostility * falloff;
+            local_pressure = std::max(local_pressure, pressure);
+
+            float potency = (1.8f + producer.genes.antibiotic_yield * 3.8f +
+                             producer.genes.antibiotic_diversity * 1.8f) * pressure * dt;
+            damage_accum[j] += potency;
+            if (potency > strongest_hit[j]) {
+                strongest_hit[j] = potency;
+                damage_source[j] = static_cast<int>(i);
+            }
+        }
+
+        film_targets[i] = antibiotic_film_target(producer, local_pressure);
+    }
+
+    for (size_t i = 0; i < n; ++i) {
+        auto& bacterium = ents[i];
+        if (!bacterium.alive || bacterium.type != BIO_BACTERIUM)
+            continue;
+
+        bacterium.antibiotic_film += (film_targets[i] - bacterium.antibiotic_film) * std::min(1.0f, dt * 4.0f);
+        if (film_targets[i] > 0.0f) {
+            bacterium.energy -= film_targets[i] * dt * (0.45f + bacterium.genes.antibiotic_diversity * 0.35f);
+            bacterium.nutrient_reserve = std::max(0.0f, bacterium.nutrient_reserve - film_targets[i] * dt * 0.035f);
+        }
+
+        if (damage_accum[i] <= 0.0f)
+            continue;
+
+        bacterium.energy -= damage_accum[i];
+        bacterium.starvation = std::min(1.6f, bacterium.starvation + damage_accum[i] * 0.015f);
+        bacterium.organelle_health = std::max(0.0f, bacterium.organelle_health - damage_accum[i] * 0.016f);
+        if (bacterium.energy <= 0.0f && bacterium.alive) {
+            std::string reason = "succumbed to an antibiotic film";
+            if (damage_source[i] >= 0 && damage_source[i] < static_cast<int>(ents.size()))
+                reason = "succumbed to the antibiotic film from " + bio_entity_label(ents[damage_source[i]]);
+            mark_entity_corpse(bacterium, BIO_EVENT_LIFECYCLE, reason);
+        }
     }
 }
 
@@ -1097,55 +1646,148 @@ void BiochemApp::process_virus_infection(float dt) {
     float oxygen_bonus = 1.0f + std::max(0.0f, 0.7f - cfg.oxygen_level) * 0.45f;
     float effective_rate = cfg.infection_rate * thermal_alignment * immune_drag * oxygen_bonus;
 
-    for (size_t i = 0; i < n; i++) {
-        if (!ents[i].alive || ents[i].type != BIO_VIRUS) continue;
+    for (size_t i = 0; i < n; ++i) {
+        auto& host = ents[i];
+        if (!host.alive || host.type != BIO_CELL || host.infection_progress <= 0.0f)
+            continue;
 
-        for (size_t j = 0; j < n; j++) {
-            if (i == j || !ents[j].alive) continue;
-            if (ents[j].type != BIO_CELL) continue;
+        float local_shelter = sample_feature_density(environment_, BIO_ENV_FEATURE_MEMBRANE, host.pos);
+        float local_toxin = sample_feature_density(environment_, BIO_ENV_FEATURE_TOXIN, host.pos);
+        float local_factor = std::clamp(1.0f + local_toxin * 0.30f - local_shelter * 0.16f, 0.65f, 1.65f);
+        float replication_rate = effective_rate * local_factor *
+            (0.65f + std::clamp(host.infection_genes.mitotic_clock, 0.25f, 2.50f) * 0.40f) *
+            (0.70f + std::clamp(host.infection_genes.energy, 0.35f, 2.25f) * 0.30f);
+        float burst_capacity = viral_burst_capacity(host);
+        float ingress_gate = glm::smoothstep(0.04f, 0.22f, host.infection_progress);
+        float replication_gate = glm::smoothstep(0.14f, 0.82f, host.infection_progress);
+        float burst_bias = 0.70f + std::clamp(host.infection_genes.seek, 0.05f, 2.50f) * 0.12f +
+                           std::clamp(host.infection_genes.energy, 0.35f, 2.25f) * 0.20f;
 
-            glm::vec3 diff = ents[j].pos - ents[i].pos;
-            float dist = glm::length(diff);
+        host.infection_progress = std::min(1.20f, host.infection_progress + replication_rate * dt * 0.38f);
+        float target_load = 1.0f + replication_gate * burst_capacity * burst_bias;
+        host.infection_load += (target_load - host.infection_load) * std::min(1.0f, dt * (1.9f + ingress_gate * 2.5f));
+        host.energy -= dt * (4.4f + replication_gate * 2.2f + host.infection_load * 1.35f);
+        host.starvation = std::min(1.6f, host.starvation + dt * host.infection_progress * 0.18f);
+        host.organelle_health = std::max(0.0f, host.organelle_health - dt * (0.012f + replication_gate * 0.09f));
+        host.vel *= 0.992f;
 
-            if (dist < cfg.infection_radius) {
-                float local_shelter = sample_feature_density(environment_, BIO_ENV_FEATURE_MEMBRANE, ents[j].pos);
-                float local_toxin = sample_feature_density(environment_, BIO_ENV_FEATURE_TOXIN, ents[j].pos);
-                float local_factor = std::clamp(1.0f + local_toxin * 0.35f - local_shelter * 0.20f, 0.55f, 1.75f);
-                float damage = effective_rate * local_factor * dt * (1.0f - dist / cfg.infection_radius) *
-                               20.0f * std::clamp(ents[i].genes.energy, 0.65f, 1.8f);
-                ents[j].energy -= damage;
+        bool overcrowded = host.infection_load >= burst_capacity * 0.96f;
+        bool ready_to_lyse = overcrowded || host.infection_progress >= 1.08f ||
+                             (host.energy <= 10.0f && host.infection_progress >= 0.82f) ||
+                             (host.organelle_health <= 0.05f && host.infection_progress >= 0.76f);
+        if (!ready_to_lyse)
+            continue;
 
-                if (dist > 1.0f) {
-                    glm::vec3 dir = diff / dist;
-                    ents[i].vel += dir * 30.0f * dt;
-                }
+        std::string host_label = bio_entity_label(host);
+        uint32_t source_generation = host.infection_generation;
+        uint32_t source_id = host.infection_source_id;
+        uint32_t source_genome = host.infection_genome;
+        uint32_t source_morphology = host.infection_morphology % BIO_VIRUS_VARIANT_COUNT;
+        BioGenes source_genes = host.infection_genes;
+        glm::vec3 burst_origin = host.pos;
+        glm::vec3 burst_velocity = host.vel;
+        int burst_count = std::clamp(
+            static_cast<int>(std::round(host.infection_load * (0.88f + source_genes.energy * 0.10f) +
+                                        (source_morphology == BIO_VIRUS_PHAGE ? 1.0f : 0.0f))),
+            6, 22);
 
-                if (ents[j].energy < 30.0f && ents[j].alive) {
-                    ents[j].alive = false;
-                    int spawn_count = 2 + rand() % 2;
-                    for (int k = 0; k < spawn_count && ents.size() < 1200; k++) {
-                        BioEntity v;
-                        float a = static_cast<float>(rand()) / RAND_MAX * 6.2832f;
-                        float p = static_cast<float>(rand()) / RAND_MAX * 3.1416f - 1.5708f;
-                        glm::vec3 d(cosf(p) * cosf(a), sinf(p), cosf(p) * sinf(a));
-                        v.pos = ents[j].pos + d * 8.0f;
-                        v.vel = d * 40.0f;
-                        v.radius = 4.0f;
-                        v.energy = 30.0f;
-                        v.type = BIO_VIRUS;
-                        v.morphology = ents[i].morphology;
-                        v.genes = ents[i].genes;
-                        v.genome = ents[i].genome;
-                        std::mt19937 vrng(v.genome ^ (uint32_t)(k * 977u + i));
-                        if (randf_range(0.0f, 1.0f) < cfg.mutation_rate * 1.5f)
-                            mutate_entity_genes(v, vrng, cfg.mutation_rate * 1.2f);
-                        v.energy *= std::clamp(v.genes.energy, 0.45f, 1.8f);
-                        configure_entity_shape(v, vrng);
-                        ents.push_back(v);
-                    }
-                }
+        mark_entity_corpse(host, BIO_EVENT_INFECTION, "was lysed into a dead husk");
+
+        int spawned = 0;
+        for (int k = 0; k < burst_count && ents.size() < 1200; ++k) {
+            BioEntity v;
+            float a = static_cast<float>(rand()) / RAND_MAX * 6.2832f;
+            float p = static_cast<float>(rand()) / RAND_MAX * 3.1416f - 1.5708f;
+            glm::vec3 d(cosf(p) * cosf(a), sinf(p), cosf(p) * sinf(a));
+            v.pos = burst_origin + d * (type_default_radius(BIO_VIRUS) * 2.4f + 0.18f * spawned);
+            v.vel = burst_velocity * 0.22f + d * randf_range(42.0f, 84.0f);
+            v.type = BIO_VIRUS;
+            v.morphology = source_morphology;
+            v.genes = source_genes;
+            v.genome = source_genome ? source_genome : static_cast<uint32_t>(rand());
+            std::mt19937 vrng(v.genome ^ (uint32_t)(k * 977u + i * 131u));
+            if (randf_range(0.0f, 1.0f) < cfg.mutation_rate * 1.5f)
+                mutate_entity_genes(v, vrng, cfg.mutation_rate * 1.2f);
+            v.energy = type_default_energy(BIO_VIRUS) * std::clamp(v.genes.energy, 0.45f, 1.8f);
+            initialize_entity_lifecycle(v, vrng);
+            assign_entity_identity(v, source_generation + 1, source_id);
+            configure_entity_shape(v, vrng);
+            ents.push_back(v);
+            spawned++;
+        }
+
+        char msg[256];
+        std::snprintf(msg, sizeof(msg),
+                      "%s burst after viral replication and released %d virions at generation %u.",
+                      host_label.c_str(), spawned, source_generation + 1);
+        push_event(BIO_EVENT_INFECTION, msg);
+    }
+
+    n = ents.size();
+    for (size_t i = 0; i < n; ++i) {
+        auto& virus = ents[i];
+        if (!virus.alive || virus.type != BIO_VIRUS)
+            continue;
+
+        int best_host = -1;
+        float best_contact = cfg.infection_radius;
+        for (size_t j = 0; j < n; ++j) {
+            if (i == j)
+                continue;
+            auto& host = ents[j];
+            if (!host.alive || host.type != BIO_CELL)
+                continue;
+            if (host.infection_progress > 0.0f)
+                continue;
+
+            float dist = glm::length(host.pos - virus.pos);
+            float contact_radius = std::min(cfg.infection_radius, virus.radius + host.radius * 1.02f + 0.8f);
+            if (dist < contact_radius && dist < best_contact) {
+                best_contact = dist;
+                best_host = static_cast<int>(j);
             }
         }
+
+        if (best_host < 0)
+            continue;
+
+        auto& host = ents[best_host];
+        float local_shelter = sample_feature_density(environment_, BIO_ENV_FEATURE_MEMBRANE, host.pos);
+        float local_factor = std::clamp(1.0f - local_shelter * 0.18f, 0.45f, 1.0f);
+        float contact_radius = std::min(cfg.infection_radius, virus.radius + host.radius * 1.02f + 0.8f);
+        float chance = std::clamp(effective_rate * local_factor * (1.0f - best_contact / std::max(contact_radius, 1.0f)) * dt * 3.5f,
+                                  0.0f, 0.95f);
+        if (randf_range(0.0f, 1.0f) > chance)
+            continue;
+
+        if (host.infection_progress <= 0.0f) {
+            host.infection_progress = 0.01f;
+            host.infection_load = 1.0f;
+            host.infection_axis = normalized_or(virus.pos - host.pos, host.axis);
+            host.infection_morphology = virus.morphology;
+            host.infection_source_id = virus.entity_id;
+            host.infection_generation = virus.generation;
+            host.infection_genome = virus.genome;
+            host.infection_genes = virus.genes;
+
+            char msg[224];
+            std::snprintf(msg, sizeof(msg), "%s entered %s and began replicating.",
+                          bio_entity_label(virus).c_str(), bio_entity_label(host).c_str());
+            push_event(BIO_EVENT_INFECTION, msg);
+        } else {
+            host.infection_load += 0.45f + std::clamp(virus.genes.energy, 0.35f, 2.25f) * 0.25f;
+            host.infection_progress = std::max(host.infection_progress, 0.06f);
+            if (virus.genes.energy > host.infection_genes.energy) {
+                host.infection_axis = normalized_or(glm::mix(host.infection_axis, virus.pos - host.pos, 0.65f), host.axis);
+                host.infection_morphology = virus.morphology;
+                host.infection_source_id = virus.entity_id;
+                host.infection_generation = virus.generation;
+                host.infection_genome = virus.genome;
+                host.infection_genes = virus.genes;
+            }
+        }
+
+        virus.alive = false;
     }
 }
 
@@ -1175,8 +1817,13 @@ void BiochemApp::process_antibody_response(float dt) {
         std::mt19937 wrng(wbc.genome ^ 0xC2B2AE35u);
         randomize_entity_genes(wbc, wrng);
         wbc.energy = type_default_energy(BIO_WHITE_BLOOD) * wbc.genes.energy;
+        initialize_entity_lifecycle(wbc, wrng);
+        assign_entity_identity(wbc);
         configure_entity_shape(wbc, wrng);
+        char msg[192];
+        std::snprintf(msg, sizeof(msg), "Immune system deployed %s.", bio_entity_label(wbc).c_str());
         ents.push_back(wbc);
+        push_event(BIO_EVENT_IMMUNE, msg);
     }
 
     if (virus_count > 0 && cfg.immune_pressure > 0.4f && ents.size() < 1200 &&
@@ -1191,8 +1838,13 @@ void BiochemApp::process_antibody_response(float dt) {
         std::mt19937 arng(antibody.genome ^ 0x27D4EB2Du);
         randomize_entity_genes(antibody, arng);
         antibody.energy = type_default_energy(BIO_ANTIBODY) * antibody.genes.energy;
+        initialize_entity_lifecycle(antibody, arng);
+        assign_entity_identity(antibody);
         configure_entity_shape(antibody, arng);
+        char msg[192];
+        std::snprintf(msg, sizeof(msg), "Immune system released %s.", bio_entity_label(antibody).c_str());
         ents.push_back(antibody);
+        push_event(BIO_EVENT_IMMUNE, msg);
     }
 
     for (auto& wbc : ents) {
@@ -1215,7 +1867,8 @@ void BiochemApp::process_antibody_response(float dt) {
             float dist = glm::length(dir);
             if (dist > 1.0f) {
                 dir /= dist;
-                float chase_speed = 60.0f * effective_immune * wbc.genes.seek;
+                float mitosis_slow = 1.0f - 0.65f * wbc.mitosis_progress;
+                float chase_speed = 60.0f * effective_immune * wbc.genes.seek * mitosis_slow;
                 wbc.vel += dir * chase_speed * dt;
                 float spd = glm::length(wbc.vel);
                 if (spd > 80.0f) wbc.vel *= 80.0f / spd;
@@ -1223,13 +1876,19 @@ void BiochemApp::process_antibody_response(float dt) {
 
             float touch = wbc.radius + ents[best_idx].radius;
             if (dist < touch) {
+                std::string target_label = bio_entity_label(ents[best_idx]);
                 ents[best_idx].alive = false;
                 wbc.energy += 10.0f;
+                char msg[224];
+                std::snprintf(msg, sizeof(msg), "%s neutralized %s.",
+                              bio_entity_label(wbc).c_str(), target_label.c_str());
+                push_event(BIO_EVENT_IMMUNE, msg);
             }
         }
 
         wbc.energy -= (0.3f + cfg.toxicity * 0.5f) * dt;
-        if (wbc.energy <= 0) wbc.alive = false;
+        if (wbc.energy <= 0.0f)
+            mark_entity_corpse(wbc, BIO_EVENT_LIFECYCLE, "failed and became a dead husk");
     }
 
     for (auto& antibody : ents) {
@@ -1247,13 +1906,95 @@ void BiochemApp::process_antibody_response(float dt) {
         }
 
         if (best_idx >= 0 && best_dist < antibody.radius + ents[best_idx].radius + 3.0f) {
+            std::string target_label = bio_entity_label(ents[best_idx]);
             ents[best_idx].alive = false;
             antibody.energy -= 10.0f;
+            char msg[224];
+            std::snprintf(msg, sizeof(msg), "%s bound and neutralized %s.",
+                          bio_entity_label(antibody).c_str(), target_label.c_str());
+            push_event(BIO_EVENT_IMMUNE, msg);
         }
 
         antibody.energy -= 0.45f * dt;
         if (antibody.energy <= 0.0f)
-            antibody.alive = false;
+            mark_entity_corpse(antibody, BIO_EVENT_LIFECYCLE, "failed and became a dead husk");
+    }
+}
+
+void BiochemApp::process_phagocyte_cleanup(float dt) {
+    auto& ents = state.entities;
+    float wr = cfg.world_radius;
+
+    size_t corpse_count = 0;
+    size_t phagocyte_count = 0;
+    for (const auto& e : ents) {
+        if (e.corpse) corpse_count++;
+        if (e.alive && e.type == BIO_JANITOR) phagocyte_count++;
+    }
+
+    if (corpse_count > phagocyte_count * 2 && ents.size() < 1200 &&
+        randf_range(0.0f, 1.0f) < std::min(0.55f, 0.04f + corpse_count * 0.025f) * dt * 60.0f) {
+        BioEntity phagocyte;
+        phagocyte.pos = {randf_range(-wr * 0.75f, wr * 0.75f),
+                         randf_range(-wr * 0.75f, wr * 0.75f),
+                         randf_range(-wr * 0.75f, wr * 0.75f)};
+        phagocyte.vel = {0, 0, 0};
+        phagocyte.type = BIO_JANITOR;
+        phagocyte.genome = (uint32_t)rand();
+        std::mt19937 jrng(phagocyte.genome ^ 0x9E3779B9u);
+        randomize_entity_genes(phagocyte, jrng);
+        phagocyte.energy = type_default_energy(BIO_JANITOR) * phagocyte.genes.energy;
+        initialize_entity_lifecycle(phagocyte, jrng);
+        assign_entity_identity(phagocyte);
+        configure_entity_shape(phagocyte, jrng);
+        ents.push_back(phagocyte);
+
+        char msg[192];
+        std::snprintf(msg, sizeof(msg), "Cleanup system recruited %s to scavenge dead husks.",
+                      bio_entity_label(phagocyte).c_str());
+        push_event(BIO_EVENT_LIFECYCLE, msg);
+    }
+
+    for (auto& phagocyte : ents) {
+        if (!phagocyte.alive || phagocyte.type != BIO_JANITOR) continue;
+
+        float best_dist = 999999.0f;
+        int best_idx = -1;
+        for (size_t j = 0; j < ents.size(); ++j) {
+            if (!ents[j].corpse) continue;
+            float d = glm::length(ents[j].pos - phagocyte.pos);
+            if (d < best_dist) {
+                best_dist = d;
+                best_idx = (int)j;
+            }
+        }
+
+        if (best_idx >= 0) {
+            glm::vec3 dir = ents[best_idx].pos - phagocyte.pos;
+            float dist = glm::length(dir);
+            if (dist > 1.0f) {
+                dir /= dist;
+                phagocyte.vel += dir * (52.0f * phagocyte.genes.seek) * dt;
+            }
+
+            float touch = phagocyte.radius + ents[best_idx].radius * 0.8f;
+            if (dist < touch) {
+                std::string husk_label = bio_entity_label(ents[best_idx]);
+                ents[best_idx].corpse = false;
+                ents[best_idx].alive = false;
+                phagocyte.energy += 12.0f;
+                feed_entity(phagocyte, 0.30f, 5.0f);
+
+                char msg[224];
+                std::snprintf(msg, sizeof(msg), "%s removed the dead husk of %s.",
+                              bio_entity_label(phagocyte).c_str(), husk_label.c_str());
+                push_event(BIO_EVENT_LIFECYCLE, msg);
+            }
+        } else {
+            phagocyte.vel += glm::vec3(randf_range(-1.0f, 1.0f),
+                                       randf_range(-1.0f, 1.0f),
+                                       randf_range(-1.0f, 1.0f)) * dt * 6.0f;
+        }
     }
 }
 
@@ -1272,6 +2013,23 @@ void BiochemApp::process_ai_movement(float dt) {
         float flee_force = cfg.flee_strength * e.genes.flee;
         float spacing_force = cfg.spacing_strength * e.genes.spacing;
         float brownian_force = cfg.brownian_strength * e.genes.brownian;
+        if ((e.type == BIO_CELL || e.type == BIO_BACTERIUM || e.type == BIO_WHITE_BLOOD) &&
+            e.mitosis_progress > 0.0f) {
+            float slowdown = (e.type == BIO_BACTERIUM)
+                ? (1.0f - 0.52f * e.mitosis_progress)
+                : (1.0f - 0.65f * e.mitosis_progress);
+            seek_force *= slowdown;
+            flee_force *= slowdown;
+            spacing_force *= 0.65f + 0.35f * slowdown;
+            brownian_force *= 0.45f + 0.55f * slowdown;
+        }
+        if (e.type == BIO_CELL && e.infection_progress > 0.0f) {
+            float infection_slow = 1.0f - std::min(0.72f, e.infection_progress * 0.72f);
+            seek_force *= infection_slow;
+            flee_force *= 0.85f * infection_slow;
+            spacing_force *= 0.70f + 0.30f * infection_slow;
+            brownian_force *= 0.55f + 0.45f * infection_slow;
+        }
 
         if (e.type == BIO_CELL || e.type == BIO_BACTERIUM) {
             max_speed = (e.type == BIO_CELL) ? 60.0f : 80.0f;
@@ -1322,16 +2080,30 @@ void BiochemApp::process_ai_movement(float dt) {
             // Seek nearest cell
             float best_dist = 200.0f;
             int best = -1;
+            int best_infected = -1;
+            float best_infected_dist = 80.0f;
             for (size_t j = 0; j < n; j++) {
                 if (!ents[j].alive || ents[j].type != BIO_CELL) continue;
                 float d = glm::length(ents[j].pos - e.pos);
+                if (ents[j].infection_progress > 0.0f) {
+                    if (d < best_infected_dist) {
+                        best_infected_dist = d;
+                        best_infected = (int)j;
+                    }
+                    continue;
+                }
                 if (d < best_dist) { best_dist = d; best = (int)j; }
             }
             if (best >= 0) {
                 glm::vec3 dir = ents[best].pos - e.pos;
                 float d = glm::length(dir);
                 if (d > 1.0f)
-                    e.vel += glm::normalize(dir) * seek_force * 0.5f * dt;
+                    e.vel += glm::normalize(dir) * seek_force * 0.72f * dt;
+            } else if (best_infected >= 0) {
+                glm::vec3 away = e.pos - ents[best_infected].pos;
+                float d = glm::length(away);
+                if (d > 1.0f)
+                    e.vel += glm::normalize(away) * flee_force * 0.40f * dt;
             }
         }
         else if (e.type == BIO_RED_BLOOD) {
@@ -1366,6 +2138,13 @@ void BiochemApp::process_ai_movement(float dt) {
                 if (d > 1.0f)
                     e.vel += glm::normalize(dir) * seek_force * 0.7f * dt;
             }
+        }
+        else if (e.type == BIO_JANITOR) {
+            max_speed = 68.0f;
+            float rx = (float)rand() / RAND_MAX * 2.0f - 1.0f;
+            float ry = (float)rand() / RAND_MAX * 2.0f - 1.0f;
+            float rz = (float)rand() / RAND_MAX * 2.0f - 1.0f;
+            e.vel += glm::vec3(rx, ry, rz) * brownian_force * 0.25f * dt;
         }
 
         // Clamp speed
@@ -1412,7 +2191,7 @@ void BiochemApp::render_overlay() {
     if (selected_entity < 0 || selected_entity >= (int)state.entities.size()) return;
 
     const auto& e = state.entities[selected_entity];
-    if (!e.alive) { selected_entity = -1; return; }
+    if (!e.alive && !e.corpse) { selected_entity = -1; return; }
 
     ImGuiIO& io = ImGui::GetIO();
     float W = io.DisplaySize.x, H = io.DisplaySize.y;
@@ -1708,6 +2487,10 @@ void BiochemApp::draw_pause_menu() {
             selected_entity = -1;
             nutrient_timer_ = 0.0f;
             sim_time_ = 0.0f;
+            next_entity_id_ = 1;
+            event_log_.clear();
+            event_log_dirty_ = false;
+            push_event(BIO_EVENT_SYSTEM, "Simulation cleared.");
             show_pause_menu = false;
             paused = false;
         }
@@ -1781,14 +2564,7 @@ void BiochemApp::draw_spawn_menu() {
             if (ImGui::Button(BIO_TYPE_NAMES[t], ImVec2(btn_w, 26))) {
                 spawn_bio_type_ = t;
                 spawn_variant_ = 0;
-                if (t == BIO_CELL) spawn_energy_ = 100.0f;
-                else if (t == BIO_BACTERIUM) spawn_energy_ = 60.0f;
-                else if (t == BIO_VIRUS) spawn_energy_ = 30.0f;
-                else if (t == BIO_NUTRIENT) spawn_energy_ = 25.0f;
-                else if (t == BIO_TOXIN) spawn_energy_ = 50.0f;
-                else if (t == BIO_ANTIBODY) spawn_energy_ = 80.0f;
-                else if (t == BIO_RED_BLOOD) spawn_energy_ = 100.0f;
-                else if (t == BIO_WHITE_BLOOD) spawn_energy_ = 200.0f;
+                spawn_energy_ = type_default_energy((uint32_t)t);
             }
 
             if (selected) {
@@ -1864,6 +2640,8 @@ void BiochemApp::draw_spawn_menu() {
                 std::mt19937 rng(e.genome ^ (uint32_t)i);
                 randomize_entity_genes(e, rng);
                 e.energy = type_default_energy(BIO_CELL) * e.genes.energy;
+                initialize_entity_lifecycle(e, rng);
+                assign_entity_identity(e);
                 configure_entity_shape(e, rng);
                 state.entities.push_back(e);
             }
@@ -1882,6 +2660,8 @@ void BiochemApp::draw_spawn_menu() {
                 std::mt19937 rng(e.genome ^ (uint32_t)(i * 13));
                 randomize_entity_genes(e, rng);
                 e.energy = type_default_energy(BIO_VIRUS) * e.genes.energy;
+                initialize_entity_lifecycle(e, rng);
+                assign_entity_identity(e);
                 configure_entity_shape(e, rng);
                 state.entities.push_back(e);
             }
@@ -1901,6 +2681,8 @@ void BiochemApp::draw_spawn_menu() {
                 std::mt19937 rng(e.genome ^ (uint32_t)(i * 31));
                 randomize_entity_genes(e, rng);
                 e.energy = type_default_energy(BIO_WHITE_BLOOD) * e.genes.energy;
+                initialize_entity_lifecycle(e, rng);
+                assign_entity_identity(e);
                 configure_entity_shape(e, rng);
                 state.entities.push_back(e);
             }
@@ -1949,6 +2731,8 @@ void BiochemApp::render_ui() {
     ImGui::TextColored({0.5f, 0.5f, 0.6f, 1.0f},
         "  |  Entities: %zu alive", state.count_alive());
     ImGui::SameLine();
+    ImGui::TextColored({0.62f, 0.54f, 0.48f, 1.0f}, "  Husks: %zu", state.count_corpses());
+    ImGui::SameLine();
     ImGui::TextColored({0.45f, 0.60f, 0.70f, 1.0f}, "  Features: %zu", environment_.count());
     ImGui::SameLine();
     if (ImGui::SmallButton(paused ? "Resume" : "Pause"))
@@ -1957,7 +2741,7 @@ void BiochemApp::render_ui() {
     ImGui::TextColored({0.4f, 0.4f, 0.5f, 1.0f}, "  %.0f FPS", io.Framerate);
     ImGui::SameLine();
     ImGui::TextColored({0.3f, 0.3f, 0.4f, 1.0f},
-        "  |  WASD: pan  Drag: orbit  Scroll: zoom  Middle: spawn  Right: select  Esc: menu");
+        "  |  WASD: pan  Click: inspect  Drag: orbit  Scroll: zoom  Middle: spawn  Esc: menu");
     ImGui::End();
 
     // Settings panel
@@ -2025,11 +2809,12 @@ void BiochemApp::render_ui() {
     // Shared arrays for population + inspector
     static const char* pop_type_names[] = {
         "Cells", "Bacteria", "Viruses", "Nutrients",
-        "Toxins", "Antibodies", "Red Blood", "White Blood"
+        "Toxins", "Antibodies", "Red Blood", "White Blood", "Phagocytes"
     };
     static const ImVec4 type_colors_v[] = {
         {0.3f,0.7f,1.0f,1}, {0.9f,0.6f,0.2f,1}, {0.9f,0.2f,0.2f,1}, {0.3f,0.9f,0.3f,1},
-        {0.8f,0.2f,0.8f,1}, {1.0f,1.0f,0.3f,1}, {0.9f,0.3f,0.3f,1}, {1.0f,1.0f,1.0f,1}
+        {0.8f,0.2f,0.8f,1}, {1.0f,1.0f,0.3f,1}, {0.9f,0.3f,0.3f,1}, {1.0f,1.0f,1.0f,1},
+        {0.47f,0.86f,0.70f,1}
     };
 
     // Population stats
@@ -2045,31 +2830,93 @@ void BiochemApp::render_ui() {
             ImGui::TextColored(type_colors_v[t], "%s: %zu", pop_type_names[t], n);
     }
     ImGui::Separator();
-    ImGui::Text("Total: %zu", total_alive);
+    ImGui::Text("Total: %zu alive", total_alive);
+    ImGui::Text("Husks: %zu", state.count_corpses());
     ImGui::End();
     } // population_visible_
+
+    if (event_log_visible_) {
+    ImGui::SetNextWindowPos({10.0f, std::max(330.0f, io.DisplaySize.y - 300.0f)}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize({460, 250}, ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Event Log", &event_log_visible_)) {
+        ImGui::Text("Recent lifecycle events");
+        ImGui::SameLine();
+        ImGui::TextDisabled("(%zu)", event_log_.size());
+        ImGui::SameLine();
+        ImGui::Checkbox("Auto-scroll", &event_log_auto_scroll_);
+        ImGui::SameLine();
+        if (ImGui::Button("Clear")) {
+            event_log_.clear();
+            event_log_dirty_ = false;
+        }
+        ImGui::Separator();
+        ImGui::BeginChild("##EventLogEntries", ImVec2(0, 0), true, ImGuiWindowFlags_HorizontalScrollbar);
+        for (const auto& entry : event_log_) {
+            ImGui::PushStyleColor(ImGuiCol_Text, bio_event_type_color(entry.type));
+            ImGui::TextWrapped("[%.1fs] [%s] %s", entry.time, bio_event_type_name(entry.type), entry.text.c_str());
+            ImGui::PopStyleColor();
+        }
+        if (event_log_dirty_ && event_log_auto_scroll_)
+            ImGui::SetScrollHereY(1.0f);
+        event_log_dirty_ = false;
+        ImGui::EndChild();
+    }
+    ImGui::End();
+    }
 
     // Entity inspector
     if (selected_entity >= 0 && selected_entity < (int)state.entities.size()) {
         const auto& e = state.entities[selected_entity];
-        if (e.alive) {
+        if (e.alive || e.corpse) {
             ImGui::SetNextWindowPos({io.DisplaySize.x - 220.0f, 280}, ImGuiCond_FirstUseEver);
-            ImGui::SetNextWindowSize({240, 340}, ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize({300, 580}, ImGuiCond_FirstUseEver);
             ImGui::Begin("Entity Inspector");
-
+		
             ImGui::TextColored(type_colors_v[e.type % BIO_TYPE_COUNT],
-                "%s #%d", pop_type_names[e.type % BIO_TYPE_COUNT], selected_entity);
+                "%s #%u", BIO_TYPE_NAMES[e.type % BIO_TYPE_COUNT], e.entity_id);
             if (e.type == BIO_CELL || e.type == BIO_BACTERIUM || e.type == BIO_VIRUS)
                 ImGui::Text("%s", bio_entity_variant_name(e.type, e.morphology));
+            if (e.corpse)
+                ImGui::TextColored(ImVec4(0.82f, 0.66f, 0.52f, 1.0f), "Dead Husk");
             ImGui::Separator();
             ImGui::Text("Energy:  %.1f", e.energy);
             ImGui::Text("Age:     %.1f s", e.age);
+            ImGui::Text("ID:      %u", e.entity_id);
+            ImGui::Text("Gen:     %u", e.generation);
+            if (e.parent_id != 0)
+                ImGui::Text("Parent:  %u", e.parent_id);
+            else
+                ImGui::Text("Parent:  Founder");
             ImGui::Text("Radius:  %.1f", e.radius);
             ImGui::Text("Aspect:  %.2f", e.shape_aspect);
             ImGui::Text("Speed:   %.1f", glm::length(e.vel));
             ImGui::Text("Stress:  %.2f", compute_environment_stress(cfg, environment_, e));
+            ImGui::Text("Reserve: %.2f", e.nutrient_reserve);
+            ImGui::Text("Starve:  %.2f", e.starvation);
+            ImGui::Text("Telomere %.0f%%", telomere_fraction_remaining(e) * 100.0f);
+            ImGui::Text("Organs:  %.0f%%", e.organelle_health * 100.0f);
+            ImGui::Text("Stage:   %s", bio_lifecycle_stage_name(e));
+            ImGui::Text("Cycle CD %.1f s", e.division_cooldown);
+            ImGui::Text("Divides: %u", e.division_count);
+            if (e.type == BIO_CELL && e.infection_progress > 0.0f) {
+                ImGui::TextColored(ImVec4(0.96f, 0.48f, 0.44f, 1.0f), "Infection: %s (%.0f%%)",
+                    bio_entity_variant_name(BIO_VIRUS, e.infection_morphology), e.infection_progress * 100.0f);
+                ImGui::Text("Virion Load: %.1f", e.infection_load);
+                if (e.infection_source_id != 0)
+                    ImGui::Text("Infected By: %u", e.infection_source_id);
+            }
+            if (e.type == BIO_BACTERIUM) {
+                ImGui::Text("Antibiotic Film: %.0f%%", e.antibiotic_film * 100.0f);
+                ImGui::Text("Antibiotic Types: %d", antibiotic_type_count(e));
+            }
+            if (e.corpse)
+                ImGui::Text("Corpse:  %.1f s", e.corpse_age);
             ImGui::Text("Pos:     (%.0f, %.0f, %.0f)", e.pos.x, e.pos.y, e.pos.z);
             ImGui::Text("Genome:  %08X", e.genome);
+            if ((e.type == BIO_CELL || e.type == BIO_WHITE_BLOOD) && e.mitosis_progress > 0.0f)
+                ImGui::Text("Mitosis: %s (%.0f%%)", bio_mitosis_stage_name(e.mitosis_progress), e.mitosis_progress * 100.0f);
+            if (e.type == BIO_BACTERIUM && e.mitosis_progress > 0.0f)
+                ImGui::Text("Fission: %s (%.0f%%)", bio_binary_fission_stage_name(e.mitosis_progress), e.mitosis_progress * 100.0f);
             ImGui::Separator();
             ImGui::Text("Genes");
             ImGui::Text("Seek:    %.2f", e.genes.seek);
@@ -2077,10 +2924,29 @@ void BiochemApp::render_ui() {
             ImGui::Text("Spacing: %.2f", e.genes.spacing);
             ImGui::Text("Brown:   %.2f", e.genes.brownian);
             ImGui::Text("Energy:  %.2f", e.genes.energy);
+            ImGui::Text("Telomr:  %.2f", e.genes.telomere);
+            ImGui::Text("Cycle:   %.2f", e.genes.mitotic_clock);
+            if (e.type == BIO_BACTERIUM) {
+                ImGui::Text("AntiType: %.2f", e.genes.antibiotic_type);
+                ImGui::Text("AntiOut:  %.2f", e.genes.antibiotic_yield);
+                ImGui::Text("AntiMix:  %.2f", e.genes.antibiotic_diversity);
+            }
             ImGui::Spacing();
-            if (ImGui::Button("Kill")) {
-                state.entities[selected_entity].alive = false;
-                selected_entity = -1;
+            if (!e.corpse) {
+                if (ImGui::Button("Kill To Husk")) {
+                    mark_entity_corpse(state.entities[selected_entity], BIO_EVENT_USER, "was manually collapsed into a dead husk");
+                    selected_entity = -1;
+                }
+            } else {
+                if (ImGui::Button("Cull Husk")) {
+                    char msg[192];
+                    std::snprintf(msg, sizeof(msg), "User culled the dead husk of %s.",
+                                  bio_entity_label(e).c_str());
+                    push_event(BIO_EVENT_USER, msg);
+                    state.entities[selected_entity].corpse = false;
+                    state.entities[selected_entity].alive = false;
+                    selected_entity = -1;
+                }
             }
             ImGui::SameLine();
             if (ImGui::Button("Deselect"))
@@ -2147,7 +3013,7 @@ void BiochemApp::draw_bottom_bar() {
         // Menu popup
         if (show_menu_popup_) {
             ImGui::SetNextWindowPos(ImVec2(4, bar_y - 200));
-            ImGui::SetNextWindowSize(ImVec2(220, 196));
+            ImGui::SetNextWindowSize(ImVec2(220, 220));
             ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.12f, 0.06f, 0.96f));
             ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.20f, 0.55f, 0.30f, 0.7f));
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
@@ -2170,6 +3036,10 @@ void BiochemApp::draw_bottom_bar() {
                     selected_entity = -1;
                     nutrient_timer_ = 0.0f;
                     sim_time_ = 0.0f;
+                    next_entity_id_ = 1;
+                    event_log_.clear();
+                    event_log_dirty_ = false;
+                    push_event(BIO_EVENT_SYSTEM, "Simulation cleared.");
                     show_menu_popup_ = false;
                 }
 
@@ -2178,6 +3048,7 @@ void BiochemApp::draw_bottom_bar() {
                 ImGui::Separator();
                 ImGui::MenuItem("Settings Panel", nullptr, &settings_visible_);
                 ImGui::MenuItem("Population Panel", nullptr, &population_visible_);
+                ImGui::MenuItem("Event Log", nullptr, &event_log_visible_);
                 ImGui::MenuItem("Spawn Menu", nullptr, &spawn_menu_visible_);
 
                 ImGui::Spacing();
@@ -2196,7 +3067,7 @@ void BiochemApp::draw_bottom_bar() {
         }
 
         // ── Center: Taskbar buttons ──
-        float center_start = W * 0.5f - 150.0f;
+        float center_start = W * 0.5f - 200.0f;
         ImGui::SameLine(center_start);
 
         struct TaskBtn { const char* label; bool* vis; };
@@ -2204,6 +3075,7 @@ void BiochemApp::draw_bottom_bar() {
             {"Settings",   &settings_visible_},
             {"Spawn",      &spawn_menu_visible_},
             {"Population", &population_visible_},
+            {"Events",     &event_log_visible_},
         };
 
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));

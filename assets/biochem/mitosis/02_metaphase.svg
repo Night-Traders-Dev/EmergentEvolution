@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="45%" r="65%">
+      <stop offset="0%" stop-color="#18354d"/>
+      <stop offset="100%" stop-color="#09131c"/>
+    </radialGradient>
+    <radialGradient id="cell" cx="45%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#c2f7ff" stop-opacity="0.38"/>
+      <stop offset="100%" stop-color="#69c9dc" stop-opacity="0.10"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="178" fill="url(#cell)" stroke="#b1f8ff" stroke-width="10"/>
+  <circle cx="256" cy="256" r="140" fill="#b9f5ff" fill-opacity="0.09" stroke="#dbfbff" stroke-opacity="0.30" stroke-width="4"/>
+  <g stroke="#7fdfff" stroke-width="5" stroke-linecap="round" opacity="0.75">
+    <line x1="140" y1="256" x2="236" y2="196"/>
+    <line x1="140" y1="256" x2="236" y2="226"/>
+    <line x1="140" y1="256" x2="236" y2="256"/>
+    <line x1="140" y1="256" x2="236" y2="286"/>
+    <line x1="140" y1="256" x2="236" y2="316"/>
+    <line x1="372" y1="256" x2="276" y2="196"/>
+    <line x1="372" y1="256" x2="276" y2="226"/>
+    <line x1="372" y1="256" x2="276" y2="256"/>
+    <line x1="372" y1="256" x2="276" y2="286"/>
+    <line x1="372" y1="256" x2="276" y2="316"/>
+  </g>
+  <g fill="#f16abf" stroke="#ffd7f1" stroke-width="6" stroke-linecap="round">
+    <path d="M244 180 L256 204 L244 228"/>
+    <path d="M244 210 L256 234 L244 258"/>
+    <path d="M244 240 L256 264 L244 288"/>
+    <path d="M244 270 L256 294 L244 318"/>
+    <path d="M244 300 L256 324 L244 348"/>
+    <path d="M268 180 L256 204 L268 228"/>
+    <path d="M268 210 L256 234 L268 258"/>
+    <path d="M268 240 L256 264 L268 288"/>
+    <path d="M268 270 L256 294 L268 318"/>
+    <path d="M268 300 L256 324 L268 348"/>
+  </g>
+  <circle cx="140" cy="256" r="14" fill="#9ef3ff"/>
+  <circle cx="372" cy="256" r="14" fill="#9ef3ff"/>
+  <text x="32" y="54" fill="#d8f7ff" font-size="34" font-family="Arial, sans-serif">Metaphase</text>
+</svg>

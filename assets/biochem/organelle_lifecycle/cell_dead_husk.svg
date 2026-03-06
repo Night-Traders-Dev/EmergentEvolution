@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="42%" r="68%">
+      <stop offset="0%" stop-color="#29333a"/>
+      <stop offset="100%" stop-color="#101417"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <g opacity="0.16" stroke="#9c8f80" stroke-width="2">
+    <circle cx="92" cy="110" r="13"/><circle cx="420" cy="90" r="12"/>
+    <circle cx="438" cy="404" r="11"/><circle cx="78" cy="397" r="14"/>
+  </g>
+  <path d="M114 266 C108 170, 188 102, 282 110 C368 118, 424 195, 396 286 C371 365, 278 419, 190 389 C142 372, 119 324, 114 266 Z"
+        fill="#473d34" fill-opacity="0.58" stroke="#9c8a78" stroke-width="9" stroke-dasharray="10 8"/>
+  <path d="M146 258 C149 206, 191 171, 251 165 C307 160, 347 192, 356 241 C366 295, 333 338, 275 354 C222 369, 166 341, 146 258 Z"
+        fill="#6a5b50" fill-opacity="0.18" stroke="#b59b86" stroke-opacity="0.4" stroke-width="4"/>
+  <path d="M176 221 L221 249 L193 289" fill="none" stroke="#d2b9a4" stroke-width="7" stroke-linecap="round"/>
+  <path d="M249 202 L291 232 L263 266" fill="none" stroke="#baa18f" stroke-width="7" stroke-linecap="round"/>
+  <path d="M225 303 L264 327 L303 301" fill="none" stroke="#8e786b" stroke-width="7" stroke-linecap="round"/>
+  <ellipse cx="309" cy="220" rx="24" ry="11" fill="#5e534a" stroke="#ab957f" stroke-width="4" transform="rotate(16 309 220)"/>
+  <ellipse cx="198" cy="329" rx="18" ry="9" fill="#564d47" stroke="#9b8977" stroke-width="4" transform="rotate(-20 198 329)"/>
+  <path d="M152 311 C204 283, 300 281, 353 315" fill="none" stroke="#2a2421" stroke-width="7" stroke-linecap="round" opacity="0.45"/>
+  <text x="30" y="48" fill="#ead7cb" font-size="32" font-family="Arial, sans-serif">Cell Dead Husk</text>
+</svg>

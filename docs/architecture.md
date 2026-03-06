@@ -7,7 +7,7 @@ The project builds five executables from a shared Vulkan framework:
 | `pp_launcher` | Expansion picker &mdash; animated menu to launch any simulation |
 | `particle_physics` | Full particle physics sandbox (282 types, compute shaders) |
 | `particle_cosmos` | 3D celestial mechanics with GPU raytraced rendering |
-| `particle_biochem` | 2D cellular biology sandbox |
+| `particle_biochem` | 3D cellular biology sandbox with SDF raytracing |
 | `pp_common` | Static library shared by all targets (Vulkan, renderer, audio, etc.) |
 
 ```text
@@ -84,7 +84,7 @@ EmergentEvolution/
 │   └── main.cpp                       # Cosmos entry point
 ├── src/biochem/                       # Biochemical Simulator application
 │   ├── biochem_app.h/.cpp             # BiochemApp: init, tick, UI, bottom bar, AI movement
-│   ├── biochem_types.h                # 8 entity types, morphologies, 4 environment presets, genes
+│   ├── biochem_types.h                # 9 entity types, morphologies, 4 environment presets, 10 genes
 │   ├── biochem_raytracer.h/.cpp       # GPU SDF raytracer for bio entities
 │   └── main.cpp                       # Biochem entry point
 ├── src/third_party/                   # Vendored headers

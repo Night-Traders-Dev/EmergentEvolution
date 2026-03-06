@@ -113,13 +113,22 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
                     // Zoom to a comfortable distance based on body radius
                     app->camera.target_distance = b.radius * 8.0f;
                 } else {
-                    // Single click on body → select. Empty space → spawn.
+                    // Single click on body → select. Empty space → spawn (if spawn menu open) or deselect.
                     if (app->click_candidate_ >= 0) {
                         app->selected_body = app->click_candidate_;
-                    } else {
+                    } else if (app->is_spawn_mode()) {
                         app->selected_body = -1;
                         glm::vec3 spawn_pos = viewport_spawn_position(app, window, mx, my);
-                        app->spawn_at(spawn_pos);
+                        int spawned = app->spawn_preview_body(spawn_pos);
+                        // Zoom camera to the spawned body
+                        if (spawned >= 0 && spawned < (int)app->state.bodies.size()) {
+                            const auto& b = app->state.bodies[spawned];
+                            app->selected_body = spawned;
+                            app->camera.focus_on(b.pos, spawned);
+                            app->camera.target_distance = b.radius * 8.0f;
+                        }
+                    } else {
+                        app->selected_body = -1;
                     }
                 }
 
@@ -134,13 +143,23 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
         }
     }
 
-    // ── Right-click drag: pan camera ──
+    // ── Right-click drag: pan camera. Right-click release (no drag): re-roll in spawn mode ──
     if (button == GLFW_MOUSE_BUTTON_RIGHT) {
+        static float rclick_start_x = 0, rclick_start_y = 0;
         if (action == GLFW_PRESS) {
             app->mouse_panning = true;
             app->last_mouse_x = mx;
             app->last_mouse_y = my;
+            rclick_start_x = (float)mx;
+            rclick_start_y = (float)my;
         } else {
+            float rdist = std::sqrt(
+                (float)((mx - rclick_start_x) * (mx - rclick_start_x) +
+                        (my - rclick_start_y) * (my - rclick_start_y)));
+            // If barely moved, treat as right-click → re-roll spawn preview
+            if (rdist < 5.0f && app->is_spawn_mode()) {
+                app->reroll_spawn_preview();
+            }
             app->mouse_panning = false;
         }
     }
@@ -275,8 +294,88 @@ int main() {
     glfwSetScrollCallback(window, scroll_callback);
     glfwSetKeyCallback(window, key_callback);
 
+    // ── Loading screen state ────────────────────────────────────────────────
+    float loading_progress = 0.0f;
+    const char* loading_label = "Starting...";
+    bool renderer_ready = false;
+
+    auto render_loading_frame = [&]() {
+        if (!renderer_ready) return;
+        glfwPollEvents();
+        if (!app.renderer.begin_frame(app.vk, window)) return;
+
+        ImGuiIO& io = ImGui::GetIO();
+        float W = io.DisplaySize.x;
+        float H = io.DisplaySize.y;
+
+        // Dark background
+        ImGui::SetNextWindowPos({0, 0});
+        ImGui::SetNextWindowSize({W, H});
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.03f, 0.06f, 1.0f));
+        ImGui::Begin("##Loading", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+            ImGuiWindowFlags_NoInputs);
+
+        // Title
+        ImGui::PushFont(nullptr);
+        {
+            const char* title = "Cosmic Sandbox";
+            ImVec2 ts = ImGui::CalcTextSize(title);
+            ImGui::SetCursorPos({(W - ts.x) * 0.5f, H * 0.36f});
+            ImGui::TextColored(ImVec4(0.7f, 0.8f, 1.0f, 1.0f), "%s", title);
+        }
+
+        // Status label
+        {
+            ImVec2 ls = ImGui::CalcTextSize(loading_label);
+            ImGui::SetCursorPos({(W - ls.x) * 0.5f, H * 0.50f});
+            ImGui::TextColored(ImVec4(0.5f, 0.55f, 0.65f, 1.0f), "%s", loading_label);
+        }
+
+        // Progress bar
+        float bar_w = W * 0.35f;
+        float bar_h = 6.0f;
+        float bar_x = (W - bar_w) * 0.5f;
+        float bar_y = H * 0.56f;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        // Background track
+        dl->AddRectFilled({bar_x, bar_y}, {bar_x + bar_w, bar_y + bar_h},
+                          IM_COL32(40, 40, 55, 200), 3.0f);
+        // Filled portion
+        float fill_w = bar_w * std::clamp(loading_progress, 0.0f, 1.0f);
+        if (fill_w > 1.0f) {
+            ImU32 col_left  = IM_COL32(60, 100, 200, 255);
+            ImU32 col_right = IM_COL32(120, 160, 255, 255);
+            dl->AddRectFilledMultiColor({bar_x, bar_y}, {bar_x + fill_w, bar_y + bar_h},
+                                        col_left, col_right, col_right, col_left);
+        }
+        // Percentage text
+        {
+            char pct[16];
+            snprintf(pct, sizeof(pct), "%d%%", (int)(loading_progress * 100.0f));
+            ImVec2 ps = ImGui::CalcTextSize(pct);
+            ImGui::SetCursorPos({(W - ps.x) * 0.5f, bar_y + bar_h + 8.0f});
+            ImGui::TextColored(ImVec4(0.45f, 0.5f, 0.6f, 1.0f), "%s", pct);
+        }
+        ImGui::PopFont();
+
+        ImGui::End();
+        ImGui::PopStyleColor();
+
+        app.renderer.end_frame(app.vk);
+    };
+
     try {
-        app.init(window);
+        app.init(window, [&](float frac, const char* label) {
+            loading_progress = frac;
+            loading_label = label;
+            // Can only render after renderer.init() completes (frac > 0.15)
+            if (frac > 0.16f && !renderer_ready)
+                renderer_ready = true;
+            render_loading_frame();
+        });
     } catch (const std::exception& e) {
         std::string msg = std::string("Initialization failed:\n\n") + e.what();
         show_error_dialog("Vulkan Error", msg.c_str());

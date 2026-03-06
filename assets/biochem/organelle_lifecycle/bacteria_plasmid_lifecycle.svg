@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 320">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#142214"/>
+      <stop offset="100%" stop-color="#09110a"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="320" fill="url(#bg)"/>
+  <text x="28" y="34" fill="#ebf8da" font-size="24" font-family="Arial, sans-serif">Bacterial Plasmid Lifecycle</text>
+  <g font-family="Arial, sans-serif" font-size="18" fill="#dcedcf">
+    <text x="84" y="70">Young</text>
+    <text x="332" y="70">Mature</text>
+    <text x="572" y="70">Senescent</text>
+    <text x="820" y="70">Dead Husk</text>
+  </g>
+  <g stroke="#415a34" stroke-width="2" fill="none" opacity="0.55">
+    <rect x="28" y="84" width="220" height="208" rx="24"/>
+    <rect x="276" y="84" width="220" height="208" rx="24"/>
+    <rect x="524" y="84" width="220" height="208" rx="24"/>
+    <rect x="772" y="84" width="220" height="208" rx="24"/>
+  </g>
+  <g>
+    <rect x="72" y="150" width="132" height="76" rx="38" fill="#5ea44d" fill-opacity="0.36" stroke="#cbf4a9" stroke-width="6"/>
+    <circle cx="121" cy="178" r="16" fill="none" stroke="#85f0bb" stroke-width="5"/><circle cx="161" cy="199" r="12" fill="none" stroke="#aef8d7" stroke-width="5"/>
+  </g>
+  <g>
+    <rect x="320" y="148" width="132" height="80" rx="40" fill="#689c3e" fill-opacity="0.42" stroke="#d1f4a7" stroke-width="6"/>
+    <circle cx="364" cy="177" r="17" fill="none" stroke="#79e3aa" stroke-width="5"/><circle cx="409" cy="201" r="14" fill="none" stroke="#c9ffe4" stroke-width="5"/>
+    <circle cx="387" cy="189" r="7" fill="none" stroke="#8fe5cf" stroke-width="4"/>
+  </g>
+  <g>
+    <rect x="568" y="150" width="132" height="76" rx="38" fill="#756c39" fill-opacity="0.32" stroke="#d7d0a8" stroke-width="6"/>
+    <path d="M603 176 C610 166, 625 166, 633 176 C632 188, 615 190, 603 176 Z" fill="none" stroke="#bfd1a4" stroke-width="4"/>
+    <path d="M645 198 C653 188, 668 188, 676 199 C674 210, 658 212, 645 198 Z" fill="none" stroke="#c9c39f" stroke-width="4"/>
+  </g>
+  <g>
+    <rect x="816" y="154" width="132" height="68" rx="34" fill="#4b4130" fill-opacity="0.46" stroke="#a89479" stroke-width="5" stroke-dasharray="9 7"/>
+    <ellipse cx="870" cy="185" rx="16" ry="9" fill="none" stroke="#a8927b" stroke-width="4"/>
+    <ellipse cx="906" cy="201" rx="12" ry="7" fill="none" stroke="#8f7c69" stroke-width="4"/>
+  </g>
+</svg>

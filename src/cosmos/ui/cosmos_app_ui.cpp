@@ -1289,7 +1289,23 @@ void CosmosApp::draw_spawn_menu() {
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.40f, 0.30f, 0.12f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.46f, 0.34f, 0.15f, 1.0f));
         }
-        if (ImGui::Button(tab_names[t], ImVec2(120, 24))) catalog_tab = t;
+        if (ImGui::Button(tab_names[t], ImVec2(120, 24)) && catalog_tab != t) {
+            catalog_tab = t;
+            // Check if current spawn_type is in the new tab's list
+            const TypeEntry* new_list = BASIC;
+            int new_count = (int)IM_ARRAYSIZE(BASIC);
+            if (t == 1) { new_list = STARS; new_count = (int)IM_ARRAYSIZE(STARS); }
+            if (t == 2) { new_list = BHS; new_count = (int)IM_ARRAYSIZE(BHS); }
+            if (t < 3) {
+                bool found = false;
+                for (int j = 0; j < new_count; ++j)
+                    if (new_list[j].type == spawn_type) { found = true; break; }
+                if (!found) {
+                    spawn_type = new_list[0].type;
+                    spawn_mass = new_list[0].mass;
+                }
+            }
+        }
         if (catalog_tab == t) ImGui::PopStyleColor(3);
     }
 
@@ -2311,7 +2327,13 @@ void CosmosApp::draw_spawn_menu() {
         snprintf(label, sizeof(label), "Spawn %s at Origin", CTYPE_NAMES[spawn_type % CTYPE_COUNT]);
     }
     if (ImGui::Button(label, ImVec2(-1, 34))) {
-        spawn_at(camera.target);
+        int spawned = spawn_preview_body(camera.target);
+        if (spawned >= 0 && spawned < (int)state.bodies.size()) {
+            const auto& b = state.bodies[spawned];
+            selected_body = spawned;
+            camera.focus_on(b.pos, spawned);
+            camera.target_distance = b.radius * 8.0f;
+        }
     }
     ImGui::PopStyleColor(3);
 

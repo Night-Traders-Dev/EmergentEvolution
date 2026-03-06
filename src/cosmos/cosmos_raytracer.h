@@ -39,4 +39,15 @@ private:
 
     static constexpr int MAX_SPHERES = 2048;
     static constexpr int MAX_GRAVITY_WELLS = 64;
+
+public:
+    // Spawn preview ghost sphere (rendered semi-transparent by the shader).
+    // Points to a fully initialized CelestialBody owned by CosmosApp.
+    // The raytracer packs it into SphereGPU using the same code as real bodies,
+    // but sets base_emit.a = -2.0 to signal ghost mode in the shader.
+    struct PreviewData {
+        const CelestialBody* body = nullptr;  // null = inactive
+        bool active() const { return body != nullptr; }
+    };
+    PreviewData preview;
 };

@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 320">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#122230"/>
+      <stop offset="100%" stop-color="#091118"/>
+    </linearGradient>
+    <radialGradient id="cell" cx="45%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#b0f4ff" stop-opacity="0.26"/>
+      <stop offset="100%" stop-color="#6fc7de" stop-opacity="0.08"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="320" fill="url(#bg)"/>
+  <text x="28" y="34" fill="#ddf8ff" font-size="24" font-family="Arial, sans-serif">Cell Golgi and Vesicle Lifecycle</text>
+  <g font-family="Arial, sans-serif" font-size="18" fill="#d3eef6">
+    <text x="84" y="70">Young</text>
+    <text x="332" y="70">Mature</text>
+    <text x="572" y="70">Senescent</text>
+    <text x="820" y="70">Dead Husk</text>
+  </g>
+  <g stroke="#2b4f66" stroke-width="2" fill="none" opacity="0.55">
+    <rect x="28" y="84" width="220" height="208" rx="24"/>
+    <rect x="276" y="84" width="220" height="208" rx="24"/>
+    <rect x="524" y="84" width="220" height="208" rx="24"/>
+    <rect x="772" y="84" width="220" height="208" rx="24"/>
+  </g>
+  <g>
+    <circle cx="138" cy="188" r="76" fill="url(#cell)" stroke="#9defff" stroke-width="6"/>
+    <path d="M102 176 C118 160, 150 160, 172 176" fill="none" stroke="#f0c17a" stroke-width="7" stroke-linecap="round"/>
+    <path d="M108 190 C124 176, 150 176, 167 191" fill="none" stroke="#f5d18a" stroke-width="7" stroke-linecap="round"/>
+    <path d="M115 205 C129 194, 149 194, 160 206" fill="none" stroke="#ffe39d" stroke-width="7" stroke-linecap="round"/>
+    <circle cx="177" cy="182" r="8" fill="#8cd8ff"/><circle cx="187" cy="195" r="7" fill="#8cd8ff"/><circle cx="172" cy="211" r="7" fill="#8cd8ff"/>
+  </g>
+  <g>
+    <circle cx="386" cy="188" r="76" fill="url(#cell)" stroke="#9defff" stroke-width="6"/>
+    <path d="M346 172 C365 154, 404 156, 428 174" fill="none" stroke="#eeb466" stroke-width="8" stroke-linecap="round"/>
+    <path d="M352 187 C370 170, 404 171, 423 189" fill="none" stroke="#f4c877" stroke-width="8" stroke-linecap="round"/>
+    <path d="M359 204 C375 191, 402 191, 417 206" fill="none" stroke="#ffe093" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="434" cy="174" r="10" fill="#92dcff"/><circle cx="444" cy="191" r="8" fill="#92dcff"/><circle cx="430" cy="209" r="8" fill="#92dcff"/>
+    <circle cx="346" cy="210" r="6" fill="#7ec3f6"/>
+  </g>
+  <g>
+    <circle cx="634" cy="188" r="76" fill="url(#cell)" stroke="#9defff" stroke-width="6"/>
+    <path d="M596 176 C611 164, 646 162, 670 178" fill="none" stroke="#b58a5a" stroke-width="7" stroke-linecap="round"/>
+    <path d="M604 193 C618 184, 646 184, 663 196" fill="none" stroke="#c29a67" stroke-width="7" stroke-linecap="round"/>
+    <path d="M613 209 C626 202, 647 203, 657 211" fill="none" stroke="#d6b07e" stroke-width="7" stroke-linecap="round"/>
+    <circle cx="585" cy="184" r="7" fill="#708496"/><circle cx="678" cy="194" r="7" fill="#8799a5"/><circle cx="650" cy="221" r="6" fill="#6f7f86"/>
+  </g>
+  <g>
+    <circle cx="882" cy="188" r="76" fill="#8d978f" fill-opacity="0.10" stroke="#847a72" stroke-width="6" stroke-dasharray="9 8"/>
+    <path d="M848 180 C865 172, 893 170, 915 183" fill="none" stroke="#89705a" stroke-width="7" stroke-linecap="round"/>
+    <path d="M857 195 C872 190, 894 191, 907 200" fill="none" stroke="#77614f" stroke-width="7" stroke-linecap="round"/>
+    <path d="M867 210 C879 207, 896 208, 903 214" fill="none" stroke="#6b594a" stroke-width="7" stroke-linecap="round"/>
+    <circle cx="843" cy="194" r="7" fill="#76685e"/><circle cx="922" cy="190" r="7" fill="#8b7868"/><circle cx="889" cy="223" r="6" fill="#66574b"/>
+  </g>
+</svg>

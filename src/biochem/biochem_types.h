@@ -17,6 +17,7 @@ enum BioEntityType : uint32_t {
     BIO_ANTIBODY    = 5,    // immune system agent
     BIO_RED_BLOOD   = 6,    // red blood cell
     BIO_WHITE_BLOOD = 7,    // white blood cell (immune)
+    BIO_JANITOR     = 8,    // phagocytic cleanup cell
     BIO_TYPE_COUNT
 };
 
@@ -168,6 +169,24 @@ inline const char* bio_entity_variant_name(uint32_t type, uint32_t morphology) {
     }
 }
 
+inline const char* bio_mitosis_stage_name(float progress) {
+    if (progress <= 0.02f) return "Interphase";
+    if (progress < 0.28f) return "Prophase";
+    if (progress < 0.55f) return "Metaphase";
+    if (progress < 0.82f) return "Anaphase";
+    if (progress < 0.995f) return "Telophase";
+    return "Cytokinesis";
+}
+
+inline const char* bio_binary_fission_stage_name(float progress) {
+    if (progress <= 0.02f) return "Resting";
+    if (progress < 0.28f) return "DNA Replication";
+    if (progress < 0.58f) return "Elongation";
+    if (progress < 0.84f) return "Septation";
+    if (progress < 0.995f) return "Constriction";
+    return "Separation";
+}
+
 // ── Single biological entity ────────────────────────────────────────────────
 
 struct BioGenes {
@@ -176,23 +195,49 @@ struct BioGenes {
     float spacing  = 1.0f;
     float brownian = 1.0f;
     float energy   = 1.0f;
+    float telomere = 1.0f;
+    float mitotic_clock = 1.0f;
+    float antibiotic_type = 0.0f;
+    float antibiotic_yield = 0.0f;
+    float antibiotic_diversity = 0.0f;
 };
 
 struct BioEntity {
     glm::vec3   pos{0.0f};
     glm::vec3   vel{0.0f};
     glm::vec3   axis{0.0f, 1.0f, 0.0f};
+    glm::vec3   infection_axis{1.0f, 0.0f, 0.0f};
     float       radius    = 8.0f;
     float       energy    = 100.0f;     // health / metabolic energy
     float       age       = 0.0f;       // seconds alive
+    float       nutrient_reserve = 1.0f;
+    float       starvation = 0.0f;
+    float       organelle_health = 1.0f;
+    float       telomere_state = 1.0f;
+    float       corpse_age = 0.0f;
+    float       division_cooldown = 0.0f;
+    float       infection_progress = 0.0f;
+    float       infection_load = 0.0f;
+    float       antibiotic_film = 0.0f;
     float       shape_aspect = 1.0f;
     float       shape_noise  = 0.2f;
     float       shape_phase  = 0.0f;
+    float       mitosis_progress = 0.0f;
     BioGenes     genes{};
+    BioGenes     infection_genes{};
     uint32_t    type      = BIO_CELL;
     uint32_t    morphology = 0;
+    uint32_t    infection_morphology = 0;
+    uint32_t    entity_id = 0;
+    uint32_t    parent_id = 0;
+    uint32_t    infection_source_id = 0;
+    uint32_t    generation = 0;
+    uint32_t    infection_generation = 0;
+    uint32_t    division_count = 0;
     uint32_t    genome    = 0;          // simple genome tag for mutations
+    uint32_t    infection_genome = 0;
     bool        alive     = true;
+    bool        corpse    = false;
 };
 
 // ── Simulation config ───────────────────────────────────────────────────────
@@ -275,6 +320,12 @@ struct BiochemState {
         size_t n = 0;
         for (const auto& e : entities)
             if (e.alive) n++;
+        return n;
+    }
+    size_t count_corpses() const {
+        size_t n = 0;
+        for (const auto& e : entities)
+            if (e.corpse) n++;
         return n;
     }
     size_t count_type(BioEntityType t) const {

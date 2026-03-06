@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="45%" r="65%">
+      <stop offset="0%" stop-color="#17384c"/>
+      <stop offset="100%" stop-color="#08131a"/>
+    </radialGradient>
+    <radialGradient id="cell" cx="45%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#c6f8ff" stop-opacity="0.34"/>
+      <stop offset="100%" stop-color="#74d1dd" stop-opacity="0.08"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <path d="M112 256c0-92 64-164 144-164 54 0 86 26 112 72 26-46 58-72 112-72 80 0 144 72 144 164s-64 164-144 164c-54 0-86-26-112-72-26 46-58 72-112 72-80 0-144-72-144-164z" transform="translate(-56)" fill="url(#cell)" stroke="#bdf8ff" stroke-width="10"/>
+  <g stroke="#7bddff" stroke-width="5" stroke-linecap="round" opacity="0.76">
+    <line x1="144" y1="256" x2="210" y2="194"/><line x1="144" y1="256" x2="210" y2="228"/>
+    <line x1="144" y1="256" x2="210" y2="256"/><line x1="144" y1="256" x2="210" y2="286"/>
+    <line x1="144" y1="256" x2="210" y2="320"/>
+    <line x1="368" y1="256" x2="302" y2="194"/><line x1="368" y1="256" x2="302" y2="228"/>
+    <line x1="368" y1="256" x2="302" y2="256"/><line x1="368" y1="256" x2="302" y2="286"/>
+    <line x1="368" y1="256" x2="302" y2="320"/>
+  </g>
+  <g fill="#f16fc5" stroke="#ffd5f1" stroke-width="6" stroke-linecap="round">
+    <path d="M195 177 L208 203 L196 228"/><path d="M180 214 L196 239 L182 264"/>
+    <path d="M196 252 L210 276 L198 301"/><path d="M183 292 L198 316 L186 340"/>
+    <path d="M317 177 L304 203 L316 228"/><path d="M332 214 L316 239 L330 264"/>
+    <path d="M316 252 L302 276 L314 301"/><path d="M329 292 L314 316 L326 340"/>
+  </g>
+  <circle cx="144" cy="256" r="14" fill="#a3f5ff"/>
+  <circle cx="368" cy="256" r="14" fill="#a3f5ff"/>
+  <text x="32" y="54" fill="#d8f7ff" font-size="34" font-family="Arial, sans-serif">Anaphase</text>
+</svg>

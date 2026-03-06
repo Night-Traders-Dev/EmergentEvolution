@@ -2383,6 +2383,20 @@ void main() {
                                   hit.class_seed_temp.x, irregularity, spin_phase, spin_axis);
     }
 
+    // ── Ghost spawn preview detection ──
+    // Ghost bodies have base_emit.a == -2.0 sentinel. Override to correct emissive
+    // and let the normal rendering path run, then blend with background at reduced opacity.
+    bool is_ghost = (hit.base_emit.a < -1.5 && hit.base_emit.a > -2.5);
+    if (is_ghost) {
+        // Determine correct emissive for this render class
+        if (render_class == RENDER_STAR)
+            hit.base_emit.a = 1.4 + hit.activity_params.y * 0.45; // corona_strength
+        else if (render_class == RENDER_BLACK_HOLE)
+            hit.base_emit.a = -1.0;
+        else
+            hit.base_emit.a = 0.0;
+    }
+
     if (render_class == RENDER_BLACK_HOLE || hit.base_emit.a < -0.5) {
         float alpha = 1.0;
         vec3 bh = black_hole_effect(ro, rd, hit, body_count, true, alpha);
@@ -2391,7 +2405,14 @@ void main() {
         accumulate_rings(ro, rd, body_count, closest_t, ring_col, ring_alpha);
         if (ring_alpha > 0.0)
             bh = mix(bh, bh + ring_col, ring_alpha);
-        outColor = vec4(pow(max(bh, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
+        vec3 bh_final = pow(max(bh, vec3(0.0)), vec3(1.0 / 2.2));
+        if (is_ghost) {
+            float ga = 0.45 + 0.07 * sin(screen_info.w * 3.5);
+            float edge = pow(1.0 - max(dot(normal, -rd), 0.0), 2.5);
+            bh_final = mix(pow(max(background(rd), vec3(0.0)), vec3(1.0 / 2.2)), bh_final, ga);
+            bh_final += vec3(0.35, 0.55, 0.90) * edge * 0.4;
+        }
+        outColor = vec4(bh_final, 1.0);
         return;
     }
 
@@ -2438,7 +2459,12 @@ void main() {
         if (magnet_alpha > 0.0)
             final_color = mix(final_color, final_color + magnet_col, magnet_alpha);
 
-        outColor = vec4(pow(max(final_color, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
+        vec3 neb_final = pow(max(final_color, vec3(0.0)), vec3(1.0 / 2.2));
+        if (is_ghost) {
+            float ga = 0.45 + 0.07 * sin(screen_info.w * 3.5);
+            neb_final = mix(pow(max(background(rd), vec3(0.0)), vec3(1.0 / 2.2)), neb_final, ga);
+        }
+        outColor = vec4(neb_final, 1.0);
         return;
     }
 
@@ -2454,7 +2480,14 @@ void main() {
         accumulate_magnetospheres(ro, rd, body_count, closest_t, magnet_col, magnet_alpha);
         if (magnet_alpha > 0.0)
             star_col = mix(star_col, star_col + magnet_col, magnet_alpha);
-        outColor = vec4(pow(max(star_col, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
+        vec3 star_final = pow(max(star_col, vec3(0.0)), vec3(1.0 / 2.2));
+        if (is_ghost) {
+            float ga = 0.45 + 0.07 * sin(screen_info.w * 3.5);
+            float edge = pow(1.0 - max(dot(normal, -rd), 0.0), 2.5);
+            star_final = mix(pow(max(background(rd), vec3(0.0)), vec3(1.0 / 2.2)), star_final, ga);
+            star_final += vec3(0.35, 0.55, 0.90) * edge * 0.3;
+        }
+        outColor = vec4(star_final, 1.0);
         return;
     }
 
@@ -2623,5 +2656,12 @@ void main() {
     if (magnet_alpha > 0.0)
         final_color = mix(final_color, final_color + magnet_col, magnet_alpha);
 
-    outColor = vec4(pow(max(final_color, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
+    vec3 body_final = pow(max(final_color, vec3(0.0)), vec3(1.0 / 2.2));
+    if (is_ghost) {
+        float ga = 0.45 + 0.07 * sin(screen_info.w * 3.5);
+        float edge = pow(1.0 - max(dot(normal, -rd), 0.0), 2.5);
+        body_final = mix(pow(max(background(rd), vec3(0.0)), vec3(1.0 / 2.2)), body_final, ga);
+        body_final += vec3(0.35, 0.55, 0.90) * edge * 0.3;
+    }
+    outColor = vec4(body_final, 1.0);
 }

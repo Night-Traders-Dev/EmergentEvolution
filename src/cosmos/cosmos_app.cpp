@@ -273,13 +273,26 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
     for (auto& b : state.bodies) refresh_body_render_state(b, &state);
 }
 
-void CosmosApp::init(GLFWwindow* window) {
+void CosmosApp::init(GLFWwindow* window, ProgressCB progress_cb) {
+    auto report = [&](float frac, const char* label) {
+        if (progress_cb) progress_cb(frac, label);
+    };
+
     install_crash_handlers_once();
+
+    report(0.0f, "Initializing Vulkan...");
     vk.init(window);
+
+    report(0.15f, "Creating renderer...");
     renderer.init(vk, window);
+
+    report(0.30f, "Compiling shaders...");
     raytracer_.init(vk, renderer.render_pass());
+
+    report(0.70f, "Initializing physics...");
     gravity_compute_.init(vk);
 
+    report(0.90f, "Loading settings...");
     state.clear();
     cfg.body_count = 0;
 
@@ -290,9 +303,36 @@ void CosmosApp::init(GLFWwindow* window) {
     camera.azimuth = 0.0f;
 
     load_persistent_settings();
+
+    report(1.0f, "Ready");
     debug_logf("init complete diagnostics=%d pause_on_invalid=%d bh=%d gpu_bh=%d verlet=%d",
                diagnostics_enabled_ ? 1 : 0, diagnostics_pause_on_invalid_ ? 1 : 0,
                cfg.barnes_hut ? 1 : 0, cfg.gpu_barnes_hut ? 1 : 0, cfg.velocity_verlet ? 1 : 0);
+}
+
+// ── Screen → world spawn position ────────────────────────────────────────────
+
+glm::vec3 CosmosApp::screen_to_spawn_pos(double mx, double my, int fb_w, int fb_h) const {
+    float W = (float)fb_w, H = (float)fb_h;
+    float aspect = W / H;
+    glm::dmat4 inv_vp = glm::inverse(camera.proj_matrix_d(aspect) * camera.view_matrix_d());
+    float ndc_x = ((float)mx / W) * 2.0f - 1.0f;
+    float ndc_y = 1.0f - ((float)my / H) * 2.0f;
+    glm::dvec4 near_clip = inv_vp * glm::dvec4(ndc_x, ndc_y, -1.0, 1.0);
+    glm::dvec4 far_clip  = inv_vp * glm::dvec4(ndc_x, ndc_y,  1.0, 1.0);
+    glm::dvec3 near_pt = glm::dvec3(near_clip) / near_clip.w;
+    glm::dvec3 far_pt  = glm::dvec3(far_clip) / far_clip.w;
+    glm::dvec3 ray_dir = glm::normalize(far_pt - near_pt);
+    glm::dvec3 eye = camera.eye_position_d();
+    glm::dvec3 plane_normal = glm::normalize(glm::dvec3(camera.target) - eye);
+    double denom = glm::dot(ray_dir, plane_normal);
+    glm::vec3 pos = camera.target;
+    if (std::abs(denom) > 1e-9) {
+        double t = glm::dot(glm::dvec3(camera.target) - near_pt, plane_normal) / denom;
+        if (t > 0.0)
+            pos = glm::vec3(near_pt + ray_dir * t);
+    }
+    return pos;
 }
 
 // ── Body picking (screen-space hit test) ─────────────────────────────────────
@@ -398,7 +438,7 @@ void CosmosApp::account_escaped_mass(const CelestialBody& source, float amount,
                              std::max(0.0, (double)thermal_energy);
 }
 
-void CosmosApp::spawn_at(glm::vec3 pos) {
+int CosmosApp::spawn_at(glm::vec3 pos) {
     const bool is_small_body = (spawn_type == CTYPE_ASTEROID || spawn_type == CTYPE_COMET || spawn_type == CTYPE_DUST);
     const int requested_count = std::clamp(spawn_draft_.small_body_spawn_count, 1, 1000);
     const bool use_batch = is_small_body && requested_count > 1;
@@ -699,6 +739,7 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
         return host_idx;
     };
 
+    int first_idx = (int)state.bodies.size();
     for (int i = 0; i < spawn_count; ++i) {
         glm::vec3 offset = layout_offset(i);
         spawn_single(pos + offset, i);
@@ -706,6 +747,228 @@ void CosmosApp::spawn_at(glm::vec3 pos) {
 
     if (diagnostics_enabled_)
         validate_body_state("spawn/manual", true);
+
+    return (first_idx < (int)state.bodies.size()) ? first_idx : -1;
+}
+
+// ── Spawn preview body construction ─────────────────────────────────────────
+
+uint32_t CosmosApp::draft_settings_hash() const {
+    uint32_t h = 0x811C9DC5u;
+    auto mix = [&](uint32_t v) { h ^= v; h *= 0x01000193u; };
+    mix((uint32_t)spawn_draft_.planet_look);
+    mix((uint32_t)spawn_draft_.star_stage_hint);
+    mix(spawn_draft_.override_temperature ? 1u : 0u);
+    mix(float_bits(spawn_draft_.temperature));
+    mix(spawn_draft_.override_radius ? 1u : 0u);
+    mix(float_bits(spawn_draft_.radius));
+    mix(spawn_draft_.override_material ? 1u : 0u);
+    mix(float_bits(spawn_draft_.material_iron));
+    mix(float_bits(spawn_draft_.material_silicate));
+    mix(float_bits(spawn_draft_.material_ice));
+    mix(float_bits(spawn_draft_.material_hydrogen));
+    mix(spawn_draft_.spawn_rings ? 1u : 0u);
+    return h;
+}
+
+void CosmosApp::build_preview_body() {
+    CelestialBody& nb = preview_body_;
+    nb = CelestialBody{};  // reset
+    nb.mass = spawn_mass;
+    nb.radius = std::max(3.0f, std::cbrt(std::max(spawn_mass, 1.0e-13f)) * 5.0f);
+    nb.type = (uint32_t)spawn_type;
+    nb.seed = hash_combine(preview_reroll_counter_ * 747796405u + 2891336453u,
+                            (uint32_t)(spawn_type) * 2654435761u);
+    std::mt19937 rng(nb.seed);
+
+    clear_ring_system(nb);
+    nb.material_phase = PHASE_SOLID;
+    nb.phase_intensity = 0.0f;
+    nb.collapse_progress = 0.0f;
+    clear_impact_signature(nb);
+    nb.forced_surface = -1;
+    nb.custom_material = false;
+    nb.props_valid = false;
+    nb.visuals_valid = false;
+    nb.cached_temp_band = -1;
+    nb.cached_visual_temp_band = -1;
+
+    if (is_star_type((uint32_t)spawn_type)) {
+        randomize_star_properties(nb, rng, (uint32_t)spawn_type);
+        if (spawn_draft_.star_stage_hint >= 0 &&
+            spawn_draft_.star_stage_hint < (int)SSTAGE_COUNT) {
+            nb.stellar_stage = (uint32_t)spawn_draft_.star_stage_hint;
+            nb.radius = expected_star_radius(nb);
+            nb.type = classify_star_spectral(std::max(nb.temperature, 250.0f),
+                                              std::max(nb.mass, 0.003f));
+            nb.luminosity = expected_stellar_luminosity(nb.mass, nb.temperature, nb.radius,
+                                                         nb.stellar_stage, nb.fuel);
+        }
+        nb.material_phase = PHASE_PLASMA;
+        nb.phase_intensity = 1.0f;
+    } else if (is_black_hole_type((uint32_t)spawn_type)) {
+        nb.temperature = 0.0f;
+        nb.radius = std::max(10.0f, std::cbrt(spawn_mass) * 4.0f);
+        if (spawn_type == CTYPE_BLACK_HOLE)
+            nb.type = classify_black_hole(nb.mass);
+        nb.material_phase = PHASE_PLASMA;
+        nb.phase_intensity = 1.0f;
+    } else {
+        nb.temperature = 300.0f;
+        if (spawn_type == CTYPE_PLANET) {
+            randomize_planet_properties(nb, state, cfg, rng);
+        } else if (spawn_type == CTYPE_MOON) {
+            randomize_moon_properties(nb, state, rng);
+        } else if (spawn_type == CTYPE_ASTEROID) {
+            randomize_small_body_properties(nb, rng, false);
+        } else if (spawn_type == CTYPE_COMET) {
+            randomize_small_body_properties(nb, rng, true);
+        } else if (spawn_type == CTYPE_DUST) {
+            randomize_dust_properties(nb, rng);
+        } else if (spawn_type == CTYPE_NEBULA) {
+            randomize_nebula_properties(nb, rng);
+        }
+    }
+
+    if (spawn_draft_.override_temperature)
+        nb.temperature = std::clamp(spawn_draft_.temperature, 2.7f, 120000.0f);
+    if (spawn_draft_.override_radius)
+        nb.radius = std::max(0.04f, spawn_draft_.radius);
+    if (spawn_draft_.override_material) {
+        nb.custom_material = true;
+        nb.custom_iron = std::max(spawn_draft_.material_iron, 0.0f);
+        nb.custom_silicate = std::max(spawn_draft_.material_silicate, 0.0f);
+        nb.custom_water = std::max(spawn_draft_.material_ice, 0.0f);
+        nb.custom_hydrogen = std::max(spawn_draft_.material_hydrogen, 0.0f);
+    }
+    if (nb.type == CTYPE_NEBULA) {
+        nb.material_phase = PHASE_GAS;
+        nb.phase_intensity = std::max(nb.phase_intensity, 0.70f);
+        nb.custom_material = true;
+        nb.custom_hydrogen = std::max(nb.custom_hydrogen, 0.85f);
+    }
+    if ((nb.type == CTYPE_PLANET || nb.type == CTYPE_MOON) && spawn_draft_.planet_look > 0) {
+        float mass_earth = nb.mass / std::max(EARTH_MASS_SOLAR, 1.0e-12f);
+        bool force_gas = (spawn_draft_.planet_look == 5 && nb.type == CTYPE_PLANET);
+        bool likely_gas = mass_earth > 10.0f;
+        if (force_gas) {
+            nb.forced_surface = 4;
+            nb.custom_material = true;
+            nb.custom_hydrogen = std::max(nb.custom_hydrogen, 0.70f);
+        } else if (!likely_gas) {
+            switch (spawn_draft_.planet_look) {
+            case 1: nb.forced_surface = 0; break;
+            case 2: nb.forced_surface = 1; break;
+            case 3: nb.forced_surface = 2; break;
+            case 4: nb.forced_surface = 3; break;
+            default: nb.forced_surface = -1; break;
+            }
+        }
+        nb.props_valid = false;
+        nb.visuals_valid = false;
+    }
+    if (body_can_host_rings(nb) && spawn_draft_.spawn_rings && nb.ring_density <= 0.001f) {
+        set_ring_system(nb, nb.radius * 1.5f, nb.radius * 3.0f, 0.32f, 0.55f, 0.12f);
+    } else if (!body_can_host_rings(nb)) {
+        clear_ring_system(nb);
+    }
+
+    refresh_body_render_state(nb, &state);
+    preview_body_valid_ = true;
+    preview_last_type_ = spawn_type;
+    preview_last_mass_ = spawn_mass;
+    preview_last_draft_hash_ = draft_settings_hash();
+}
+
+void CosmosApp::reroll_spawn_preview() {
+    preview_reroll_counter_++;
+    preview_body_valid_ = false;  // triggers rebuild next frame
+}
+
+int CosmosApp::spawn_preview_body(glm::vec3 pos) {
+    if (!preview_body_valid_)
+        build_preview_body();
+
+    // Nebulae still need to spawn as a cloud
+    if (spawn_type == CTYPE_NEBULA) {
+        float cloud_r = std::max(35.0f, std::cbrt(spawn_mass) * 120.0f);
+        if (spawn_draft_.override_radius)
+            cloud_r = std::max(10.0f, spawn_draft_.radius);
+        glm::vec3 vel(0.0f);
+        if (spawn_draft_.override_velocity)
+            vel = spawn_draft_.velocity_kms / SIM_UNIT_TO_KM;
+        int idx = spawn_nebula_cloud(pos, vel, spawn_mass, cloud_r, preview_body_.seed);
+        reroll_spawn_preview();
+        return idx;
+    }
+
+    CelestialBody nb = preview_body_;
+    nb.pos = pos;
+    nb.vel = glm::vec3(0.0f);
+
+    // Orbit insertion
+    if (spawn_in_orbit_ && !state.bodies.empty()) {
+        int nearest = -1;
+        float nearest_dist = 1e9f;
+        for (size_t i = 0; i < state.bodies.size(); i++) {
+            float d = glm::length(state.bodies[i].pos - nb.pos);
+            if (d > 0.1f && d < nearest_dist && state.bodies[i].mass > nb.mass) {
+                nearest_dist = d;
+                nearest = (int)i;
+            }
+        }
+        if (nearest >= 0) {
+            nb.parent = nearest;
+            glm::vec3 diff = nb.pos - state.bodies[nearest].pos;
+            float dist = glm::length(diff);
+            if (dist > 0.1f) {
+                float v = std::sqrt(cfg.G * state.bodies[nearest].mass / dist);
+                glm::vec3 dir = glm::normalize(diff);
+                glm::vec3 perp(-dir.z, 0.0f, dir.x);
+                nb.vel = state.bodies[nearest].vel + perp * v;
+            }
+        }
+    }
+    if (spawn_draft_.override_velocity)
+        nb.vel += spawn_draft_.velocity_kms / SIM_UNIT_TO_KM;
+
+    nb.name = generate_body_name(nb.seed, nb.type);
+    nb.non_attracting = (nb.type == CTYPE_DUST) ? cfg.dust_debug_non_attracting : nb.non_attracting;
+    refresh_body_render_state(nb, &state);
+    state.bodies.push_back(nb);
+    state.trails.emplace_back();
+
+    int host_idx = (int)state.bodies.size() - 1;
+    const auto spawned = state.bodies[(size_t)host_idx];
+    int ring_style = std::clamp(spawn_draft_.ring_layout_type, 0, 6);
+    if (cfg.planetary_rings && spawned.ring_density > 0.001f &&
+        (spawned.type == CTYPE_PLANET || spawned.type == CTYPE_MOON)) {
+        float annulus = std::max(spawned.ring_outer_radius * spawned.ring_outer_radius -
+                                 spawned.ring_inner_radius * spawned.ring_inner_radius, 1.0f);
+        float mass_hint = std::max(spawned.mass * spawned.ring_density * 0.00012f *
+                                   (annulus / std::max(spawned.radius * spawned.radius, 1.0e-5f)),
+                                   std::max(cfg.min_fragment_mass, 1.0e-12f) * 48.0f);
+        spawn_dust_ring(host_idx, mass_hint, spawned.ring_inner_radius, spawned.ring_outer_radius,
+                        spawned.ring_density, spawned.ring_ice_fraction, spawned.seed ^ 0xD05751EDu,
+                        ring_style);
+        if (host_idx >= 0 && host_idx < (int)state.bodies.size())
+            clear_ring_system(state.bodies[(size_t)host_idx]);
+    }
+    if (spawn_draft_.spawn_moons && host_idx >= 0 && host_idx < (int)state.bodies.size()) {
+        spawn_moons_for_host(host_idx,
+                             std::clamp(spawn_draft_.moon_count, 1, 100),
+                             std::clamp(spawn_draft_.moon_orbit_layout, 0, 4),
+                             std::clamp(spawn_draft_.moon_inclination_deg, 0.0f, 85.0f),
+                             std::clamp(spawn_draft_.moon_spacing_scale, 0.35f, 4.0f));
+    }
+
+    if (diagnostics_enabled_)
+        validate_body_state("spawn/preview", true);
+
+    // Re-roll preview for next spawn
+    reroll_spawn_preview();
+
+    return host_idx;
 }
 
 // ── Tick ─────────────────────────────────────────────────────────────────────
@@ -760,8 +1023,32 @@ void CosmosApp::tick(GLFWwindow* window, float dt) {
         }
     }
 
-    // GPU raytraced scene (draws within the active render pass)
+    // ── Spawn preview ghost body ────────────────────────────────────────
     ImGuiIO& io = ImGui::GetIO();
+    raytracer_.preview.body = nullptr;
+    if (spawn_menu_visible_ && !show_splash && !show_pause_menu &&
+        !mouse_dragging && !mouse_panning && !io.WantCaptureMouse) {
+        int fb_w, fb_h;
+        glfwGetFramebufferSize(window, &fb_w, &fb_h);
+        spawn_preview_pos_ = screen_to_spawn_pos(last_mouse_x, last_mouse_y, fb_w, fb_h);
+
+        // Only show preview when no body is under cursor (click would select, not spawn)
+        int hover_body = pick_body((float)last_mouse_x, (float)last_mouse_y,
+                                    (float)fb_w, (float)fb_h);
+        if (hover_body < 0) {
+            // Rebuild preview body when spawn type, mass, or draft settings change
+            uint32_t dh = draft_settings_hash();
+            if (!preview_body_valid_ || preview_last_type_ != spawn_type ||
+                preview_last_mass_ != spawn_mass || preview_last_draft_hash_ != dh) {
+                build_preview_body();
+            }
+            // Update position to follow cursor
+            preview_body_.pos = spawn_preview_pos_;
+            raytracer_.preview.body = &preview_body_;
+        }
+    }
+
+    // GPU raytraced scene (draws within the active render pass)
     try {
         raytracer_.update_and_draw(vk, renderer.current_cmd(), state, camera, cfg,
                                    io.DisplaySize.x, io.DisplaySize.y, sim_time_);
@@ -1864,11 +2151,12 @@ bool CosmosApp::spawn_dust_ring(int host_index, float total_mass, float inner_ra
         }
         count = std::min(count, std::max(0, cap - current));
     }
-    if (count < 1)
+    // Rings need at least 8 particles to look like a ring, not a single asteroid
+    if (count < 8)
         return false;
 
-    count = std::min(count, std::max(1, (int)std::floor(ring_mass / safe_min_mass)));
-    if (count < 1)
+    count = std::min(count, std::max(8, (int)std::floor(ring_mass / safe_min_mass)));
+    if (count < 8)
         return false;
 
     uint32_t seed = hash_combine(host.seed, seed_hint == 0u ? 0xD057CAFEu : seed_hint);
@@ -4381,6 +4669,18 @@ void CosmosApp::cleanup_bodies() {
     // Fix selected body
     if (selected_body >= 0 && selected_body < (int)bodies.size()) {
         selected_body = remap[selected_body];
+    }
+
+    // Fix camera focus body
+    if (camera.focus_body >= 0 && camera.focus_body < (int)bodies.size()) {
+        int new_focus = remap[camera.focus_body];
+        if (new_focus < 0) {
+            camera.release_focus();
+        } else {
+            camera.focus_body = new_focus;
+        }
+    } else if (camera.focus_body >= (int)bodies.size()) {
+        camera.release_focus();
     }
 
     // Fix parent indices

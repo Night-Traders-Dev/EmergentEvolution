@@ -8,16 +8,20 @@
 #include <glm/glm.hpp>
 #include <vector>
 #include <string>
+#include <functional>
 
 struct GLFWwindow;
 
 class CosmosApp {
 public:
-    void init(GLFWwindow* window);
+    // progress_cb(fraction 0..1, stage_label) — called between init stages
+    using ProgressCB = std::function<void(float, const char*)>;
+    void init(GLFWwindow* window, ProgressCB progress_cb = nullptr);
     void tick(GLFWwindow* window, float dt);
     void destroy();
     void reset_simulation();
-    void spawn_at(glm::vec3 pos);
+    int  spawn_at(glm::vec3 pos);  // returns index of primary spawned body, or -1
+    int  spawn_preview_body(glm::vec3 pos); // spawn the current preview body at pos
 
     // Save/Load
     bool save_simulation(const std::string& path);
@@ -59,6 +63,16 @@ public:
     bool   click_pending_ = false;
     int    click_candidate_ = -1;
     float  click_start_x_ = 0, click_start_y_ = 0;
+
+    // Spawn preview: ghost body shown at cursor position when spawn menu is open
+    glm::vec3 spawn_preview_pos_{0.0f};
+    bool is_spawn_mode() const { return spawn_menu_visible_; }
+
+    // Re-roll the spawn preview (called on right-click in spawn mode)
+    void reroll_spawn_preview();
+
+    // Compute spawn world position from screen coordinates
+    glm::vec3 screen_to_spawn_pos(double mx, double my, int fb_w, int fb_h) const;
 
 private:
     void render_ui();
@@ -156,6 +170,16 @@ private:
 
     // Spawn menu
     bool spawn_menu_visible_ = true;
+
+    // Preview body for spawn ghost (fully initialized CelestialBody)
+    CelestialBody preview_body_;
+    bool preview_body_valid_ = false;
+    uint32_t preview_reroll_counter_ = 0;
+    int  preview_last_type_ = -1;
+    float preview_last_mass_ = -1.0f;
+    uint32_t preview_last_draft_hash_ = 0;
+    uint32_t draft_settings_hash() const;
+    void build_preview_body();
     bool spawn_in_orbit_ = false;
     struct SpawnDraftSettings {
         bool override_temperature = false;

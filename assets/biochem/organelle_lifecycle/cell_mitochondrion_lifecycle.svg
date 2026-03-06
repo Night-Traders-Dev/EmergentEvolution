@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 320">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#10212e"/>
+      <stop offset="100%" stop-color="#071017"/>
+    </linearGradient>
+    <radialGradient id="cell" cx="45%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#b0f4ff" stop-opacity="0.26"/>
+      <stop offset="100%" stop-color="#6fc7de" stop-opacity="0.08"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="320" fill="url(#bg)"/>
+  <text x="28" y="34" fill="#ddf8ff" font-size="24" font-family="Arial, sans-serif">Cell Mitochondrion Lifecycle</text>
+  <g font-family="Arial, sans-serif" font-size="18" fill="#d3eef6">
+    <text x="84" y="70">Young</text>
+    <text x="332" y="70">Mature</text>
+    <text x="572" y="70">Senescent</text>
+    <text x="820" y="70">Dead Husk</text>
+  </g>
+  <g stroke="#2b4f66" stroke-width="2" fill="none" opacity="0.55">
+    <rect x="28" y="84" width="220" height="208" rx="24"/>
+    <rect x="276" y="84" width="220" height="208" rx="24"/>
+    <rect x="524" y="84" width="220" height="208" rx="24"/>
+    <rect x="772" y="84" width="220" height="208" rx="24"/>
+  </g>
+  <g>
+    <circle cx="138" cy="188" r="76" fill="url(#cell)" stroke="#9defff" stroke-width="6"/>
+    <ellipse cx="118" cy="176" rx="28" ry="14" fill="#83d67e" stroke="#d4ffb8" stroke-width="4" transform="rotate(-18 118 176)"/>
+    <ellipse cx="160" cy="206" rx="31" ry="15" fill="#83d67e" stroke="#d4ffb8" stroke-width="4" transform="rotate(18 160 206)"/>
+    <path d="M97 176 C108 164, 124 164, 137 176 C123 186, 110 187, 97 176" fill="none" stroke="#e6ffd5" stroke-width="3"/>
+    <path d="M133 208 C145 194, 164 194, 178 208 C166 220, 149 221, 133 208" fill="none" stroke="#e6ffd5" stroke-width="3"/>
+  </g>
+  <g>
+    <circle cx="386" cy="188" r="76" fill="url(#cell)" stroke="#9defff" stroke-width="6"/>
+    <ellipse cx="364" cy="174" rx="31" ry="15" fill="#76c96e" stroke="#d2ffb8" stroke-width="4" transform="rotate(-12 364 174)"/>
+    <ellipse cx="406" cy="198" rx="33" ry="16" fill="#76c96e" stroke="#d2ffb8" stroke-width="4" transform="rotate(14 406 198)"/>
+    <path d="M340 173 C352 161, 370 162, 386 174 C370 188, 354 188, 340 173" fill="none" stroke="#f2ffd9" stroke-width="3"/>
+    <path d="M381 198 C393 183, 414 184, 431 198 C415 214, 396 214, 381 198" fill="none" stroke="#f2ffd9" stroke-width="3"/>
+    <circle cx="386" cy="188" r="5" fill="#b6ff9f"/>
+  </g>
+  <g>
+    <circle cx="634" cy="188" r="76" fill="url(#cell)" stroke="#9defff" stroke-width="6"/>
+    <ellipse cx="618" cy="179" rx="28" ry="13" fill="#7d7b4f" stroke="#d8d09c" stroke-width="4" transform="rotate(-16 618 179)"/>
+    <ellipse cx="652" cy="202" rx="24" ry="12" fill="#716f48" stroke="#c9bf94" stroke-width="4" transform="rotate(22 652 202)"/>
+    <path d="M597 180 C608 170, 623 170, 636 181" fill="none" stroke="#e7deb2" stroke-width="3"/>
+    <path d="M632 202 C640 192, 655 192, 668 203" fill="none" stroke="#ddd0a0" stroke-width="3"/>
+    <circle cx="604" cy="209" r="7" fill="#75673e"/>
+  </g>
+  <g>
+    <circle cx="882" cy="188" r="76" fill="#8d978f" fill-opacity="0.10" stroke="#847a72" stroke-width="6" stroke-dasharray="9 8"/>
+    <ellipse cx="874" cy="182" rx="30" ry="12" fill="#4b453a" stroke="#9a8770" stroke-width="4" transform="rotate(-12 874 182)"/>
+    <ellipse cx="897" cy="206" rx="22" ry="10" fill="#40382f" stroke="#8e7965" stroke-width="4" transform="rotate(20 897 206)"/>
+    <path d="M849 183 L868 176 L884 184" fill="none" stroke="#b59e8c" stroke-width="3"/>
+    <path d="M881 206 L897 197 L914 205" fill="none" stroke="#a48d7d" stroke-width="3"/>
+  </g>
+</svg>

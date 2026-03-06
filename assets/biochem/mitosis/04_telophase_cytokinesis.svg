@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="45%" r="65%">
+      <stop offset="0%" stop-color="#16364a"/>
+      <stop offset="100%" stop-color="#081119"/>
+    </radialGradient>
+    <radialGradient id="cellLeft" cx="40%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#d1fbff" stop-opacity="0.34"/>
+      <stop offset="100%" stop-color="#78d7df" stop-opacity="0.08"/>
+    </radialGradient>
+    <radialGradient id="cellRight" cx="60%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#d1fbff" stop-opacity="0.34"/>
+      <stop offset="100%" stop-color="#78d7df" stop-opacity="0.08"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <circle cx="204" cy="256" r="140" fill="url(#cellLeft)" stroke="#c8fbff" stroke-width="10"/>
+  <circle cx="308" cy="256" r="140" fill="url(#cellRight)" stroke="#c8fbff" stroke-width="10"/>
+  <path d="M246 132 Q256 256 246 380" fill="none" stroke="#efffff" stroke-width="10" stroke-opacity="0.75"/>
+  <path d="M266 132 Q256 256 266 380" fill="none" stroke="#efffff" stroke-width="10" stroke-opacity="0.75"/>
+  <g fill="#8e53d8" fill-opacity="0.32" stroke="#efc8ff" stroke-width="4">
+    <ellipse cx="190" cy="256" rx="56" ry="46"/>
+    <ellipse cx="322" cy="256" rx="56" ry="46"/>
+  </g>
+  <g fill="#69b773" fill-opacity="0.72">
+    <ellipse cx="160" cy="320" rx="24" ry="12" transform="rotate(-16 160 320)"/>
+    <ellipse cx="240" cy="188" rx="25" ry="12" transform="rotate(25 240 188)"/>
+    <ellipse cx="355" cy="321" rx="26" ry="12" transform="rotate(12 355 321)"/>
+    <ellipse cx="287" cy="187" rx="24" ry="11" transform="rotate(-20 287 187)"/>
+  </g>
+  <g fill="#79e0ff" fill-opacity="0.5">
+    <circle cx="206" cy="171" r="9"/><circle cx="316" cy="342" r="10"/>
+    <circle cx="336" cy="171" r="8"/><circle cx="178" cy="342" r="9"/>
+  </g>
+  <text x="32" y="54" fill="#d8f7ff" font-size="34" font-family="Arial, sans-serif">Telophase / Cytokinesis</text>
+</svg>

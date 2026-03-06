@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 320">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#102030"/>
+      <stop offset="100%" stop-color="#081018"/>
+    </linearGradient>
+    <radialGradient id="cell" cx="45%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#b0f4ff" stop-opacity="0.26"/>
+      <stop offset="100%" stop-color="#6fc7de" stop-opacity="0.08"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="320" fill="url(#bg)"/>
+  <text x="28" y="34" fill="#ddf8ff" font-size="24" font-family="Arial, sans-serif">Cell Endoplasmic Reticulum Lifecycle</text>
+  <g font-family="Arial, sans-serif" font-size="18" fill="#d3eef6">
+    <text x="84" y="70">Young</text>
+    <text x="332" y="70">Mature</text>
+    <text x="572" y="70">Senescent</text>
+    <text x="820" y="70">Dead Husk</text>
+  </g>
+  <g stroke="#2b4f66" stroke-width="2" fill="none" opacity="0.55">
+    <rect x="28" y="84" width="220" height="208" rx="24"/>
+    <rect x="276" y="84" width="220" height="208" rx="24"/>
+    <rect x="524" y="84" width="220" height="208" rx="24"/>
+    <rect x="772" y="84" width="220" height="208" rx="24"/>
+  </g>
+  <g>
+    <circle cx="138" cy="188" r="76" fill="url(#cell)" stroke="#9defff" stroke-width="6"/>
+    <path d="M89 170 C106 157, 124 181, 145 170 C162 160, 179 182, 189 171" fill="none" stroke="#83cfc0" stroke-width="5" stroke-linecap="round"/>
+    <path d="M90 188 C108 176, 125 198, 145 188 C161 178, 179 197, 188 188" fill="none" stroke="#9ce1d4" stroke-width="5" stroke-linecap="round"/>
+    <path d="M94 207 C109 198, 127 214, 148 205 C162 200, 176 214, 186 207" fill="none" stroke="#b7f2e8" stroke-width="5" stroke-linecap="round"/>
+  </g>
+  <g>
+    <circle cx="386" cy="188" r="76" fill="url(#cell)" stroke="#9defff" stroke-width="6"/>
+    <path d="M338 168 C354 153, 375 182, 395 166 C412 151, 433 178, 445 165" fill="none" stroke="#76bea9" stroke-width="6" stroke-linecap="round"/>
+    <path d="M339 189 C355 175, 376 202, 397 188 C414 175, 433 198, 445 186" fill="none" stroke="#8dd5c1" stroke-width="6" stroke-linecap="round"/>
+    <path d="M343 208 C359 197, 380 218, 400 205 C416 194, 431 214, 442 206" fill="none" stroke="#abebd7" stroke-width="6" stroke-linecap="round"/>
+  </g>
+  <g>
+    <circle cx="634" cy="188" r="76" fill="url(#cell)" stroke="#9defff" stroke-width="6"/>
+    <path d="M590 174 C603 168, 620 183, 638 174 C653 167, 670 183, 681 176" fill="none" stroke="#839184" stroke-width="5" stroke-linecap="round"/>
+    <path d="M593 194 C607 189, 622 202, 641 193 C656 188, 671 199, 680 193" fill="none" stroke="#99a69a" stroke-width="5" stroke-linecap="round"/>
+    <path d="M600 212 C613 208, 626 219, 642 211 C655 206, 668 214, 675 210" fill="none" stroke="#b1bbb1" stroke-width="5" stroke-linecap="round"/>
+  </g>
+  <g>
+    <circle cx="882" cy="188" r="76" fill="#8d978f" fill-opacity="0.10" stroke="#847a72" stroke-width="6" stroke-dasharray="9 8"/>
+    <path d="M842 178 C856 176, 870 186, 888 181 C901 177, 913 186, 921 184" fill="none" stroke="#7c6a5d" stroke-width="5" stroke-linecap="round"/>
+    <path d="M848 197 C861 196, 874 204, 891 199 C905 195, 915 201, 920 201" fill="none" stroke="#6a5b52" stroke-width="5" stroke-linecap="round"/>
+    <path d="M856 214 C868 213, 879 218, 894 214 C905 211, 914 215, 918 216" fill="none" stroke="#5e524b" stroke-width="5" stroke-linecap="round"/>
+  </g>
+</svg>

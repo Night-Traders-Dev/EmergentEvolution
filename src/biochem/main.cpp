@@ -18,6 +18,42 @@
 
 // ── GLFW input callbacks ───────────────────────────────────────────────────
 
+static int pick_entity_under_cursor(BiochemApp* app, GLFWwindow* window, double mx, double my) {
+    int fb_w, fb_h;
+    glfwGetFramebufferSize(window, &fb_w, &fb_h);
+    float W = (float)fb_w, H = (float)fb_h;
+    float aspect = W / H;
+
+    glm::mat4 vp = app->camera.proj_matrix(aspect) * app->camera.view_matrix();
+
+    int best = -1;
+    float best_dist = 30.0f;
+    for (size_t i = 0; i < app->state.entities.size(); i++) {
+        const auto& e = app->state.entities[i];
+        if (!e.alive && !e.corpse) continue;
+
+        glm::vec4 clip = vp * glm::vec4(e.pos, 1.0f);
+        if (clip.w <= 0.0f) continue;
+        glm::vec3 ndc = glm::vec3(clip) / clip.w;
+        float sx = (ndc.x * 0.5f + 0.5f) * W;
+        float sy = (1.0f - (ndc.y * 0.5f + 0.5f)) * H;
+
+        float dx = sx - (float)mx;
+        float dy = sy - (float)my;
+        float d = std::sqrt(dx * dx + dy * dy);
+
+        float fov_rad = glm::radians(app->camera.fov);
+        float sr = (e.radius / clip.w) * (H / (2.0f * std::tan(fov_rad * 0.5f)));
+        float pick_r = std::max(sr, 10.0f);
+        if (d < pick_r && d < best_dist) {
+            best_dist = d;
+            best = (int)i;
+        }
+    }
+
+    return best;
+}
+
 static void mouse_button_callback(GLFWwindow* window, int button, int action, int /*mods*/) {
     auto* app = static_cast<BiochemApp*>(glfwGetWindowUserPointer(window));
     if (!app) return;
@@ -33,12 +69,20 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
     // No interaction during pause menu (ImGui handles its own buttons)
     if (app->show_pause_menu) return;
 
-    // Left mouse: orbit camera drag
+    // Left mouse: click to inspect, drag to orbit
     if (button == GLFW_MOUSE_BUTTON_LEFT) {
         if (action == GLFW_PRESS) {
             app->mouse_dragging = true;
             glfwGetCursorPos(window, &app->last_mouse_x, &app->last_mouse_y);
+            app->mouse_down_x = app->last_mouse_x;
+            app->mouse_down_y = app->last_mouse_y;
         } else {
+            double mx, my;
+            glfwGetCursorPos(window, &mx, &my);
+            double dx = mx - app->mouse_down_x;
+            double dy = my - app->mouse_down_y;
+            if (dx * dx + dy * dy < 36.0)
+                app->selected_entity = pick_entity_under_cursor(app, window, mx, my);
             app->mouse_dragging = false;
         }
     }
@@ -47,40 +91,7 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
     if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {
         double mx, my;
         glfwGetCursorPos(window, &mx, &my);
-
-        int fb_w, fb_h;
-        glfwGetFramebufferSize(window, &fb_w, &fb_h);
-        float W = (float)fb_w, H = (float)fb_h;
-        float aspect = W / H;
-
-        glm::mat4 vp = app->camera.proj_matrix(aspect) * app->camera.view_matrix();
-
-        int best = -1;
-        float best_dist = 30.0f;
-        for (size_t i = 0; i < app->state.entities.size(); i++) {
-            const auto& e = app->state.entities[i];
-            if (!e.alive) continue;
-
-            // Project to screen
-            glm::vec4 clip = vp * glm::vec4(e.pos, 1.0f);
-            if (clip.w <= 0.0f) continue;
-            glm::vec3 ndc = glm::vec3(clip) / clip.w;
-            float sx = (ndc.x * 0.5f + 0.5f) * W;
-            float sy = (1.0f - (ndc.y * 0.5f + 0.5f)) * H;
-
-            float dx = sx - (float)mx;
-            float dy = sy - (float)my;
-            float d = std::sqrt(dx * dx + dy * dy);
-
-            float fov_rad = glm::radians(app->camera.fov);
-            float sr = (e.radius / clip.w) * (H / (2.0f * std::tan(fov_rad * 0.5f)));
-            float pick_r = std::max(sr, 10.0f);
-            if (d < pick_r && d < best_dist) {
-                best_dist = d;
-                best = (int)i;
-            }
-        }
-        app->selected_entity = best;
+        app->selected_entity = pick_entity_under_cursor(app, window, mx, my);
     }
 
     // Middle-click: spawn entity at clicked 3D position

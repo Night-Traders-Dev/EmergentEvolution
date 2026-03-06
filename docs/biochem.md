@@ -1,21 +1,22 @@
 # Biochemical Simulator
 
-The Biochemical Simulator is a 3D cellular biology sandbox with GPU-raytraced rendering. Entities interact through proximity-based rules covering metabolism, reproduction, infection, and immune response. Four environment presets model distinct biological milieus with gene-driven entity behavior.
+The Biochemical Simulator is a 3D cellular biology sandbox with GPU SDF-raytraced rendering. Entities interact through proximity-based rules covering metabolism, reproduction, infection, immune response, antibiotic warfare, and phagocytic cleanup. Four environment presets model distinct biological milieus with gene-driven entity behavior and heritable mutations.
 
 ## Entity Types
 
-8 biological entity types with morphological variants:
+9 biological entity types with morphological variants:
 
 | Type | ID | Morphologies | Description |
 |---|---|---|---|
-| Cell | 0 | Animal, Epithelial, Amoeboid | Generic eukaryotic cell &mdash; metabolizes nutrients, divides when energy threshold reached |
-| Bacterium | 1 | Cocci, Bacilli, Spiral | Prokaryote &mdash; competes with cells for nutrients |
-| Virus | 2 | Classical Capsid, Coronavirus, Bacteriophage | Viral particle &mdash; infects nearby cells/bacteria within infection radius |
+| Cell | 0 | Animal, Epithelial, Amoeboid | Eukaryotic cell &mdash; metabolizes nutrients, divides via mitosis with telomere tracking |
+| Bacterium | 1 | Cocci, Bacilli, Spiral | Prokaryote &mdash; binary fission, secretes antibiotic defense films, faster metabolism |
+| Virus | 2 | Classical Capsid, Coronavirus, Bacteriophage | Viral particle &mdash; infects cells/bacteria, replicates internally, causes lysis burst |
 | Nutrient | 3 | &mdash; | Food / glucose molecule &mdash; consumed by cells and bacteria for energy |
-| Toxin | 4 | &mdash; | Harmful chemical &mdash; damages nearby entities |
-| Antibody | 5 | &mdash; | Immune system agent &mdash; neutralizes viruses and bacteria |
-| Red Blood Cell | 6 | &mdash; | Erythrocyte &mdash; oxygen transport |
-| White Blood Cell | 7 | &mdash; | Leukocyte &mdash; immune response, seeks and destroys pathogens |
+| Toxin | 4 | &mdash; | Harmful chemical &mdash; damages nearby entities on contact |
+| Antibody | 5 | &mdash; | Immune protein &mdash; seeks and neutralizes viruses on contact |
+| Red Blood Cell | 6 | &mdash; | Erythrocyte &mdash; passive oxygen transport, brownian drift |
+| White Blood Cell | 7 | &mdash; | Leukocyte &mdash; immune response, seeks and engulfs pathogens, can divide |
+| Phagocyte | 8 | &mdash; | Cleanup cell &mdash; scavenges corpse husks, auto-spawns when corpses accumulate |
 
 ## Entity Properties
 
@@ -25,88 +26,161 @@ Each entity has:
 - **Radius** (default 8.0 units)
 - **Energy** (health / metabolic energy, default 100)
 - **Age** (seconds alive)
-- **Genome** tag (simple integer for tracking mutations)
+- **Generation** and **parent ID** for lineage tracking
+- **Genome** tag (integer for tracking mutations)
 - **Morphology** variant (determines visual shape via SDF rendering)
-- **Genes** (5 behavioral traits: seek, flee, spacing, brownian, energy)
+- **Genes** (10 behavioral/metabolic traits &mdash; see Gene System)
 - **Shape** parameters (aspect ratio, noise amplitude, phase)
+- **Organelle health** (0&ndash;1, cellular vitality)
+- **Nutrient reserve** (0&ndash;1, stored food)
+- **Telomere state** (0&ndash;1, replicative lifespan for cells/WBC)
+- **Antibiotic film** (0&ndash;1, bacterial defense secretion)
+- **Infection state** (progress, virion load, source ID)
+- **Mitosis progress** (0&ndash;1, division animation state)
+- **Corpse** flag and **corpse age** (dead husk state)
 - **Alive** flag
 
 ## Gene System
 
-Each entity carries a `BioGenes` struct with 5 heritable traits that modulate behavior:
+Each entity carries a `BioGenes` struct with 10 heritable traits that modulate behavior:
 
-| Gene | Default | Effect |
-|---|---|---|
-| `seek` | 1.0 | Multiplier on nutrient-seeking strength |
-| `flee` | 1.0 | Multiplier on threat-avoidance strength |
-| `spacing` | 1.0 | Multiplier on same-type neighbor spacing |
-| `brownian` | 1.0 | Multiplier on random thermal drift |
-| `energy` | 1.0 | Multiplier on metabolic efficiency |
+| Gene | Range | Default | Effect |
+|---|---|---|---|
+| `seek` | 0.05&ndash;2.50 | 1.0 | Multiplier on nutrient-seeking strength |
+| `flee` | 0.05&ndash;2.50 | 1.0 | Multiplier on threat-avoidance strength |
+| `spacing` | 0.05&ndash;2.50 | 1.0 | Multiplier on same-type neighbor spacing |
+| `brownian` | 0.00&ndash;2.50 | 1.0 | Multiplier on random thermal drift |
+| `energy` | 0.35&ndash;2.25 | 1.0 | Multiplier on metabolic efficiency |
+| `telomere` | 0.00&ndash;2.25 | 1.0 | Telomere length multiplier (cells/WBC only) |
+| `mitotic_clock` | 0.25&ndash;2.50 | 1.0 | Division speed multiplier |
+| `antibiotic_type` | 0.00&ndash;1.00 | varies | Antibiotic spectrum band (bacteria only) |
+| `antibiotic_yield` | 0.00&ndash;2.50 | varies | Antibiotic potency (bacteria only) |
+| `antibiotic_diversity` | 0.00&ndash;1.00 | varies | Antibiotic spectrum width (bacteria only) |
 
-During cell division, each gene has a chance to mutate (scaled by `mutation_rate`), creating heritable variation in the population.
+During cell division, each gene has a chance to mutate (scaled by `mutation_rate`, default 1%), plus a 25% chance of morphology shift, creating heritable variation in the population.
 
 ## Environment Presets
 
 4 environment presets, each configuring temperature, acidity, oxygen, nutrients, flow, toxicity, immune pressure, and fluid damping:
 
-| Preset | Temp | pH | O&#8322; | Description |
-|---|---|---|---|---|
-| Human Lung | 37.0 &deg;C | 7.25 | 0.98 | Warm, oxygen-rich tissue with active immune surveillance and rhythmic airflow |
-| Pond Water | 18.0 &deg;C | 6.70 | 0.58 | Cool, nutrient-rich water with suspended toxins, weak immunity, and slow currents |
-| Petri Dish | 30.0 &deg;C | 7.05 | 0.76 | Engineered culture media with high nutrient availability, low flow, and weak immunity |
-| Cat Brain | 38.2 &deg;C | 7.32 | 0.88 | Warm, protected neural tissue with high metabolic demand and selective immunity |
+| Preset | Temp | pH | O&#8322; | Immune | Description |
+|---|---|---|---|---|---|
+| Human Lung | 37.0 &deg;C | 7.25 | 0.98 | Active | Warm, oxygen-rich tissue with active immune surveillance and rhythmic airflow. Lung alveolar structure with branching membrane features. |
+| Pond Water | 18.0 &deg;C | 6.70 | 0.58 | Inactive | Cool, nutrient-rich water (density 1.45) with suspended toxins, weak immunity, and slow currents. Scattered circular membrane features. |
+| Petri Dish | 30.0 &deg;C | 7.05 | 0.76 | Inactive | Engineered culture media with high nutrient availability (density 1.65), minimal flow, and weak immunity. Ring-shaped membrane arrangement. |
+| Cat Brain | 38.2 &deg;C | 7.32 | 0.88 | Active | Warm, protected neural tissue with highest metabolic demand and selective immunity. Bilateral lobe structure with neural-like features. |
 
 Each preset also defines a visual tint, flow axis and strength, and whether the immune system is active.
 
 ### Environment Features
 
-Environments can contain placed features that locally modify conditions:
+Environments contain placed features that locally modify conditions:
 
 | Feature | Effect |
 |---|---|
-| Membrane | Semi-permeable barrier |
-| Nutrient | Local nutrient-rich zone |
-| Toxin | Local toxic zone |
-| Current | Directed fluid flow |
+| Membrane | Semi-permeable zone &mdash; 8% organelle protection, reduces local toxin stress |
+| Nutrient | Local nutrient-rich zone &mdash; spawn location bias, 18% nutrient relief |
+| Toxin | Local toxic zone &mdash; 55% toxin stress increase |
+| Current | Directed fluid flow overlay |
 
 ## Simulation Systems
 
 ### Metabolism
 
-Entities consume energy at a configurable rate (`metabolism_rate`). Cells and bacteria gain energy by absorbing nearby nutrients. When energy reaches zero, entities die.
+Entities consume energy at a rate combining base metabolism, environmental stress, starvation, and senescence:
+
+- **Energy drain**: `base_metabolism * dt * (1 + stress + starvation * 1.45 + senescence)`
+- **Starvation**: increases when `nutrient_reserve < 0.18`, accelerating energy drain
+- **Organelle health**: tracks cellular vitality (0&ndash;1 scale), degrades under infection and antibiotic pressure
+- **Nutrient reserve**: replenished by feeding, depleted by metabolism and antibiotics
+
+### Environmental Stresses
+
+Entities experience stress from environmental conditions:
+
+- **Temperature**: `max(0, |actual - preferred| - 4) * 0.035`
+- **pH**: `max(0, |actual - preferred| - 0.2) * 0.7`
+- **Oxygen**: `max(0, preferred - actual) * 1.1`
+- **Toxicity**: `toxicity * type_sensitivity`
 
 ### Cell Division
 
-When a cell or bacterium accumulates energy above `division_energy` (default 150), it divides into two daughter cells. Each division has a configurable `mutation_rate` (default 1%) chance of altering the genome tag and gene values.
+When a cell or bacterium accumulates energy above `division_energy` (default 150) and cooldown has elapsed, it divides:
+
+- **Duration**: 2.45&ndash;4.9 seconds depending on entity type and `mitotic_clock` gene
+- **Process**: `mitosis_progress` ramps 0&rarr;1 over the duration, visually morphing the entity
+- **Completion**: parent keeps 50% energy, child spawned with 50%
+- **Mutation**: 1% base chance per gene, 25% chance of morphology shift
+- **Cooldown**: 4&ndash;15 seconds post-division (bacteria faster than cells)
+- **Telomere cost**: each division shortens telomeres by `1/capacity` (capacity = 10 + gene*8 for cells, ~7 for WBC)
+- **Senescence**: at telomere &le; 12%, entities enter late-life senescence with +30% damage multiplier
 
 ### Viral Infection
 
-Viruses infect cells and bacteria within `infection_radius` (default 20 units) with probability `infection_rate` (default 50%) per contact per tick. Infected cells lose energy and eventually die.
+Viruses infect cells and bacteria through a multi-stage process:
+
+- **Contact**: virus within `infection_radius` (default 20 units) of uninfected cell
+- **Probability**: modulated by temperature alignment, immune drag, O&#8322; levels, and membrane shelter
+- **Stages**: ingress (0.04&rarr;0.22), replication (0.14&rarr;0.82), burst (&ge;0.96 load or progress &ge; 1.08)
+- **Viral burst**: spawns 6&ndash;22 virions at random directions, killing the host cell
+- **Energy drain**: 4.4 + replication_progress * 2.2 + load * 1.35 per tick
+- **Organelle damage**: 0.012 + replication_progress * 0.09 per tick
+- **Mutation boost**: virions from burst have 50% higher mutation rate
+
+### Antibacterial Defense
+
+Bacteria secrete antibiotic films in a quorum-sensing analog:
+
+- **Spectrum**: 1&ndash;4 antibiotic bands per bacterium based on `antibiotic_diversity` gene
+- **Band signature**: circular distance in [0,1) space from `antibiotic_type` gene
+- **Potency**: `(1.8 + yield * 3.8 + diversity * 1.8) * pressure * dt`
+- **Resistance**: bacteria with different `antibiotic_type` genes resist neighboring bacteria's antibiotics
+- **Damage**: energy drain, nutrient reserve depletion, and organelle damage proportional to film strength
 
 ### Immune Response
 
-When enabled, antibodies and white blood cells seek out and neutralize viruses and bacteria. Effectiveness scales with `immune_strength` (default 1.0) and `immune_pressure` from the environment preset.
+When enabled, the immune system spawns defenders and attacks pathogens:
+
+- **WBC spawning**: when virus count exceeds WBC count and immune pressure > 0.4
+- **Antibody spawning**: when viruses present and immune pressure > 0.4
+- **WBC behavior**: seeks nearest virus/toxin, engulfs on contact (energy += 10, target dies)
+- **Antibody behavior**: seeks viruses within infection radius, neutralizes on contact
+- **Auto-cap**: immune spawning stops at 1200 total entities
+
+### Phagocyte Cleanup
+
+Phagocytes (janitor cells) manage corpse accumulation:
+
+- **Auto-spawning**: when `corpse_count > phagocyte_count * 2` and entity count < 1200
+- **Behavior**: seeks nearest corpse, removes it on contact (energy += 12)
+- **Fallback**: brownian drift when no corpses available
 
 ### AI Movement
 
 Entities use behavior-based AI steering, modulated by individual gene values:
 
-- **Seek** &mdash; cells/bacteria move toward nutrients (`seek_strength` = 40)
-- **Flee** &mdash; entities move away from threats like toxins (`flee_strength` = 60)
-- **Spacing** &mdash; maintain minimum distance from same-type neighbors (`spacing_strength` = 20)
-- **Brownian motion** &mdash; random drift simulating thermal motion (`brownian_strength` = 15)
+| Entity | Seek Target | Flee Target | Max Speed |
+|---|---|---|---|
+| Cell | Nearest nutrient (150u) | Virus/toxin (100u) | 60 |
+| Bacterium | Nearest nutrient (150u) | Virus/toxin (100u) | 80 |
+| Virus | Uninfected cells (200u) | Infected cells (80u) | 100 |
+| White Blood Cell | Virus/toxin (unlimited) | &mdash; | 80 |
+| Antibody | Viruses (120u) | &mdash; | 70 |
+| Phagocyte | Corpses (unlimited) | &mdash; | 68 |
+| Red Blood Cell | &mdash; (brownian only) | &mdash; | 40 |
+| Nutrient | &mdash; (gentle brownian) | &mdash; | 15 |
+
+Steering forces are reduced proportionally to `mitosis_progress` during division.
+
+### Death and Corpses
+
+Entities die from starvation (energy &le; 0), telomere exhaustion, viral lysis, or antibiotic damage. Dead entities become corpse husks that shrink over time and are cleaned up by phagocytes. When dead count exceeds 50, auto-culling removes oldest dead entities.
 
 ### Fluid Dynamics
 
-Velocity damping (`viscosity` = 0.98) simulates fluid drag. Entities experience continuous deceleration proportional to their speed. Environment presets provide a `fluid_damping` value and directional `flow_axis` for currents.
-
-### Repulsion
-
-Hard-sphere-like repulsion prevents entities from overlapping.
-
-### Nutrient Spawning
-
-Nutrients spawn at a configurable rate (`nutrient_rate` = 2.0/second) at random positions within the world volume.
+- **Velocity damping**: `vel *= viscosity * fluid_damping` per tick
+- **World boundary**: sphere wrap with elastic reflection and 0.8&times; damping
+- **Environment flow**: directional current from preset `flow_axis` and `flow_strength`
 
 ## Configuration
 
@@ -122,7 +196,7 @@ Nutrients spawn at a configurable rate (`nutrient_rate` = 2.0/second) at random 
 | `immune_strength` | 1.0 | Antibody effectiveness multiplier |
 | `viscosity` | 0.98 | Fluid damping (1.0 = no damping) |
 | `dt_scale` | 1.0 | Simulation speed multiplier |
-| `world_radius` | 200.0 | 3D world bounds radius (entities wrap) |
+| `world_radius` | 200.0 | 3D world bounds radius |
 | `ai_movement` | true | Enable AI steering behaviors |
 | `immune_system` | true | Enable immune response |
 | `show_energy_bars` | true | Display energy bars above entities |
@@ -139,28 +213,44 @@ Nutrients spawn at a configurable rate (`nutrient_rate` = 2.0/second) at random 
 
 ### GPU SDF Raytracing
 
-All entities are rendered via a GPU fragment shader (`biochem_rt.frag`, ~815 lines) using signed distance field (SDF) raymarching. Each entity type and morphological variant has a unique SDF shape:
+All entities are rendered via a GPU fragment shader (`biochem_rt.frag`, ~1,240 lines) using signed distance field (SDF) raymarching. Each entity type and morphological variant has a unique SDF shape:
 
-- **Cells**: smooth blobs with nucleus and organelle interiors visible
-- **Bacteria**: cocci (spheres), bacilli (capsules), spirals (helical)
+- **Cells**: smooth blobs with nucleus and organelle interiors visible; mitosis morphs to two-sphere
+- **Bacteria**: cocci (spheres), bacilli (capsules), spirals (helical); antibiotic film expands radius
 - **Viruses**: icosahedral capsids, corona spike proteins, bacteriophage legs
 - **Blood cells**: biconcave discs (RBC), irregular amoeboid shapes (WBC)
+- **Corpses**: shrunk (0.42&ndash;0.76&times; scale) and darkened
 
-Lighting uses configurable ambient strength (default 0.12) with diffuse and specular components.
+SDF primitives: sphere, capsule, ellipsoid, octahedron, torus. Raymarching uses up to 256 steps with adaptive sizing, soft shadows, subsurface scattering for organic appearance, and ambient occlusion.
+
+Visual encoding per entity:
+- Infection swelling: `radius *= 1 + min(0.36, progress * 0.20 + load * 0.012)`
+- Antibiotic cloud: `radius *= 1 + min(1.35, film * (0.85 + yield * 0.28))`
+- Telomere aging darkens surface as it depletes
+- Organelle health tints interior glow
+
+### Pipeline
+
+- Fullscreen triangle (no vertex buffer)
+- Two SSBOs: sphere data (max 1,024 entities) and environment features (max 128)
+- Per-frame upload of entity positions, states, and environment features
+- Inverse VP matrix for ray generation from camera
 
 ### Orbit Camera
 
-- Mouse drag to orbit
+- Mouse drag to orbit around target
 - Scroll to zoom
 - WASD/QE to pan
-- Click to select entities
+- Click to select entities (F4 select mode)
 
 ## User Interface
 
-- **Bottom taskbar**: auto-hiding bar with spawn menu, settings, and population graph toggles
-- **Spawn menu**: select entity type, morphological variant, and initial energy; click to place
-- **Settings panel**: all simulation parameters and environment preset selection adjustable in real-time
-- **Population panel**: live entity type counts
-- **Entity selection**: click to select and inspect individual entities
-- **Splash screen**: dismissible startup screen
-- **Pause menu**: resume, new simulation, quit, return to launcher
+- **Top bar**: environment name, live entity/corpse/feature counts, pause toggle, FPS
+- **Settings panel**: environment selector, 18 environment sliders, AI behavior sliders, reset camera
+- **Population panel**: live counts per entity type (9 types)
+- **Event log**: color-coded lifecycle events (division, infection, immune, lifecycle, user, system) with auto-scroll, max 160 entries
+- **Entity inspector**: full property view on selection &mdash; energy, age, genes, infection state, telomere state, lineage, stress metrics; kill/cull buttons
+- **Spawn menu**: entity type selector (9 types), variant combo, energy slider, quick-spawn presets (cell colony, virus outbreak, nutrient burst, immune response, reseed)
+- **Splash screen**: animated cell nucleus with orbiting organelles, dismissible
+- **Pause menu**: resume, new simulation, empty simulation, return to launcher, quit
+- **Bottom bar**: auto-hiding with green bio-themed styling

@@ -4,6 +4,8 @@
 #include "biochem/biochem_types.h"
 #include "biochem/biochem_raytracer.h"
 #include "common/simple_renderer.h"
+#include <deque>
+#include <string>
 #include <vector>
 
 struct GLFWwindow;
@@ -34,6 +36,7 @@ public:
     int    selected_entity = -1;
     bool   mouse_dragging  = false;
     double last_mouse_x = 0, last_mouse_y = 0;
+    double mouse_down_x = 0, mouse_down_y = 0;
 
 private:
     void apply_environment_preset(BioEnvironmentType env, bool reseed_population);
@@ -43,6 +46,9 @@ private:
     void render_overlay();
     void step_simulation(float dt);
     void spawn_nutrient();
+    void assign_entity_identity(BioEntity& e, uint32_t generation = 0, uint32_t parent_id = 0);
+    void push_event(uint32_t type, const std::string& text);
+    void mark_entity_corpse(BioEntity& e, uint32_t event_type, const std::string& reason);
 
     // Fullscreen overlay screens
     void draw_splash_screen();
@@ -51,13 +57,16 @@ private:
     void draw_spawn_menu();
 
     // Simulation subsystems
-    void process_cell_division();
+    void process_cell_division(float dt);
+    void process_bacteria_antibiotics(float dt);
     void process_virus_infection(float dt);
     void process_antibody_response(float dt);
+    void process_phagocyte_cleanup(float dt);
     void process_repulsion();
     void process_ai_movement(float dt);
 
     float nutrient_timer_ = 0.0f;
+    uint32_t next_entity_id_ = 1;
 
     // Splash + menu background particles
     float splash_time_ = 0.0f;
@@ -85,5 +94,14 @@ private:
     bool  show_menu_popup_   = false;
     bool  settings_visible_  = true;
     bool  population_visible_ = true;
+    bool  event_log_visible_ = true;
+    bool  event_log_auto_scroll_ = true;
+    bool  event_log_dirty_ = false;
+    struct EventLogEntry {
+        float time = 0.0f;
+        uint32_t type = 0;
+        std::string text;
+    };
+    std::deque<EventLogEntry> event_log_;
     void  draw_bottom_bar();
 };

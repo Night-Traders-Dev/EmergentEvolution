@@ -19,7 +19,11 @@ struct BioSphereGPU {
     glm::vec4 pos_radius;    // xyz = position, w = bounding radius
     glm::vec4 axis_morph;    // xyz = orientation axis, w = morphology
     glm::vec4 color_type;    // rgb = base color (0-1), a = entity type
-    glm::vec4 shape_params;  // x = aspect, y = noise, z = phase, w = reserved
+    glm::vec4 shape_params;  // x = aspect, y = noise, z = phase, w = mitosis progress
+    glm::vec4 life_params;   // x = organelle health, y = nutrient reserve, z = corpse flag, w = telomere state
+    glm::vec4 signal_params; // x = infection progress, y = infection load, z = infection morph, w = antibiotic film
+    glm::vec4 gene_params;   // x = antibiotic type, y = antibiotic diversity, z = antibiotic yield, w = unused
+    glm::vec4 aux_params;    // xyz = infection axis, w = unused
 };
 
 struct BioEnvironmentFeatureGPU {
@@ -41,6 +45,7 @@ static glm::vec3 bio_type_color(uint32_t type) {
     case BIO_ANTIBODY:    return {1.0f,   1.0f,   0.275f};  // yellow
     case BIO_RED_BLOOD:   return {0.863f, 0.275f, 0.275f};  // red
     case BIO_WHITE_BLOOD: return {0.941f, 0.941f, 1.0f};    // white
+    case BIO_JANITOR:     return {0.471f, 0.863f, 0.706f};  // phagocyte seafoam
     default:              return {0.7f,   0.7f,   0.7f};
     }
 }
@@ -250,11 +255,11 @@ void BiochemRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     glm::mat4 proj = camera.proj_matrix(aspect);
     glm::mat4 vp   = proj * view;
 
-    // Count alive entities for upload
-    int alive_count = 0;
+    // Count renderable entities for upload, including drifting corpses.
+    int render_count = 0;
     for (const auto& e : state.entities)
-        if (e.alive) alive_count++;
-    int n = std::min(alive_count, MAX_SPHERES);
+        if (e.alive || e.corpse) render_count++;
+    int n = std::min(render_count, MAX_SPHERES);
     int feature_count = std::min(static_cast<int>(environment.features.size()), MAX_ENV_FEATURES);
 
     // ── Upload camera UBO ──────────────────────────────────────────────────
@@ -280,15 +285,26 @@ void BiochemRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     std::vector<BioSphereGPU> spheres;
     spheres.reserve(n);
     for (const auto& e : state.entities) {
-        if (!e.alive) continue;
+        if (!e.alive && !e.corpse) continue;
         if ((int)spheres.size() >= MAX_SPHERES) break;
 
         glm::vec3 col = bio_type_color(e.type);
         BioSphereGPU s;
-        s.pos_radius = glm::vec4(e.pos, e.radius);
+        float corpse_shrink = e.corpse ? std::clamp(0.76f - e.corpse_age * 0.010f, 0.42f, 0.76f) : 1.0f;
+        float infection_swelling = (e.type == BIO_CELL && e.infection_progress > 0.0f && !e.corpse)
+            ? (1.0f + std::min(0.36f, e.infection_progress * 0.20f + std::clamp(e.infection_load, 0.0f, 14.0f) * 0.012f))
+            : 1.0f;
+        float antibiotic_cloud = (e.type == BIO_BACTERIUM && e.antibiotic_film > 0.02f && !e.corpse)
+            ? (1.0f + std::min(1.35f, e.antibiotic_film * (0.85f + e.genes.antibiotic_yield * 0.28f)))
+            : 1.0f;
+        s.pos_radius = glm::vec4(e.pos, e.radius * corpse_shrink * infection_swelling * antibiotic_cloud);
         s.axis_morph = glm::vec4(e.axis, (float)e.morphology);
         s.color_type = glm::vec4(col, (float)e.type);
-        s.shape_params = glm::vec4(e.shape_aspect, e.shape_noise, e.shape_phase, 0.0f);
+        s.shape_params = glm::vec4(e.shape_aspect, e.shape_noise, e.shape_phase, e.mitosis_progress);
+        s.life_params = glm::vec4(e.organelle_health, e.nutrient_reserve, e.corpse ? 1.0f : 0.0f, e.telomere_state);
+        s.signal_params = glm::vec4(e.infection_progress, e.infection_load, (float)e.infection_morphology, e.antibiotic_film);
+        s.gene_params = glm::vec4(e.genes.antibiotic_type, e.genes.antibiotic_diversity, e.genes.antibiotic_yield, 0.0f);
+        s.aux_params = glm::vec4(glm::normalize(e.infection_axis), 0.0f);
         spheres.push_back(s);
     }
 

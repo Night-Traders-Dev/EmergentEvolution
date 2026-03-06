@@ -1,6 +1,6 @@
 # Cosmic Sandbox
 
-The Cosmic Sandbox is a 3D celestial mechanics simulator with GPU-raytraced rendering, N-body gravity, stellar evolution, and procedurally generated planets. Bodies interact via Newtonian gravity with optional general relativity corrections.
+The Cosmic Sandbox is a 3D celestial mechanics simulator with GPU-raytraced sphere rendering, N-body gravity, stellar evolution, and procedurally generated planets. Bodies interact via Newtonian gravity with optional general relativity corrections. A Spawn Studio provides full control over body creation with live 3D ghost previews.
 
 ## Celestial Body Types
 
@@ -60,11 +60,21 @@ Stars evolve through 9 stages based on fuel consumption, mass, and temperature:
 | White Dwarf | 7 | Degenerate remnant (low/intermediate mass) |
 | Neutron Star | 8 | Degenerate remnant (high mass) |
 
-Stars undergo supernova events at end-of-life, producing fragments, neutron stars, or black holes depending on mass. Collision-triggered supernovae are also supported.
+Stars undergo supernova events at end-of-life, producing fragments, neutron stars, or black holes depending on mass. Collision-triggered supernovae are also supported (thermonuclear or core-collapse).
+
+### Magnetic Signatures
+
+Stars and planets with iron cores or gas dynamos generate magnetic fields. Computed properties include:
+
+- **Magnetic field strength** &mdash; driven by spin rate, density, convective zone, and stellar stage
+- **Magnetosphere size** &mdash; scaled from body radius and field strength
+- **Particle trapping** &mdash; Van Allen belt analog
+- **Particle jets** &mdash; polar outflows from neutron stars and white dwarfs with strong fields
+- **Pulsar detection** &mdash; rapidly spinning neutron stars with jets
 
 ## Procedural Planet Generation
 
-Planets and moons are procedurally generated from a deterministic seed, mass, and temperature. Properties include:
+Planets and moons are procedurally generated from a deterministic seed, mass, and temperature. Temperature band hysteresis prevents per-frame property flashing. Properties include:
 
 ### Surface Composition
 - **Rocky** &mdash; barren terrain (Mercury/Mars-like)
@@ -81,6 +91,19 @@ Planets and moons are procedurally generated from a deterministic seed, mass, an
 - **Ice Giant** &mdash; intermediate gas/ice body
 - **Gas Giant** &mdash; massive hydrogen/helium body (>45 Earth masses)
 
+### Planet Look Presets
+
+The Spawn Studio supports forced surface overrides:
+
+| Preset | Effect |
+|---|---|
+| Auto | Procedurally determined from mass/temperature |
+| Rocky | Barren terrain, minimal clouds, no oceans |
+| Water | Ocean coverage &ge;82%, heavy clouds |
+| Ice | Ice sheets &ge;70%, no vegetation |
+| Earth-like | N&#8322;/O&#8322; atmosphere, 40&ndash;75% ocean, vegetation, weather |
+| Gas Giant | H&#8322;/He atmosphere &ge;15 atm, storm weather, banding |
+
 ### Atmosphere System
 13 atmospheric gas species modeled: N&#8322;, O&#8322;, CO&#8322;, H&#8322;, He, CH&#8324;, NH&#8323;, H&#8322;O vapor, Ar, Ne, SO&#8322;, CO, H&#8322;S. Atmosphere properties include:
 - Pressure (atmospheres)
@@ -88,6 +111,7 @@ Planets and moons are procedurally generated from a deterministic seed, mass, an
 - Up to 8 atmospheric layers with individual altitude, thickness, pressure, temperature offset, opacity, and IR emissivity
 - Greenhouse effect computed from gas composition, pressure, and cloud coverage
 - Venus-like thick CO&#8322; atmospheres, Titan-like methane hazes, Earth-like N&#8322;/O&#8322; compositions
+- Atmosphere retention tracking &mdash; cumulative erosion strips clouds, weather, and surface features
 
 ### Oceans
 5 ocean types: None, Water, Methane, Ammonia, Lava. Temperature-dependent &mdash; changing a planet's temperature can melt ice into oceans or freeze them over.
@@ -98,16 +122,31 @@ Mountains, valleys, continents, islands, rivers, ice sheets, and vegetation. Cov
 ### Weather
 4 weather types: Storms, Rain, Snow, Dust. Driven by atmospheric pressure, ocean coverage, and temperature.
 
+### Material Phases
+
+7 material phases with temperature-driven transitions:
+
+| Phase | Description |
+|---|---|
+| Solid | Default rocky/metallic state |
+| Liquid | Melted surface |
+| Ice | Sub-freezing with ice expansion |
+| Gas | Sublimated/evaporated atmosphere |
+| Molten | Magma surface |
+| Plasma | Ionized stellar interior |
+| Collapsing | Gravitational collapse (nebula cores) |
+
 ## Physics Systems
 
 ### N-Body Gravity
 Pairwise gravitational interaction with configurable gravitational constant scaling and softening. Supports:
-- **Barnes-Hut** tree approximation for large body counts
+- **Barnes-Hut** tree approximation for large body counts (configurable theta = 0.72, min bodies = 128)
 - **GPU compute** Barnes-Hut acceleration via Vulkan compute shader (`cosmos_bh.comp`)
-- **Parallel gravity** via OpenMP
+- **Parallel gravity** via std::thread chunked parallelization
+- **Configurable softening** to prevent singularities at close approach
 
 ### Integrators
-6 integration methods:
+6 integration methods, runtime-selectable:
 
 | Integrator | Description |
 |---|---|
@@ -118,46 +157,71 @@ Pairwise gravitational interaction with configurable gravitational constant scal
 | Forest-Ruth | Fourth-order symplectic |
 | PEFRL | Position-Extended Forest-Ruth-Like, fourth-order |
 
+Adaptive substepping available with configurable tolerance (position error), safety factor, and max substep count (up to 32).
+
 ### General Relativity Corrections
 Optional GR effects:
 - **Perihelion precession** &mdash; orbit precession scaling
 - **Gravitational time dilation** &mdash; time rate near massive bodies
 - **Frame dragging** &mdash; Lense-Thirring effect from spinning bodies
-- Configurable speed of light in simulation units
+- Configurable speed of light in simulation units (default 300)
 
 ### Collision Physics
 - **Merging** &mdash; low-speed collisions combine bodies (mass, momentum, temperature conserved)
-- **Fragmentation** &mdash; high-speed collisions shatter bodies into configurable fragment count (1&ndash;12)
-- **SPH-like** soft-body pressure/viscosity for impacts
-- **Rigid-body dynamics** &mdash; impulse/depenetration response
+- **Fragmentation** &mdash; high-speed collisions shatter bodies into configurable fragment count (1&ndash;12), with generation tracking (max 2 re-fragmentations)
+- **SPH-like** soft-body pressure/viscosity for impacts (configurable pressure, viscosity, heat multipliers)
+- **Rigid-body dynamics** &mdash; impulse/depenetration response with configurable restitution (0.35) and separation scale
 - **Supernova triggering** &mdash; stellar collisions can trigger supernovae (thermonuclear or core-collapse)
+- **Spatial hash broadphase** &mdash; optional spatial hashing for efficient collision detection
 
 ### Roche Limit
-Tidal disruption of bodies that approach within the Roche limit of a more massive body. Supports both fluid and rigid body Roche limits. Disrupted bodies form ring systems or fragment clouds.
+Tidal disruption of bodies that approach within the Roche limit of a more massive body. Supports both fluid and rigid body Roche limits with independent scaling multipliers. Disrupted bodies form ring systems or fragment clouds. Tidal heating is applied during close encounters.
 
 ### Planetary Rings
-Ring systems generated from Roche limit disruption or spawned manually. 7 ring styles: Saturn-like, Uranus-like, Neptune-like, torus, realistic disk, geometric, resonance gaps. Rings are composed of non-attracting dust particles with configurable ice fraction, density, and extent. A mixture of dust, asteroid, and comet particle types populates each ring.
+Ring systems generated from Roche limit disruption or spawned manually. 7 ring styles:
+
+| Style | Description |
+|---|---|
+| Saturn-like | Classic multi-gap system |
+| Uranus-like | Narrow tilted rings |
+| Neptune-like | Thin, sparse arcs |
+| Torus | Thick donut-shaped ring |
+| Realistic Disk | Default, physically motivated distribution |
+| Geometric | Exaggerated visual geometry |
+| Resonance Gaps | Kirkwood-style cleared lanes |
+
+Rings are composed of non-attracting dust particles (minimum 8) with configurable ice fraction, density, inner/outer radius, and global scale multipliers. A mixture of dust, asteroid, and comet particle types populates each ring. Dynamic budget caps ensure ring spawning doesn't degrade performance.
 
 ### Temperature System
 - Radiative cooling (Stefan-Boltzmann)
-- Collision heating (kinetic energy conversion)
+- Collision heating (configurable KE-to-heat fraction)
 - Star luminosity heating of nearby bodies
-- Material phase transitions: Solid, Liquid, Ice, Gas, Molten, Plasma, Collapsing
+- Material phase transitions driven by temperature changes
 
 ### Evaporation & Mass Loss
-Bodies lose mass through stellar wind, atmospheric erosion, and evaporation. Atmosphere retention tracks cumulative erosion &mdash; stripped atmospheres reduce clouds, weather, and surface features.
+Bodies lose mass through stellar wind, atmospheric erosion, and evaporation. Atmosphere retention tracks cumulative erosion &mdash; stripped atmospheres reduce clouds, weather, and surface features. Escaped mass, energy, and momentum are tracked globally.
+
+### Stellar Wind Pressure
+Luminous stars exert radiation/wind pressure on nearby bodies, with configurable strength scaling.
 
 ### Tidal Locking
-Bodies orbiting close to a massive primary experience tidal torque and evolve toward synchronous rotation.
+Bodies orbiting close to a massive primary experience tidal torque and evolve toward synchronous rotation. Configurable locking rate.
 
 ### Hawking Radiation
-Black holes lose mass through Hawking radiation, with evaporation rate inversely proportional to mass squared. Primordial black holes can evaporate entirely.
+Black holes lose mass through Hawking radiation, with evaporation rate inversely proportional to mass squared. Primordial black holes can evaporate entirely. Configurable rate scaling.
 
 ### Spin Fragmentation
-Bodies spinning faster than their structural integrity allows will fragment due to centrifugal forces.
+Bodies spinning faster than their structural integrity allows will fragment due to centrifugal forces. Configurable threshold ratio.
 
 ### Space Weather
 Dynamic processes including stellar mass loss, atmospheric stripping, and impact effects (craters, ejecta, heat signatures).
+
+### Orbital Mechanics
+- **Orbital element computation** &mdash; eccentricity tracking for each body
+- **Dominant primary detection** &mdash; identifies the strongest gravitational influence on each body
+- **Orbital resonance detection** &mdash; identifies bodies in resonant orbits (optional)
+- **Lagrange point computation** &mdash; L1&ndash;L5 point display (optional)
+- **Habitable zone display** &mdash; renders habitable zone indicators around stars (optional)
 
 ## Nebula Particle Clouds
 
@@ -166,17 +230,27 @@ Nebulae spawn as clouds of 40&ndash;300 small dust particles arranged in a 3D Ga
 - Turbulent velocity component plus bulk rotational motion
 - Gravitational attraction (particles are attracting bodies), enabling natural gravitational collapse into protostars
 
+### Nebula Collapse & Sink Formation
+
+Dense, converging nebula cores can spawn protostars when enabled:
+- **Collapse metric** computed from density and convergence velocity
+- **Sink threshold** controls when protostars form (higher = slower collapse)
+- **Mass fractions** control how much host-cloud mass is consumed vs. converted to the new star
+- **Minimum sink mass** prevents formation of insignificant protostars
+
 ## Timestep System
 
 Logarithmic timescale spanning 30 orders of magnitude:
 - Range: 10&#8315;&#8313; to 10&#178;&#185; simulated seconds per real second
 - Human-readable labels from "1 ns/s" through "31.7 trillion years/s"
 - Adaptive timestepping available &mdash; dynamically limits dt for stability with configurable safety factor, min/max bounds
+- Reverse time support for rewinding simulations
+- Physics substeps per rendered frame (configurable)
 
 ## Rendering
 
 ### GPU Sphere Raytracing
-All bodies rendered via GPU raytracing in a fragment shader (`cosmos_rt.frag`, ~2,600 lines). 7 render classes: Star, Planet, Moon, Asteroid, Comet, Black Hole, Nebula. Per-body visual properties include:
+All bodies rendered via GPU raytracing in a fragment shader (`cosmos_rt.frag`, ~2,670 lines). 7 render classes: Star, Planet, Moon, Asteroid, Comet, Black Hole, Nebula. Per-body visual properties include:
 - Terrain amplitude/frequency, ridge amplitude, crater density
 - Rock/ice/metal/dust material fractions
 - Atmospheric haze (Rayleigh + Mie scattering)
@@ -188,16 +262,33 @@ All bodies rendered via GPU raytracing in a fragment shader (`cosmos_rt.frag`, ~
 - City lights on populated worlds
 
 ### Nebula Compute Shader
-A dedicated Vulkan compute shader (`cosmos_nebula.comp`) handles nebula particle advection and density field computation.
+A dedicated Vulkan compute shader (`cosmos_nebula.comp`, ~260 lines) handles nebula particle advection and density field computation. Gravity-coupled advection with configurable collapse and compression scales.
+
+### Nebula Rendering
+3 render modes:
+
+| Mode | Description |
+|---|---|
+| Raymarch | CPU-driven volumetric rendering |
+| Raymarch + Compute | Hybrid with GPU density computation |
+| Advanced Particles | Full GPU particle system |
 
 ### Background Presets
 12 background styles: Realistic, Deep Black, Nebula, Warm Dust, Blue Haze, Aurora Veil, Crimson Rift, Galactic Core, Monochrome, Emerald Sea, Infrared Dust, Deep Field.
 
 ### Quality Levels
-4 quality presets: Low, Balanced, High, Ultra.
+4 quality presets: Low, Balanced, High, Ultra. Controls shader detail, shadow quality, and corona effects.
 
-### Nebula Rendering
-3 render modes: raymarch, raymarch+compute, advanced particles. Nebula particles advect with gravity fields and can collapse into protostars.
+### Lighting System
+- **Star lighting** &mdash; stars act as point light sources for nearby bodies
+- **Uniform lighting** &mdash; everything uniformly illuminated (optional fallback)
+- **Fast star lighting** &mdash; strongest-star direct lighting optimization
+- **Configurable ambient** &mdash; base ambient light level
+- **Per-feature toggles** &mdash; corona, comet tails, black hole lensing, background starfield
+- **Per-feature strength** &mdash; independent intensity scales for corona, tails, lensing, starfield
+
+### Space Fabric
+Optional gravitational field visualization grid overlay with configurable grid size and strength.
 
 ## Procedural Naming
 
@@ -206,41 +297,81 @@ Bodies receive procedurally generated names based on type:
 - **Black holes**: catalog-style ("Sgr 1547", "NGC 3021", "Cyg 8842")
 - **Planets/moons/asteroids**: syllable-based names from onset+nucleus+coda pools with capitalization
 
-## Spawn System
+## Spawn Studio
 
-The spawn menu supports:
-- Body type selection (all 23 types)
-- Mass, temperature, radius, rotation period overrides
-- Custom velocity in km/s
-- Custom material composition (iron/silicate/ice/hydrogen fractions)
-- Planet surface look presets (auto, rocky, water, ice, earth-like, gas giant)
-- Stellar stage hints
-- Orbit spawning (auto-calculate orbital velocity around nearest body)
-- Moon spawning with configurable count, orbit layout (prograde disk, compact, wide, resonant chain, isotropic cloud), inclination, and spacing
-- Ring spawning with style selection, inner/outer radius, density, ice fraction
-- Asteroid/comet/dust batch spawning with layout options (random, sphere, cube, torus)
+The Spawn Studio provides comprehensive body creation with 5 catalog tabs:
+
+### Catalog Tabs
+
+| Tab | Contents |
+|---|---|
+| Basic | Planet, Moon, Asteroid, Comet, Dust, Nebula |
+| Stars | Generic Star + 11 spectral classes (O through Y, Wolf-Rayet) |
+| Black Holes | Generic + Stellar, Intermediate, Supermassive, Primordial |
+| Known Objects | Real astronomical objects with accurate properties (Solar System bodies, famous stars, known black holes) |
+| Existing Objects | Clone/modify existing simulation bodies |
+
+### Spawn Controls
+
+- **Mass** slider (logarithmic, 10&#8315;&#185;&#179; to 500 solar masses)
+- **Temperature** override
+- **Radius** override
+- **Rotation period** override
+- **Custom velocity** in km/s
+- **Material composition** &mdash; iron/silicate/ice/hydrogen fractions
+- **Planet surface look** presets (auto, rocky, water, ice, earth-like, gas giant)
+- **Stellar stage** hints
+- **Orbit spawning** &mdash; auto-calculate orbital velocity around nearest body
+
+### Moon Spawning
+
+Configurable moon systems:
+- Moon count
+- Orbit layout: prograde disk, compact disk, wide disk, resonant chain, isotropic cloud
+- Inclination and spacing scale
+
+### Ring Spawning
+
+Manual ring creation with:
+- 7 ring style selection
+- Inner/outer radius multipliers
+- Density and ice fraction
+- Override or auto-generate layout
+
+### Small Body Batch Spawning
+
+Asteroid/comet/dust batch spawning:
+- Count selection
+- Layout options: random, sphere, cube, torus
+
+### Ghost Preview
+
+A translucent 3D ghost body is rendered at the spawn position, showing the exact appearance of the body that will be spawned. Right-click in spawn mode re-rolls the procedural seed. The preview rebuilds automatically when type, mass, or any draft setting changes.
 
 ## Dynamic Performance Budget
 
 Automatic body count management to maintain target framerate:
-- Attracting body cap (default 300)
-- Non-attracting debris cap (default 900)
-- Per-event explosion density allocation
-- Automatic culling when over budget
+- **Attracting body cap** (default 300)
+- **Non-attracting debris cap** (default 900)
+- **Per-event explosion density allocation** (0&ndash;100% of non-attracting budget)
+- **Automatic culling** when over budget with configurable reduction percentage
+- **Target FPS** tracking (default 60)
 
 ## Save / Load
 
-Binary `.cssim` save format (version 16) for full simulation state including all body properties, configuration, and camera state. Supports individual body export/import.
+Binary `.cssim` save format (version 16) for full simulation state including all body properties, configuration, camera state, and spawn draft settings. Supports individual body export/import.
 
 ## User Interface
 
-- **Bottom taskbar**: auto-hiding bar with menu, spawn, settings, and body list toggles
-- **Settings panel**: all simulation parameters adjustable in real-time
-- **Body list panel**: scrollable list of all bodies with type icons and selection
-- **Inspector panel**: detailed body properties shown on selection (click to select, double-click to track)
-- **Orbit camera**: mouse drag to orbit, middle-drag/shift+drag to pan, scroll to zoom, WASD/QE panning
-- **Orbital trails**: configurable trail length per body
+- **Bottom taskbar**: auto-hiding bar with menu, spawn, settings, body list, and inspector toggles
+- **Settings panel**: all simulation parameters adjustable in real-time &mdash; physics, collisions, temperature, rendering, GR, nebula, performance
+- **Body list panel**: scrollable list of all bodies with type-colored entries, click to select, double-click to track
+- **Inspector panel**: detailed body properties on selection &mdash; mass, radius, temperature, velocity, orbital elements, atmosphere, terrain, magnetic signature; track button for camera follow
+- **Orbit camera**: mouse drag to orbit, middle-drag/shift+drag to pan, scroll to zoom, WASD/QE panning; smooth focus tracking on selected bodies
+- **Orbital trails**: configurable trail length, opacity, and width per body
+- **Body labels**: optional floating name labels with distance culling and opacity control
 - **Space fabric visualization**: optional grid overlay showing gravitational field curvature
-- **Debug window**: diagnostics, body state validation, and step counter
-- **Splash screen**: dismissible startup screen
+- **Debug window**: diagnostics, body state validation, step counter, conservation tracking (escaped mass/energy/momentum)
+- **Splash screen**: animated particle background, dismissible on any key/click
 - **Pause menu**: resume, new simulation, save, load, quit, return to launcher
+- **Loading screen**: progress bar with stage labels during initialization
