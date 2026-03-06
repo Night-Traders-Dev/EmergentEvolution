@@ -889,6 +889,13 @@ struct CosmosConfig {
     float    nebula_sink_consume_fraction = 0.95f; // fraction of sink mass consumed from host cloud
     float    barnes_hut_theta     = 0.72f;   // opening angle (smaller = more accurate)
     int      barnes_hut_min_bodies = 128;    // body-count threshold before BH engages
+
+    // Persisted settings must only append new fields after this point.
+    bool     show_body_labels = false;
+    float    body_label_min_distance = 0.0f;   // world-space distance from camera before labels appear
+    float    body_label_max_distance = 1.0e8f; // world-space distance from camera after labels are culled
+    bool     spin_fragmentation      = true;   // rotational breakup when angular speed exceeds structural limit
+    float    spin_fragmentation_threshold = 0.92f; // ratio of spin/breakup angular velocity that starts shedding mass
 };
 
 // ── Body collection ─────────────────────────────────────────────────────────

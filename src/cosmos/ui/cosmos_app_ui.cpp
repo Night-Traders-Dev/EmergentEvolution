@@ -358,6 +358,7 @@ void CosmosApp::render_overlay() {
     float W = io.DisplaySize.x, H = io.DisplaySize.y;
     float aspect = W / H;
     float fov_rad = glm::radians(camera.fov);
+    glm::dvec3 eye = camera.eye_position_d();
 
     glm::dmat4 view = camera.view_matrix_d();
     glm::dmat4 proj = camera.proj_matrix_d(aspect);
@@ -534,6 +535,107 @@ void CosmosApp::render_overlay() {
                 fg->AddLine(ImVec2(p0.sx, p0.sy), ImVec2(p1.sx, p1.sy),
                             IM_COL32(cr, cg, cb, alpha), width);
             }
+        }
+    }
+
+    if (cfg.show_body_labels) {
+        float label_min_dist = std::clamp(cfg.body_label_min_distance, 0.0f, 1.0e8f);
+        float label_max_dist = std::clamp(cfg.body_label_max_distance,
+                                          std::max(label_min_dist, 1.0e-3f), 1.0e8f);
+        struct LabelCandidate {
+            int index = -1;
+            Projected projected{};
+            float screen_r = 0.0f;
+            float priority = 0.0f;
+        };
+
+        std::vector<LabelCandidate> labels;
+        labels.reserve(std::min<size_t>(state.bodies.size(), 128));
+        for (int i = 0; i < (int)state.bodies.size(); ++i) {
+            if (i == selected_body) continue;
+            const auto& b = state.bodies[(size_t)i];
+            if (b.marked_for_removal || b.non_attracting || b.type == CTYPE_DUST) continue;
+            if (fragment_like_body(b) && !is_star_type(b.type) && !is_black_hole_type(b.type))
+                continue;
+
+            double cam_dist = glm::length(glm::dvec3(b.pos) - eye);
+            if (!std::isfinite(cam_dist) ||
+                cam_dist < (double)label_min_dist ||
+                cam_dist > (double)label_max_dist) {
+                continue;
+            }
+
+            auto p = project(b.pos, vp, W, H);
+            if (!p.visible) continue;
+
+            const char* name = b.name.empty()
+                ? CTYPE_NAMES[std::min(b.type, (uint32_t)CTYPE_COUNT - 1)]
+                : b.name.c_str();
+            if (!name || name[0] == '\0') continue;
+
+            float sr = screen_radius(b.radius, p.depth, fov_rad, H);
+            if (sr < 1.0f && !is_star_type(b.type) && !is_black_hole_type(b.type) && b.mass < 1.0e-5f)
+                continue;
+
+            LabelCandidate candidate;
+            candidate.index = i;
+            candidate.projected = p;
+            candidate.screen_r = sr;
+            candidate.priority = sr + (is_star_type(b.type) ? 8.0f : 0.0f) +
+                (is_black_hole_type(b.type) ? 6.0f : 0.0f) +
+                std::clamp((label_max_dist - (float)cam_dist) / std::max(label_max_dist, 1.0f), 0.0f, 1.0f) * 4.0f;
+            labels.push_back(candidate);
+        }
+
+        std::sort(labels.begin(), labels.end(), [](const LabelCandidate& a, const LabelCandidate& b) {
+            return a.priority > b.priority;
+        });
+
+        std::vector<ImVec4> occupied;
+        occupied.reserve(labels.size());
+        auto overlaps = [](const ImVec4& a, const ImVec4& b) {
+            return a.x < b.z && a.z > b.x && a.y < b.w && a.w > b.y;
+        };
+
+        int drawn = 0;
+        int label_cap = std::min<int>((int)labels.size(), 64);
+        for (const auto& candidate : labels) {
+            if (drawn >= label_cap) break;
+            const auto& b = state.bodies[(size_t)candidate.index];
+            const char* name = b.name.empty()
+                ? CTYPE_NAMES[std::min(b.type, (uint32_t)CTYPE_COUNT - 1)]
+                : b.name.c_str();
+            ImVec2 name_size = ImGui::CalcTextSize(name);
+            float label_x = std::clamp(candidate.projected.sx + std::max(candidate.screen_r + 8.0f, 10.0f),
+                                       6.0f, W - name_size.x - 6.0f);
+            float label_y = std::clamp(candidate.projected.sy - name_size.y * 0.5f,
+                                       6.0f, H - name_size.y - 6.0f);
+            ImVec4 rect(label_x - 4.0f, label_y - 2.0f,
+                        label_x + name_size.x + 4.0f, label_y + name_size.y + 2.0f);
+
+            bool blocked = false;
+            for (const auto& other : occupied) {
+                ImVec4 expanded(other.x - 6.0f, other.y - 4.0f, other.z + 6.0f, other.w + 4.0f);
+                if (overlaps(rect, expanded)) {
+                    blocked = true;
+                    break;
+                }
+            }
+            if (blocked) continue;
+
+            ImU32 c = body_color(b);
+            int cr = (c >> IM_COL32_R_SHIFT) & 0xFF;
+            int cg = (c >> IM_COL32_G_SHIFT) & 0xFF;
+            int cb = (c >> IM_COL32_B_SHIFT) & 0xFF;
+            ImU32 text_col = IM_COL32(std::min(cr + 48, 255),
+                                      std::min(cg + 48, 255),
+                                      std::min(cb + 48, 255), 235);
+            fg->AddRectFilled(ImVec2(rect.x, rect.y), ImVec2(rect.z, rect.w),
+                              IM_COL32(8, 10, 20, 140), 3.0f);
+            fg->AddText(ImVec2(label_x + 1.0f, label_y + 1.0f), IM_COL32(0, 0, 0, 150), name);
+            fg->AddText(ImVec2(label_x, label_y), text_col, name);
+            occupied.push_back(rect);
+            drawn++;
         }
     }
 
@@ -3073,6 +3175,7 @@ void CosmosApp::draw_bottom_bar() {
                 ImGui::Separator();
                 ImGui::MenuItem("Show Orbits", nullptr, &cfg.show_orbits);
                 ImGui::MenuItem("Show Trails", nullptr, &cfg.show_trails);
+                ImGui::MenuItem("Show Object Labels", nullptr, &cfg.show_body_labels);
                 ImGui::MenuItem("Auto-hide Bottom Bar", nullptr, &bottom_bar_autohide_);
                 ImGui::TreePop();
             }
@@ -3233,6 +3336,22 @@ void CosmosApp::draw_bottom_bar() {
                     }
                     ImGui::Checkbox("Show Orbits##Menu", &cfg.show_orbits);
                     ImGui::Checkbox("Show Trails##Menu", &cfg.show_trails);
+                    ImGui::Checkbox("Show Object Labels##Menu", &cfg.show_body_labels);
+                    if (cfg.show_body_labels) {
+                        float label_min_log = std::log10(std::max(cfg.body_label_min_distance, 1.0e-3f));
+                        if (ImGui::SliderFloat("Label Min Dist##Menu", &label_min_log, -3.0f, 8.0f, "10^%.2f")) {
+                            cfg.body_label_min_distance = (label_min_log <= -2.95f)
+                                ? 0.0f
+                                : std::pow(10.0f, label_min_log);
+                        }
+                        float label_max_log = std::log10(std::max(cfg.body_label_max_distance, 1.0e-3f));
+                        if (ImGui::SliderFloat("Label Max Dist##Menu", &label_max_log, -2.0f, 8.0f, "10^%.2f"))
+                            cfg.body_label_max_distance = std::pow(10.0f, label_max_log);
+                        cfg.body_label_min_distance = std::clamp(cfg.body_label_min_distance, 0.0f, 1.0e8f);
+                        cfg.body_label_max_distance = std::clamp(cfg.body_label_max_distance,
+                                                                 std::max(cfg.body_label_min_distance, 1.0e-3f),
+                                                                 1.0e8f);
+                    }
                     int trail_len = (int)cfg.trail_length;
                     if (ImGui::SliderInt("Trail Length##Menu", &trail_len, 0, 500))
                         cfg.trail_length = (uint32_t)trail_len;
@@ -3255,8 +3374,10 @@ void CosmosApp::draw_bottom_bar() {
                     }
                     ImGui::Checkbox("Merging##Menu", &cfg.collision_merging);
                     ImGui::Checkbox("Fragmentation##Menu", &cfg.collision_fragmentation);
+                    ImGui::Checkbox("Spin Fragmentation##Menu", &cfg.spin_fragmentation);
                     ImGui::SliderFloat("Merge Speed##Menu", &cfg.merge_speed_threshold, 1.0f, 20.0f);
                     ImGui::SliderFloat("Fragment Speed##Menu", &cfg.fragment_speed_threshold, 10.0f, 50.0f);
+                    ImGui::SliderFloat("Spin Frag Threshold##Menu", &cfg.spin_fragmentation_threshold, 0.70f, 1.50f, "%.2f x");
                     ImGui::SliderInt("Fragment Count##Menu", &cfg.fragment_count, 1, 12);
                     ImGui::SliderFloat("Min Frag Mass##Menu", &cfg.min_fragment_mass, 1.0e-9f, 1.0f, "%.6f",
                                        ImGuiSliderFlags_Logarithmic);

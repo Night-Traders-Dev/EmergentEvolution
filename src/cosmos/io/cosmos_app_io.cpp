@@ -8,9 +8,9 @@
 namespace {
 
 constexpr uint32_t COSMOS_MAGIC   = 0x534D4F43; // "COSM"
-constexpr uint32_t COSMOS_VERSION = 12;
+constexpr uint32_t COSMOS_VERSION = 13;
 constexpr uint32_t COSMOS_SETTINGS_MAGIC   = 0x54475343; // "CSGT"
-constexpr uint32_t COSMOS_SETTINGS_VERSION = 3;
+constexpr uint32_t COSMOS_SETTINGS_VERSION = 4;
 constexpr const char* COSMOS_SETTINGS_PATH = "cosmos_settings.bin";
 
 struct PersistedUiSettingsV1 {
@@ -297,6 +297,7 @@ bool CosmosApp::save_simulation(const std::string& path) {
     if (cfg.gpu_barnes_hut) flags |= 1048576;
     if (cfg.collision_sph) flags |= 2097152;
     if (cfg.collision_rigid_body_dynamics) flags |= 4194304;
+    if (cfg.spin_fragmentation) flags |= 8388608;
     f.write(reinterpret_cast<const char*>(&flags), sizeof(uint32_t));
 
     f.write(reinterpret_cast<const char*>(&cfg.merge_speed_threshold), sizeof(float));
@@ -309,6 +310,7 @@ bool CosmosApp::save_simulation(const std::string& path) {
     f.write(reinterpret_cast<const char*>(&cfg.ambient_strength), sizeof(float));
     f.write(reinterpret_cast<const char*>(&cfg.min_fragment_mass), sizeof(float));
     f.write(reinterpret_cast<const char*>(&cfg.max_frag_generation), sizeof(int));
+    f.write(reinterpret_cast<const char*>(&cfg.spin_fragmentation_threshold), sizeof(float));
     f.write(reinterpret_cast<const char*>(&cfg.dynamic_max_fragments), sizeof(int));
     f.write(reinterpret_cast<const char*>(&cfg.dynamic_max_non_attracting), sizeof(int));
     f.write(reinterpret_cast<const char*>(&cfg.dynamic_explosion_density), sizeof(float));
@@ -440,6 +442,8 @@ bool CosmosApp::load_simulation(const std::string& path) {
     else cfg.collision_sph = true;
     if (version >= 12) cfg.collision_rigid_body_dynamics = (flags & 4194304) != 0;
     else cfg.collision_rigid_body_dynamics = true;
+    if (version >= 13) cfg.spin_fragmentation = (flags & 8388608) != 0;
+    else cfg.spin_fragmentation = true;
     if (version < 3) {
         cfg.material_phases = true;
         cfg.planetary_rings = true;
@@ -455,6 +459,11 @@ bool CosmosApp::load_simulation(const std::string& path) {
     f.read(reinterpret_cast<char*>(&cfg.ambient_strength), sizeof(float));
     f.read(reinterpret_cast<char*>(&cfg.min_fragment_mass), sizeof(float));
     f.read(reinterpret_cast<char*>(&cfg.max_frag_generation), sizeof(int));
+    if (version >= 13) {
+        f.read(reinterpret_cast<char*>(&cfg.spin_fragmentation_threshold), sizeof(float));
+    } else {
+        cfg.spin_fragmentation_threshold = 0.92f;
+    }
     if (version >= 6) {
         f.read(reinterpret_cast<char*>(&cfg.dynamic_max_fragments), sizeof(int));
         f.read(reinterpret_cast<char*>(&cfg.dynamic_max_non_attracting), sizeof(int));
@@ -508,6 +517,10 @@ bool CosmosApp::load_simulation(const std::string& path) {
     cfg.fragment_count = std::clamp(cfg.fragment_count, 1, 12);
     cfg.min_fragment_mass = std::clamp(cfg.min_fragment_mass, 1.0e-9f, 10.0f);
     cfg.max_frag_generation = std::clamp(cfg.max_frag_generation, 0, 8);
+    cfg.spin_fragmentation_threshold = std::clamp(cfg.spin_fragmentation_threshold, 0.50f, 2.0f);
+    cfg.body_label_min_distance = std::clamp(cfg.body_label_min_distance, 0.0f, 1.0e8f);
+    cfg.body_label_max_distance = std::clamp(cfg.body_label_max_distance,
+                                             std::max(cfg.body_label_min_distance, 1.0e-3f), 1.0e8f);
     cfg.dynamic_max_fragments = std::clamp(cfg.dynamic_max_fragments, 0, 10000);
     cfg.dynamic_max_non_attracting = std::clamp(cfg.dynamic_max_non_attracting, 0, 50000);
     cfg.dynamic_explosion_density = std::clamp(cfg.dynamic_explosion_density, 0.01f, 1.0f);
@@ -895,13 +908,18 @@ void CosmosApp::load_persistent_settings() {
     uint32_t magic = 0;
     uint32_t version = 0;
     uint32_t cfg_size = 0;
+    bool rewrite_legacy_settings = false;
     f.read(reinterpret_cast<char*>(&magic), sizeof(magic));
     f.read(reinterpret_cast<char*>(&version), sizeof(version));
     f.read(reinterpret_cast<char*>(&cfg_size), sizeof(cfg_size));
     if (!f.good() || magic != COSMOS_SETTINGS_MAGIC || version > COSMOS_SETTINGS_VERSION)
         return;
 
-    if (cfg_size > 0 && cfg_size < (1u << 20)) {
+    if (!(cfg_size > 0 && cfg_size < (1u << 20))) {
+        return;
+    }
+
+    if (version >= 4) {
         CosmosConfig loaded_cfg = cfg;
         size_t copy_bytes = std::min<size_t>(cfg_size, sizeof(CosmosConfig));
         f.read(reinterpret_cast<char*>(&loaded_cfg), (std::streamsize)copy_bytes);
@@ -910,9 +928,21 @@ void CosmosApp::load_persistent_settings() {
             f.seekg((std::streamoff)(cfg_size - copy_bytes), std::ios::cur);
         cfg = loaded_cfg;
     } else {
-        return;
+        // Versions 1-3 wrote CosmosConfig as raw bytes while fields were being inserted
+        // in the middle of the struct. Loading those bytes into the current layout corrupts
+        // unrelated toggles, so keep defaults and only preserve the UI block.
+        rewrite_legacy_settings = true;
+        f.seekg((std::streamoff)cfg_size, std::ios::cur);
+        if (!f.good()) return;
     }
     if (!f.good()) return;
+
+    cfg.spin_fragmentation_threshold = std::clamp(cfg.spin_fragmentation_threshold, 0.50f, 2.0f);
+    cfg.fragment_count = std::clamp(cfg.fragment_count, 1, 12);
+    cfg.max_frag_generation = std::clamp(cfg.max_frag_generation, 0, 8);
+    cfg.body_label_min_distance = std::clamp(cfg.body_label_min_distance, 0.0f, 1.0e8f);
+    cfg.body_label_max_distance = std::clamp(cfg.body_label_max_distance,
+                                             std::max(cfg.body_label_min_distance, 1.0e-3f), 1.0e8f);
 
     if (version == 1) {
         PersistedUiSettingsV1 ui{};
@@ -1044,4 +1074,7 @@ void CosmosApp::load_persistent_settings() {
         spawn_draft_.small_body_spawn_count = std::clamp(ui.small_body_spawn_count, 1, 1000);
         spawn_draft_.small_body_layout = std::clamp(ui.small_body_layout, 0, 3);
     }
+
+    if (rewrite_legacy_settings)
+        save_persistent_settings();
 }

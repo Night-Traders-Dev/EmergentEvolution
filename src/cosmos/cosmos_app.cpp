@@ -113,6 +113,70 @@ void install_crash_handlers_once() {
     });
 }
 
+float spin_fragmentation_critical_omega(const CelestialBody& body, float G) {
+    if (!std::isfinite(body.mass) || !std::isfinite(body.radius) ||
+        body.mass <= 0.0f || body.radius <= 0.0f) {
+        return 0.0f;
+    }
+
+    float radius = std::max(body.radius, body.type == CTYPE_DUST ? 0.04f : 0.1f);
+    float omega = std::sqrt(std::max(G * body.mass / std::max(radius * radius * radius, 1.0e-8f), 0.0f));
+    if (!std::isfinite(omega) || omega <= 0.0f)
+        return 0.0f;
+
+    MaterialComposition materials = derive_materials(body);
+    float material_factor = 1.0f;
+    if (gas_dominated_body(body, materials)) {
+        material_factor *= 0.72f;
+    } else if (roche_secondary_fluid_like(body)) {
+        material_factor *= 0.82f;
+    }
+    if (body.type == CTYPE_COMET) material_factor *= 0.80f;
+    if (body.type == CTYPE_DUST) material_factor *= 0.72f;
+    if (body.type == CTYPE_ASTEROID) material_factor *= 0.92f;
+    if (materials.water > 0.45f) material_factor *= 0.93f;
+    if (materials.iron > 0.35f) material_factor *= 1.08f;
+
+    switch (body.material_phase) {
+    case PHASE_LIQUID:
+    case PHASE_MOLTEN:
+        material_factor *= 0.82f;
+        break;
+    case PHASE_GAS:
+    case PHASE_PLASMA:
+    case PHASE_COLLAPSING:
+        material_factor *= 0.68f;
+        break;
+    default:
+        break;
+    }
+
+    material_factor = std::clamp(material_factor, 0.45f, 1.20f);
+    return omega * material_factor;
+}
+
+float spin_fragmentation_ratio(const CelestialBody& body, float G) {
+    float critical = spin_fragmentation_critical_omega(body, G);
+    if (critical <= 0.0f)
+        return 0.0f;
+    return std::abs(body.angular_vel) / critical;
+}
+
+glm::vec3 spin_fragmentation_axis(const CelestialBody& body) {
+    if (glm::dot(body.vel, body.vel) > 1.0e-10f)
+        return glm::normalize(body.vel);
+
+    uint32_t h0 = hash_combine(body.seed, 0x5311u);
+    uint32_t h1 = hash_combine(body.seed, 0x9F02u);
+    uint32_t h2 = hash_combine(body.seed, 0xC733u);
+    glm::vec3 axis(hash_float(h0) * 2.0f - 1.0f,
+                   hash_float(h1) * 2.0f - 1.0f,
+                   hash_float(h2) * 2.0f - 1.0f);
+    if (glm::dot(axis, axis) < 1.0e-10f)
+        axis = glm::vec3(0.0f, 1.0f, 0.0f);
+    return glm::normalize(axis);
+}
+
 } // namespace
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
@@ -1238,6 +1302,7 @@ void CosmosApp::step_physics(float dt) {
     // Physics subsystems
     if (cfg.roche_limit || cfg.tidal_forces) process_roche_limit(scaled_dt);
     if (cfg.collisions)         process_collisions(scaled_dt);
+    if (cfg.spin_fragmentation) process_spin_fragmentation(scaled_dt);
     if (cfg.temperature_system) process_temperature(scaled_dt);
     if (cfg.temperature_system || cfg.evaporation) process_space_weather(scaled_dt);
     if (cfg.material_phases)    process_material_phases(scaled_dt);
@@ -1991,6 +2056,19 @@ void CosmosApp::process_collisions(float dt) {
             float disruption_j = impact_energy / std::max(binding_j, 1.0e-6f);
             float combined_disruption = impact_energy / std::max(combined_binding, 1.0e-6f);
             glm::vec3 impact_axis = (rel_speed > 1.0e-5f) ? (rel_vel / rel_speed) : normal;
+            float spin_ratio_i = cfg.spin_fragmentation ? spin_fragmentation_ratio(bodies[i], cfg.G) : 0.0f;
+            float spin_ratio_j = cfg.spin_fragmentation ? spin_fragmentation_ratio(bodies[j], cfg.G) : 0.0f;
+            float spin_threshold = std::max(cfg.spin_fragmentation_threshold, 0.05f);
+            float spin_over_i = std::max(spin_ratio_i - spin_threshold, 0.0f);
+            float spin_over_j = std::max(spin_ratio_j - spin_threshold, 0.0f);
+            if (cfg.spin_fragmentation) {
+                float spin_disruption_i = spin_over_i * (soft_body_pair ? 0.34f : 0.12f);
+                float spin_disruption_j = spin_over_j * (soft_body_pair ? 0.34f : 0.12f);
+                disruption_i += spin_disruption_i;
+                disruption_j += spin_disruption_j;
+                combined_disruption += (spin_disruption_i + spin_disruption_j) *
+                    (soft_body_pair ? 0.55f : 0.28f);
+            }
 
             if (soft_body_pair && cfg.collision_sph) {
                 float h = touch * 1.25f;
@@ -2060,8 +2138,12 @@ void CosmosApp::process_collisions(float dt) {
                  combined_disruption > (soft_body_pair ? 0.22f : 0.60f) ||
                  disruption_i > (soft_body_pair ? 0.26f : 0.75f) ||
                  disruption_j > (soft_body_pair ? 0.26f : 0.75f));
+            bool spin_fragment_contact = cfg.spin_fragmentation &&
+                (spin_over_i > 0.0f || spin_over_j > 0.0f) &&
+                (overlap_now || swept_hit || overlap_fraction > (soft_body_pair ? 0.01f : 0.002f)) &&
+                impact_speed > merge_speed_limit * (soft_body_pair ? 0.45f : 0.70f);
 
-            bool fragment_candidate = catastrophic_fragment || optional_fragment ||
+            bool fragment_candidate = catastrophic_fragment || optional_fragment || spin_fragment_contact ||
                 (soft_body_pair && swept_hit && impact_speed > fragment_speed_limit * 0.75f);
             bool ultra_gentle_soft = soft_body_pair &&
                 impact_speed < merge_speed_limit * 0.95f &&
@@ -2227,6 +2309,10 @@ void CosmosApp::process_collisions(float dt) {
                 bool fragment_j = can_fragment(bodies[j]) &&
                     (disruption_j > (soft_body_pair ? 0.20f : 0.78f) ||
                      (bodies[j].mass <= bodies[i].mass && combined_disruption > (soft_body_pair ? 0.15f : 0.58f)));
+                if (cfg.spin_fragmentation && spin_over_i > 0.0f && can_fragment(bodies[i]))
+                    fragment_i = true;
+                if (cfg.spin_fragmentation && spin_over_j > 0.0f && can_fragment(bodies[j]))
+                    fragment_j = true;
 
                 if (combined_disruption > (soft_body_pair ? 0.30f : 0.90f) &&
                     can_fragment(bodies[i]) && can_fragment(bodies[j])) {
@@ -2267,7 +2353,8 @@ void CosmosApp::process_collisions(float dt) {
                         (bodies[i].type == CTYPE_PLANET || bodies[i].type == CTYPE_MOON)) {
                         float severity = std::clamp(
                             0.28f + combined_disruption * 0.32f + disruption_i * 0.24f +
-                            std::min(overlap_fraction, 0.6f) * 0.30f, 0.10f, 0.70f);
+                            std::min(overlap_fraction, 0.6f) * 0.30f +
+                            spin_over_i * 0.16f, 0.10f, 0.70f);
                         float remnant_fraction = std::max(1.0f - severity,
                             impact_speed < fragment_speed_limit * 1.10f ? 0.45f : 0.28f);
                         float remnant_mass = bodies[i].mass * remnant_fraction;
@@ -2279,6 +2366,15 @@ void CosmosApp::process_collisions(float dt) {
                             bodies[i].radius = std::max(bodies[i].radius * mass_scale, 0.1f);
                             bodies[i].frag_generation = std::min<uint32_t>(bodies[i].frag_generation + 1u,
                                                                            (uint32_t)cfg.max_frag_generation);
+                            if (cfg.spin_fragmentation) {
+                                float post_spin_cap = spin_fragmentation_critical_omega(bodies[i], cfg.G) *
+                                    std::max(spin_threshold * 0.92f, 0.35f);
+                                if (post_spin_cap > 0.0f) {
+                                    bodies[i].angular_vel = std::copysign(
+                                        std::min(std::abs(bodies[i].angular_vel), post_spin_cap),
+                                        bodies[i].angular_vel);
+                                }
+                            }
                             bodies[i].props_valid = false;
                             bodies[i].visuals_valid = false;
                         }
@@ -2317,7 +2413,8 @@ void CosmosApp::process_collisions(float dt) {
                         (bodies[j].type == CTYPE_PLANET || bodies[j].type == CTYPE_MOON)) {
                         float severity = std::clamp(
                             0.28f + combined_disruption * 0.32f + disruption_j * 0.24f +
-                            std::min(overlap_fraction, 0.6f) * 0.30f, 0.10f, 0.70f);
+                            std::min(overlap_fraction, 0.6f) * 0.30f +
+                            spin_over_j * 0.16f, 0.10f, 0.70f);
                         float remnant_fraction = std::max(1.0f - severity,
                             impact_speed < fragment_speed_limit * 1.10f ? 0.45f : 0.28f);
                         float remnant_mass = bodies[j].mass * remnant_fraction;
@@ -2329,6 +2426,15 @@ void CosmosApp::process_collisions(float dt) {
                             bodies[j].radius = std::max(bodies[j].radius * mass_scale, 0.1f);
                             bodies[j].frag_generation = std::min<uint32_t>(bodies[j].frag_generation + 1u,
                                                                            (uint32_t)cfg.max_frag_generation);
+                            if (cfg.spin_fragmentation) {
+                                float post_spin_cap = spin_fragmentation_critical_omega(bodies[j], cfg.G) *
+                                    std::max(spin_threshold * 0.92f, 0.35f);
+                                if (post_spin_cap > 0.0f) {
+                                    bodies[j].angular_vel = std::copysign(
+                                        std::min(std::abs(bodies[j].angular_vel), post_spin_cap),
+                                        bodies[j].angular_vel);
+                                }
+                            }
                             bodies[j].props_valid = false;
                             bodies[j].visuals_valid = false;
                         }
@@ -2452,6 +2558,12 @@ void CosmosApp::process_roche_limit(float dt) {
             float disruption_overflow = (allow_disruption && disruption_limit > 0.0f)
                 ? std::clamp((disruption_limit - eval_dist) / std::max(disruption_limit, 1.0e-4f), 0.0f, 1.0f)
                 : 0.0f;
+            float spin_threshold = std::max(cfg.spin_fragmentation_threshold, 0.05f);
+            float spin_ratio = cfg.spin_fragmentation ? spin_fragmentation_ratio(bodies[j], cfg.G) : 0.0f;
+            float spin_overflow = cfg.spin_fragmentation ? std::max(spin_ratio - spin_threshold, 0.0f) : 0.0f;
+            bool spin_assisted_disruption = cfg.spin_fragmentation &&
+                spin_overflow > 0.0f &&
+                eval_dist < heating_limit * (using_fluid_limit ? 1.20f : 1.08f);
             glm::vec3 tidal_axis = (sweep_dist < dist && sweep_dist > 1.0e-5f)
                 ? (closest_rel / sweep_dist)
                 : glm::normalize(delta);
@@ -2472,7 +2584,7 @@ void CosmosApp::process_roche_limit(float dt) {
                     bodies[j].visuals_valid = false;
                 }
             }
-            if (!allow_disruption || eval_dist >= disruption_limit)
+            if ((!allow_disruption || eval_dist >= disruption_limit) && !spin_assisted_disruption)
                 continue;
 
             float effective_min_frag_mass = std::max(1.0e-12f, std::min(cfg.min_fragment_mass, 1.0e-9f));
@@ -2487,10 +2599,18 @@ void CosmosApp::process_roche_limit(float dt) {
                 std::max(eval_dist, 1.0e-6f), 0.0f));
             float speed_ratio = glm::length(rel_vel) / std::max(local_orbital_speed, 1.0e-4f);
             float dynamic_overflow = disruption_overflow +
-                std::clamp((speed_ratio - 0.8f) * 0.28f, 0.0f, 0.45f);
+                std::clamp((speed_ratio - 0.8f) * 0.28f, 0.0f, 0.45f) +
+                spin_overflow * (using_fluid_limit ? 0.58f : 0.40f);
             float strip_fraction = using_fluid_limit
                 ? std::clamp(0.10f + dynamic_overflow * 0.92f, 0.04f, 0.98f)
                 : std::clamp(0.06f + dynamic_overflow * 0.66f, 0.02f, 0.86f);
+            if (spin_assisted_disruption && eval_dist >= disruption_limit) {
+                float spin_only_floor = using_fluid_limit ? 0.10f : 0.06f;
+                float spin_only_cap = using_fluid_limit ? 0.40f : 0.28f;
+                strip_fraction = std::clamp(std::max(strip_fraction,
+                                                     spin_only_floor + spin_overflow * (using_fluid_limit ? 0.18f : 0.12f)),
+                                            spin_only_floor, spin_only_cap);
+            }
             if (eval_dist < disruption_limit * (using_fluid_limit ? 0.62f : 0.52f) ||
                 disruption_overflow > (using_fluid_limit ? 0.72f : 0.82f))
                 strip_fraction = std::max(strip_fraction, using_fluid_limit ? 0.93f : 0.78f);
@@ -2518,15 +2638,21 @@ void CosmosApp::process_roche_limit(float dt) {
             float fragment_mass = std::max(stripped_mass - ring_mass, 0.0f);
             if (fragment_mass > 1.0e-9f) {
                 int fragment_count = std::clamp(
-                    std::max(1, cfg.fragment_count / 2 + (int)std::floor(disruption_overflow * (using_fluid_limit ? 3.8f : 2.4f))),
+                    std::max(1, cfg.fragment_count / 2 +
+                                (int)std::floor((disruption_overflow + spin_overflow * 0.85f) *
+                                                (using_fluid_limit ? 3.8f : 2.4f))),
                                                 1, 10);
                 float speed_scale = using_fluid_limit ? 0.08f : 0.055f;
-                float roche_ejecta_speed = std::clamp(local_orbital_speed * (speed_scale + dynamic_overflow * 0.13f),
+                float spin_surface_speed = std::abs(bodies[j].angular_vel) *
+                    std::max(bodies[j].radius, bodies[j].type == CTYPE_DUST ? 0.04f : 0.1f);
+                float roche_ejecta_speed = std::clamp(
+                    local_orbital_speed * (speed_scale + dynamic_overflow * 0.13f) +
+                    spin_surface_speed * (using_fluid_limit ? 0.05f : 0.07f),
                                                       0.0003f, using_fluid_limit ? 0.012f : 0.009f);
                 spawn_fragments(bodies[j].pos, bodies[j].vel, fragment_mass, fragment_count,
                                 bodies[j].frag_generation, bodies[j].temperature,
                                 tidal_axis, roche_ejecta_speed,
-                                &bodies[j], 0.45f + disruption_overflow * 0.90f);
+                                &bodies[j], 0.45f + disruption_overflow * 0.90f + spin_overflow * 0.50f);
             }
 
             register_mass_loss(bodies[j], stripped_mass, std::max(dt, 1.0e-4f));
@@ -2539,20 +2665,128 @@ void CosmosApp::process_roche_limit(float dt) {
             float mass_scale = std::cbrt(remaining_mass / std::max(secondary_mass, 1.0e-8f));
             bodies[j].mass = remaining_mass;
             bodies[j].radius = std::max(bodies[j].radius * mass_scale, 0.1f);
+            if (cfg.spin_fragmentation) {
+                float post_spin_cap = spin_fragmentation_critical_omega(bodies[j], cfg.G) *
+                    std::max(spin_threshold * 0.94f, 0.25f);
+                if (post_spin_cap > 0.0f) {
+                    float damped_spin = std::abs(bodies[j].angular_vel) * std::max(0.48f, mass_scale * 0.78f);
+                    bodies[j].angular_vel = std::copysign(std::min(damped_spin, post_spin_cap), bodies[j].angular_vel);
+                }
+            }
             bodies[j].props_valid = false;
             bodies[j].visuals_valid = false;
             apply_impact_signature(
                 bodies[j], -tidal_axis,
-                std::clamp(disruption_overflow * 0.8f, 0.0f, 1.2f),
+                std::clamp(disruption_overflow * 0.8f + spin_overflow * 0.35f, 0.0f, 1.2f),
                 stripped_mass / std::max(secondary_mass, 1.0e-8f),
                 std::clamp(tidal_work / std::max(bodies[j].mass, 1.0e-8f), 0.0f, 1.0f),
-                std::clamp(0.18f + disruption_overflow * 0.45f, 0.08f, 0.92f));
+                std::clamp(0.18f + disruption_overflow * 0.45f + spin_overflow * 0.18f, 0.08f, 0.92f));
         }
     }
 
     for (const auto& ring : pending_rings) {
         spawn_dust_ring(ring.host_index, ring.total_mass, ring.inner, ring.outer,
                         ring.density, ring.ice_fraction, ring.seed_hint);
+    }
+}
+
+void CosmosApp::process_spin_fragmentation(float dt) {
+    auto& bodies = state.bodies;
+    size_t n = bodies.size();
+    float effective_min_frag_mass = std::max(1.0e-12f, std::min(cfg.min_fragment_mass, 1.0e-9f));
+    float spin_threshold = std::max(cfg.spin_fragmentation_threshold, 0.05f);
+    float dt_limited = std::clamp(dt, 1.0e-4f, 2.0f);
+
+    for (size_t i = 0; i < n; ++i) {
+        if (bodies[i].marked_for_removal) continue;
+        if (is_star_type(bodies[i].type) || is_black_hole_type(bodies[i].type) ||
+            bodies[i].type == CTYPE_NEBULA) {
+            continue;
+        }
+
+        float critical = spin_fragmentation_critical_omega(bodies[i], cfg.G);
+        if (critical <= 0.0f) continue;
+
+        float spin_ratio = spin_fragmentation_ratio(bodies[i], cfg.G);
+        if (!std::isfinite(spin_ratio) || spin_ratio <= spin_threshold)
+            continue;
+
+        float spin_cap = critical * std::max(spin_threshold * 0.94f, 0.25f);
+        if (bodies[i].mass < effective_min_frag_mass * 2.0f ||
+            (int)bodies[i].frag_generation >= cfg.max_frag_generation) {
+            bodies[i].angular_vel = std::copysign(std::min(std::abs(bodies[i].angular_vel), spin_cap),
+                                                  bodies[i].angular_vel);
+            continue;
+        }
+
+        float overflow = spin_ratio - spin_threshold;
+        float max_strip = (bodies[i].type == CTYPE_ASTEROID || bodies[i].type == CTYPE_COMET || bodies[i].type == CTYPE_DUST)
+            ? 0.38f : 0.30f;
+        float strip_fraction = std::clamp(0.06f + overflow * 0.24f + dt_limited * 0.02f, 0.04f, max_strip);
+        if (spin_ratio > spin_threshold * 1.35f)
+            strip_fraction = std::max(strip_fraction, max_strip * 0.72f);
+
+        float original_mass = bodies[i].mass;
+        float stripped_mass = std::min(original_mass * strip_fraction,
+                                       std::max(original_mass - effective_min_frag_mass * 1.25f, 0.0f));
+        if (stripped_mass <= effective_min_frag_mass * 0.25f) {
+            bodies[i].angular_vel = std::copysign(std::min(std::abs(bodies[i].angular_vel), spin_cap),
+                                                  bodies[i].angular_vel);
+            continue;
+        }
+
+        MaterialComposition materials = derive_materials(bodies[i]);
+        bool gas_dominated = gas_dominated_body(bodies[i], materials);
+        bool fluid_like = roche_secondary_fluid_like(bodies[i]);
+        float radius = std::max(bodies[i].radius, bodies[i].type == CTYPE_DUST ? 0.04f : 0.1f);
+        float surface_speed = std::abs(bodies[i].angular_vel) * radius;
+        float excess_surface_speed = std::max(surface_speed - critical * radius * spin_threshold, 0.0f);
+        float ejecta_speed = std::clamp(
+            excess_surface_speed * (gas_dominated ? 0.12f : 0.18f) +
+            critical * radius * (fluid_like ? 0.014f : 0.020f),
+            0.00025f,
+            gas_dominated ? 0.0045f : (bodies[i].type == CTYPE_DUST ? 0.006f : 0.015f));
+        int fragment_count = std::clamp(
+            std::max(2, cfg.fragment_count / 2 + (int)std::floor(overflow * 5.0f)),
+            2, 8);
+        glm::vec3 fragment_axis = spin_fragmentation_axis(bodies[i]);
+        uint32_t parent_generation = bodies[i].frag_generation;
+        float temperature = bodies[i].temperature;
+
+        spawn_fragments(bodies[i].pos, bodies[i].vel, stripped_mass, fragment_count,
+                        parent_generation, temperature, fragment_axis, ejecta_speed,
+                        &bodies[i], 0.30f + overflow * 0.75f);
+        register_mass_loss(bodies[i], stripped_mass, std::max(dt_limited, 1.0e-4f));
+
+        float remaining_mass = std::max(original_mass - stripped_mass, 0.0f);
+        if (remaining_mass <= effective_min_frag_mass) {
+            bodies[i].marked_for_removal = true;
+            continue;
+        }
+
+        float mass_scale = std::cbrt(remaining_mass / std::max(original_mass, 1.0e-12f));
+        bodies[i].mass = remaining_mass;
+        bodies[i].radius = std::max(bodies[i].radius * mass_scale, bodies[i].type == CTYPE_DUST ? 0.06f : 0.1f);
+        bodies[i].frag_generation = std::min<uint32_t>(parent_generation + 1u, (uint32_t)cfg.max_frag_generation);
+        float post_spin_cap = spin_fragmentation_critical_omega(bodies[i], cfg.G) *
+            std::max(spin_threshold * 0.94f, 0.25f);
+        if (post_spin_cap > 0.0f) {
+            float damped_spin = std::abs(bodies[i].angular_vel) * std::max(0.52f, mass_scale * 0.82f);
+            bodies[i].angular_vel = std::copysign(std::min(damped_spin, post_spin_cap), bodies[i].angular_vel);
+        }
+        if (cfg.temperature_system) {
+            float spin_heat = stripped_mass * surface_speed * surface_speed * 0.04f;
+            bodies[i].internal_energy += spin_heat;
+            bodies[i].temperature += std::min(spin_heat / std::max(bodies[i].mass * 0.08f, 1.0e-7f), 2200.0f);
+        }
+        bodies[i].props_valid = false;
+        bodies[i].visuals_valid = false;
+        apply_impact_signature(
+            bodies[i], fragment_axis,
+            std::clamp(0.24f + overflow * 0.55f, 0.0f, 1.2f),
+            stripped_mass / std::max(original_mass, 1.0e-8f),
+            std::clamp(surface_speed * 0.08f, 0.0f, 1.0f),
+            std::clamp(0.18f + overflow * 0.25f, 0.10f, 0.85f));
     }
 }
 
