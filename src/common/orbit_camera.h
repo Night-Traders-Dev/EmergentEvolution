@@ -20,10 +20,17 @@ struct OrbitCamera {
     int       focus_body   = -1;         // index of tracked body (-1 = none)
     glm::vec3 focus_target{0.0f};        // smoothed goal position
     float     focus_lerp_speed = 6.0f;   // how fast camera catches up
+    float     focus_body_radius = 1.0f;  // radius of focused body (for min zoom)
 
-    // Smooth zoom
+    // Smooth zoom (logarithmic)
     float target_distance = 600.0f;
-    float zoom_speed      = 6.0f;
+    float zoom_speed      = 8.0f;
+
+    // Orbit inertia
+    float orbit_vel_az  = 0.0f;
+    float orbit_vel_el  = 0.0f;
+    float inertia_decay = 5.0f;  // how fast inertia decays (higher = faster stop)
+    bool  orbiting      = false; // true while user is actively dragging
 
     glm::dvec3 eye_position_d() const {
         double cos_el = std::cos((double)elevation);
@@ -74,14 +81,21 @@ struct OrbitCamera {
 
     // Universe Sandbox-style orbit: drag rotates around target
     void orbit(float dx, float dy, float sensitivity = 0.005f) {
-        azimuth   -= dx * sensitivity;
-        elevation += dy * sensitivity;
-        elevation = std::clamp(elevation, -1.5f, 1.5f);
+        float daz = -dx * sensitivity;
+        float del = dy * sensitivity;
+        azimuth   += daz;
+        elevation += del;
+        elevation = std::clamp(elevation, -1.55f, 1.55f);
+
+        // Feed inertia
+        orbit_vel_az = daz;
+        orbit_vel_el = del;
     }
 
     // Pan: shift target in the screen plane
     void pan(float dx, float dy) {
-        float scale = distance * 0.001f;
+        // Scale pan speed logarithmically with distance for consistent feel
+        float scale = distance * 0.0015f;
         glm::vec3 r = right_direction();
         glm::vec3 u = up_direction();
         target += r * (-dx * scale) + u * (dy * scale);
@@ -92,18 +106,41 @@ struct OrbitCamera {
         }
     }
 
-    // Smooth zoom toward/away from target
+    // Smooth logarithmic zoom — feels consistent at all scales
     void zoom(float delta) {
-        float factor = (delta > 0) ? 0.9f : 1.1f;
+        // Logarithmic: each scroll step multiplies distance by a constant ratio
+        float factor = std::pow(0.88f, delta);  // ~12% per notch
         target_distance *= factor;
-        target_distance = std::max(target_distance, 5.0f);
+        float min_dist = 1.0f;
+        if (focus_active)
+            min_dist = std::max(1.0f, focus_body_radius * 1.5f);
+        target_distance = std::max(target_distance, min_dist);
+    }
+
+    // Zoom toward a world-space point (scroll zooms toward cursor position)
+    void zoom_toward(float delta, glm::vec3 world_point) {
+        float old_dist = target_distance;
+        zoom(delta);
+        float new_dist = target_distance;
+
+        // Shift target toward the world point proportional to zoom change
+        float shift = 1.0f - (new_dist / old_dist);
+        glm::vec3 offset = world_point - target;
+        target += offset * shift * 0.5f;
+
+        // Zooming toward a point breaks focus
+        if (focus_active && glm::length(offset) > focus_body_radius * 2.0f) {
+            focus_active = false;
+            focus_body = -1;
+        }
     }
 
     // Focus on a position: smooth camera pan to body
-    void focus_on(glm::vec3 pos, int body_idx = -1) {
+    void focus_on(glm::vec3 pos, int body_idx = -1, float body_radius = 1.0f) {
         focus_active = true;
         focus_body = body_idx;
         focus_target = pos;
+        focus_body_radius = std::max(body_radius, 0.1f);
     }
 
     // Stop following a body but keep the camera where it is
@@ -112,15 +149,32 @@ struct OrbitCamera {
         focus_body = -1;
     }
 
-    // Call every frame to animate smooth zoom + focus tracking
+    // Signal that the user started/stopped orbiting (for inertia)
+    void begin_orbit() { orbiting = true; }
+    void end_orbit() { orbiting = false; }
+
+    // Call every frame to animate smooth zoom + focus tracking + inertia
     void update(float dt) {
-        // Smooth zoom
-        distance += (target_distance - distance) * std::min(1.0f, zoom_speed * dt);
+        // Smooth zoom (exponential interpolation for consistent feel)
+        float zoom_t = 1.0f - std::exp(-zoom_speed * dt);
+        distance += (target_distance - distance) * zoom_t;
 
         // Focus tracking: smoothly move target toward focus_target
         if (focus_active) {
-            float t = std::min(1.0f, focus_lerp_speed * dt);
+            float t = 1.0f - std::exp(-focus_lerp_speed * dt);
             target = glm::mix(target, focus_target, t);
+        }
+
+        // Orbit inertia: apply residual velocity when not actively dragging
+        if (!orbiting && (std::abs(orbit_vel_az) > 1e-5f || std::abs(orbit_vel_el) > 1e-5f)) {
+            azimuth   += orbit_vel_az;
+            elevation += orbit_vel_el;
+            elevation = std::clamp(elevation, -1.55f, 1.55f);
+
+            // Exponential decay
+            float decay = std::exp(-inertia_decay * dt);
+            orbit_vel_az *= decay;
+            orbit_vel_el *= decay;
         }
     }
 
@@ -128,5 +182,34 @@ struct OrbitCamera {
     void track_body(glm::vec3 body_pos) {
         if (focus_active)
             focus_target = body_pos;
+    }
+
+    // Cast a ray from screen coordinates into world space
+    // Returns a point on the camera target plane (for zoom-toward-cursor)
+    glm::vec3 screen_to_world_on_target_plane(float screen_x, float screen_y,
+                                                float screen_w, float screen_h) const {
+        // Normalized device coords
+        float ndc_x = (2.0f * screen_x / screen_w) - 1.0f;
+        float ndc_y = 1.0f - (2.0f * screen_y / screen_h);
+
+        float aspect = screen_w / screen_h;
+        float half_h = std::tan(glm::radians(fov * 0.5f));
+        float half_w = half_h * aspect;
+
+        glm::vec3 eye = eye_position();
+        glm::vec3 fwd = forward_direction();
+        glm::vec3 r = right_direction();
+        glm::vec3 u = up_direction();
+
+        glm::vec3 ray_dir = glm::normalize(fwd + r * (ndc_x * half_w) + u * (ndc_y * half_h));
+
+        // Intersect with the plane through target, facing camera
+        glm::vec3 plane_normal = glm::normalize(target - eye);
+        float denom = glm::dot(ray_dir, plane_normal);
+        if (std::abs(denom) < 1e-6f) return target;
+
+        float t = glm::dot(target - eye, plane_normal) / denom;
+        if (t < 0.0f) return target;
+        return eye + ray_dir * t;
     }
 };

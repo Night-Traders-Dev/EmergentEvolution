@@ -4,19 +4,19 @@ The Biochemical Simulator is a 3D cellular biology sandbox with GPU SDF-raytrace
 
 ## Entity Types
 
-9 biological entity types with morphological variants:
+9 biological entity types with 19 morphological variants across 3 visual families:
 
-| Type | ID | Morphologies | Description |
-|---|---|---|---|
-| Cell | 0 | Animal, Epithelial, Amoeboid | Eukaryotic cell &mdash; metabolizes nutrients, divides via mitosis with telomere tracking |
-| Bacterium | 1 | Cocci, Bacilli, Spiral | Prokaryote &mdash; binary fission, secretes antibiotic defense films, faster metabolism |
-| Virus | 2 | Classical Capsid, Coronavirus, Bacteriophage | Viral particle &mdash; infects cells/bacteria, replicates internally, causes lysis burst |
-| Nutrient | 3 | &mdash; | Food / glucose molecule &mdash; consumed by cells and bacteria for energy |
-| Toxin | 4 | &mdash; | Harmful chemical &mdash; damages nearby entities on contact |
-| Antibody | 5 | &mdash; | Immune protein &mdash; seeks and neutralizes viruses on contact |
-| Red Blood Cell | 6 | &mdash; | Erythrocyte &mdash; passive oxygen transport, brownian drift |
-| White Blood Cell | 7 | &mdash; | Leukocyte &mdash; immune response, seeks and engulfs pathogens, can divide |
-| Phagocyte | 8 | &mdash; | Cleanup cell &mdash; scavenges corpse husks, auto-spawns when corpses accumulate |
+| Type | ID | Variants | Visual Families | Description |
+|---|---|---|---|---|
+| Cell | 0 | 8 (Generic Animal, Type II Pneumocyte, Ciliated Epithelial, Enterocyte, Neuron, Astrocyte, Fibroblast, Amoeboid) | Animal, Epithelial, Amoeboid | Eukaryotic cell &mdash; metabolizes nutrients, divides via mitosis with telomere tracking |
+| Bacterium | 1 | 6 (Staphylococcus aureus, Streptococcus pneumoniae, Escherichia coli, Pseudomonas aeruginosa, Bacillus subtilis, Vibrio cholerae) | Cocci, Bacilli, Spiral | Prokaryote &mdash; binary fission, secretes antibiotic defense films, faster metabolism |
+| Virus | 2 | 5 (Human adenovirus C5, SARS-CoV-2, Influenza A H1N1, Influenza A H3N2, Enterobacteria phage T4) | Capsid, Corona, Influenza, Phage | Viral particle &mdash; infects cells/bacteria, replicates internally, causes lysis burst |
+| Nutrient | 3 | &mdash; | &mdash; | Food / glucose molecule &mdash; consumed by cells and bacteria for energy |
+| Toxin | 4 | &mdash; | &mdash; | Harmful chemical &mdash; damages nearby entities on contact |
+| Antibody | 5 | &mdash; | &mdash; | Immune protein &mdash; seeks and neutralizes viruses on contact |
+| Red Blood Cell | 6 | &mdash; | &mdash; | Erythrocyte &mdash; passive oxygen transport, brownian drift |
+| White Blood Cell | 7 | &mdash; | &mdash; | Leukocyte &mdash; immune response, seeks and engulfs pathogens, can divide |
+| Phagocyte | 8 | &mdash; | &mdash; | Cleanup cell &mdash; scavenges corpse husks, auto-spawns when corpses accumulate |
 
 ## Entity Properties
 
@@ -42,7 +42,7 @@ Each entity has:
 
 ## Gene System
 
-Each entity carries a `BioGenes` struct with 10 heritable traits that modulate behavior:
+Each entity carries a `BioGenes` struct with 16 heritable traits that modulate behavior:
 
 | Gene | Range | Default | Effect |
 |---|---|---|---|
@@ -53,6 +53,12 @@ Each entity carries a `BioGenes` struct with 10 heritable traits that modulate b
 | `energy` | 0.35&ndash;2.25 | 1.0 | Multiplier on metabolic efficiency |
 | `telomere` | 0.00&ndash;2.25 | 1.0 | Telomere length multiplier (cells/WBC only) |
 | `mitotic_clock` | 0.25&ndash;2.50 | 1.0 | Division speed multiplier |
+| `metabolism_efficiency` | 0.35&ndash;2.25 | 1.0 | Energy usage rate multiplier |
+| `nutrient_affinity` | 0.25&ndash;2.50 | 1.0 | Nutrient attraction strength |
+| `stress_tolerance` | 0.35&ndash;2.50 | 1.0 | Resistance to environmental damage |
+| `defense` | 0.35&ndash;2.50 | 1.0 | Pathogen resistance multiplier |
+| `sensing` | 0.20&ndash;2.50 | 1.0 | Detection range multiplier |
+| `mutation_stability` | 0.25&ndash;2.50 | 1.0 | Mutation susceptibility (higher = more stable) |
 | `antibiotic_type` | 0.00&ndash;1.00 | varies | Antibiotic spectrum band (bacteria only) |
 | `antibiotic_yield` | 0.00&ndash;2.50 | varies | Antibiotic potency (bacteria only) |
 | `antibiotic_diversity` | 0.00&ndash;1.00 | varies | Antibiotic spectrum width (bacteria only) |
@@ -126,6 +132,20 @@ Viruses infect cells and bacteria through a multi-stage process:
 - **Energy drain**: 4.4 + replication_progress * 2.2 + load * 1.35 per tick
 - **Organelle damage**: 0.012 + replication_progress * 0.09 per tick
 - **Mutation boost**: virions from burst have 50% higher mutation rate
+
+### Bacterial Colonization
+
+Bacteria can colonize cells through a slower infection pathway:
+- Biofilm formation and fimbrial adhesion mechanisms
+- Toxin-mediated cell entry
+- Independent tracking from viral infection (dual infection possible)
+
+### Gene Exchange
+
+Horizontal gene transfer between bacteria in close proximity:
+- Species-specific exchange groups (10&ndash;13 per bacterial type)
+- Contact-based genetic mixing with blending algorithm
+- Supports plasmid-like trait sharing between compatible strains
 
 ### Antibacterial Defense
 
@@ -213,7 +233,7 @@ Entities die from starvation (energy &le; 0), telomere exhaustion, viral lysis, 
 
 ### GPU SDF Raytracing
 
-All entities are rendered via a GPU fragment shader (`biochem_rt.frag`, ~1,240 lines) using signed distance field (SDF) raymarching. Each entity type and morphological variant has a unique SDF shape:
+All entities are rendered via a GPU fragment shader (`biochem_rt.frag`, ~1,527 lines) using signed distance field (SDF) raymarching. Each entity type and morphological variant has a unique SDF shape:
 
 - **Cells**: smooth blobs with nucleus and organelle interiors visible; mitosis morphs to two-sphere
 - **Bacteria**: cocci (spheres), bacilli (capsules), spirals (helical); antibiotic film expands radius

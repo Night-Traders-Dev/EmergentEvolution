@@ -41,7 +41,7 @@ The project produces five executables and one static library:
 | `pp_launcher` | Expansion picker — choose which simulation to launch |
 | `particle_physics` | Full particle physics sandbox |
 | `particle_cosmos` | 3D celestial mechanics with GPU raytracing |
-| `particle_biochem` | 2D cellular biology sandbox |
+| `particle_biochem` | 3D cellular biology sandbox with SDF raytracing |
 
 All application targets link against `pp_common`. Shader compilation (`physics.comp`,
 `fullscreen.vert/frag`, `overlay.vert/frag`, `cosmos_rt.vert/frag`, `cosmos_bh.comp`,

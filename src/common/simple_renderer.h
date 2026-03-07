@@ -23,6 +23,7 @@ struct SimpleRenderer {
     // Public accessors for custom rendering passes (e.g. cosmos raytracer)
     VkRenderPass    render_pass()  const { return render_pass_; }
     VkCommandBuffer current_cmd()  const { return cmd_bufs_[frame_idx_]; }
+    uint32_t        current_image_index() const { return image_idx_; }
 
 private:
     void create_render_pass(VulkanContext& vk);

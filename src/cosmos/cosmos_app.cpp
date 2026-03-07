@@ -18,6 +18,7 @@
 #include <random>
 #include <unordered_map>
 #include <thread>
+#include "third_party/stb_image_write.h"
 #include <ctime>
 
 #if !defined(_WIN32)
@@ -369,6 +370,85 @@ int CosmosApp::pick_body(float mx, float my, float W, float H) const {
         }
     }
     return best;
+}
+
+void CosmosApp::capture_screenshot(GLFWwindow* window) {
+    vkDeviceWaitIdle(vk.device);
+    uint32_t w = vk.swapchain_extent.width;
+    uint32_t h = vk.swapchain_extent.height;
+    VkDeviceSize size = (VkDeviceSize)w * h * 4;
+
+    Buffer staging = vk.create_buffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    VkCommandBuffer cmd = vk.begin_single_command();
+
+    // Transition swapchain image to TRANSFER_SRC
+    VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    barrier.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = vk.swapchain_images[renderer.current_image_index()];
+    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {w, h, 1};
+    vkCmdCopyImageToBuffer(cmd, vk.swapchain_images[renderer.current_image_index()],
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging.handle, 1, &region);
+
+    // Transition back to PRESENT_SRC
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    vk.end_single_command(cmd);
+
+    void* mapped = nullptr;
+    vkMapMemory(vk.device, staging.memory, 0, size, 0, &mapped);
+
+    // Convert BGRA to RGBA if needed
+    std::vector<uint8_t> pixels(w * h * 4);
+    const uint8_t* src = reinterpret_cast<const uint8_t*>(mapped);
+    bool is_bgra = (vk.swapchain_format == VK_FORMAT_B8G8R8A8_UNORM ||
+                    vk.swapchain_format == VK_FORMAT_B8G8R8A8_SRGB);
+    for (uint32_t i = 0; i < w * h; ++i) {
+        if (is_bgra) {
+            pixels[i * 4 + 0] = src[i * 4 + 2]; // R
+            pixels[i * 4 + 1] = src[i * 4 + 1]; // G
+            pixels[i * 4 + 2] = src[i * 4 + 0]; // B
+        } else {
+            pixels[i * 4 + 0] = src[i * 4 + 0];
+            pixels[i * 4 + 1] = src[i * 4 + 1];
+            pixels[i * 4 + 2] = src[i * 4 + 2];
+        }
+        pixels[i * 4 + 3] = 255;
+    }
+    vkUnmapMemory(vk.device, staging.memory);
+    vk.destroy_buffer(staging);
+
+    // Generate filename with timestamp
+    auto now = std::chrono::system_clock::now();
+    auto time_t = std::chrono::system_clock::to_time_t(now);
+    struct tm tm_buf;
+    localtime_r(&time_t, &tm_buf);
+    char filename[256];
+    snprintf(filename, sizeof(filename), "cosmos_screenshot_%04d%02d%02d_%02d%02d%02d.png",
+             tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
+             tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
+
+    stbi_write_png(filename, (int)w, (int)h, 4, pixels.data(), (int)(w * 4));
+
+    last_save_status_ = std::string("Screenshot saved: ") + filename;
+    save_status_timer_ = 3.0f;
 }
 
 void CosmosApp::destroy() {
@@ -1073,6 +1153,11 @@ void CosmosApp::tick(GLFWwindow* window, float dt) {
     render_ui();
 
     renderer.end_frame(vk);
+
+    if (screenshot_requested_) {
+        screenshot_requested_ = false;
+        capture_screenshot(window);
+    }
 }
 
 // ── Physics (CPU N-body, 3D) ────────────────────────────────────────────────
@@ -1637,7 +1722,7 @@ void CosmosApp::step_physics(float dt) {
             ensure_accel(accel);
             parallel_for(n, 384, [&](size_t begin, size_t end) {
                 for (size_t i = begin; i < end; ++i) {
-                    if (bodies[i].marked_for_removal) {
+                    if (bodies[i].marked_for_removal || bodies[i].locked) {
                         out_pos[i] = in_pos[i];
                         out_vel[i] = in_vel[i];
                         continue;
@@ -1653,7 +1738,7 @@ void CosmosApp::step_physics(float dt) {
             ensure_accel(accel);
             parallel_for(n, 384, [&](size_t begin, size_t end) {
                 for (size_t i = begin; i < end; ++i) {
-                    if (bodies[i].marked_for_removal) {
+                    if (bodies[i].marked_for_removal || bodies[i].locked) {
                         out_pos[i] = in_pos[i];
                         out_vel[i] = in_vel[i];
                         continue;
@@ -1671,7 +1756,7 @@ void CosmosApp::step_physics(float dt) {
             std::vector<glm::vec3> vel_mid(n, glm::vec3(0.0f));
             parallel_for(n, 384, [&](size_t begin, size_t end) {
                 for (size_t i = begin; i < end; ++i) {
-                    if (bodies[i].marked_for_removal) {
+                    if (bodies[i].marked_for_removal || bodies[i].locked) {
                         pos_mid[i] = in_pos[i];
                         vel_mid[i] = in_vel[i];
                         continue;
@@ -1684,7 +1769,7 @@ void CosmosApp::step_physics(float dt) {
             compute_accel(pos_mid, vel_mid, accel_mid);
             parallel_for(n, 384, [&](size_t begin, size_t end) {
                 for (size_t i = begin; i < end; ++i) {
-                    if (bodies[i].marked_for_removal) {
+                    if (bodies[i].marked_for_removal || bodies[i].locked) {
                         out_pos[i] = in_pos[i];
                         out_vel[i] = in_vel[i];
                         continue;
@@ -1710,7 +1795,7 @@ void CosmosApp::step_physics(float dt) {
             auto drift = [&](float coeff) {
                 parallel_for(n, 384, [&](size_t begin, size_t end) {
                     for (size_t i = begin; i < end; ++i) {
-                        if (bodies[i].marked_for_removal) continue;
+                        if (bodies[i].marked_for_removal || bodies[i].locked) continue;
                         pos[i] += vel[i] * (step_scaled_dt * coeff);
                     }
                 });
@@ -1719,7 +1804,7 @@ void CosmosApp::step_physics(float dt) {
                 compute_accel(pos, vel, accel);
                 parallel_for(n, 384, [&](size_t begin, size_t end) {
                     for (size_t i = begin; i < end; ++i) {
-                        if (bodies[i].marked_for_removal) continue;
+                        if (bodies[i].marked_for_removal || bodies[i].locked) continue;
                         vel[i] += accel[i] * (step_scaled_dt * coeff);
                     }
                 });
@@ -1744,7 +1829,7 @@ void CosmosApp::step_physics(float dt) {
             auto drift = [&](float coeff) {
                 parallel_for(n, 384, [&](size_t begin, size_t end) {
                     for (size_t i = begin; i < end; ++i) {
-                        if (bodies[i].marked_for_removal) continue;
+                        if (bodies[i].marked_for_removal || bodies[i].locked) continue;
                         pos[i] += vel[i] * (step_scaled_dt * coeff);
                     }
                 });
@@ -1753,7 +1838,7 @@ void CosmosApp::step_physics(float dt) {
                 compute_accel(pos, vel, accel);
                 parallel_for(n, 384, [&](size_t begin, size_t end) {
                     for (size_t i = begin; i < end; ++i) {
-                        if (bodies[i].marked_for_removal) continue;
+                        if (bodies[i].marked_for_removal || bodies[i].locked) continue;
                         vel[i] += accel[i] * (step_scaled_dt * coeff);
                     }
                 });
@@ -1776,7 +1861,7 @@ void CosmosApp::step_physics(float dt) {
             float dt2 = step_scaled_dt * step_scaled_dt;
             parallel_for(n, 384, [&](size_t begin, size_t end) {
                 for (size_t i = begin; i < end; ++i) {
-                    if (bodies[i].marked_for_removal) {
+                    if (bodies[i].marked_for_removal || bodies[i].locked) {
                         pos1_local[i] = in_pos[i];
                         vel_half_local[i] = in_vel[i];
                         continue;
@@ -1789,7 +1874,7 @@ void CosmosApp::step_physics(float dt) {
             compute_accel(pos1_local, vel_half_local, accel1);
             parallel_for(n, 384, [&](size_t begin, size_t end) {
                 for (size_t i = begin; i < end; ++i) {
-                    if (bodies[i].marked_for_removal) {
+                    if (bodies[i].marked_for_removal || bodies[i].locked) {
                         out_pos[i] = in_pos[i];
                         out_vel[i] = in_vel[i];
                         continue;
@@ -1804,7 +1889,7 @@ void CosmosApp::step_physics(float dt) {
 
         parallel_for(n, 384, [&](size_t begin, size_t end) {
             for (size_t i = begin; i < end; ++i) {
-                if (bodies[i].marked_for_removal) continue;
+                if (bodies[i].marked_for_removal || bodies[i].locked) continue;
                 out_vel[i] *= cfg.damping;
             }
         });
@@ -1917,8 +2002,10 @@ void CosmosApp::step_physics(float dt) {
         for (size_t i = begin; i < end; ++i) {
             if (bodies[i].marked_for_removal) continue;
             bodies[i].mass_loss_rate = 0.0f;
-            bodies[i].vel = vel1[i];
-            bodies[i].pos = pos1[i];
+            if (!bodies[i].locked) {
+                bodies[i].vel = vel1[i];
+                bodies[i].pos = pos1[i];
+            }
             bodies[i].age += scaled_dt;
         }
     });
@@ -2527,9 +2614,9 @@ void CosmosApp::spawn_ring_for_host(int host_index, float inner_mult, float oute
 
     float annulus = std::max(host.ring_outer_radius * host.ring_outer_radius -
                              host.ring_inner_radius * host.ring_inner_radius, 1.0f);
-    float mass_hint = std::max(host.mass * host.ring_density * 0.0000025f *
+    float mass_hint = std::max(host.mass * host.ring_density * 0.00012f *
                                (annulus / std::max(host.radius * host.radius, 1.0e-5f)),
-                               std::max(cfg.min_fragment_mass, 1.0e-12f) * 2.0f);
+                               std::max(cfg.min_fragment_mass, 1.0e-12f) * 48.0f);
     spawn_dust_ring(host_index, mass_hint, host.ring_inner_radius, host.ring_outer_radius,
                     host.ring_density, host.ring_ice_fraction,
                     hash_combine(host.seed, 0xA77A11u),
@@ -2786,6 +2873,8 @@ void CosmosApp::process_collisions(float dt) {
     // Process all candidate pairs.
     for (auto& [i, j] : pairs) {
         if (bodies[i].marked_for_removal || bodies[j].marked_for_removal) continue;
+        // Locked bodies don't participate in collisions
+        if (bodies[i].locked || bodies[j].locked) continue;
 
             glm::vec3 rel_vel = bodies[j].vel - bodies[i].vel;
             glm::vec3 diff = bodies[j].pos - bodies[i].pos;
@@ -2896,8 +2985,10 @@ void CosmosApp::process_collisions(float dt) {
             bool compact_j = is_star_type(bodies[j].type) || is_black_hole_type(bodies[j].type);
             bool compact_vs_soft = (compact_i != compact_j);
 
-            float infall_speed = soft_body_pair ? std::max(closing_speed, escape_speed * 0.45f) : closing_speed;
-            float compression_speed = overlap_fraction * escape_speed * (soft_body_pair ? 2.8f : 1.6f);
+            // For soft bodies, use actual measured speeds — no artificial infall floor
+            // that would prevent gentle mergers between equal-mass planets.
+            float infall_speed = soft_body_pair ? closing_speed : closing_speed;
+            float compression_speed = overlap_fraction * escape_speed * (soft_body_pair ? 1.4f : 1.6f);
             float impact_speed = std::max(rel_speed, std::max(infall_speed, compression_speed));
             float reduced_mass = (bodies[i].mass * bodies[j].mass) / std::max(total_mass, 1.0e-6f);
             float impact_energy = 0.5f * reduced_mass * impact_speed * impact_speed;
@@ -2928,7 +3019,7 @@ void CosmosApp::process_collisions(float dt) {
                 float q = std::clamp(1.0f - contact_dist / std::max(h, 1.0e-6f), 0.0f, 1.0f);
                 if (q > 0.0f) {
                     float inv_total_mass = 1.0f / std::max(total_mass, 1.0e-6f);
-                    float pressure_term = q * q * (0.18f + overlap_fraction * 0.65f) *
+                    float pressure_term = q * q * (0.08f + overlap_fraction * 0.35f) *
                         std::clamp(cfg.collision_sph_pressure, 0.0f, 4.0f);
                     glm::vec3 pressure_push = normal * pressure_term;
                     bodies[i].vel -= pressure_push * (bodies[j].mass * inv_total_mass);
@@ -2970,10 +3061,12 @@ void CosmosApp::process_collisions(float dt) {
             float fragment_speed_limit = 0.0f;
             if (soft_body_pair) {
                 if (small_soft_pair) {
-                    merge_speed_limit = std::max(escape_speed * 0.20f, 1.0e-4f);
-                    fragment_speed_limit = std::max(escape_speed * 0.35f, 2.5e-4f);
+                    merge_speed_limit = std::max(escape_speed * 0.40f, 1.0e-4f);
+                    fragment_speed_limit = std::max(escape_speed * 0.70f, 2.5e-4f);
                 } else {
-                    merge_speed_limit = std::max(std::max(escape_speed * 0.55f, cfg.merge_speed_threshold * 0.0005f), 0.0015f);
+                    // Allow merging up to ~escape velocity — planets that gravitationally
+                    // fall into each other should merge, not bounce like billiard balls.
+                    merge_speed_limit = std::max(std::max(escape_speed * 0.95f, cfg.merge_speed_threshold * 0.0005f), 0.0015f);
                     fragment_speed_limit = std::max(std::max(escape_speed * 2.20f, cfg.fragment_speed_threshold * 0.0010f),
                                                     merge_speed_limit * 2.0f);
                 }
@@ -3002,13 +3095,13 @@ void CosmosApp::process_collisions(float dt) {
             bool fragment_candidate = catastrophic_fragment || optional_fragment || spin_fragment_contact ||
                 (soft_body_pair && swept_hit && impact_speed > fragment_speed_limit * 0.75f);
             bool ultra_gentle_soft = soft_body_pair &&
-                impact_speed < merge_speed_limit * 0.95f &&
-                combined_disruption < 0.030f &&
-                overlap_fraction < 0.12f;
+                impact_speed < merge_speed_limit * 1.0f &&
+                combined_disruption < 0.15f &&
+                overlap_fraction < 0.25f;
             if (small_soft_pair) {
-                ultra_gentle_soft = impact_speed < merge_speed_limit * 0.60f &&
-                    combined_disruption < 0.005f &&
-                    overlap_fraction < 0.01f;
+                ultra_gentle_soft = impact_speed < merge_speed_limit * 0.80f &&
+                    combined_disruption < 0.04f &&
+                    overlap_fraction < 0.06f;
             }
             if (ultra_gentle_soft)
                 fragment_candidate = false;
@@ -3026,15 +3119,13 @@ void CosmosApp::process_collisions(float dt) {
                 ((overlap_now &&
                   rel_speed <= merge_speed_limit &&
                   closing_speed <= merge_speed_limit &&
-                  impact_speed <= fragment_speed_limit * (soft_body_pair ? 0.70f : 0.90f) &&
-                  overlap_fraction >= (soft_body_pair ? 0.03f : 0.006f) &&
-                  combined_disruption < (soft_body_pair ? 0.06f : 0.55f)) ||
+                  impact_speed <= fragment_speed_limit * (soft_body_pair ? 0.85f : 0.90f) &&
+                  overlap_fraction >= (soft_body_pair ? 0.005f : 0.006f) &&
+                  combined_disruption < (soft_body_pair ? 0.20f : 0.55f)) ||
                  sticky_soft_merge) &&
                 !fragment_candidate;
             if (soft_body_pair && cfg.collision_fragmentation)
                 merge_candidate = merge_candidate && ultra_gentle_soft;
-            if (small_soft_pair && cfg.collision_fragmentation)
-                merge_candidate = false;
 
             if (merge_candidate) {
                 size_t big = (bodies[i].mass >= bodies[j].mass) ? i : j;

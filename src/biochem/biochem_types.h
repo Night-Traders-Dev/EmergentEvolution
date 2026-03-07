@@ -79,6 +79,12 @@ enum BioEnvironmentType : uint32_t {
     BIO_ENV_COUNT
 };
 
+enum BioAutoSpawnMode : uint32_t {
+    BIO_AUTOSPAWN_STATIC = 0,
+    BIO_AUTOSPAWN_DYNAMIC = 1,
+    BIO_AUTOSPAWN_MODE_COUNT
+};
+
 struct BioEnvironmentPreset {
     const char* name;
     const char* summary;
@@ -100,7 +106,19 @@ enum BioEnvironmentFeatureType : uint32_t {
     BIO_ENV_FEATURE_NUTRIENT = 1,
     BIO_ENV_FEATURE_TOXIN    = 2,
     BIO_ENV_FEATURE_CURRENT  = 3,
+    BIO_ENV_FEATURE_STRUCTURE = 4,
     BIO_ENV_FEATURE_COUNT
+};
+
+enum BioEnvironmentStructureShape : uint32_t {
+    BIO_ENV_STRUCTURE_LUNG_BRANCH = 0,
+    BIO_ENV_STRUCTURE_ALVEOLAR_CLUSTER = 1,
+    BIO_ENV_STRUCTURE_POND_REED = 2,
+    BIO_ENV_STRUCTURE_POND_ROCK = 3,
+    BIO_ENV_STRUCTURE_PETRI_RIM = 4,
+    BIO_ENV_STRUCTURE_PETRI_AGAR = 5,
+    BIO_ENV_STRUCTURE_BRAIN_FOLD = 6,
+    BIO_ENV_STRUCTURE_BRAIN_VESSEL = 7,
 };
 
 inline const BioEnvironmentPreset& bio_environment_preset(BioEnvironmentType env) {
@@ -289,16 +307,36 @@ struct BioGenes {
     float energy   = 1.0f;
     float telomere = 1.0f;
     float mitotic_clock = 1.0f;
+    float metabolism_efficiency = 1.0f;
+    float nutrient_affinity = 1.0f;
+    float stress_tolerance = 1.0f;
+    float defense = 1.0f;
+    float sensing = 1.0f;
+    float mutation_stability = 1.0f;
     float antibiotic_type = 0.0f;
     float antibiotic_yield = 0.0f;
     float antibiotic_diversity = 0.0f;
+};
+
+inline constexpr int BIO_GENE_TRAIT_COUNT = 16;
+
+struct BioPathogenState {
+    glm::vec3   axis{1.0f, 0.0f, 0.0f};
+    float       progress = 0.0f;
+    float       load = 0.0f;
+    BioGenes    genes{};
+    uint32_t    morphology = 0;
+    uint32_t    source_id = 0;
+    uint32_t    source_type = BIO_TYPE_COUNT;
+    uint32_t    species_key = 0;
+    uint32_t    generation = 0;
+    uint32_t    genome = 0;
 };
 
 struct BioEntity {
     glm::vec3   pos{0.0f};
     glm::vec3   vel{0.0f};
     glm::vec3   axis{0.0f, 1.0f, 0.0f};
-    glm::vec3   infection_axis{1.0f, 0.0f, 0.0f};
     float       radius    = 8.0f;
     float       energy    = 100.0f;     // health / metabolic energy
     float       age       = 0.0f;       // seconds alive
@@ -308,29 +346,22 @@ struct BioEntity {
     float       telomere_state = 1.0f;
     float       corpse_age = 0.0f;
     float       division_cooldown = 0.0f;
-    float       infection_progress = 0.0f;
-    float       infection_load = 0.0f;
     float       antibiotic_film = 0.0f;
     float       shape_aspect = 1.0f;
     float       shape_noise  = 0.2f;
     float       shape_phase  = 0.0f;
     float       mitosis_progress = 0.0f;
     BioGenes     genes{};
-    BioGenes     infection_genes{};
+    BioPathogenState viral_infection{};
+    BioPathogenState bacterial_infection{};
     uint32_t    type      = BIO_CELL;
     uint32_t    morphology = 0;
-    uint32_t    infection_morphology = 0;
     uint32_t    entity_id = 0;
     uint32_t    parent_id = 0;
-    uint32_t    infection_source_id = 0;
-    uint32_t    infection_source_type = BIO_TYPE_COUNT;
-    uint32_t    infection_species_key = 0;
     uint32_t    generation = 0;
-    uint32_t    infection_generation = 0;
     uint32_t    division_count = 0;
     uint32_t    species_key = 0;
     uint32_t    genome    = 0;          // simple genome tag for mutations
-    uint32_t    infection_genome = 0;
     bool        alive     = true;
     bool        corpse    = false;
     bool        ever_infected = false;
@@ -342,7 +373,14 @@ struct BiochemConfig {
     uint32_t environment      = BIO_ENV_HUMAN_LUNG;
     uint32_t environment_seed = 1337u;
     uint32_t entity_count     = 200;
+    uint32_t max_entities     = 5000;
     float    nutrient_rate    = 2.0f;     // nutrients spawned per second
+    bool     autospawn_enabled = false;
+    uint32_t autospawn_mode    = BIO_AUTOSPAWN_STATIC;
+    float    autospawn_static_rate = 0.6f;
+    float    autospawn_dynamic_rate = 2.0f;
+    uint32_t autospawn_target_alive = 36;
+    float    antibiotic_visibility = 1.30f;
     float    metabolism_rate  = 1.0f;     // energy consumption rate
     float    division_energy  = 150.0f;   // energy threshold for cell division
     float    mutation_rate    = 0.01f;    // per-division mutation probability
@@ -389,6 +427,8 @@ struct BioEnvironmentFeature {
     uint32_t  type = BIO_ENV_FEATURE_MEMBRANE;
     float     falloff = 0.5f;
     float     noise = 0.0f;
+    float     shape = 0.0f;
+    float     opacity = 1.0f;
 };
 
 struct BiochemEnvironment {

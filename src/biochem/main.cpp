@@ -7,6 +7,7 @@
 #include <chrono>
 #include <thread>
 #include <cmath>
+#include <limits>
 
 #ifndef APP_VERSION
 #define APP_VERSION "0.1.0"
@@ -28,6 +29,7 @@ static int pick_entity_under_cursor(BiochemApp* app, GLFWwindow* window, double 
 
     int best = -1;
     float best_dist = 30.0f;
+    float best_depth = std::numeric_limits<float>::max();
     for (size_t i = 0; i < app->state.entities.size(); i++) {
         const auto& e = app->state.entities[i];
         if (!e.alive && !e.corpse) continue;
@@ -35,6 +37,7 @@ static int pick_entity_under_cursor(BiochemApp* app, GLFWwindow* window, double 
         glm::vec4 clip = vp * glm::vec4(e.pos, 1.0f);
         if (clip.w <= 0.0f) continue;
         glm::vec3 ndc = glm::vec3(clip) / clip.w;
+        if (ndc.z < -1.0f || ndc.z > 1.0f) continue;
         float sx = (ndc.x * 0.5f + 0.5f) * W;
         float sy = (1.0f - (ndc.y * 0.5f + 0.5f)) * H;
 
@@ -45,7 +48,8 @@ static int pick_entity_under_cursor(BiochemApp* app, GLFWwindow* window, double 
         float fov_rad = glm::radians(app->camera.fov);
         float sr = (e.radius / clip.w) * (H / (2.0f * std::tan(fov_rad * 0.5f)));
         float pick_r = std::max(sr, 10.0f);
-        if (d < pick_r && d < best_dist) {
+        if (d < pick_r && (ndc.z < best_depth - 1e-4f || (std::abs(ndc.z - best_depth) <= 1e-4f && d < best_dist))) {
+            best_depth = ndc.z;
             best_dist = d;
             best = (int)i;
         }

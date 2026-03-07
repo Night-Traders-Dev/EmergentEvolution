@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <glm/gtc/matrix_inverse.hpp>
+#include <glm/gtx/norm.hpp>
 
 // ── GPU data layout (must match biochem_rt.frag) ────────────────────────────
 
@@ -10,7 +11,7 @@ struct alignas(16) BioCameraUBOData {
     glm::mat4 inv_vp;             // 64 bytes
     glm::vec4 eye_pos;            // 16 bytes
     glm::vec4 screen_info;        // 16 bytes (w,h,count,time)
-    glm::vec4 lighting_params;    // 16 bytes (unused,unused,ambient,unused)
+    glm::vec4 lighting_params;    // 16 bytes (feature_count, antibiotic_visibility, ambient, unused)
     glm::vec4 environment_color;  // 16 bytes (rgb = tint, a = haze density)
     glm::vec4 environment_factors;// 16 bytes (oxygen,nutrients,pH,toxicity)
 };                                // Total: 144 bytes
@@ -30,7 +31,7 @@ struct BioEnvironmentFeatureGPU {
     glm::vec4 pos_radius;     // xyz = world position, w = radius
     glm::vec4 axis_strength;  // xyz = dominant direction, w = strength
     glm::vec4 tint_type;      // rgb = tint, a = feature type
-    glm::vec4 meta;           // x = falloff, y = noise, z = unused, w = unused
+    glm::vec4 meta;           // x = falloff, y = noise, z = shape, w = opacity
 };
 
 // ── Entity type colors (0-1 range) ─────────────────────────────────────────
@@ -169,13 +170,15 @@ void BiochemRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
+    sphere_capacity_ = 2048;
+    feature_capacity_ = 256;
     sphere_ssbo_ = vk.create_buffer(
-        MAX_SPHERES * sizeof(BioSphereGPU),
+        sphere_capacity_ * sizeof(BioSphereGPU),
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
     feature_ssbo_ = vk.create_buffer(
-        MAX_ENV_FEATURES * sizeof(BioEnvironmentFeatureGPU),
+        feature_capacity_ * sizeof(BioEnvironmentFeatureGPU),
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
@@ -197,7 +200,10 @@ void BiochemRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     alloc_ci.pSetLayouts        = &desc_layout_;
     vkAllocateDescriptorSets(vk.device, &alloc_ci, &desc_set_);
 
-    // Write descriptors
+    refresh_descriptors(vk);
+}
+
+void BiochemRaytracer::refresh_descriptors(VulkanContext& vk) {
     VkDescriptorBufferInfo ubo_info{};
     ubo_info.buffer = camera_ubo_.handle;
     ubo_info.offset = 0;
@@ -206,12 +212,12 @@ void BiochemRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     VkDescriptorBufferInfo ssbo_info{};
     ssbo_info.buffer = sphere_ssbo_.handle;
     ssbo_info.offset = 0;
-    ssbo_info.range  = MAX_SPHERES * sizeof(BioSphereGPU);
+    ssbo_info.range  = sphere_capacity_ * sizeof(BioSphereGPU);
 
     VkDescriptorBufferInfo feature_info{};
     feature_info.buffer = feature_ssbo_.handle;
     feature_info.offset = 0;
-    feature_info.range  = MAX_ENV_FEATURES * sizeof(BioEnvironmentFeatureGPU);
+    feature_info.range  = feature_capacity_ * sizeof(BioEnvironmentFeatureGPU);
 
     VkWriteDescriptorSet writes[3]{};
     writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -236,6 +242,37 @@ void BiochemRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     writes[2].pBufferInfo     = &feature_info;
 
     vkUpdateDescriptorSets(vk.device, 3, writes, 0, nullptr);
+}
+
+void BiochemRaytracer::ensure_buffer_capacity(VulkanContext& vk, size_t sphere_count, size_t feature_count) {
+    bool changed = false;
+    sphere_count = std::max<size_t>(sphere_count, 1);
+    feature_count = std::max<size_t>(feature_count, 1);
+
+    if (sphere_count > sphere_capacity_) {
+        size_t new_capacity = std::max(sphere_count, sphere_capacity_ == 0 ? size_t(2048) : sphere_capacity_ * 2);
+        vk.destroy_buffer(sphere_ssbo_);
+        sphere_ssbo_ = vk.create_buffer(
+            new_capacity * sizeof(BioSphereGPU),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        sphere_capacity_ = new_capacity;
+        changed = true;
+    }
+
+    if (feature_count > feature_capacity_) {
+        size_t new_capacity = std::max(feature_count, feature_capacity_ == 0 ? size_t(256) : feature_capacity_ * 2);
+        vk.destroy_buffer(feature_ssbo_);
+        feature_ssbo_ = vk.create_buffer(
+            new_capacity * sizeof(BioEnvironmentFeatureGPU),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        feature_capacity_ = new_capacity;
+        changed = true;
+    }
+
+    if (changed)
+        refresh_descriptors(vk);
 }
 
 // ── Destroy ─────────────────────────────────────────────────────────────────
@@ -264,19 +301,34 @@ void BiochemRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     glm::mat4 proj = camera.proj_matrix(aspect);
     glm::mat4 vp   = proj * view;
 
-    // Count renderable entities for upload, including drifting corpses.
-    int render_count = 0;
-    for (const auto& e : state.entities)
-        if (e.alive || e.corpse) render_count++;
-    int n = std::min(render_count, MAX_SPHERES);
-    int feature_count = std::min(static_cast<int>(environment.features.size()), MAX_ENV_FEATURES);
+    std::vector<const BioEntity*> visible_entities;
+    visible_entities.reserve(state.entities.size());
+    for (const auto& e : state.entities) {
+        if (!e.alive && !e.corpse)
+            continue;
+        glm::vec4 clip = vp * glm::vec4(e.pos, 1.0f);
+        if (clip.w <= 0.0f)
+            continue;
+        glm::vec3 ndc = glm::vec3(clip) / clip.w;
+        float margin = std::max(0.12f, e.radius / std::max(clip.w, 1.0f));
+        if (ndc.z < -1.25f || ndc.z > 1.25f)
+            continue;
+        if (ndc.x < -1.0f - margin || ndc.x > 1.0f + margin ||
+            ndc.y < -1.0f - margin || ndc.y > 1.0f + margin)
+            continue;
+        visible_entities.push_back(&e);
+    }
+
+    int n = static_cast<int>(visible_entities.size());
+    int feature_count = static_cast<int>(environment.features.size());
+    ensure_buffer_capacity(vk, visible_entities.size(), environment.features.size());
 
     // ── Upload camera UBO ──────────────────────────────────────────────────
     BioCameraUBOData cam{};
     cam.inv_vp         = glm::inverse(vp);
     cam.eye_pos        = glm::vec4(camera.eye_position(), 0.0f);
     cam.screen_info    = glm::vec4(screen_w, screen_h, (float)n, time);
-    cam.lighting_params = glm::vec4((float)feature_count, 0.0f, cfg.ambient_strength, 0.0f);
+    cam.lighting_params = glm::vec4((float)feature_count, cfg.antibiotic_visibility, cfg.ambient_strength, 0.0f);
     cam.environment_color = glm::vec4(cfg.environment_tint,
         0.010f + cfg.flow_strength * 0.0007f + cfg.nutrient_density * 0.0025f);
     cam.environment_factors = glm::vec4(
@@ -293,30 +345,36 @@ void BiochemRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     // ── Upload sphere SSBO ─────────────────────────────────────────────────
     std::vector<BioSphereGPU> spheres;
     spheres.reserve(n);
-    for (const auto& e : state.entities) {
-        if (!e.alive && !e.corpse) continue;
-        if ((int)spheres.size() >= MAX_SPHERES) break;
+    for (const BioEntity* entity : visible_entities) {
+        const auto& e = *entity;
 
         glm::vec3 col = bio_type_color(e.type);
         BioSphereGPU s;
         float corpse_shrink = e.corpse ? std::clamp(0.76f - e.corpse_age * 0.010f, 0.42f, 0.76f) : 1.0f;
-        float infection_swelling = (e.type == BIO_CELL && e.infection_progress > 0.0f && !e.corpse)
-            ? (1.0f + std::min(0.36f, e.infection_progress * 0.20f + std::clamp(e.infection_load, 0.0f, 14.0f) * 0.012f))
+        float dominant_infection = std::max(e.viral_infection.progress, e.bacterial_infection.progress);
+        float total_infection_load = e.viral_infection.load + e.bacterial_infection.load;
+        float infection_swelling = ((e.type == BIO_CELL || e.type == BIO_BACTERIUM) && dominant_infection > 0.0f && !e.corpse)
+            ? (1.0f + std::min(0.36f, dominant_infection * 0.20f + std::clamp(total_infection_load, 0.0f, 14.0f) * 0.012f))
             : 1.0f;
         float antibiotic_cloud = (e.type == BIO_BACTERIUM && e.antibiotic_film > 0.02f && !e.corpse)
-            ? (1.0f + std::min(1.35f, e.antibiotic_film * (0.85f + e.genes.antibiotic_yield * 0.28f)))
+            ? (1.0f + std::min(1.85f, e.antibiotic_film * cfg.antibiotic_visibility *
+                                      (0.85f + e.genes.antibiotic_yield * 0.28f)))
             : 1.0f;
         s.pos_radius = glm::vec4(e.pos, e.radius * corpse_shrink * infection_swelling * antibiotic_cloud);
         s.axis_morph = glm::vec4(e.axis, (float)render_morphology_for(e));
         s.color_type = glm::vec4(col, (float)e.type);
         s.shape_params = glm::vec4(e.shape_aspect, e.shape_noise, e.shape_phase, e.mitosis_progress);
         s.life_params = glm::vec4(e.organelle_health, e.nutrient_reserve, e.corpse ? 1.0f : 0.0f, e.telomere_state);
-        float infection_render_morph = (e.infection_progress > 0.0f && e.infection_source_type == BIO_VIRUS)
-            ? static_cast<float>(bio_virus_visual_family(e.infection_morphology))
+        float infection_render_morph = (e.viral_infection.progress > 0.0f)
+            ? static_cast<float>(bio_virus_visual_family(e.viral_infection.morphology))
             : 0.0f;
-        s.signal_params = glm::vec4(e.infection_progress, e.infection_load, infection_render_morph, e.antibiotic_film);
-        s.gene_params = glm::vec4(e.genes.antibiotic_type, e.genes.antibiotic_diversity, e.genes.antibiotic_yield, 0.0f);
-        s.aux_params = glm::vec4(glm::normalize(e.infection_axis), 0.0f);
+        glm::vec3 viral_axis = glm::length2(e.viral_infection.axis) > 1e-4f
+            ? glm::normalize(e.viral_infection.axis)
+            : glm::vec3(1.0f, 0.0f, 0.0f);
+        s.signal_params = glm::vec4(e.viral_infection.progress, e.viral_infection.load, infection_render_morph, e.antibiotic_film);
+        s.gene_params = glm::vec4(e.genes.antibiotic_type, e.genes.antibiotic_diversity, e.genes.antibiotic_yield,
+                                  e.bacterial_infection.progress);
+        s.aux_params = glm::vec4(viral_axis, e.bacterial_infection.load);
         spheres.push_back(s);
     }
 
@@ -330,13 +388,11 @@ void BiochemRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     std::vector<BioEnvironmentFeatureGPU> features;
     features.reserve(feature_count);
     for (const auto& feature : environment.features) {
-        if ((int)features.size() >= MAX_ENV_FEATURES) break;
-
         BioEnvironmentFeatureGPU gpu{};
         gpu.pos_radius = glm::vec4(feature.pos, feature.radius);
         gpu.axis_strength = glm::vec4(feature.axis, feature.strength);
         gpu.tint_type = glm::vec4(feature.tint, (float)feature.type);
-        gpu.meta = glm::vec4(feature.falloff, feature.noise, 0.0f, 0.0f);
+        gpu.meta = glm::vec4(feature.falloff, feature.noise, feature.shape, feature.opacity);
         features.push_back(gpu);
     }
 

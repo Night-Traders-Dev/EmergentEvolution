@@ -66,29 +66,23 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
     double mx, my;
     glfwGetCursorPos(window, &mx, &my);
 
-    // ── Left-click: orbit drag OR click-to-select / double-click-to-focus ──
+    // ── Left-click: drag to orbit, click to select, double-click to focus ──
     if (button == GLFW_MOUSE_BUTTON_LEFT) {
         if (action == GLFW_PRESS) {
-            // Check for shift+left = pan
-            if (mods & GLFW_MOD_SHIFT) {
-                app->mouse_panning = true;
-                app->last_mouse_x = mx;
-                app->last_mouse_y = my;
-            } else {
-                app->mouse_dragging = true;
-                app->last_mouse_x = mx;
-                app->last_mouse_y = my;
+            app->mouse_dragging = true;
+            app->camera.begin_orbit();
+            app->last_mouse_x = mx;
+            app->last_mouse_y = my;
 
-                // Set up click candidate for click-to-select
-                app->click_pending_ = true;
-                app->click_start_x_ = (float)mx;
-                app->click_start_y_ = (float)my;
+            // Set up click candidate for click-to-select
+            app->click_pending_ = true;
+            app->click_start_x_ = (float)mx;
+            app->click_start_y_ = (float)my;
 
-                int fb_w, fb_h;
-                glfwGetFramebufferSize(window, &fb_w, &fb_h);
-                app->click_candidate_ = app->pick_body((float)mx, (float)my,
-                                                        (float)fb_w, (float)fb_h);
-            }
+            int fb_w, fb_h;
+            glfwGetFramebufferSize(window, &fb_w, &fb_h);
+            app->click_candidate_ = app->pick_body((float)mx, (float)my,
+                                                    (float)fb_w, (float)fb_h);
         } else { // RELEASE
             float drag_dist = std::sqrt(
                 (float)((mx - app->click_start_x_) * (mx - app->click_start_x_) +
@@ -109,8 +103,7 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
                     // Double-click on body → focus camera on it
                     const auto& b = app->state.bodies[app->click_candidate_];
                     app->selected_body = app->click_candidate_;
-                    app->camera.focus_on(b.pos, app->click_candidate_);
-                    // Zoom to a comfortable distance based on body radius
+                    app->camera.focus_on(b.pos, app->click_candidate_, b.radius);
                     app->camera.target_distance = b.radius * 8.0f;
                 } else {
                     // Single click on body → select. Empty space → spawn (if spawn menu open) or deselect.
@@ -120,11 +113,10 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
                         app->selected_body = -1;
                         glm::vec3 spawn_pos = viewport_spawn_position(app, window, mx, my);
                         int spawned = app->spawn_preview_body(spawn_pos);
-                        // Zoom camera to the spawned body
                         if (spawned >= 0 && spawned < (int)app->state.bodies.size()) {
                             const auto& b = app->state.bodies[spawned];
                             app->selected_body = spawned;
-                            app->camera.focus_on(b.pos, spawned);
+                            app->camera.focus_on(b.pos, spawned, b.radius);
                             app->camera.target_distance = b.radius * 8.0f;
                         }
                     } else {
@@ -139,7 +131,7 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
 
             app->click_pending_ = false;
             app->mouse_dragging = false;
-            app->mouse_panning = false;
+            app->camera.end_orbit();
         }
     }
 
@@ -164,6 +156,17 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
         }
     }
 
+    // ── Middle-click drag: pan camera ──
+    if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
+        if (action == GLFW_PRESS) {
+            app->mouse_panning = true;
+            app->last_mouse_x = mx;
+            app->last_mouse_y = my;
+        } else {
+            app->mouse_panning = false;
+        }
+    }
+
 }
 
 static void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
@@ -176,13 +179,13 @@ static void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
     app->last_mouse_x = xpos;
     app->last_mouse_y = ypos;
 
-    // Pan (right-drag or shift+left-drag)
+    // Pan (middle-drag)
     if (app->mouse_panning) {
         app->camera.pan((float)dx, (float)dy);
         return;
     }
 
-    // Orbit (left-drag)
+    // Orbit (right-drag)
     if (app->mouse_dragging) {
         app->camera.orbit((float)dx, (float)dy);
     }
@@ -193,10 +196,18 @@ static void scroll_callback(GLFWwindow* window, double /*xoffset*/, double yoffs
     auto* app = static_cast<CosmosApp*>(glfwGetWindowUserPointer(window));
     if (!app) return;
 
-    app->camera.zoom((float)yoffset);
+    // Zoom toward cursor position (Universe Sandbox style)
+    double mx, my;
+    glfwGetCursorPos(window, &mx, &my);
+    int fb_w, fb_h;
+    glfwGetFramebufferSize(window, &fb_w, &fb_h);
+
+    glm::vec3 world_pt = app->camera.screen_to_world_on_target_plane(
+        (float)mx, (float)my, (float)fb_w, (float)fb_h);
+    app->camera.zoom_toward((float)yoffset, world_pt);
 }
 
-static void key_callback(GLFWwindow* window, int key, int /*scancode*/, int action, int /*mods*/) {
+static void key_callback(GLFWwindow* window, int key, int /*scancode*/, int action, int mods) {
     if (action != GLFW_PRESS) return;
     auto* app = static_cast<CosmosApp*>(glfwGetWindowUserPointer(window));
     if (!app) return;
@@ -229,9 +240,8 @@ static void key_callback(GLFWwindow* window, int key, int /*scancode*/, int acti
     }
     if (key == GLFW_KEY_F && app->selected_body >= 0 &&
         app->selected_body < (int)app->state.bodies.size()) {
-        // F key: focus on selected body
         const auto& b = app->state.bodies[app->selected_body];
-        app->camera.focus_on(b.pos, app->selected_body);
+        app->camera.focus_on(b.pos, app->selected_body, b.radius);
         app->camera.target_distance = b.radius * 8.0f;
     }
     if (key == GLFW_KEY_DELETE && app->selected_body >= 0 &&
@@ -240,6 +250,29 @@ static void key_callback(GLFWwindow* window, int key, int /*scancode*/, int acti
         app->state.trails.erase(app->state.trails.begin() + app->selected_body);
         app->selected_body = -1;
         app->camera.release_focus();
+    }
+    // Ctrl+D: duplicate selected body
+    if (key == GLFW_KEY_D && (mods & GLFW_MOD_CONTROL) && !app->show_pause_menu) {
+        app->duplicate_selected_body();
+    }
+    // F1: toggle keyboard shortcuts overlay
+    if (key == GLFW_KEY_F1) {
+        app->shortcuts_visible_ = !app->shortcuts_visible_;
+    }
+    // V: toggle velocity arrows
+    if (key == GLFW_KEY_V && !app->show_pause_menu) {
+        app->show_velocity_arrows_ = !app->show_velocity_arrows_;
+    }
+    // L: lock/unlock selected body
+    if (key == GLFW_KEY_L && !app->show_pause_menu &&
+        app->selected_body >= 0 && app->selected_body < (int)app->state.bodies.size()) {
+        auto& b = app->state.bodies[app->selected_body];
+        b.locked = !b.locked;
+        if (b.locked) b.vel = glm::vec3(0.0f);
+    }
+    // F12: screenshot
+    if (key == GLFW_KEY_F12) {
+        app->screenshot_requested_ = true;
     }
 }
 

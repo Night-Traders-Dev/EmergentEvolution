@@ -411,7 +411,7 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
     cam.quality_params = glm::vec4(
         (float)cfg.cosmos_quality,
         cfg.cosmos_hq_shading ? 1.0f : 0.0f,
-        (float)std::clamp(cfg.cosmos_background_preset, 0, 11),
+        (float)std::clamp(cfg.cosmos_background_preset, 0, 19),
         (float)cfg.sim_time_accumulated);
     cam.render_flags = glm::vec4(
         cfg.cosmos_background_starfield ? std::max(cfg.background_starfield_intensity, 0.0f) : 0.0f,

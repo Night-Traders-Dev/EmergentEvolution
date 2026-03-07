@@ -9,7 +9,7 @@ layout(std140, set = 0, binding = 0) uniform CameraUBO {
     mat4 inv_vp;            // inverse view-projection matrix
     vec4 eye_pos;           // xyz = camera position
     vec4 screen_info;       // x = width, y = height, z = entity_count, w = time
-    vec4 lighting_params;   // x = unused, y = unused, z = ambient, w = unused
+    vec4 lighting_params;   // x = feature_count, y = antibiotic visibility, z = ambient, w = unused
     vec4 environment_color; // rgb = environment tint, a = haze density
     vec4 environment_factors; // x = oxygen, y = nutrients, z = pH, w = toxicity
 };
@@ -22,9 +22,9 @@ struct Sphere {
     vec4 color_type;    // rgb = base color (0-1), a = entity type
     vec4 shape_params;  // x = aspect, y = noise, z = phase, w = mitosis progress
     vec4 life_params;   // x = organelle health, y = nutrient reserve, z = corpse flag, w = telomere state
-    vec4 signal_params; // x = infection progress, y = infection load, z = infection morph, w = antibiotic film
-    vec4 gene_params;   // x = antibiotic type, y = antibiotic diversity, z = antibiotic yield, w = unused
-    vec4 aux_params;    // xyz = infection axis, w = unused
+    vec4 signal_params; // x = viral infection progress, y = viral infection load, z = viral infection morph, w = antibiotic film
+    vec4 gene_params;   // x = antibiotic type, y = antibiotic diversity, z = antibiotic yield, w = bacterial infection progress
+    vec4 aux_params;    // xyz = viral infection axis, w = bacterial infection load
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer SphereBuffer {
@@ -35,12 +35,27 @@ struct EnvFeature {
     vec4 pos_radius;
     vec4 axis_strength;
     vec4 tint_type;
-    vec4 meta;
+    vec4 meta; // x = falloff, y = noise, z = structure shape, w = opacity
 };
 
 layout(std430, set = 0, binding = 2) readonly buffer FeatureBuffer {
     EnvFeature features[];
 };
+
+const float FEATURE_MEMBRANE = 0.0;
+const float FEATURE_NUTRIENT = 1.0;
+const float FEATURE_TOXIN = 2.0;
+const float FEATURE_CURRENT = 3.0;
+const float FEATURE_STRUCTURE = 4.0;
+
+const int STRUCT_LUNG_BRANCH = 0;
+const int STRUCT_ALVEOLAR_CLUSTER = 1;
+const int STRUCT_POND_REED = 2;
+const int STRUCT_POND_ROCK = 3;
+const int STRUCT_PETRI_RIM = 4;
+const int STRUCT_PETRI_AGAR = 5;
+const int STRUCT_BRAIN_FOLD = 6;
+const int STRUCT_BRAIN_VESSEL = 7;
 
 float hash3d(vec3 p);
 
@@ -312,8 +327,9 @@ float entity_sdf_local(vec3 p, Sphere s) {
     if (entity_type == 1) {
         float core = sd_bacteria_shape(p, morph, aspect, noise, phase, division);
         if (antibiotic_film > 0.02 && corpse < 0.5) {
+            float antibiotic_visibility = lighting_params.y;
             float cloud = sd_antibiotic_cloud(p, morph, aspect, noise, phase, division,
-                                              antibiotic_film, antibiotic_diversity);
+                                              antibiotic_film * antibiotic_visibility, antibiotic_diversity);
             return min(core, cloud);
         }
         return core;
@@ -928,12 +944,195 @@ vec3 subsurface(vec3 normal, vec3 light_dir, vec3 view_dir, vec3 color, float ra
     return color * (wrap * 0.2 + back_scatter) * translucency;
 }
 
+float structure_bound_scale(int shape) {
+    if (shape == STRUCT_PETRI_RIM)
+        return 1.40;
+    if (shape == STRUCT_LUNG_BRANCH || shape == STRUCT_BRAIN_VESSEL || shape == STRUCT_POND_REED)
+        return 1.28;
+    if (shape == STRUCT_BRAIN_FOLD)
+        return 1.24;
+    return 1.15;
+}
+
+float sd_environment_structure_local(vec3 p, EnvFeature feature) {
+    int shape = int(feature.meta.z + 0.5);
+    float noise = feature.meta.y;
+    float opacity = feature.meta.w;
+    float detail_phase = noise * 6.2831853;
+
+    if (shape == STRUCT_LUNG_BRANCH) {
+        float trunk = sd_capsule(p, vec3(0.0, -0.88, 0.0), vec3(0.0, 0.10, 0.0), 0.16);
+        float arm_a = sd_capsule(p, vec3(0.0, 0.02, 0.0), vec3(0.56, 0.74, 0.0), 0.12);
+        float arm_b = sd_capsule(p, vec3(0.0, 0.02, 0.0), vec3(-0.56, 0.74, 0.0), 0.12);
+        float branch = min(trunk, min(arm_a, arm_b));
+        float rings = sin(p.y * 14.0 + detail_phase) * 0.018;
+        return branch - rings;
+    }
+    if (shape == STRUCT_ALVEOLAR_CLUSTER) {
+        float cluster = sd_sphere(p, 0.52);
+        cluster = min(cluster, sd_sphere(p - vec3(0.48, 0.08, 0.0), 0.34));
+        cluster = min(cluster, sd_sphere(p + vec3(0.46, -0.04, 0.06), 0.32));
+        cluster = min(cluster, sd_sphere(p - vec3(0.12, 0.36, 0.26), 0.28));
+        cluster = min(cluster, sd_sphere(p + vec3(0.10, -0.30, -0.28), 0.30));
+        cluster -= (0.5 + 0.5 * sin(dot(p, vec3(9.0, 7.0, 11.0)) + detail_phase)) * 0.04;
+        return cluster;
+    }
+    if (shape == STRUCT_POND_REED) {
+        float stalk = sd_capsule(p, vec3(0.0, -0.90, 0.0), vec3(0.0, 0.95, 0.0), 0.07);
+        float leaf_a = sd_capsule(p, vec3(0.0, 0.06, 0.0), vec3(0.46, 0.56, 0.0), 0.05);
+        float leaf_b = sd_capsule(p, vec3(0.0, -0.08, 0.0), vec3(-0.40, 0.40, 0.12), 0.045);
+        return min(stalk, min(leaf_a, leaf_b));
+    }
+    if (shape == STRUCT_POND_ROCK) {
+        vec3 q = p;
+        q.y *= 1.28;
+        float rock = sd_ellipsoid(q, vec3(0.96, 0.60, 0.82));
+        rock -= sin(p.x * 8.0 + detail_phase) * sin(p.z * 7.0 - detail_phase * 0.8) * 0.06;
+        return rock;
+    }
+    if (shape == STRUCT_PETRI_RIM) {
+        vec3 q = p;
+        q.y *= 1.35;
+        float rim = sd_torus(q, vec2(1.04, 0.16 + opacity * 0.02));
+        float lip = sd_torus(q + vec3(0.0, 0.10, 0.0), vec2(0.96, 0.12));
+        return min(rim, lip);
+    }
+    if (shape == STRUCT_PETRI_AGAR) {
+        vec3 q = p;
+        q.y += 0.30;
+        float mound = sd_ellipsoid(q, vec3(0.96, 0.30, 0.96));
+        mound -= (0.5 + 0.5 * sin(dot(p, vec3(8.0, 0.0, 10.0)) + detail_phase)) * 0.04;
+        return mound;
+    }
+    if (shape == STRUCT_BRAIN_FOLD) {
+        vec3 q = p;
+        q.y += sin(p.z * 5.0 + detail_phase) * 0.14;
+        q.x += sin(p.z * 3.5 - detail_phase * 0.6) * 0.08;
+        float fold = sd_ellipsoid(q, vec3(0.92, 0.48, 0.68));
+        float groove = sd_capsule(q, vec3(0.0, -0.18, -0.72), vec3(0.0, 0.26, 0.72), 0.18);
+        return max(fold, -groove);
+    }
+    if (shape == STRUCT_BRAIN_VESSEL) {
+        float trunk = sd_capsule(p, vec3(0.0, -0.72, -0.18), vec3(0.0, 0.76, 0.18), 0.10);
+        float branch = sd_capsule(p, vec3(0.0, 0.12, 0.02), vec3(0.42, 0.58, 0.40), 0.07);
+        return min(trunk, branch);
+    }
+
+    return sd_sphere(p, 0.80);
+}
+
+vec3 structure_normal_local(vec3 p, EnvFeature feature) {
+    vec2 e = vec2(0.0035, 0.0);
+    return normalize(vec3(
+        sd_environment_structure_local(p + vec3(e.x, e.y, e.y), feature) - sd_environment_structure_local(p - vec3(e.x, e.y, e.y), feature),
+        sd_environment_structure_local(p + vec3(e.y, e.x, e.y), feature) - sd_environment_structure_local(p - vec3(e.y, e.x, e.y), feature),
+        sd_environment_structure_local(p + vec3(e.y, e.y, e.x), feature) - sd_environment_structure_local(p - vec3(e.y, e.y, e.x), feature)
+    ));
+}
+
+bool refine_structure_hit(vec3 ro, vec3 rd, EnvFeature feature, float bound_t,
+                          out float refined_t, out vec3 refined_pos, out vec3 refined_normal,
+                          out vec3 local_surface) {
+    mat3 basis = basis_from_axis(feature.axis_strength.xyz);
+    float radius = max(feature.pos_radius.w, 0.001);
+    float bound_radius = radius * structure_bound_scale(int(feature.meta.z + 0.5));
+    float start_t = max(bound_t - bound_radius * 1.15, 0.0);
+    float end_t = bound_t + bound_radius * 1.25;
+    float t = start_t;
+
+    for (int step = 0; step < 44; ++step) {
+        vec3 pos = ro + rd * t;
+        vec3 local = transpose(basis) * ((pos - feature.pos_radius.xyz) / radius);
+        float dist = sd_environment_structure_local(local, feature) * radius;
+        if (dist < radius * 0.004) {
+            vec3 normal_local = structure_normal_local(local, feature);
+            refined_t = t;
+            refined_pos = pos;
+            refined_normal = normalize(basis * normal_local);
+            local_surface = local;
+            return true;
+        }
+        t += max(dist * 0.72, radius * 0.010);
+        if (t > end_t)
+            break;
+    }
+    return false;
+}
+
+bool trace_environment_structure(vec3 ro, vec3 rd, float max_t, int feature_count,
+                                 out float closest_t, out int closest_idx,
+                                 out vec3 hit_pos, out vec3 hit_normal, out vec3 local_hit) {
+    closest_t = max_t;
+    closest_idx = -1;
+    hit_pos = vec3(0.0);
+    hit_normal = vec3(0.0, 1.0, 0.0);
+    local_hit = vec3(0.0);
+
+    for (int i = 0; i < feature_count; ++i) {
+        if (abs(features[i].tint_type.a - FEATURE_STRUCTURE) > 0.1)
+            continue;
+        float bound_radius = features[i].pos_radius.w * structure_bound_scale(int(features[i].meta.z + 0.5));
+        float t = intersect_sphere(ro, rd, features[i].pos_radius.xyz, bound_radius);
+        if (t < 0.0 || t >= closest_t)
+            continue;
+
+        float refined_t;
+        vec3 refined_pos;
+        vec3 refined_normal;
+        vec3 refined_local;
+        if (refine_structure_hit(ro, rd, features[i], t, refined_t, refined_pos, refined_normal, refined_local) &&
+            refined_t < closest_t) {
+            closest_t = refined_t;
+            closest_idx = i;
+            hit_pos = refined_pos;
+            hit_normal = refined_normal;
+            local_hit = refined_local;
+        }
+    }
+
+    return closest_idx >= 0;
+}
+
+vec3 shade_environment_structure(EnvFeature feature, vec3 pos, vec3 normal, vec3 local_pos,
+                                 vec3 view_dir, vec3 env_tint, vec3 bg, vec4 media, float ambient, float time) {
+    int shape = int(feature.meta.z + 0.5);
+    float opacity = clamp(feature.meta.w, 0.0, 1.0);
+    vec3 base = feature.tint_type.rgb;
+    vec3 key_dir = normalize(vec3(0.6, 0.8, 0.4));
+    vec3 fill_dir = normalize(vec3(-0.4, -0.3, 0.6));
+    float key = max(dot(normal, key_dir), 0.0);
+    float fill = max(dot(normal, fill_dir), 0.0);
+    float rim = pow(1.0 - max(dot(normal, view_dir), 0.0), 2.0);
+    float detail = 0.5 + 0.5 * sin(dot(local_pos, vec3(11.0, 9.0, 7.0)) + feature.meta.y * 6.2831853 + time * 0.22);
+    vec3 color = base;
+
+    if (shape == STRUCT_LUNG_BRANCH || shape == STRUCT_ALVEOLAR_CLUSTER) {
+        color = mix(base, vec3(0.88, 0.60, 0.54), detail * 0.45);
+    } else if (shape == STRUCT_POND_REED) {
+        color = mix(base, vec3(0.34, 0.52, 0.18), detail * 0.55);
+    } else if (shape == STRUCT_POND_ROCK) {
+        color = mix(base, vec3(0.34, 0.30, 0.24), detail * 0.30);
+    } else if (shape == STRUCT_PETRI_RIM || shape == STRUCT_PETRI_AGAR) {
+        color = mix(base, vec3(0.70, 0.66, 0.36), detail * 0.26);
+    } else if (shape == STRUCT_BRAIN_FOLD) {
+        color = mix(base, vec3(0.56, 0.48, 0.62), detail * 0.38);
+    } else if (shape == STRUCT_BRAIN_VESSEL) {
+        color = mix(base, vec3(0.70, 0.18, 0.18), detail * 0.30);
+    }
+
+    vec3 lit = color * (ambient * 0.90 + key * 0.70 + fill * 0.24);
+    lit += subsurface(normal, key_dir, view_dir, color, feature.pos_radius.w * 0.8) * 0.45;
+    lit += color * rim * (0.12 + opacity * 0.10);
+    lit = mix(bg + media.rgb * 0.28, lit, clamp(0.42 + opacity * 0.48, 0.28, 0.92));
+    return lit;
+}
+
 vec4 trace_environment_media(vec3 ro, vec3 rd, float max_t, int feature_count) {
     vec3 accum = vec3(0.0);
     float density = 0.0;
     float limit = max(max_t, 350.0);
 
-    for (int i = 0; i < feature_count && i < 128; ++i) {
+    for (int i = 0; i < feature_count; ++i) {
         vec3 center = features[i].pos_radius.xyz;
         float radius = features[i].pos_radius.w;
         vec3 to_center = center - ro;
@@ -950,7 +1149,8 @@ vec4 trace_environment_media(vec3 ro, vec3 rd, float max_t, int feature_count) {
         float gain = 0.10;
         if (type > 0.5 && type < 1.5) gain = 0.18;
         else if (type > 1.5 && type < 2.5) gain = 0.16;
-        else if (type > 2.5) gain = 0.09;
+        else if (type > 2.5 && type < 3.5) gain = 0.09;
+        else if (type > 3.5) gain = 0.05 * features[i].meta.w;
 
         accum += tint * influence * gain;
         density += influence * gain * 1.4;
@@ -967,6 +1167,7 @@ void main() {
     int entity_count = int(screen_info.z);
     float time = screen_info.w;
     int feature_count = int(lighting_params.x);
+    float antibiotic_visibility = lighting_params.y;
     float ambient = lighting_params.z;
     vec3 env_tint = environment_color.rgb;
     float haze_density = environment_color.a;
@@ -994,7 +1195,7 @@ void main() {
     float closest_t = 1e30;
     int closest_idx = -1;
 
-    for (int i = 0; i < entity_count && i < 1024; i++) {
+    for (int i = 0; i < entity_count; i++) {
         float t = intersect_sphere(ro, rd,
             spheres[i].pos_radius.xyz,
             spheres[i].pos_radius.w);
@@ -1004,10 +1205,33 @@ void main() {
         }
     }
 
+    float structure_t;
+    int structure_idx;
+    vec3 structure_pos;
+    vec3 structure_normal;
+    vec3 structure_local;
+    bool has_structure_hit = trace_environment_structure(ro, rd, closest_t, feature_count,
+                                                         structure_t, structure_idx,
+                                                         structure_pos, structure_normal, structure_local);
+
     // ── No hit — background ────────────────────────────────────────────────
-    if (closest_idx < 0) {
+    if (closest_idx < 0 && !has_structure_hit) {
         vec4 media = trace_environment_media(ro, rd, 1200.0, feature_count);
         outColor = vec4(background(rd, time, env_tint, oxygen, nutrients, acidity, toxicity) + media.rgb, 1.0);
+        return;
+    }
+
+    vec3 bg = background(rd, time, env_tint, oxygen, nutrients, acidity, toxicity);
+    if (has_structure_hit && (closest_idx < 0 || structure_t < closest_t)) {
+        EnvFeature structure = features[structure_idx];
+        vec4 media = trace_environment_media(ro, rd, structure_t, feature_count);
+        vec3 structure_color = shade_environment_structure(structure, structure_pos, structure_normal,
+                                                          structure_local, -rd, env_tint, bg, media, ambient, time);
+        float haze = 1.0 - exp(-structure_t * haze_density);
+        haze *= 0.28 + nutrients * 0.08 + toxicity * 0.28;
+        structure_color += media.rgb;
+        structure_color = mix(structure_color, bg + media.rgb * 0.26, clamp(haze + media.a * 0.18, 0.0, 0.62));
+        outColor = vec4(pow(max(structure_color, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
         return;
     }
 
@@ -1037,11 +1261,13 @@ void main() {
     float antibiotic_type = hit.gene_params.x;
     float antibiotic_diversity = hit.gene_params.y;
     float antibiotic_yield = hit.gene_params.z;
+    float bacterial_infection_progress = hit.gene_params.w;
     mat3 hit_basis = basis_from_axis(hit.axis_morph.xyz);
     vec3 infection_axis_local = transpose(hit_basis) * hit.aux_params.xyz;
     infection_axis_local = length(infection_axis_local) > 1e-4
         ? normalize(infection_axis_local)
         : vec3(1.0, 0.0, 0.0);
+    float bacterial_infection_load = hit.aux_params.w;
     float bacteria_core_sdf = 0.0;
     bool bacteria_cloud_hit = false;
     if (entity_type == 1) {
@@ -1202,11 +1428,12 @@ void main() {
                                        film_color * (0.74 + cloud_noise * 0.14) + vec3(0.06, 0.08, 0.10),
                                        iridescence * 0.45);
                 final_color = mix(final_color, cloud_color, 0.64);
-                final_color += film_color * cloud_noise * antibiotic_film * 0.16;
+                final_color += film_color * cloud_noise * antibiotic_film * antibiotic_visibility * 0.24;
             } else {
                 final_color = mix(final_color, final_color * 0.84 + film_color * (0.74 + antibiotic_yield * 0.12),
-                                  film_shell * antibiotic_film * 0.68);
-                final_color += film_color * film_shell * antibiotic_film * (0.10 + 0.08 * iridescence);
+                                  film_shell * antibiotic_film * antibiotic_visibility * 0.82);
+                final_color += film_color * film_shell * antibiotic_film * antibiotic_visibility *
+                               (0.14 + 0.12 * iridescence);
             }
         }
     } else if (entity_type == 8) {
@@ -1217,11 +1444,26 @@ void main() {
         final_color *= mix(0.86, 1.08, tail_stripe);
     }
 
-    if (entity_type == 0 && infection_progress > 0.0 && corpse < 0.5) {
-        float lesion = 0.5 + 0.5 * sin(surface_pt.x * 16.0 + surface_pt.y * 19.0 + phase * 2.4);
-        final_color = mix(final_color, final_color * vec3(0.92, 0.78, 0.78) + vec3(0.36, 0.06, 0.08) * lesion,
-                          smoothstep(0.08, 0.95, infection_progress) * 0.26);
-        final_color += vec3(0.88, 0.16, 0.14) * rim * infection_progress * 0.12;
+    if (entity_type == 0 && corpse < 0.5) {
+        if (infection_progress > 0.0) {
+            float lesion = 0.5 + 0.5 * sin(surface_pt.x * 16.0 + surface_pt.y * 19.0 + phase * 2.4);
+            final_color = mix(final_color, final_color * vec3(0.92, 0.78, 0.78) + vec3(0.36, 0.06, 0.08) * lesion,
+                              smoothstep(0.08, 0.95, infection_progress) * 0.26);
+            final_color += vec3(0.88, 0.16, 0.14) * rim * infection_progress * 0.12;
+        }
+        if (bacterial_infection_progress > 0.0) {
+            float biofilm = 0.5 + 0.5 * sin(surface_pt.x * 22.0 - surface_pt.z * 18.0 + phase * 1.6);
+            float lesion = smoothstep(0.04, 0.92, bacterial_infection_progress);
+            vec3 lesion_col = mix(vec3(0.84, 0.72, 0.18), vec3(0.28, 0.72, 0.18), biofilm);
+            final_color = mix(final_color, final_color * 0.78 + lesion_col, lesion * 0.24);
+            final_color += lesion_col * (0.04 + bacterial_infection_load * 0.01) * rim;
+        }
+    }
+
+    if (entity_type == 1 && infection_progress > 0.0 && corpse < 0.5) {
+        float phage_stress = 0.5 + 0.5 * sin(surface_pt.z * 24.0 + surface_pt.x * 11.0 + phase * 2.1);
+        vec3 phage_col = mix(vec3(0.92, 0.32, 0.22), vec3(0.94, 0.74, 0.30), phage_stress);
+        final_color = mix(final_color, final_color * 0.80 + phage_col, smoothstep(0.06, 0.94, infection_progress) * 0.22);
     }
 
     if ((entity_type == 0 || entity_type == 1) && mitosis > 0.02 && corpse < 0.5) {
@@ -1246,7 +1488,7 @@ void main() {
     // Simple soft shadow from key light
     vec3 shadow_origin = hit_pos + normal * 0.2;
     float shadow = 1.0;
-    for (int i = 0; i < entity_count && i < 1024; i++) {
+    for (int i = 0; i < entity_count; i++) {
         if (i == closest_idx) continue;
         float st = intersect_sphere(shadow_origin, key_dir,
             spheres[i].pos_radius.xyz,
@@ -1259,7 +1501,6 @@ void main() {
     final_color *= (0.4 + 0.6 * shadow);
 
     vec4 media = trace_environment_media(ro, rd, closest_t, feature_count);
-    vec3 bg = background(rd, time, env_tint, oxygen, nutrients, acidity, toxicity);
 
     if (entity_type == 0) {
         float membrane_alpha = clamp(0.18 + fresnel * 0.26 + rim * 0.10 + membrane * 0.05, 0.20, 0.44);
@@ -1269,7 +1510,8 @@ void main() {
         final_color = mix(transparent_fill, shell_color + interior_color * 0.78, membrane_alpha);
         final_color += vec3(0.10, 0.18, 0.22) * fresnel * 0.10;
     } else if (entity_type == 1 && bacteria_cloud_hit) {
-        float film_alpha = clamp(0.18 + antibiotic_film * 0.22 + antibiotic_yield * 0.05, 0.20, 0.42);
+        float film_alpha = clamp(0.18 + antibiotic_film * antibiotic_visibility * 0.26 +
+                                 antibiotic_yield * 0.07, 0.20, 0.56);
         vec3 transparent_cloud = mix(bg + media.rgb * 0.26, final_color, film_alpha);
         final_color = mix(transparent_cloud, final_color, 0.62);
     }

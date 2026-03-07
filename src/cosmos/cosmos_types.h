@@ -708,6 +708,7 @@ struct CelestialBody {
     uint32_t    material_phase = PHASE_SOLID;
     bool        marked_for_removal = false;
     bool        non_attracting = false;     // affected by gravity but does not source gravity
+    bool        locked = false;             // frozen in place (vel=0, unaffected by forces)
     uint32_t    seed           = 0;         // procedural generation seed
     uint32_t    frag_generation = 0;        // how many times this body has been fragmented (0 = original)
     int32_t     forced_surface = -1;        // -1 auto, 0 rocky, 1 water, 2 ice, 3 earth-like, 4 gas giant
@@ -1064,7 +1065,10 @@ struct CosmosConfig {
     bool     cosmos_space_fabric = false;
     int      cosmos_background_preset = 0; // 0=realistic, 1=deep black, 2=nebula, 3=warm dust, 4=blue haze,
                                             // 5=aurora veil, 6=crimson rift, 7=galactic core, 8=monochrome,
-                                            // 9=emerald sea, 10=infrared dust, 11=deep field
+                                            // 9=emerald sea, 10=infrared dust, 11=deep field,
+                                            // 12=milky way panorama, 13=orion nebula, 14=carina nebula,
+                                            // 15=cosmic microwave bg, 16=void, 17=eagle nebula,
+                                            // 18=supernova remnant, 19=stellar nursery
     int      cosmos_quality = 3;        // 0=low, 1=balanced, 2=high, 3=ultra
     float    cosmos_space_fabric_grid_size = 40.0f;
     float    cosmos_space_fabric_strength = 1.0f;

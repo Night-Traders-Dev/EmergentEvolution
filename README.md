@@ -40,18 +40,22 @@ events, magnetic field signatures (magnetospheres, pulsars, particle jets), Roch
 tidal disruption, Hawking radiation, tidal locking, stellar wind pressure, and collision
 physics (merging, fragmentation, SPH, rigid-body dynamics). 7 planetary ring styles from
 Saturn-like to resonance gaps. A logarithmic timestep system spans 30 orders of magnitude
-from nanoseconds/s to trillions of years/s. Spawn Studio with 5 catalog tabs, live 3D ghost
-preview, planet look presets, moon/ring spawning, and known astronomical objects. Orbit
-camera with WASD panning, mouse drag, scroll zoom, body tracking, and auto-hiding bottom
-taskbar. Loading screen with progress bar.
+from nanoseconds/s to trillions of years/s. 20 procedural background presets from realistic
+starfields to Milky Way panoramas, nebulae, and supernova remnants. Spawn Studio with 5
+catalog tabs, live 3D ghost preview, planet look presets, moon/ring spawning, and known
+astronomical objects. Quality-of-life features include body lock/pin, duplication, search
+filter, velocity arrows, keyboard shortcuts overlay, and screenshot capture. Orbit camera
+with WASD panning, mouse drag, scroll zoom, body tracking, and auto-hiding bottom taskbar.
+Loading screen with progress bar.
 
 **Biochemical Simulator** &mdash;
 3D cellular biology sandbox with GPU SDF-raytraced rendering and 9 entity types (cells,
 bacteria, viruses, nutrients, toxins, antibodies, red blood cells, white blood cells,
-phagocytes), each with morphological variants and unique SDF shapes showing organelle
-interiors. Features metabolism with telomere tracking and senescence, cell division with
-heritable gene mutations (10 traits including metabolic efficiency, telomere length, mitotic
-clock, and antibiotic spectrum), multi-stage viral infection with replication gates and lysis
+phagocytes) with 19 morphological variants (8 cell, 6 bacteria, 5 virus) and unique SDF
+shapes showing organelle interiors. Features metabolism with telomere tracking and
+senescence, cell division with heritable gene mutations (16 traits including metabolic
+efficiency, telomere length, mitotic clock, stress tolerance, defense, sensing, and
+antibiotic spectrum), multi-stage viral infection with replication gates and lysis
 bursts, bacterial antibiotic film warfare with quorum-sensing-like defense, immune response
 with WBC/antibody spawning, phagocyte corpse cleanup, AI-driven entity movement
 (seek/flee/spacing behaviors), and fluid dynamics. 4 environment presets (Human Lung, Pond

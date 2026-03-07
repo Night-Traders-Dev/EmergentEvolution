@@ -41,13 +41,20 @@ public:
     double mouse_down_x = 0, mouse_down_y = 0;
 
 private:
+    void rebuild_spatial_index();
+    void query_spatial_neighbors(const glm::vec3& pos, float radius, std::vector<int>& out,
+                                 bool include_corpses = false) const;
     void apply_environment_preset(BioEnvironmentType env, bool reseed_population);
     void regenerate_environment(bool advance_seed);
     void reset_camera_pose();
     void render_ui();
     void render_overlay();
     void step_simulation(float dt);
+    void process_autospawn(float dt);
     void spawn_nutrient();
+    bool spawn_autospawn_entity();
+    size_t count_alive_matching_spawn_selection() const;
+    float compute_autospawn_rate(size_t matching_alive) const;
     void assign_entity_identity(BioEntity& e, uint32_t generation = 0, uint32_t parent_id = 0);
     void push_event(uint32_t type, const std::string& text);
     void mark_entity_corpse(BioEntity& e, uint32_t event_type, const std::string& reason);
@@ -71,11 +78,17 @@ private:
     void process_ai_movement(float dt);
 
     float nutrient_timer_ = 0.0f;
+    float autospawn_timer_ = 0.0f;
     uint32_t next_entity_id_ = 1;
     uint32_t next_species_key_ = 1024;
     uint32_t ever_infected_total_ = 0;
     std::array<uint32_t, BIO_TYPE_COUNT> ever_infected_by_type_{};
     std::unordered_map<uint64_t, uint32_t> ever_infected_by_subtype_;
+    std::array<uint32_t, BIO_TYPE_COUNT> ever_pathogen_infections_by_type_{};
+    std::unordered_map<uint64_t, uint32_t> ever_pathogen_infections_by_subtype_;
+    float spatial_cell_size_ = 18.0f;
+    float spatial_max_radius_ = 0.0f;
+    std::unordered_map<int64_t, std::vector<int>> spatial_buckets_;
 
     // Splash + menu background particles
     float splash_time_ = 0.0f;

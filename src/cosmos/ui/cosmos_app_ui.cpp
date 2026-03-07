@@ -772,6 +772,52 @@ void CosmosApp::render_overlay() {
         }
     }
 
+    // Velocity arrows
+    if (show_velocity_arrows_) {
+        for (size_t i = 0; i < state.bodies.size(); ++i) {
+            const auto& b = state.bodies[i];
+            if (b.marked_for_removal) continue;
+            float speed = glm::length(b.vel);
+            if (speed < 1.0e-6f) continue;
+
+            auto p0 = project(b.pos, vp, W, H);
+            if (!p0.visible || p0.depth < 0.0f) continue;
+
+            // Arrow length: proportional to velocity, clamped to screen space
+            float sr = screen_radius(b.radius, p0.depth, fov_rad, H);
+            float arrow_len = std::clamp(sr * speed * 300.0f, sr * 1.5f, 120.0f);
+
+            glm::vec3 vel_dir = b.vel / speed;
+            glm::vec3 arrow_end_world = b.pos + vel_dir * (b.radius * 2.0f + speed * 50.0f);
+            auto p1 = project(arrow_end_world, vp, W, H);
+            if (!p1.visible) continue;
+
+            // Compute screen direction and normalize to arrow_len
+            float dx = p1.sx - p0.sx;
+            float dy = p1.sy - p0.sy;
+            float screen_dist = std::sqrt(dx * dx + dy * dy);
+            if (screen_dist < 2.0f) continue;
+            float scale = arrow_len / screen_dist;
+            float ex = p0.sx + dx * scale;
+            float ey = p0.sy + dy * scale;
+
+            // Color based on speed
+            float t = std::clamp(speed * 2000.0f, 0.0f, 1.0f);
+            ImU32 arrow_col = IM_COL32(
+                (int)(100 + 155 * t), (int)(200 - 60 * t), (int)(255 - 200 * t), 180);
+
+            fg->AddLine(ImVec2(p0.sx, p0.sy), ImVec2(ex, ey), arrow_col, 1.8f);
+            // Arrowhead
+            float nx = -(ey - p0.sy) / arrow_len * 5.0f;
+            float ny =  (ex - p0.sx) / arrow_len * 5.0f;
+            fg->AddTriangleFilled(
+                ImVec2(ex, ey),
+                ImVec2(ex - dx * scale * 0.15f + nx, ey - dy * scale * 0.15f + ny),
+                ImVec2(ex - dx * scale * 0.15f - nx, ey - dy * scale * 0.15f - ny),
+                arrow_col);
+        }
+    }
+
     if (cfg.show_body_labels) {
         float label_min_dist = std::clamp(cfg.body_label_min_distance, 0.0f, 1.0e8f);
         float label_max_dist = std::clamp(cfg.body_label_max_distance,
@@ -913,6 +959,24 @@ void CosmosApp::render_overlay() {
                               IM_COL32(10, 10, 20, 180), 3.0f);
             fg->AddText(ImVec2(label_x, label_y), IM_COL32(255, 220, 100, 240), name);
         }
+    }
+
+    // Lock indicators on locked bodies
+    for (size_t i = 0; i < state.bodies.size(); ++i) {
+        const auto& lb = state.bodies[i];
+        if (!lb.locked || lb.marked_for_removal) continue;
+        auto lp = project(lb.pos, vp, W, H);
+        if (!lp.visible) continue;
+        float lsr = std::max(screen_radius(lb.radius, lp.depth, fov_rad, H), 6.0f);
+        // Small "LOCKED" badge below the body
+        const char* lock_text = "LOCKED";
+        ImVec2 lt_size = ImGui::CalcTextSize(lock_text);
+        float ltx = lp.sx - lt_size.x * 0.5f;
+        float lty = lp.sy + lsr + 4.0f;
+        fg->AddRectFilled(ImVec2(ltx - 3, lty - 1),
+                          ImVec2(ltx + lt_size.x + 3, lty + lt_size.y + 1),
+                          IM_COL32(200, 80, 30, 140), 2.0f);
+        fg->AddText(ImVec2(ltx, lty), IM_COL32(255, 200, 100, 220), lock_text);
     }
 
     if (camera.focus_active && camera.focus_body >= 0 &&
@@ -1248,66 +1312,104 @@ void CosmosApp::draw_spawn_menu() {
     if (!spawn_menu_visible_) return;
 
     ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowPos({30, io.DisplaySize.y - 430.0f}, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize({980, 400}, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(780, 330), ImVec2(1320, 620));
+    ImGui::SetNextWindowPos({io.DisplaySize.x * 0.5f - 540, io.DisplaySize.y - 520.0f}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize({1080, 490}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(900, 420), ImVec2(1400, 680));
 
-    if (!ImGui::Begin("Spawn Bodies", &spawn_menu_visible_)) {
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.10f, 0.96f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.22f, 0.22f, 0.26f, 0.80f));
+
+    if (!ImGui::Begin("##SpawnMenu", &spawn_menu_visible_,
+                       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar)) {
         ImGui::End();
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar(2);
         return;
     }
 
-    struct TypeEntry { int type; float mass; };
+    struct TypeEntry { int type; float mass; const char* desc; };
     static const TypeEntry BASIC[] = {
-        {CTYPE_PLANET, 3.003e-6f}, {CTYPE_MOON, 3.70e-8f}, {CTYPE_ASTEROID, 2.0e-10f},
-        {CTYPE_COMET, 8.0e-11f}, {CTYPE_DUST, 5.0e-12f}, {CTYPE_NEBULA, 0.02f},
+        {CTYPE_PLANET, 3.003e-6f, "Rocky or gas world"},
+        {CTYPE_MOON, 3.70e-8f, "Natural satellite"},
+        {CTYPE_ASTEROID, 2.0e-10f, "Small rocky body"},
+        {CTYPE_COMET, 8.0e-11f, "Icy body with tail"},
+        {CTYPE_DUST, 5.0e-12f, "Ring/disk particle"},
+        {CTYPE_NEBULA, 0.02f, "Gas cloud"},
     };
     static const TypeEntry STARS[] = {
-        {CTYPE_STAR, 1.0f}, {CTYPE_STAR_O, 30.0f}, {CTYPE_STAR_B, 5.0f}, {CTYPE_STAR_A, 1.8f},
-        {CTYPE_STAR_F, 1.2f}, {CTYPE_STAR_G, 1.0f}, {CTYPE_STAR_K, 0.6f}, {CTYPE_STAR_M, 0.2f},
-        {CTYPE_STAR_L, 0.06f}, {CTYPE_STAR_T, 0.04f}, {CTYPE_STAR_Y, 0.02f}, {CTYPE_STAR_WR, 20.0f},
+        {CTYPE_STAR, 1.0f, "Generic star"},
+        {CTYPE_STAR_O, 30.0f, "Blue supergiant >30kK"},
+        {CTYPE_STAR_B, 5.0f, "Blue-white 10-30kK"},
+        {CTYPE_STAR_A, 1.8f, "White 7.5-10kK"},
+        {CTYPE_STAR_F, 1.2f, "Yellow-white 6-7.5kK"},
+        {CTYPE_STAR_G, 1.0f, "Sun-like 5.2-6kK"},
+        {CTYPE_STAR_K, 0.6f, "Orange 3.7-5.2kK"},
+        {CTYPE_STAR_M, 0.2f, "Red dwarf 2.4-3.7kK"},
+        {CTYPE_STAR_L, 0.06f, "Brown dwarf 1.3-2.4kK"},
+        {CTYPE_STAR_T, 0.04f, "Cool brown dwarf"},
+        {CTYPE_STAR_Y, 0.02f, "Ultra-cool <500K"},
+        {CTYPE_STAR_WR, 20.0f, "Wolf-Rayet, extreme wind"},
     };
     static const TypeEntry BHS[] = {
-        {CTYPE_BLACK_HOLE, 200.0f}, {CTYPE_BH_STELLAR, 10.0f}, {CTYPE_BH_INTERMEDIATE, 1000.0f},
-        {CTYPE_BH_SUPERMASSIVE, 1000000.0f}, {CTYPE_BH_PRIMORDIAL, 0.5f},
+        {CTYPE_BLACK_HOLE, 200.0f, "Generic black hole"},
+        {CTYPE_BH_STELLAR, 10.0f, "3-20 solar masses"},
+        {CTYPE_BH_INTERMEDIATE, 1000.0f, "100-100k solar masses"},
+        {CTYPE_BH_SUPERMASSIVE, 1000000.0f, "Galactic center class"},
+        {CTYPE_BH_PRIMORDIAL, 0.5f, "Sub-stellar mass"},
     };
     static int catalog_tab = 0;
-    const char* tab_names[] = {"Basic", "Stars", "Black Holes", "Known Objects", "Existing Objects"};
     const TypeEntry* active_list = BASIC;
     int active_count = (int)IM_ARRAYSIZE(BASIC);
     if (catalog_tab == 1) { active_list = STARS; active_count = (int)IM_ARRAYSIZE(STARS); }
     if (catalog_tab == 2) { active_list = BHS; active_count = (int)IM_ARRAYSIZE(BHS); }
 
-    ImGui::TextColored(ImVec4(0.88f, 0.82f, 0.66f, 1.0f), "Spawn Studio");
-    ImGui::SameLine();
-    ImGui::TextColored(ImVec4(0.62f, 0.60f, 0.56f, 1.0f),
-                       "Select a body card, tune properties, then spawn at camera target.");
+    // ── Left sidebar: vertical category tabs ──
+    constexpr float SIDEBAR_W = 52.0f;
+    const char* tab_icons[] = {"Bod", "Star", "BH", "Lib", "Mod"};
+    const char* tab_tooltips[] = {"Bodies", "Stars", "Black Holes", "Known Objects", "Existing Objects"};
+
+    ImGui::BeginChild("##sidebar", ImVec2(SIDEBAR_W, 0), false);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 6));
+    ImGui::Dummy(ImVec2(0, 8));
     for (int t = 0; t < 5; ++t) {
-        if (t > 0) ImGui::SameLine();
-        if (catalog_tab == t) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.34f, 0.26f, 0.10f, 0.95f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.40f, 0.30f, 0.12f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.46f, 0.34f, 0.15f, 1.0f));
-        }
-        if (ImGui::Button(tab_names[t], ImVec2(120, 24)) && catalog_tab != t) {
-            catalog_tab = t;
-            // Check if current spawn_type is in the new tab's list
-            const TypeEntry* new_list = BASIC;
-            int new_count = (int)IM_ARRAYSIZE(BASIC);
-            if (t == 1) { new_list = STARS; new_count = (int)IM_ARRAYSIZE(STARS); }
-            if (t == 2) { new_list = BHS; new_count = (int)IM_ARRAYSIZE(BHS); }
-            if (t < 3) {
-                bool found = false;
-                for (int j = 0; j < new_count; ++j)
-                    if (new_list[j].type == spawn_type) { found = true; break; }
-                if (!found) {
-                    spawn_type = new_list[0].type;
-                    spawn_mass = new_list[0].mass;
+        bool active = (catalog_tab == t);
+        ImVec4 bg = active ? ImVec4(0.28f, 0.42f, 0.62f, 1.0f) : ImVec4(0.14f, 0.14f, 0.16f, 0.9f);
+        ImGui::PushStyleColor(ImGuiCol_Button, bg);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(bg.x + 0.08f, bg.y + 0.08f, bg.z + 0.08f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(bg.x + 0.14f, bg.y + 0.14f, bg.z + 0.14f, 1.0f));
+        ImGui::SetCursorPosX(4);
+        if (ImGui::Button(tab_icons[t], ImVec2(SIDEBAR_W - 8, 40))) {
+            if (catalog_tab != t) {
+                catalog_tab = t;
+                const TypeEntry* new_list = BASIC;
+                int new_count = (int)IM_ARRAYSIZE(BASIC);
+                if (t == 1) { new_list = STARS; new_count = (int)IM_ARRAYSIZE(STARS); }
+                if (t == 2) { new_list = BHS; new_count = (int)IM_ARRAYSIZE(BHS); }
+                if (t < 3) {
+                    bool found = false;
+                    for (int j = 0; j < new_count; ++j)
+                        if (new_list[j].type == spawn_type) { found = true; break; }
+                    if (!found) {
+                        spawn_type = new_list[0].type;
+                        spawn_mass = new_list[0].mass;
+                    }
                 }
             }
         }
-        if (catalog_tab == t) ImGui::PopStyleColor(3);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tab_tooltips[t]);
+        ImGui::PopStyleColor(3);
     }
+    ImGui::PopStyleVar(2);
+    ImGui::EndChild();
+
+    ImGui::SameLine(0, 0);
+
+    // ── Main content area (right of sidebar) ──
+    ImGui::BeginChild("##main_content", ImVec2(0, 0), false);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 10));
 
     if (catalog_tab == 3) {
         static int known_subtab = 0;
@@ -1850,7 +1952,11 @@ void CosmosApp::draw_spawn_menu() {
             }
         }
         ImGui::EndChild();
+        ImGui::PopStyleVar();
+        ImGui::EndChild(); // main_content
         ImGui::End();
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar(2);
         return;
     }
 
@@ -1974,70 +2080,183 @@ void CosmosApp::draw_spawn_menu() {
             }
         }
         ImGui::EndChild();
+        ImGui::PopStyleVar();
+        ImGui::EndChild(); // main_content
         ImGui::End();
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar(2);
         return;
     }
 
-    if (ImGui::BeginChild("##spawn_type_strip", ImVec2(0, 96), true, ImGuiWindowFlags_HorizontalScrollbar)) {
-        for (int i = 0; i < active_count; ++i) {
-            const int t = active_list[i].type;
-            const float default_mass = active_list[i].mass;
-            ImGui::PushID(t);
-            ImU32 col = CTYPE_COLORS[t];
-            float r = (float)((col >> IM_COL32_R_SHIFT) & 0xFF) / 255.0f;
-            float g = (float)((col >> IM_COL32_G_SHIFT) & 0xFF) / 255.0f;
-            float b = (float)((col >> IM_COL32_B_SHIFT) & 0xFF) / 255.0f;
-            bool sel = (spawn_type == t);
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(r * (sel ? 0.60f : 0.26f), g * (sel ? 0.60f : 0.26f), b * (sel ? 0.60f : 0.26f), sel ? 1.0f : 0.86f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(r * 0.75f, g * 0.75f, b * 0.75f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(r * 0.88f, g * 0.88f, b * 0.88f, 1.0f));
-            if (ImGui::Button(CTYPE_NAMES[t], ImVec2(130, 44))) {
-                spawn_type = t;
-                spawn_mass = default_mass;
-            }
-            ImGui::PopStyleColor(3);
-            ImGui::TextColored(ImVec4(0.65f, 0.62f, 0.58f, 1.0f), "m %.2e", default_mass);
-            ImGui::PopID();
-            if (i + 1 < active_count) ImGui::SameLine();
+    // ── Body selection grid (tabs 0-2) ──
+    // Header
+    ImGui::Dummy(ImVec2(0, 4));
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 12);
+    ImGui::TextColored(ImVec4(0.88f, 0.82f, 0.66f, 1.0f), "%s", catalog_tab == 0 ? "Bodies" : (catalog_tab == 1 ? "Stars" : "Black Holes"));
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(0.50f, 0.50f, 0.52f, 1.0f), "  Click to select, then configure properties on the right.");
+    ImGui::Dummy(ImVec2(0, 2));
+
+    // Body card grid - left side
+    float props_panel_w = 320.0f;
+    float grid_w = ImGui::GetContentRegionAvail().x - props_panel_w - 8;
+
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8);
+    if (ImGui::BeginChild("##body_grid", ImVec2(grid_w, 0), false)) {
+    // Grid of body cards
+    float card_w = 148.0f;
+    float card_h = 68.0f;
+    float padding = 6.0f;
+    float avail = ImGui::GetContentRegionAvail().x;
+    int cols = std::max(1, (int)((avail + padding) / (card_w + padding)));
+
+    for (int i = 0; i < active_count; ++i) {
+        const int t = active_list[i].type;
+        const float default_mass = active_list[i].mass;
+        const char* desc = active_list[i].desc;
+        bool sel = (spawn_type == t);
+
+        if (i % cols != 0) ImGui::SameLine(0, padding);
+
+        ImU32 col = CTYPE_COLORS[t];
+        float cr = (float)((col >> IM_COL32_R_SHIFT) & 0xFF) / 255.0f;
+        float cg = (float)((col >> IM_COL32_G_SHIFT) & 0xFF) / 255.0f;
+        float cb = (float)((col >> IM_COL32_B_SHIFT) & 0xFF) / 255.0f;
+
+        ImGui::PushID(t);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+
+        // Card background
+        ImVec4 card_bg = sel
+            ? ImVec4(cr * 0.28f, cg * 0.28f, cb * 0.28f, 0.95f)
+            : ImVec4(0.12f, 0.12f, 0.14f, 0.90f);
+        ImGui::PushStyleColor(ImGuiCol_Button, card_bg);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(cr * 0.22f + 0.06f, cg * 0.22f + 0.06f, cb * 0.22f + 0.06f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(cr * 0.30f + 0.08f, cg * 0.30f + 0.08f, cb * 0.30f + 0.08f, 1.0f));
+
+        ImVec2 cursor = ImGui::GetCursorScreenPos();
+        if (ImGui::Button("##card", ImVec2(card_w, card_h))) {
+            spawn_type = t;
+            spawn_mass = default_mass;
+        }
+        ImGui::PopStyleColor(3);
+
+        // Draw card content over the button
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        // Color accent bar on left edge
+        ImU32 accent = IM_COL32((int)(cr * 255), (int)(cg * 255), (int)(cb * 255), sel ? 255 : 140);
+        dl->AddRectFilled(ImVec2(cursor.x, cursor.y + 4), ImVec2(cursor.x + 3, cursor.y + card_h - 4), accent, 2.0f);
+
+        // Selection highlight border
+        if (sel) {
+            dl->AddRect(cursor, ImVec2(cursor.x + card_w, cursor.y + card_h),
+                        IM_COL32((int)(cr * 200), (int)(cg * 200), (int)(cb * 200), 200), 6.0f, 0, 2.0f);
+        }
+
+        // Type name
+        dl->AddText(ImVec2(cursor.x + 10, cursor.y + 8),
+                    IM_COL32(240, 235, 225, sel ? 255 : 200), CTYPE_NAMES[t]);
+
+        // Mass
+        char mass_str[32];
+        snprintf(mass_str, sizeof(mass_str), "%.2e M\xe2\x98\x89", default_mass);
+        dl->AddText(ImVec2(cursor.x + 10, cursor.y + 26),
+                    IM_COL32(160, 155, 140, sel ? 220 : 160), mass_str);
+
+        // Description
+        dl->AddText(ImVec2(cursor.x + 10, cursor.y + 44),
+                    IM_COL32(120, 120, 130, sel ? 180 : 120), desc);
+
+        ImGui::PopStyleVar();
+        ImGui::PopID();
+    }
+
+    // ── Spawn button at bottom of grid ──
+    ImGui::Dummy(ImVec2(0, 8));
+    ImU32 spawn_col = CTYPE_COLORS[spawn_type % CTYPE_COUNT];
+    float sr = (float)((spawn_col >> IM_COL32_R_SHIFT) & 0xFF) / 255.0f;
+    float sg = (float)((spawn_col >> IM_COL32_G_SHIFT) & 0xFF) / 255.0f;
+    float sb = (float)((spawn_col >> IM_COL32_B_SHIFT) & 0xFF) / 255.0f;
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(sr * 0.35f + 0.05f, sg * 0.35f + 0.05f, sb * 0.35f + 0.05f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(sr * 0.50f + 0.08f, sg * 0.50f + 0.08f, sb * 0.50f + 0.08f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(sr * 0.65f + 0.10f, sg * 0.65f + 0.10f, sb * 0.65f + 0.10f, 1.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+
+    char label[64];
+    bool small_type = (spawn_type == CTYPE_ASTEROID || spawn_type == CTYPE_COMET || spawn_type == CTYPE_DUST);
+    int batch_count = std::clamp(spawn_draft_.small_body_spawn_count, 1, 1000);
+    if (small_type && batch_count > 1)
+        snprintf(label, sizeof(label), "Spawn x%d %s", batch_count, CTYPE_NAMES[spawn_type % CTYPE_COUNT]);
+    else
+        snprintf(label, sizeof(label), "Spawn %s", CTYPE_NAMES[spawn_type % CTYPE_COUNT]);
+
+    if (ImGui::Button(label, ImVec2(-1, 36))) {
+        int spawned = spawn_preview_body(camera.target);
+        if (spawned >= 0 && spawned < (int)state.bodies.size()) {
+            const auto& b = state.bodies[spawned];
+            selected_body = spawned;
+            camera.focus_on(b.pos, spawned, b.radius);
+            camera.target_distance = b.radius * 8.0f;
         }
     }
-    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(3);
 
-    ImGui::Columns(2, "##spawn_cols", false);
-    ImGui::SetColumnWidth(0, 340.0f);
+    ImGui::TextColored(ImVec4(0.45f, 0.45f, 0.48f, 1.0f), "Or left-click empty space to place at cursor");
+    }
+    ImGui::EndChild(); // body_grid
 
-    if (ImGui::BeginChild("##spawn_dynamics", ImVec2(0, 0), true)) {
-        ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Dynamics");
-        ImGui::SliderFloat("Mass##Spawn", &spawn_mass, 1.0e-13f, 500.0f, "%.3e", ImGuiSliderFlags_Logarithmic);
+    // ── Right properties panel ──
+    ImGui::SameLine(0, 8);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.10f, 0.10f, 0.12f, 0.95f));
+    if (ImGui::BeginChild("##props_panel", ImVec2(props_panel_w, 0), true, ImGuiWindowFlags_NoScrollbar)) {
+        // ── Properties header ──
+        ImU32 hdr_col = CTYPE_COLORS[spawn_type % CTYPE_COUNT];
+        float hr = (float)((hdr_col >> IM_COL32_R_SHIFT) & 0xFF) / 255.0f;
+        float hg = (float)((hdr_col >> IM_COL32_G_SHIFT) & 0xFF) / 255.0f;
+        float hb = (float)((hdr_col >> IM_COL32_B_SHIFT) & 0xFF) / 255.0f;
+        ImGui::TextColored(ImVec4(hr, hg, hb, 1.0f), "%s", CTYPE_NAMES[spawn_type % CTYPE_COUNT]);
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.50f, 0.50f, 0.52f, 1.0f), "Properties");
+        ImGui::Separator();
+
+        // ── Mass & Dynamics ──
+        ImGui::TextColored(ImVec4(0.75f, 0.72f, 0.65f, 1.0f), "Mass & Dynamics");
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("##Mass", &spawn_mass, 1.0e-13f, 500.0f, "%.3e M\xe2\x98\x89", ImGuiSliderFlags_Logarithmic);
         ImGui::Checkbox("Orbital Velocity", &spawn_in_orbit_);
-        bool small_type = (spawn_type == CTYPE_ASTEROID || spawn_type == CTYPE_COMET || spawn_type == CTYPE_DUST);
-        if (small_type) {
+        {
+        bool small_body = (spawn_type == CTYPE_ASTEROID || spawn_type == CTYPE_COMET || spawn_type == CTYPE_DUST);
+        if (small_body) {
+            ImGui::SliderInt("Count", &spawn_draft_.small_body_spawn_count, 1, 1000);
             const char* layouts[] = {"Random", "Sphere", "Cube", "Torus"};
-            ImGui::SliderInt("Spawn Count", &spawn_draft_.small_body_spawn_count, 1, 1000);
-            ImGui::Combo("Spawn Layout", &spawn_draft_.small_body_layout, layouts, IM_ARRAYSIZE(layouts));
+            ImGui::Combo("Layout", &spawn_draft_.small_body_layout, layouts, IM_ARRAYSIZE(layouts));
         }
-        ImGui::Checkbox("Override Temperature", &spawn_draft_.override_temperature);
-        if (spawn_draft_.override_temperature)
-            ImGui::SliderFloat("Temperature K", &spawn_draft_.temperature, 2.7f, 8000.0f, "%.1f");
-        ImGui::Checkbox("Override Radius", &spawn_draft_.override_radius);
-        if (spawn_draft_.override_radius)
-            ImGui::SliderFloat("Radius", &spawn_draft_.radius, 0.04f, 120.0f, "%.2f");
-        ImGui::Checkbox("Override Rotation", &spawn_draft_.override_rotation);
-        if (spawn_draft_.override_rotation)
-            ImGui::SliderFloat("Rotation Hours", &spawn_draft_.rotation_hours, 0.1f, 2000.0f, "%.2f");
-        ImGui::Checkbox("Override Velocity", &spawn_draft_.override_velocity);
-        if (spawn_draft_.override_velocity) {
-            ImGui::SliderFloat("Vx (km/s)", &spawn_draft_.velocity_kms.x, -200.0f, 200.0f, "%.1f");
-            ImGui::SliderFloat("Vy (km/s)", &spawn_draft_.velocity_kms.y, -200.0f, 200.0f, "%.1f");
-            ImGui::SliderFloat("Vz (km/s)", &spawn_draft_.velocity_kms.z, -200.0f, 200.0f, "%.1f");
         }
-    }
-    ImGui::EndChild();
 
-    ImGui::NextColumn();
+        // ── Overrides (collapsible) ──
+        if (ImGui::TreeNode("Overrides")) {
+            ImGui::Checkbox("Temperature", &spawn_draft_.override_temperature);
+            if (spawn_draft_.override_temperature)
+                ImGui::SliderFloat("##TempK", &spawn_draft_.temperature, 2.7f, 8000.0f, "%.0f K");
+            ImGui::Checkbox("Radius", &spawn_draft_.override_radius);
+            if (spawn_draft_.override_radius)
+                ImGui::SliderFloat("##Rad", &spawn_draft_.radius, 0.04f, 120.0f, "%.2f");
+            ImGui::Checkbox("Rotation", &spawn_draft_.override_rotation);
+            if (spawn_draft_.override_rotation)
+                ImGui::SliderFloat("##RotH", &spawn_draft_.rotation_hours, 0.1f, 2000.0f, "%.1f hrs");
+            ImGui::Checkbox("Velocity", &spawn_draft_.override_velocity);
+            if (spawn_draft_.override_velocity) {
+                ImGui::SliderFloat("Vx", &spawn_draft_.velocity_kms.x, -200.0f, 200.0f, "%.1f km/s");
+                ImGui::SliderFloat("Vy", &spawn_draft_.velocity_kms.y, -200.0f, 200.0f, "%.1f km/s");
+                ImGui::SliderFloat("Vz", &spawn_draft_.velocity_kms.z, -200.0f, 200.0f, "%.1f km/s");
+            }
+            ImGui::TreePop();
+        }
 
-    if (ImGui::BeginChild("##spawn_visuals", ImVec2(0, 0), true)) {
-        ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Appearance & System");
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.75f, 0.72f, 0.65f, 1.0f), "Appearance");
         if (spawn_type == CTYPE_PLANET || spawn_type == CTYPE_MOON) {
             const char* looks[] = {"Auto", "Rocky", "Water", "Ice", "Earth-like", "Gas Giant"};
             ImGui::Combo("Planet Look", &spawn_draft_.planet_look, looks, IM_ARRAYSIZE(looks));
@@ -2161,43 +2380,46 @@ void CosmosApp::draw_spawn_menu() {
                                "Raymarching uses Perlin + Beer-Lambert + semi-Lagrangian advection.");
         }
 
-        static uint32_t preview_seed = 0xC05109ADu;
+        // ── Preview ──
+        static uint32_t props_preview_seed = 0xC05109ADu;
         ImGui::Separator();
-        ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Body Preview");
-        if (ImGui::Button("Regenerate Preview", ImVec2(-1, 0))) {
-            preview_seed = hash_combine(preview_seed, (uint32_t)(sim_time_ * 1000.0f) + 0x9E3779B9u);
-        }
-        SpawnPreviewStyle pv{};
-        pv.planet_look = spawn_draft_.planet_look;
-        pv.spawn_rings = spawn_draft_.spawn_rings && (spawn_type == CTYPE_PLANET || spawn_type == CTYPE_MOON);
-        pv.spawn_moons = spawn_draft_.spawn_moons && (spawn_type == CTYPE_PLANET || spawn_type == CTYPE_MOON);
-        pv.moon_count = spawn_draft_.moon_count;
-        pv.moon_layout = spawn_draft_.moon_orbit_layout;
-        pv.moon_inclination_deg = spawn_draft_.moon_inclination_deg;
-        pv.moon_spacing_scale = spawn_draft_.moon_spacing_scale;
-        draw_spawn_preview_thumb("##spawn_preview_thumb", spawn_type, spawn_mass, preview_seed, pv);
+        if (ImGui::Button("Regenerate##Preview", ImVec2(-1, 0)))
+            props_preview_seed = hash_combine(props_preview_seed, (uint32_t)(sim_time_ * 1000.0f) + 0x9E3779B9u);
+        SpawnPreviewStyle props_pv{};
+        props_pv.planet_look = spawn_draft_.planet_look;
+        props_pv.spawn_rings = spawn_draft_.spawn_rings && (spawn_type == CTYPE_PLANET || spawn_type == CTYPE_MOON);
+        props_pv.spawn_moons = spawn_draft_.spawn_moons && (spawn_type == CTYPE_PLANET || spawn_type == CTYPE_MOON);
+        props_pv.moon_count = spawn_draft_.moon_count;
+        props_pv.moon_layout = spawn_draft_.moon_orbit_layout;
+        props_pv.moon_inclination_deg = spawn_draft_.moon_inclination_deg;
+        props_pv.moon_spacing_scale = spawn_draft_.moon_spacing_scale;
+        draw_spawn_preview_thumb("##spawn_preview_thumb", spawn_type, spawn_mass, props_preview_seed, props_pv);
 
-        ImGui::Separator();
-        ImGui::Checkbox("Override Material Composition", &spawn_draft_.override_material);
-        if (spawn_draft_.override_material) {
-            ImGui::SliderFloat("Iron", &spawn_draft_.material_iron, 0.0f, 1.0f, "%.2f");
-            ImGui::SliderFloat("Silicate", &spawn_draft_.material_silicate, 0.0f, 1.0f, "%.2f");
-            ImGui::SliderFloat("Ice/Water", &spawn_draft_.material_ice, 0.0f, 1.0f, "%.2f");
-            ImGui::SliderFloat("Hydrogen", &spawn_draft_.material_hydrogen, 0.0f, 1.0f, "%.2f");
-            float total = spawn_draft_.material_iron + spawn_draft_.material_silicate +
-                          spawn_draft_.material_ice + spawn_draft_.material_hydrogen;
-            if (total > 1.0e-6f)
-                ImGui::TextColored(ImVec4(0.65f, 0.75f, 0.85f, 1.0f), "Current Sum: %.2f", total);
-            if (ImGui::SmallButton("Normalize Composition")) {
-                float s = std::max(total, 1.0e-6f);
-                spawn_draft_.material_iron /= s;
-                spawn_draft_.material_silicate /= s;
-                spawn_draft_.material_ice /= s;
-                spawn_draft_.material_hydrogen /= s;
+        // ── Material ──
+        if (ImGui::TreeNode("Material")) {
+            ImGui::Checkbox("Override", &spawn_draft_.override_material);
+            if (spawn_draft_.override_material) {
+                ImGui::SliderFloat("Iron", &spawn_draft_.material_iron, 0.0f, 1.0f, "%.2f");
+                ImGui::SliderFloat("Silicate", &spawn_draft_.material_silicate, 0.0f, 1.0f, "%.2f");
+                ImGui::SliderFloat("Ice/Water", &spawn_draft_.material_ice, 0.0f, 1.0f, "%.2f");
+                ImGui::SliderFloat("H2", &spawn_draft_.material_hydrogen, 0.0f, 1.0f, "%.2f");
+                float total = spawn_draft_.material_iron + spawn_draft_.material_silicate +
+                              spawn_draft_.material_ice + spawn_draft_.material_hydrogen;
+                if (total > 1.0e-6f)
+                    ImGui::TextColored(ImVec4(0.65f, 0.75f, 0.85f, 1.0f), "Sum: %.2f", total);
+                if (ImGui::SmallButton("Normalize"))  {
+                    float s = std::max(total, 1.0e-6f);
+                    spawn_draft_.material_iron /= s;
+                    spawn_draft_.material_silicate /= s;
+                    spawn_draft_.material_ice /= s;
+                    spawn_draft_.material_hydrogen /= s;
+                }
             }
+            ImGui::TreePop();
         }
 
-        if (ImGui::CollapsingHeader("Quick Presets")) {
+        // ── Quick Presets ──
+        if (ImGui::TreeNode("Quick Presets")) {
             auto star_luminosity = [&](float mass, float radius_sim, float temperature_k) {
                 float r_solar = std::max(radius_sim / (EARTH_RADIUS_SIM_UNITS * 109.1f), 1.0e-4f);
                 float stefan = r_solar * r_solar * std::pow(std::max(temperature_k, 100.0f) / 5778.0f, 4.0f);
@@ -2209,7 +2431,7 @@ void CosmosApp::draw_spawn_menu() {
                 return std::max(stefan, mass_law);
             };
 
-            if (ImGui::Button("Add Solar System", ImVec2(-1, 0))) {
+            if (ImGui::Button("Solar System", ImVec2(-1, 0))) {
                 glm::vec3 offset = camera.target;
                 CelestialBody s;
                 s.pos = offset; s.mass = 1.0f; s.radius = 696340.0f / SIM_UNIT_TO_KM;
@@ -2242,7 +2464,7 @@ void CosmosApp::draw_spawn_menu() {
                 }
             }
 
-            if (ImGui::Button("Add Binary Stars", ImVec2(-1, 0))) {
+            if (ImGui::Button("Binary Stars", ImVec2(-1, 0))) {
                 glm::vec3 center = camera.target;
                 float sep = 60.0f;
                 float v = std::sqrt(cfg.G * 50.0f / sep);
@@ -2272,7 +2494,7 @@ void CosmosApp::draw_spawn_menu() {
                 refresh_body_render_state(state.bodies.back(), &state);
             }
 
-            if (ImGui::Button("Add Asteroid Belt", ImVec2(-1, 0))) {
+            if (ImGui::Button("Asteroid Belt", ImVec2(-1, 0))) {
                 std::mt19937 rng((unsigned)sim_time_);
                 auto randf = [&](float lo, float hi) {
                     return std::uniform_real_distribution<float>(lo, hi)(rng);
@@ -2304,40 +2526,18 @@ void CosmosApp::draw_spawn_menu() {
                     state.bodies.push_back(a); state.trails.emplace_back();
                 }
             }
+            ImGui::TreePop();
         }
     }
-    ImGui::EndChild();
+    ImGui::EndChild(); // props_panel
+    ImGui::PopStyleColor();
 
-    ImGui::Columns(1);
-    ImGui::Separator();
-    ImGui::TextColored(ImVec4(0.58f, 0.60f, 0.66f, 1.0f), "Left-click empty space in viewport to place");
-    ImU32 col = CTYPE_COLORS[spawn_type % CTYPE_COUNT];
-    float r = (float)((col >> IM_COL32_R_SHIFT) & 0xFF) / 255.0f;
-    float g = (float)((col >> IM_COL32_G_SHIFT) & 0xFF) / 255.0f;
-    float b = (float)((col >> IM_COL32_B_SHIFT) & 0xFF) / 255.0f;
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(r * 0.42f, g * 0.42f, b * 0.42f, 0.95f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(r * 0.60f, g * 0.60f, b * 0.60f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(r * 0.75f, g * 0.75f, b * 0.75f, 1.0f));
-    char label[64];
-    bool small_type = (spawn_type == CTYPE_ASTEROID || spawn_type == CTYPE_COMET || spawn_type == CTYPE_DUST);
-    int batch_count = std::clamp(spawn_draft_.small_body_spawn_count, 1, 1000);
-    if (small_type && batch_count > 1) {
-        snprintf(label, sizeof(label), "Spawn x%d %s", batch_count, CTYPE_NAMES[spawn_type % CTYPE_COUNT]);
-    } else {
-        snprintf(label, sizeof(label), "Spawn %s at Origin", CTYPE_NAMES[spawn_type % CTYPE_COUNT]);
-    }
-    if (ImGui::Button(label, ImVec2(-1, 34))) {
-        int spawned = spawn_preview_body(camera.target);
-        if (spawned >= 0 && spawned < (int)state.bodies.size()) {
-            const auto& b = state.bodies[spawned];
-            selected_body = spawned;
-            camera.focus_on(b.pos, spawned);
-            camera.target_distance = b.radius * 8.0f;
-        }
-    }
-    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar(); // WindowPadding for main_content
+    ImGui::EndChild(); // main_content
 
     ImGui::End();
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar(2);
 }
 
 void CosmosApp::render_ui() {
@@ -2393,6 +2593,7 @@ void CosmosApp::render_ui() {
     draw_spawn_menu();
     draw_file_dialog();
     draw_debug_window();
+    draw_shortcuts_overlay();
 
     if (save_status_timer_ > 0.0f) {
         save_status_timer_ -= io.DeltaTime;
@@ -2424,7 +2625,17 @@ void CosmosApp::render_ui() {
                 expanded_rows.assign(state.count(), 0u);
 
             ImGui::Text("Objects: %zu", state.count());
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(160);
+            ImGui::InputTextWithHint("##body_search", "Search...", body_search_buf_, sizeof(body_search_buf_));
             ImGui::Separator();
+
+            // Build lowercase search term once
+            std::string search_lower;
+            if (body_search_buf_[0]) {
+                search_lower = body_search_buf_;
+                for (auto& c : search_lower) c = (char)std::tolower((unsigned char)c);
+            }
 
             ImGuiTableFlags table_flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                           ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
@@ -2440,6 +2651,17 @@ void CosmosApp::render_ui() {
                     const auto& b = state.bodies[i];
                     const char* tn = (b.type < CTYPE_COUNT) ? CTYPE_NAMES[b.type] : "?";
                     std::string display_name = b.name.empty() ? std::string(tn) : b.name;
+
+                    // Filter by search term
+                    if (!search_lower.empty()) {
+                        std::string name_lower = display_name;
+                        for (auto& c : name_lower) c = (char)std::tolower((unsigned char)c);
+                        std::string type_lower = tn;
+                        for (auto& c : type_lower) c = (char)std::tolower((unsigned char)c);
+                        if (name_lower.find(search_lower) == std::string::npos &&
+                            type_lower.find(search_lower) == std::string::npos)
+                            continue;
+                    }
                     bool is_sel = ((int)i == selected_body);
                     char age_buf[64];
                     format_sim_time((double)b.age, age_buf, sizeof(age_buf));
@@ -2561,7 +2783,19 @@ void CosmosApp::draw_inspector() {
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "(%s)", type_name);
     }
 
-    ImGui::SameLine(ImGui::GetWindowWidth() - 72);
+    ImGui::SameLine(ImGui::GetWindowWidth() - 120);
+    // Lock/pin toggle
+    if (b.locked) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.3f, 0.1f, 0.9f));
+        if (ImGui::SmallButton("Unlock")) b.locked = false;
+        ImGui::PopStyleColor();
+    } else {
+        if (ImGui::SmallButton("Lock")) {
+            b.locked = true;
+            b.vel = glm::vec3(0.0f);
+        }
+    }
+    ImGui::SameLine();
     bool is_tracked = camera.focus_active && camera.focus_body == selected_body;
     if (is_tracked) {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.4f, 0.1f, 0.9f));
@@ -2569,7 +2803,7 @@ void CosmosApp::draw_inspector() {
         ImGui::PopStyleColor();
     } else {
         if (ImGui::SmallButton("Track")) {
-            camera.focus_on(b.pos, selected_body);
+            camera.focus_on(b.pos, selected_body, b.radius);
             camera.target_distance = b.radius * 8.0f;
         }
     }
@@ -3180,12 +3414,20 @@ void CosmosApp::draw_inspector() {
     ImGui::Separator();
     ImGui::Spacing();
 
-    if (ImGui::Button("Delete Body", ImVec2(-1, 0))) {
+    // Duplicate + Delete side by side
+    float btn_w = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+    if (ImGui::Button("Duplicate", ImVec2(btn_w, 0))) {
+        duplicate_selected_body();
+    }
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.15f, 0.15f, 1.0f));
+    if (ImGui::Button("Delete", ImVec2(btn_w, 0))) {
         b.marked_for_removal = true;
         if (camera.focus_body == selected_body) camera.release_focus();
         selected_body = -1;
         inspector_visible_ = false;
     }
+    ImGui::PopStyleColor();
 
     ImGui::End();
 }
@@ -3891,7 +4133,15 @@ void CosmosApp::draw_bottom_bar() {
                         "Monochrome",
                         "Emerald Sea",
                         "Infrared Dust",
-                        "Deep Field"
+                        "Deep Field",
+                        "Milky Way Panorama",
+                        "Orion Nebula",
+                        "Carina Nebula",
+                        "Cosmic Microwave Background",
+                        "Void",
+                        "Eagle Nebula",
+                        "Supernova Remnant",
+                        "Stellar Nursery"
                     };
                     combo_tt("Background Preset##Menu", &cfg.cosmos_background_preset,
                              BG_PRESETS, IM_ARRAYSIZE(BG_PRESETS));
@@ -4257,4 +4507,75 @@ void CosmosApp::draw_debug_window() {
     }
 
     ImGui::End();
+}
+
+// ── Duplicate Selected Body ─────────────────────────────────────────────────
+void CosmosApp::duplicate_selected_body() {
+    if (selected_body < 0 || selected_body >= (int)state.bodies.size()) return;
+    const auto& src = state.bodies[selected_body];
+    CelestialBody dup = src;
+    // Offset position slightly so the duplicate doesn't overlap
+    dup.pos += glm::vec3(src.radius * 2.5f, 0.0f, 0.0f);
+    dup.marked_for_removal = false;
+    dup.seed = src.seed + 7919u;
+    dup.props_valid = false;
+    dup.visuals_valid = false;
+    state.bodies.push_back(dup);
+    state.trails.push_back({});
+    selected_body = (int)state.bodies.size() - 1;
+    inspector_visible_ = true;
+}
+
+// ── Keyboard Shortcuts Overlay ──────────────────────────────────────────────
+void CosmosApp::draw_shortcuts_overlay() {
+    if (!shortcuts_visible_) return;
+    ImGuiIO& io = ImGui::GetIO();
+    ImVec2 center(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(400, 0), ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.10f, 0.95f));
+
+    if (ImGui::Begin("Keyboard Shortcuts", &shortcuts_visible_,
+                      ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+                      ImGuiWindowFlags_NoMove)) {
+        auto row = [](const char* key, const char* desc) {
+            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "%-16s", key);
+            ImGui::SameLine(160);
+            ImGui::Text("%s", desc);
+        };
+        ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "Camera");
+        ImGui::Separator();
+        row("Left Drag", "Orbit camera");
+        row("Right Drag", "Pan camera");
+        row("Middle Drag", "Pan camera");
+        row("Scroll", "Zoom (toward cursor)");
+        row("R", "Reset camera");
+        row("F", "Focus on selected body");
+        ImGui::Spacing();
+
+        ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "Simulation");
+        ImGui::Separator();
+        row("Space", "Pause / Resume");
+        row("Escape", "Pause menu");
+        ImGui::Spacing();
+
+        ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "Bodies");
+        ImGui::Separator();
+        row("Click", "Select body");
+        row("Double-Click", "Focus on body");
+        row("Delete", "Delete selected body");
+        row("Ctrl+D", "Duplicate selected body");
+        row("L", "Lock/unlock selected body");
+        row("V", "Toggle velocity arrows");
+        ImGui::Spacing();
+
+        ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "UI");
+        ImGui::Separator();
+        row("F1", "Toggle this overlay");
+        row("F12", "Take screenshot");
+    }
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
 }

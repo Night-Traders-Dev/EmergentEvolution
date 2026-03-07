@@ -71,6 +71,13 @@ public:
     // Re-roll the spawn preview (called on right-click in spawn mode)
     void reroll_spawn_preview();
 
+    // QoL features (public for GLFW callbacks)
+    void  duplicate_selected_body();
+    bool  show_velocity_arrows_ = false;
+    bool  screenshot_requested_ = false;
+    bool  shortcuts_visible_ = false;
+    void  capture_screenshot(GLFWwindow* window);
+
     // Compute spawn world position from screen coordinates
     glm::vec3 screen_to_spawn_pos(double mx, double my, int fb_w, int fb_h) const;
 
@@ -226,6 +233,12 @@ private:
     // Inspector panel
     bool  inspector_visible_ = false;  // shown on click, hidden on deselect
     void  draw_inspector();
+
+    // Body list search filter
+    char  body_search_buf_[64] = {};
+
+    // Keyboard shortcuts overlay
+    void  draw_shortcuts_overlay();
 
     // Save/Load UI state
     bool  show_save_dialog_   = false;

@@ -250,7 +250,7 @@ Logarithmic timescale spanning 30 orders of magnitude:
 ## Rendering
 
 ### GPU Sphere Raytracing
-All bodies rendered via GPU raytracing in a fragment shader (`cosmos_rt.frag`, ~2,670 lines). 7 render classes: Star, Planet, Moon, Asteroid, Comet, Black Hole, Nebula. Per-body visual properties include:
+All bodies rendered via GPU raytracing in a fragment shader (`cosmos_rt.frag`, ~2,870 lines). 7 render classes: Star, Planet, Moon, Asteroid, Comet, Black Hole, Nebula. Per-body visual properties include:
 - Terrain amplitude/frequency, ridge amplitude, crater density
 - Rock/ice/metal/dust material fractions
 - Atmospheric haze (Rayleigh + Mie scattering)
@@ -274,7 +274,30 @@ A dedicated Vulkan compute shader (`cosmos_nebula.comp`, ~260 lines) handles neb
 | Advanced Particles | Full GPU particle system |
 
 ### Background Presets
-12 background styles: Realistic, Deep Black, Nebula, Warm Dust, Blue Haze, Aurora Veil, Crimson Rift, Galactic Core, Monochrome, Emerald Sea, Infrared Dust, Deep Field.
+20 background styles:
+
+| # | Name | Description |
+|---|---|---|
+| 0 | Realistic | Natural starfield with subtle nebulosity |
+| 1 | Deep Black | Minimal stars, near-black sky |
+| 2 | Nebula | Colorful emission nebula backdrop |
+| 3 | Warm Dust | Reddish interstellar dust clouds |
+| 4 | Blue Haze | Cool blue-tinted atmosphere |
+| 5 | Aurora Veil | Shimmering aurora-like curtains |
+| 6 | Crimson Rift | Deep red nebula with dark lanes |
+| 7 | Galactic Core | Dense central bulge starfield |
+| 8 | Monochrome | Grayscale starfield |
+| 9 | Emerald Sea | Green-tinted nebulosity |
+| 10 | Infrared Dust | Warm infrared false-color view |
+| 11 | Deep Field | Dense distant galaxy field |
+| 12 | Milky Way Panorama | Bright galactic plane with central bulge and dark molecular clouds |
+| 13 | Orion Nebula | H-alpha pink/magenta emission with blue reflection nebulosity |
+| 14 | Carina Nebula | Gold and teal pillars with ionization fronts |
+| 15 | Cosmic Microwave Background | Dipole anisotropy with temperature fluctuations |
+| 16 | Void | Near-black with sparse isolated stars |
+| 17 | Eagle Nebula | Pillars of Creation dark columns against OII/OIII emission |
+| 18 | Supernova Remnant | Filamentary shock shell with hot gas |
+| 19 | Stellar Nursery | Warm molecular cloud with embedded protostars |
 
 ### Quality Levels
 4 quality presets: Low, Balanced, High, Ultra. Controls shader detail, shadow quality, and corona effects.
@@ -375,3 +398,13 @@ Binary `.cssim` save format (version 16) for full simulation state including all
 - **Splash screen**: animated particle background, dismissible on any key/click
 - **Pause menu**: resume, new simulation, save, load, quit, return to launcher
 - **Loading screen**: progress bar with stage labels during initialization
+
+### Quality of Life Features
+
+- **Lock/pin bodies** &mdash; locked bodies are immune to gravity, collisions, and integration; velocity zeroed on lock; "LOCKED" badge overlay displayed
+- **Body duplication** &mdash; Ctrl+D clones the selected body with an offset position, new seed, and automatic selection of the duplicate
+- **Body search filter** &mdash; case-insensitive name and type search in the body list panel
+- **Velocity arrows** &mdash; toggle (V key) shows per-body velocity vectors as arrows with blue-to-red color shift proportional to speed
+- **Keyboard shortcuts overlay** &mdash; F1 toggles a centered overlay listing all camera, simulation, body, and UI shortcuts
+- **Screenshot capture** &mdash; F12 saves a timestamped PNG screenshot via Vulkan swapchain readback with BGRA-to-RGBA conversion
+- **Camera-inside-sphere transparency** &mdash; bodies are skipped when the camera is inside their bounding sphere, preventing black-screen rendering

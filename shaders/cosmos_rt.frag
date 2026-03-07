@@ -432,8 +432,7 @@ float intersect_sphere(vec3 ro, vec3 rd, vec3 center, float radius) {
     float sq = sqrt(disc);
     float t = -b - sq;
     if (t > 0.001) return t;
-    t = -b + sq;
-    if (t > 0.001) return t;
+    // Camera is inside the sphere — skip it so we see through
     return -1.0;
 }
 
@@ -745,7 +744,143 @@ vec3 background(vec3 rd) {
         bg = vec3(0.00003, 0.00004, 0.00007);
         bg += faint * haze;
         bg += sample_starfield(rd) * 1.12;
-    } else { // Realistic
+    } else if (preset == 12) { // Milky Way Panorama — bright galactic plane with prominent dust lanes
+        float band2 = pow(clamp(1.0 - abs(rd.y * 0.65 + noise3D(rd * 1.8) * 0.08), 0.0, 1.0), 3.8);
+        float dust2 = smoothstep(0.32, 0.82, fbm(rd * 14.0 + vec3(1.1, -0.5, 3.2), 6));
+        float neb2 = fbm(rd * 4.2 + vec3(2.8, -1.6, 0.3), 5);
+        // Dense star clouds in the galactic plane
+        float star_cloud = pow(band2, 1.5) * (1.0 - dust2 * 0.75);
+        vec3 cloud_col = mix(vec3(0.035, 0.032, 0.028), vec3(0.065, 0.055, 0.040), neb2);
+        // Bright central bulge
+        float bulge = pow(clamp(1.0 - length(vec2(rd.x * 0.8, rd.y * 1.5)) * 0.7, 0.0, 1.0), 6.0);
+        vec3 bulge_col = vec3(0.08, 0.065, 0.045) * bulge;
+        // Subtle emission nebulae along the plane
+        float emission = smoothstep(0.55, 0.95, fbm(rd * 8.5 + vec3(-1.4, 0.8, 2.1), 5)) * band2;
+        vec3 em_col = mix(vec3(0.06, 0.01, 0.02), vec3(0.02, 0.01, 0.04), neb2) * emission * 0.4;
+        // Dark molecular clouds
+        float dark = smoothstep(0.50, 0.80, fbm(rd * 10.0 + vec3(0.5, 2.3, -1.1), 5)) * band2;
+        bg = vec3(0.00015, 0.00018, 0.00030);
+        bg += cloud_col * star_cloud;
+        bg += bulge_col;
+        bg += em_col;
+        bg *= (1.0 - dark * 0.65);
+        bg += sample_starfield(rd) * (1.1 + star_cloud * 0.5);
+    } else if (preset == 13) { // Orion Nebula — pink/magenta emission with blue reflection
+        float n1 = fbm(rd * 5.8 + vec3(1.7, -2.4, 0.9), 6);
+        float n2 = fbm(rd * 3.2 + vec3(-0.5, 1.8, 3.1), 5);
+        float n3 = fbm(rd * 9.5 + vec3(2.2, 0.6, -1.3), 5);
+        // Central bright region
+        float bright_core = pow(clamp(1.0 - length(rd - vec3(0.3, -0.1, 0.8)) * 0.9, 0.0, 1.0), 3.5);
+        // Emission nebula — H-alpha pink/magenta
+        float emission = smoothstep(0.25, 0.85, n1) * (0.5 + bright_core * 0.5);
+        vec3 h_alpha = mix(vec3(0.18, 0.04, 0.08), vec3(0.35, 0.08, 0.18), n2);
+        // Blue reflection nebula
+        float reflection = smoothstep(0.35, 0.78, n2) * (1.0 - emission * 0.6);
+        vec3 blue_ref = vec3(0.04, 0.08, 0.20) * reflection;
+        // Dark globules
+        float globule = smoothstep(0.60, 0.90, n3) * 0.7;
+        bg = vec3(0.00012, 0.00010, 0.00018);
+        bg += h_alpha * emission * 0.35;
+        bg += blue_ref * 0.25;
+        bg *= (1.0 - globule * 0.8);
+        bg += vec3(0.006, 0.004, 0.008) * pow(galactic_band, 2.2);
+        bg += sample_starfield(rd) * (0.85 + bright_core * 0.3);
+    } else if (preset == 14) { // Carina Nebula — gold/teal pillars with bright emission
+        float n1 = fbm(rd * 4.6 + vec3(-2.1, 0.4, 1.7), 6);
+        float n2 = fbm(rd * 7.8 + vec3(3.5, -1.1, 0.2), 5);
+        float n3 = fbm(rd * 6.2 + vec3(0.8, 2.5, -0.6), 5);
+        // Pillar structures — tall column-like dust features
+        float pillar_mask = pow(clamp(1.0 - abs(rd.y + 0.1) * 0.6, 0.0, 1.0), 2.5);
+        float pillars = smoothstep(0.40, 0.85, n2) * pillar_mask;
+        // Gold/amber emission
+        vec3 gold = mix(vec3(0.22, 0.14, 0.04), vec3(0.40, 0.28, 0.08), n1);
+        // Teal/cyan scattered light
+        vec3 teal = mix(vec3(0.02, 0.10, 0.12), vec3(0.06, 0.18, 0.22), n3);
+        float scatter = smoothstep(0.30, 0.75, n1) * (1.0 - pillars * 0.5);
+        // Bright ionization front
+        float ionfront = smoothstep(0.55, 0.70, n2) * pillar_mask * 0.6;
+        vec3 ionize = vec3(0.30, 0.18, 0.06) * ionfront;
+        bg = vec3(0.00015, 0.00012, 0.00008);
+        bg += gold * pillars * 0.30;
+        bg += teal * scatter * 0.22;
+        bg += ionize;
+        bg += vec3(0.008, 0.006, 0.004) * pow(galactic_band, 2.0);
+        bg += sample_starfield(rd) * 0.95;
+    } else if (preset == 15) { // Cosmic Microwave Background — faint warm all-sky glow
+        float cmb1 = fbm(rd * 3.0 + vec3(0.5, -0.3, 1.8), 5);
+        float cmb2 = fbm(rd * 5.5 + vec3(-1.2, 2.1, 0.4), 4);
+        // CMB-like dipole anisotropy
+        float dipole = dot(rd, normalize(vec3(0.4, 0.1, 0.9))) * 0.5 + 0.5;
+        // Temperature fluctuations mapped to subtle color shifts
+        vec3 cool_cmb = vec3(0.008, 0.012, 0.025);
+        vec3 warm_cmb = vec3(0.025, 0.015, 0.008);
+        vec3 cmb_col = mix(cool_cmb, warm_cmb, dipole * 0.6 + cmb1 * 0.4);
+        float fluctuation = 0.6 + cmb2 * 0.4;
+        bg = vec3(0.00008, 0.00010, 0.00018);
+        bg += cmb_col * fluctuation * 0.45;
+        bg += sample_starfield(rd) * 0.60;
+    } else if (preset == 16) { // Void — near-pure black, very sparse faint stars
+        bg = vec3(0.00001, 0.00001, 0.00002);
+        bg += sample_starfield(rd) * 0.30;
+    } else if (preset == 17) { // Eagle Nebula (Pillars of Creation) — dark columns silhouetted against emission
+        float n1 = fbm(rd * 5.5 + vec3(1.4, -0.7, 2.8), 6);
+        float n2 = fbm(rd * 8.2 + vec3(-2.6, 1.2, 0.5), 5);
+        float n3 = fbm(rd * 3.8 + vec3(0.3, 3.1, -1.4), 5);
+        // Tall dark pillar shapes rising from below
+        float pillar_y = clamp((rd.y + 0.5) * 1.2, 0.0, 1.0);
+        float pillar_shape = smoothstep(0.45, 0.80, n2) * pillar_y;
+        float pillar_edge = smoothstep(0.40, 0.50, n2) * pillar_y;
+        // Background emission glow (green/yellow from OII/OIII)
+        vec3 emission_bg = mix(vec3(0.08, 0.14, 0.06), vec3(0.15, 0.20, 0.08), n3);
+        float emission_f = (0.35 + 0.45 * smoothstep(0.20, 0.70, n1));
+        // Bright evaporating edges (photo-evaporation)
+        vec3 edge_glow = vec3(0.28, 0.22, 0.10) * pillar_edge * 0.5;
+        bg = vec3(0.00010, 0.00014, 0.00008);
+        bg += emission_bg * emission_f * (1.0 - pillar_shape * 0.85);
+        bg += edge_glow;
+        bg += vec3(0.005, 0.007, 0.004) * pow(galactic_band, 2.0);
+        bg += sample_starfield(rd) * (0.80 - pillar_shape * 0.5);
+    } else if (preset == 18) { // Supernova Remnant — filamentary shock structures
+        float n1 = fbm(rd * 6.4 + vec3(-1.8, 0.5, 3.3), 6);
+        float n2 = fbm(rd * 10.5 + vec3(2.7, -2.3, 0.1), 5);
+        float n3 = fbm(rd * 4.0 + vec3(0.9, 1.6, -2.0), 4);
+        // Expanding shell
+        float shell_dist = length(rd - vec3(-0.2, 0.15, 0.7));
+        float shell = smoothstep(0.55, 0.62, shell_dist) * smoothstep(0.78, 0.68, shell_dist);
+        // Filaments along the shell
+        float filament = smoothstep(0.50, 0.90, n2) * shell;
+        // Shock-heated gas (blue/cyan for X-ray, red for H-alpha)
+        vec3 shock_blue = vec3(0.05, 0.12, 0.22) * filament;
+        vec3 shock_red = vec3(0.18, 0.04, 0.06) * smoothstep(0.55, 0.88, n1) * shell;
+        // Interior glow
+        float interior = smoothstep(0.62, 0.40, shell_dist) * 0.15;
+        vec3 inner_glow = vec3(0.06, 0.08, 0.14) * interior * (0.5 + n3 * 0.5);
+        bg = vec3(0.00008, 0.00010, 0.00016);
+        bg += shock_blue * 0.35;
+        bg += shock_red * 0.30;
+        bg += inner_glow;
+        bg += sample_starfield(rd) * 0.88;
+    } else if (preset == 19) { // Stellar Nursery — warm molecular cloud with embedded protostars
+        float n1 = fbm(rd * 4.0 + vec3(2.5, -0.8, 1.5), 6);
+        float n2 = fbm(rd * 7.0 + vec3(-1.0, 2.4, 0.7), 5);
+        float n3 = fbm(rd * 12.0 + vec3(0.3, -1.5, 3.4), 5);
+        // Dense molecular cloud — dark and opaque
+        float cloud = smoothstep(0.28, 0.75, n1);
+        // Warm dust heated by embedded stars
+        vec3 warm_dust = mix(vec3(0.12, 0.06, 0.02), vec3(0.25, 0.12, 0.04), n2);
+        // Point-like embedded protostars (bright spots)
+        float protostar = pow(smoothstep(0.92, 0.98, n3), 3.0) * 2.5;
+        vec3 proto_col = vec3(0.35, 0.25, 0.12) * protostar;
+        // Faint scattered light at cloud edges
+        float edge_light = smoothstep(0.65, 0.40, n1) * smoothstep(0.20, 0.50, n1) * 0.4;
+        vec3 scattered = vec3(0.06, 0.04, 0.08) * edge_light;
+        bg = vec3(0.00006, 0.00005, 0.00004);
+        bg += warm_dust * cloud * 0.15;
+        bg += proto_col;
+        bg += scattered;
+        bg *= (1.0 - cloud * 0.4);
+        bg += sample_starfield(rd) * (0.70 - cloud * 0.45);
+    } else { // Realistic (preset 0)
         bg += sample_starfield(rd);
     }
     return bg * bg_strength;

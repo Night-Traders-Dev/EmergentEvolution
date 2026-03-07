@@ -5,6 +5,7 @@
 
 #include "biochem/biochem_types.h"
 #include "common/vulkan_context.h"
+#include <cstddef>
 
 class BiochemRaytracer {
 public:
@@ -31,6 +32,8 @@ private:
     Buffer sphere_ssbo_;
     Buffer feature_ssbo_;
 
-    static constexpr int MAX_SPHERES = 1024;
-    static constexpr int MAX_ENV_FEATURES = 128;
+    size_t sphere_capacity_ = 0;
+    size_t feature_capacity_ = 0;
+    void refresh_descriptors(VulkanContext& vk);
+    void ensure_buffer_capacity(VulkanContext& vk, size_t sphere_count, size_t feature_count);
 };

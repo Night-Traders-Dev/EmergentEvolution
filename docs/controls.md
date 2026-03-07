@@ -30,10 +30,18 @@ Gamepad support is automatic when a controller is connected (see [Gamepad Suppor
 | `Q` / `E` | Pan camera up / down |
 | `R` | Reset camera to default orbit |
 | `Delete` | Delete selected body |
+| `Ctrl+D` | Duplicate selected body |
+| `V` | Toggle velocity arrows |
+| `L` | Lock / unlock selected body |
+| `F` | Focus camera on selected body |
+| `F1` | Toggle keyboard shortcuts overlay |
+| `F12` | Capture screenshot (saved as PNG) |
 | Left drag | Orbit camera (azimuth / elevation) |
+| Shift+Left drag | Pan camera |
+| Middle drag | Pan camera |
 | Scroll wheel | Zoom in / out (10&ndash;5000 range) |
-| Middle click | Spawn body at click position |
-| Right click | Select nearest body |
+| Left click | Select body / spawn in spawn mode |
+| Right click | Select nearest body / re-roll preview in spawn mode |
 | Any key / click | Dismiss splash screen |
 
 The bottom taskbar auto-hides at the screen edge. Hover the bottom to reveal it. Use the
