@@ -20,6 +20,7 @@ public:
     void tick(GLFWwindow* window, float dt);
     void destroy();
     void reset_simulation();
+    void load_preset(int index);
     int  spawn_at(glm::vec3 pos);  // returns index of primary spawned body, or -1
     int  spawn_preview_body(glm::vec3 pos); // spawn the current preview body at pos
 

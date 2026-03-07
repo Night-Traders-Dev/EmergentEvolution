@@ -83,6 +83,15 @@ enum StellarRemnantKind {
 };
 StellarRemnantKind stellar_remnant_kind(float progenitor_mass, bool thermonuclear = false);
 
+// Presets
+struct CosmosPreset {
+    const char* name;
+    const char* description;
+    void (*build)(CosmosState& state, const CosmosConfig& cfg, OrbitCamera& camera);
+};
+extern const CosmosPreset COSMOS_PRESETS[];
+extern const int          COSMOS_PRESET_COUNT;
+
 float body_gravitational_binding_energy(const CelestialBody& b, float G);
 float body_albedo_for_type(const CelestialBody& b);
 float body_escape_speed(const CelestialBody& a, const CelestialBody& b, float G);

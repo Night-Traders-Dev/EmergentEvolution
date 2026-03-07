@@ -752,10 +752,10 @@ void CosmosApp::render_overlay() {
             auto& trail = state.trails[i];
             if (trail.size() < 2) continue;
 
-            ImU32 c = body_color(state.bodies[i]);
-            int cr = (c >> IM_COL32_R_SHIFT) & 0xFF;
-            int cg = (c >> IM_COL32_G_SHIFT) & 0xFF;
-            int cb = (c >> IM_COL32_B_SHIFT) & 0xFF;
+            ImU32 base_c = body_color(state.bodies[i]);
+            int base_r = (base_c >> IM_COL32_R_SHIFT) & 0xFF;
+            int base_g = (base_c >> IM_COL32_G_SHIFT) & 0xFF;
+            int base_b = (base_c >> IM_COL32_B_SHIFT) & 0xFF;
 
             for (size_t j = 1; j < trail.size(); j++) {
                 auto p0 = project(trail[j - 1], vp, W, H);
@@ -766,8 +766,27 @@ void CosmosApp::render_overlay() {
                 int alpha = (int)std::clamp(frac * 80.0f * std::clamp(cfg.trail_alpha_scale, 0.0f, 4.0f),
                                             0.0f, 255.0f);
                 float width = (1.0f + frac * 1.5f) * std::clamp(cfg.trail_width_scale, 0.1f, 4.0f);
+
+                // Velocity-based color: compute speed from trail segment displacement
+                float seg_speed = glm::length(trail[j] - trail[j - 1]);
+                // Map speed to 0..1 (log scale for better contrast)
+                float speed_t = std::clamp(std::log2(seg_speed * 20.0f + 1.0f) * 0.25f, 0.0f, 1.0f);
+                // Blend: body color at low speed → white at mid → warm highlight at high
+                int tr, tg, tb;
+                if (speed_t < 0.5f) {
+                    float t2 = speed_t * 2.0f;
+                    tr = (int)std::clamp(base_r + (255 - base_r) * t2 * 0.5f, 0.0f, 255.0f);
+                    tg = (int)std::clamp(base_g + (255 - base_g) * t2 * 0.5f, 0.0f, 255.0f);
+                    tb = (int)std::clamp(base_b + (255 - base_b) * t2 * 0.4f, 0.0f, 255.0f);
+                } else {
+                    float t2 = (speed_t - 0.5f) * 2.0f;
+                    tr = (int)std::clamp(base_r * 0.5f + 255.0f * 0.5f + t2 * (255.0f - base_r * 0.5f - 255.0f * 0.5f + 60.0f), 0.0f, 255.0f);
+                    tg = (int)std::clamp(base_g * 0.5f + 255.0f * 0.5f - t2 * 80.0f, 0.0f, 255.0f);
+                    tb = (int)std::clamp(base_b * 0.5f + 255.0f * 0.5f - t2 * 140.0f, 0.0f, 255.0f);
+                }
+
                 fg->AddLine(ImVec2(p0.sx, p0.sy), ImVec2(p1.sx, p1.sy),
-                            IM_COL32(cr, cg, cb, alpha), width);
+                            IM_COL32(tr, tg, tb, alpha), width);
             }
         }
     }
@@ -1109,23 +1128,10 @@ void CosmosApp::draw_splash_screen() {
     splash_time_ += io.DeltaTime;
 
     if (splash_time_ > 0.3f) {
-        bool dismiss = ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                       ImGui::IsMouseClicked(ImGuiMouseButton_Right);
-        if (!dismiss) {
-            const ImGuiKey keys[] = {
-                ImGuiKey_Space, ImGuiKey_Enter, ImGuiKey_Escape,
-                ImGuiKey_A, ImGuiKey_B, ImGuiKey_C, ImGuiKey_D, ImGuiKey_E,
-                ImGuiKey_F, ImGuiKey_G, ImGuiKey_H, ImGuiKey_I, ImGuiKey_J,
-                ImGuiKey_K, ImGuiKey_L, ImGuiKey_M, ImGuiKey_N, ImGuiKey_O,
-                ImGuiKey_P, ImGuiKey_Q, ImGuiKey_R, ImGuiKey_S, ImGuiKey_T,
-                ImGuiKey_U, ImGuiKey_V, ImGuiKey_W, ImGuiKey_X, ImGuiKey_Y,
-                ImGuiKey_Z, ImGuiKey_1, ImGuiKey_2, ImGuiKey_3, ImGuiKey_4,
-            };
-            for (auto k : keys) {
-                if (ImGui::IsKeyPressed(k)) { dismiss = true; break; }
-            }
-        }
-        if (dismiss) {
+        // Only Escape/Space/Enter dismiss to default — card clicks handled below
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape) ||
+            ImGui::IsKeyPressed(ImGuiKey_Space) ||
+            ImGui::IsKeyPressed(ImGuiKey_Enter)) {
             show_splash = false;
             return;
         }
@@ -1193,11 +1199,124 @@ void CosmosApp::draw_splash_screen() {
                     IM_COL32(255, 160, 40, 200), 4.0f, 0, 1.5f);
         dl->AddText(ImVec2(badge_x, badge_y), IM_COL32(255, 180, 60, 230), badge);
 
-        const char* hint = "Click or press any key to continue";
+        // Subtitle
+        ImGui::SetWindowFontScale(0.9f);
+        const char* subtitle = "Choose a scenario to begin";
+        ImVec2 sub_size = ImGui::CalcTextSize(subtitle);
+        float sub_alpha = std::min(splash_time_ * 2.0f, 1.0f) * 180.0f;
+        dl->AddText(ImVec2(title_x, title_y + 36.0f),
+                    IM_COL32(200, 200, 220, (int)sub_alpha), subtitle);
+        ImGui::SetWindowFontScale(1.0f);
+
+        // Preset gallery grid — right side of screen
+        float grid_left = W * 0.32f;
+        float grid_top = 55.0f;
+        float grid_right = W - 30.0f;
+        float grid_bottom = H - 50.0f;
+        int cols = (W > 1600.0f) ? 4 : 3;
+        int rows = (COSMOS_PRESET_COUNT + cols - 1) / cols;
+        float gap = 5.0f;
+        float card_w = (grid_right - grid_left - gap * (float)(cols - 1)) / (float)cols;
+        float card_h = std::min((grid_bottom - grid_top - gap * (float)(rows - 1)) / (float)rows, 52.0f);
+
+        // Icon colors per preset (grouped by theme)
+        const ImU32 preset_colors[] = {
+            IM_COL32(255, 200, 60, 255),  // Solar System - yellow
+            IM_COL32(255, 160, 80, 255),  // Binary Stars - orange
+            IM_COL32(220, 80, 60, 255),   // TRAPPIST-1 - red dwarf
+            IM_COL32(255, 120, 40, 255),  // Hot Jupiter - hot orange
+            IM_COL32(200, 100, 60, 255),  // Giant Impact - brown
+            IM_COL32(140, 120, 200, 255), // Stellar Graveyard - purple
+            IM_COL32(180, 160, 120, 255), // Protoplanetary - dust
+            IM_COL32(160, 200, 255, 255), // Ringed Worlds - ice blue
+            IM_COL32(200, 200, 255, 255), // Star Cluster - white blue
+            IM_COL32(120, 200, 255, 255), // Comet Shower - cyan
+            IM_COL32(80, 140, 200, 255),  // Rogue Planet - dark blue
+            IM_COL32(180, 60, 200, 255),  // Supermassive BH - magenta
+            IM_COL32(100, 200, 120, 255), // Habitable Zone - green
+            IM_COL32(255, 220, 180, 255), // Stellar Evolution - warm white
+            IM_COL32(255, 255, 160, 255), // Figure Eight - bright yellow
+            IM_COL32(160, 140, 120, 255), // Asteroid Belt - grey
+            IM_COL32(100, 140, 255, 255), // Wolf-Rayet - blue
+            IM_COL32(255, 100, 100, 255), // Collision Course - red
+            IM_COL32(160, 100, 200, 255), // Nebula Collapse - purple
+            IM_COL32(80, 220, 255, 255),  // Pulsar Binary - bright cyan
+            IM_COL32(180, 170, 140, 255), // Trojan Asteroids - tan
+            IM_COL32(200, 140, 80, 255),  // Exomoon System - amber
+            IM_COL32(255, 200, 120, 255), // Hierarchical Triple - gold
+            IM_COL32(255, 170, 100, 255), // Tatooine - warm sunset
+            IM_COL32(100, 60, 160, 255),  // Black Hole Accretion - dark purple
+        };
+
+        for (int i = 0; i < COSMOS_PRESET_COUNT; i++) {
+            int col = i % cols;
+            int row = i / cols;
+            float cx = grid_left + col * (card_w + gap);
+            float cy = grid_top + row * (card_h + gap);
+
+            // Stagger animation
+            float anim_delay = 0.4f + i * 0.04f;
+            float anim_t = std::clamp((splash_time_ - anim_delay) * 3.0f, 0.0f, 1.0f);
+            float ease = anim_t * anim_t * (3.0f - 2.0f * anim_t); // smoothstep
+            float slide = (1.0f - ease) * 30.0f;
+            cy += slide;
+            int card_alpha = (int)(ease * 255.0f);
+            if (card_alpha < 5) continue;
+
+            ImVec2 p0(cx, cy), p1(cx + card_w, cy + card_h);
+            ImVec2 mouse = io.MousePos;
+            bool hovered = mouse.x >= p0.x && mouse.x <= p1.x &&
+                           mouse.y >= p0.y && mouse.y <= p1.y;
+
+            // Card background
+            ImU32 bg_col = hovered
+                ? IM_COL32(40, 50, 70, std::min(card_alpha, 220))
+                : IM_COL32(18, 22, 35, std::min(card_alpha, 180));
+            dl->AddRectFilled(p0, p1, bg_col, 6.0f);
+
+            // Accent bar on left
+            ImU32 accent = i < (int)(sizeof(preset_colors)/sizeof(preset_colors[0]))
+                ? preset_colors[i] : IM_COL32(200, 200, 200, 255);
+            int ar = (accent >> IM_COL32_R_SHIFT) & 0xFF;
+            int ag = (accent >> IM_COL32_G_SHIFT) & 0xFF;
+            int ab = (accent >> IM_COL32_B_SHIFT) & 0xFF;
+            dl->AddRectFilled(ImVec2(cx, cy + 2), ImVec2(cx + 3, cy + card_h - 2),
+                              IM_COL32(ar, ag, ab, std::min(card_alpha, 200)), 2.0f);
+
+            // Border on hover
+            if (hovered) {
+                dl->AddRect(p0, p1, IM_COL32(ar, ag, ab, 160), 6.0f, 0, 1.5f);
+            }
+
+            // Name
+            ImGui::SetWindowFontScale(0.85f);
+            dl->AddText(ImVec2(cx + 10, cy + 4),
+                        IM_COL32(240, 240, 255, card_alpha), COSMOS_PRESETS[i].name);
+            ImGui::SetWindowFontScale(1.0f);
+
+            // Description (truncated)
+            ImGui::SetWindowFontScale(0.65f);
+            dl->AddText(nullptr, 0.0f, ImVec2(cx + 10, cy + 22),
+                        IM_COL32(160, 170, 190, std::min(card_alpha, 180)),
+                        COSMOS_PRESETS[i].description,
+                        COSMOS_PRESETS[i].description + std::min((int)strlen(COSMOS_PRESETS[i].description), 60));
+            ImGui::SetWindowFontScale(1.0f);
+
+            // Click to launch
+            if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && splash_time_ > 0.5f) {
+                load_preset(i);
+                show_splash = false;
+            }
+        }
+
+        // Hint at bottom
+        const char* hint = "Click a scenario to begin  |  Press Escape to start with default";
         ImVec2 hint_size = ImGui::CalcTextSize(hint);
-        float hint_alpha = 120.0f + 80.0f * sinf(splash_time_ * 3.0f);
-        dl->AddText(ImVec2(W * 0.5f - hint_size.x * 0.5f, H - 40.0f),
-                    IM_COL32(200, 200, 210, (int)hint_alpha), hint);
+        float hint_alpha = std::min(splash_time_ - 0.3f, 1.0f) * (120.0f + 80.0f * sinf(splash_time_ * 3.0f));
+        if (hint_alpha > 0.0f) {
+            dl->AddText(ImVec2(W * 0.5f - hint_size.x * 0.5f, H - 35.0f),
+                        IM_COL32(200, 200, 210, (int)std::max(hint_alpha, 0.0f)), hint);
+        }
     }
     ImGui::End();
     ImGui::PopStyleVar(3);
@@ -1250,9 +1369,22 @@ void CosmosApp::draw_pause_menu() {
         }
 
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing));
-        if (ImGui::Button("New Simulation", ImVec2(btn_w, btn_h))) {
-            reset_simulation();
-            show_pause_menu = false;
+        if (ImGui::Button("Presets...", ImVec2(btn_w, btn_h))) {
+            ImGui::OpenPopup("##PresetPicker");
+        }
+        if (ImGui::BeginPopup("##PresetPicker")) {
+            ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Scenarios");
+            ImGui::Separator();
+            for (int i = 0; i < COSMOS_PRESET_COUNT; i++) {
+                if (ImGui::MenuItem(COSMOS_PRESETS[i].name)) {
+                    load_preset(i);
+                    show_pause_menu = false;
+                }
+                if (ImGui::IsItemHovered() && COSMOS_PRESETS[i].description[0]) {
+                    ImGui::SetTooltip("%s", COSMOS_PRESETS[i].description);
+                }
+            }
+            ImGui::EndPopup();
         }
 
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 2));
@@ -2197,7 +2329,9 @@ void CosmosApp::draw_spawn_menu() {
             const auto& b = state.bodies[spawned];
             selected_body = spawned;
             camera.focus_on(b.pos, spawned, b.radius);
-            camera.target_distance = b.radius * 8.0f;
+            float ideal = b.radius * 8.0f;
+            float cur = camera.target_distance;
+            camera.target_distance = std::max(ideal, cur * 0.25f);
         }
     }
     ImGui::PopStyleVar();
@@ -2804,7 +2938,9 @@ void CosmosApp::draw_inspector() {
     } else {
         if (ImGui::SmallButton("Track")) {
             camera.focus_on(b.pos, selected_body, b.radius);
-            camera.target_distance = b.radius * 8.0f;
+            float ideal = b.radius * 8.0f;
+            float cur = camera.target_distance;
+            camera.target_distance = std::max(ideal, cur * 0.25f);
         }
     }
 
@@ -3782,6 +3918,17 @@ void CosmosApp::draw_bottom_bar() {
                 }
                 if (menu_item_tt("New Simulation")) {
                     reset_simulation(); show_menu_popup_ = false;
+                }
+                if (ImGui::BeginMenu("Presets")) {
+                    for (int i = 0; i < COSMOS_PRESET_COUNT; i++) {
+                        if (ImGui::MenuItem(COSMOS_PRESETS[i].name)) {
+                            load_preset(i);
+                            show_menu_popup_ = false;
+                        }
+                        if (ImGui::IsItemHovered() && COSMOS_PRESETS[i].description[0])
+                            ImGui::SetTooltip("%s", COSMOS_PRESETS[i].description);
+                    }
+                    ImGui::EndMenu();
                 }
                 if (menu_item_tt("Empty Universe")) {
                     state.clear(); cfg.body_count = 0;

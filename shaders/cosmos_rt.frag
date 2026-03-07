@@ -432,7 +432,10 @@ float intersect_sphere(vec3 ro, vec3 rd, vec3 center, float radius) {
     float sq = sqrt(disc);
     float t = -b - sq;
     if (t > 0.001) return t;
-    // Camera is inside the sphere — skip it so we see through
+    // Camera is inside the sphere — return the exit intersection so the body
+    // stays visible (rendered from inside) rather than disappearing entirely.
+    float t2 = -b + sq;
+    if (t2 > 0.001) return t2;
     return -1.0;
 }
 
@@ -1339,20 +1342,93 @@ vec3 shade_gas_giant(vec3 normal, Sphere hit, vec3 light_dir, vec3 view_dir) {
     float secondary = sin(lat * (band_freq * 0.62) - warp * 0.55 +
                           fbm(vec3(fine_lon * 0.15, lat * 3.4, seed * 0.17), 3) * 1.4);
 
+    // Diverse gas giant palettes — seed-driven color selection
+    float palette_id = floor(hash11(seed * 0.037 + mass * 2800.0) * 8.0);
     vec3 warm;
     vec3 cool;
+    vec3 accent;  // third band color for richer banding
     if (ice_giant) {
-        warm = vec3(0.38, 0.70, 0.92);
-        cool = vec3(0.10, 0.24, 0.52);
+        float ice_style = floor(hash11(seed * 0.053) * 4.0);
+        if (ice_style < 0.5) {
+            warm = vec3(0.38, 0.70, 0.92);       // Neptune blue
+            cool = vec3(0.10, 0.24, 0.52);
+            accent = vec3(0.55, 0.80, 0.95);
+        } else if (ice_style < 1.5) {
+            warm = vec3(0.42, 0.78, 0.82);       // cyan-teal
+            cool = vec3(0.12, 0.32, 0.48);
+            accent = vec3(0.62, 0.88, 0.90);
+        } else if (ice_style < 2.5) {
+            warm = vec3(0.52, 0.62, 0.80);       // Uranus pale blue-grey
+            cool = vec3(0.28, 0.38, 0.58);
+            accent = vec3(0.68, 0.75, 0.88);
+        } else {
+            warm = vec3(0.34, 0.56, 0.74);       // deep ocean blue
+            cool = vec3(0.08, 0.16, 0.38);
+            accent = vec3(0.48, 0.72, 0.86);
+        }
+    } else if (temperature > 1400.0) {
+        // Ultra-hot Jupiters — exotic colors
+        float uh_style = floor(hash11(seed * 0.071) * 3.0);
+        if (uh_style < 0.5) {
+            warm = vec3(1.0, 0.42, 0.12);        // molten orange-white
+            cool = vec3(0.65, 0.12, 0.04);
+            accent = vec3(1.0, 0.78, 0.35);
+        } else if (uh_style < 1.5) {
+            warm = vec3(0.88, 0.32, 0.48);       // magenta hot Jupiter
+            cool = vec3(0.42, 0.08, 0.18);
+            accent = vec3(1.0, 0.55, 0.62);
+        } else {
+            warm = vec3(0.92, 0.72, 0.15);       // golden-yellow
+            cool = vec3(0.55, 0.28, 0.05);
+            accent = vec3(1.0, 0.90, 0.45);
+        }
     } else if (temperature > 900.0) {
         warm = vec3(0.95, 0.48, 0.20);
         cool = vec3(0.56, 0.15, 0.08);
-    } else {
-        warm = vec3(0.82, 0.68, 0.45);
+        accent = vec3(1.0, 0.68, 0.32);
+    } else if (palette_id < 0.5) {
+        warm = vec3(0.82, 0.68, 0.45);           // classic Jupiter tan
         cool = vec3(0.54, 0.40, 0.25);
+        accent = vec3(0.92, 0.80, 0.58);
+    } else if (palette_id < 1.5) {
+        warm = vec3(0.78, 0.58, 0.35);           // warm amber Jupiter
+        cool = vec3(0.42, 0.24, 0.12);
+        accent = vec3(0.88, 0.72, 0.42);
+    } else if (palette_id < 2.5) {
+        warm = vec3(0.85, 0.75, 0.55);           // Saturn gold
+        cool = vec3(0.62, 0.52, 0.32);
+        accent = vec3(0.94, 0.88, 0.68);
+    } else if (palette_id < 3.5) {
+        warm = vec3(0.72, 0.52, 0.38);           // rust-brown
+        cool = vec3(0.38, 0.22, 0.14);
+        accent = vec3(0.85, 0.65, 0.45);
+    } else if (palette_id < 4.5) {
+        warm = vec3(0.68, 0.62, 0.55);           // grey-beige (muted)
+        cool = vec3(0.35, 0.30, 0.25);
+        accent = vec3(0.82, 0.78, 0.72);
+    } else if (palette_id < 5.5) {
+        warm = vec3(0.58, 0.48, 0.42);           // dark umber
+        cool = vec3(0.28, 0.18, 0.14);
+        accent = vec3(0.72, 0.62, 0.50);
+    } else if (palette_id < 6.5) {
+        warm = vec3(0.72, 0.45, 0.35);           // copper-red
+        cool = vec3(0.40, 0.16, 0.10);
+        accent = vec3(0.88, 0.60, 0.42);
+    } else {
+        warm = vec3(0.76, 0.72, 0.60);           // pale cream
+        cool = vec3(0.48, 0.42, 0.34);
+        accent = vec3(0.90, 0.86, 0.76);
     }
 
+    // Per-seed hue shift for even more diversity
+    vec3 hue_shift = (hash31(seed * 0.0177) - 0.5) * vec3(0.10, 0.08, 0.12);
+    warm = clamp(warm + hue_shift, 0.0, 1.0);
+    cool = clamp(cool + hue_shift * 0.7, 0.0, 1.0);
+    accent = clamp(accent + hue_shift * 0.5, 0.0, 1.0);
+
     vec3 col = mix(warm, cool, band * 0.5 + 0.5);
+    // Weave in accent color on secondary band structure
+    col = mix(col, accent, (secondary * 0.5 + 0.5) * 0.28);
     col = mix(col, col * 1.14, secondary * 0.5 + 0.5);
     float cloud_lanes = smoothstep(0.46, 0.78,
         fbm(vec3(fine_lon * 0.55, lat * 7.5 + sin(band_lon * 0.3) * 0.7, seed * 0.13), 5));
@@ -1363,7 +1439,7 @@ vec3 shade_gas_giant(vec3 normal, Sphere hit, vec3 light_dir, vec3 view_dir) {
 
     float giant_storm = exp(-pow((lon + wind_speed * 0.28 - sin(seed * 0.01) * 1.4) / 0.28, 2.0)
                           - pow((lat - sin(seed * 0.003) * 0.22) / 0.11, 2.0));
-    vec3 storm_col = ice_giant ? vec3(0.92, 0.98, 1.0) : vec3(1.0, 0.74, 0.52);
+    vec3 storm_col = ice_giant ? vec3(0.92, 0.98, 1.0) : accent;
     col = mix(col, storm_col, giant_storm * (0.22 + storms * 0.35));
 
     float haze = smoothstep(0.58, 0.94, abs(sample_normal.y));
@@ -1381,30 +1457,46 @@ vec3 rocky_palette(float style, float tone) {
     vec3 mid;
     vec3 bright;
 
-    if (style < 0.5) {
+    if (style < 0.5) {             // lunar grey
         dark = vec3(0.08, 0.09, 0.11);
         mid = vec3(0.28, 0.31, 0.35);
         bright = vec3(0.60, 0.65, 0.71);
-    } else if (style < 1.5) {
+    } else if (style < 1.5) {     // Mars red-oxide
         dark = vec3(0.15, 0.06, 0.05);
         mid = vec3(0.45, 0.18, 0.10);
         bright = vec3(0.78, 0.45, 0.20);
-    } else if (style < 2.5) {
+    } else if (style < 2.5) {     // desert tan
         dark = vec3(0.21, 0.15, 0.09);
         mid = vec3(0.57, 0.40, 0.23);
         bright = vec3(0.86, 0.73, 0.50);
-    } else if (style < 3.5) {
+    } else if (style < 3.5) {     // olive drab
         dark = vec3(0.13, 0.11, 0.08);
         mid = vec3(0.36, 0.28, 0.15);
         bright = vec3(0.72, 0.66, 0.42);
-    } else if (style < 4.5) {
+    } else if (style < 4.5) {     // mossy green
         dark = vec3(0.09, 0.12, 0.08);
         mid = vec3(0.26, 0.34, 0.20);
         bright = vec3(0.60, 0.70, 0.46);
-    } else {
+    } else if (style < 5.5) {     // slate blue-grey
         dark = vec3(0.16, 0.18, 0.20);
         mid = vec3(0.44, 0.48, 0.54);
         bright = vec3(0.82, 0.85, 0.89);
+    } else if (style < 6.5) {     // volcanic basalt
+        dark = vec3(0.06, 0.05, 0.07);
+        mid = vec3(0.18, 0.15, 0.20);
+        bright = vec3(0.42, 0.38, 0.45);
+    } else if (style < 7.5) {     // terracotta
+        dark = vec3(0.18, 0.08, 0.04);
+        mid = vec3(0.52, 0.28, 0.15);
+        bright = vec3(0.82, 0.56, 0.34);
+    } else if (style < 8.5) {     // copper weathered
+        dark = vec3(0.12, 0.10, 0.06);
+        mid = vec3(0.38, 0.32, 0.18);
+        bright = vec3(0.68, 0.58, 0.38);
+    } else {                       // chalk/limestone
+        dark = vec3(0.22, 0.20, 0.18);
+        mid = vec3(0.58, 0.55, 0.50);
+        bright = vec3(0.88, 0.84, 0.78);
     }
 
     vec3 col = mix(dark, mid, smoothstep(0.14, 0.52, tone));
@@ -1527,20 +1619,27 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     float heat = clamp((temperature - 340.0) / 900.0, 0.0, 1.0);
     float palette_roll = hash11(seed * 0.021 + terrain_freq * 0.13 + continent_cov * 2.7 +
                                 hit.gravity_params.x * 1800.0);
-    float style = floor(palette_roll * 6.0);
+    float style = floor(palette_roll * 10.0);
     if (temperature > 900.0) {
-        style = 1.0;
+        // Hot worlds: volcanic basalt or Mars red or terracotta
+        float hot_style = floor(hash11(seed * 0.043) * 3.0);
+        style = (hot_style < 0.5) ? 6.0 : (hot_style < 1.5) ? 1.0 : 7.0;
     } else if (coldness > 0.55 && ocean_cov < 0.18) {
         style = 5.0;
     } else if (dryness > 0.65 && temperature > 285.0) {
-        style = 2.0;
+        // Arid worlds: desert tan, terracotta, or copper
+        float arid_style = floor(hash11(seed * 0.057) * 3.0);
+        style = (arid_style < 0.5) ? 2.0 : (arid_style < 1.5) ? 7.0 : 8.0;
     } else if (humidity > 0.55 && temperate > 0.40) {
-        style = 3.0;
+        // Temperate: olive, mossy green, or chalk
+        float temp_style = floor(hash11(seed * 0.063) * 3.0);
+        style = (temp_style < 0.5) ? 3.0 : (temp_style < 1.5) ? 4.0 : 9.0;
     } else if (metal_frac > 0.34 && heat > 0.18) {
         style = 1.0;
     }
 
-    vec3 palette_shift = (hash31(seed * 0.113 + surface_type * 9.7) - 0.5) * vec3(0.14, 0.12, 0.10);
+    // Stronger per-seed palette shift for more visual diversity
+    vec3 palette_shift = (hash31(seed * 0.113 + surface_type * 9.7) - 0.5) * vec3(0.22, 0.18, 0.16);
     float rock_tone = clamp(elev + land_mask * 0.08 - valley_mask * 0.05, 0.0, 1.0);
     vec3 ice_col = vec3(0.72, 0.82, 0.95);
     vec3 col = rocky_palette(style, rock_tone);
@@ -1613,8 +1712,13 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
         float shallows = 1.0 - smoothstep(sea_level - 0.05, sea_level - 0.18, elev);
         vec3 ocean_col;
         if (ocean_type < 1.5) {
-            ocean_col = mix(vec3(0.02, 0.08, 0.24), vec3(0.08, 0.34, 0.62), 1.0 - depth);
-            ocean_col = mix(ocean_col, vec3(0.24, 0.70, 0.84), shallows * 0.42);
+            // Seed-driven ocean hue: blue, teal, cyan, or deep navy
+            float ocean_hue = hash11(seed * 0.029 + ocean_cov * 3.1);
+            vec3 deep_base = mix(vec3(0.02, 0.08, 0.24), vec3(0.02, 0.12, 0.18), ocean_hue);
+            vec3 mid_base = mix(vec3(0.08, 0.34, 0.62), vec3(0.06, 0.42, 0.52), ocean_hue);
+            vec3 shallow_base = mix(vec3(0.24, 0.70, 0.84), vec3(0.18, 0.72, 0.68), ocean_hue);
+            ocean_col = mix(deep_base, mid_base, 1.0 - depth);
+            ocean_col = mix(ocean_col, shallow_base, shallows * 0.42);
             roughness_out = 0.10;
         } else if (ocean_type < 2.5) {
             ocean_col = mix(vec3(0.02, 0.08, 0.12), vec3(0.08, 0.20, 0.24), 1.0 - depth);
