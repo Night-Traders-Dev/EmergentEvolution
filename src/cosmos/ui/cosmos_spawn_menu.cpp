@@ -219,22 +219,36 @@ void draw_spawn_preview_thumb(const char* thumb_id, int preview_type, float mass
 } // namespace
 
 void CosmosApp::draw_spawn_menu() {
+    // Auto-toggle space fabric grid with spawn menu visibility
+    if (spawn_menu_visible_ && !spawn_grid_was_visible_) {
+        grid_was_on_before_spawn_ = cfg.cosmos_space_fabric;
+        cfg.cosmos_space_fabric = true;
+        spawn_grid_was_visible_ = true;
+    } else if (!spawn_menu_visible_ && spawn_grid_was_visible_) {
+        if (!grid_was_on_before_spawn_)
+            cfg.cosmos_space_fabric = false;
+        spawn_grid_was_visible_ = false;
+    }
+
     if (!spawn_menu_visible_) return;
 
     ImGuiIO& io = ImGui::GetIO();
-    float menu_w = io.DisplaySize.x * 0.85f;
+    float bar_h = 36.0f;
     float menu_h = 210.0f;
-    ImGui::SetNextWindowPos({io.DisplaySize.x * 0.5f - menu_w * 0.5f, io.DisplaySize.y - menu_h - 38.0f}, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize({menu_w, menu_h}, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(700, 170), ImVec2(io.DisplaySize.x * 0.95f, 340));
+    float menu_w = io.DisplaySize.x;
+    float menu_y = io.DisplaySize.y - menu_h - bar_h;
+
+    ImGui::SetNextWindowPos({0.0f, menu_y}, ImGuiCond_Always);
+    ImGui::SetNextWindowSize({menu_w, menu_h}, ImGuiCond_Always);
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.10f, 0.96f));
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.22f, 0.22f, 0.26f, 0.80f));
 
     if (!ImGui::Begin("##SpawnMenu", &spawn_menu_visible_,
-                       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar)) {
+                       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
+                       ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
         ImGui::End();
         ImGui::PopStyleColor(2);
         ImGui::PopStyleVar(2);

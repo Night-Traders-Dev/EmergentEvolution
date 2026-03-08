@@ -738,8 +738,6 @@ void CosmosApp::draw_bottom_bar() {
                     checkbox_tt("Black Hole Lensing##Menu", &cfg.cosmos_blackhole_lensing);
                     slider_float_tt("Lensing Strength##Menu", &cfg.blackhole_lensing_strength, 0.0f, 4.0f, "%.2f");
                     checkbox_tt("Space Fabric Grid##Menu", &cfg.cosmos_space_fabric);
-                    slider_float_tt("Fabric Square Size##Menu", &cfg.cosmos_space_fabric_grid_size,
-                                    5.0f, 200.0f, "%.1f u", ImGuiSliderFlags_Logarithmic);
                     slider_float_tt("Fabric Curvature##Menu", &cfg.cosmos_space_fabric_strength,
                                     0.1f, 3.0f, "%.2f");
                     if (button_tt("Snap Fabric View Isometric##Menu")) {

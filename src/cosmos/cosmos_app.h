@@ -69,6 +69,11 @@ public:
     glm::vec3 spawn_preview_pos_{0.0f};
     bool is_spawn_mode() const { return spawn_menu_visible_; }
 
+    // Spawn drag — click-and-hold to place, drag up/down to set inclination/height
+    bool      spawn_dragging_ = false;       // currently in a spawn drag
+    glm::vec3 spawn_drag_base_pos_{0.0f};    // XZ plane position from initial click
+    float     spawn_drag_y_offset_ = 0.0f;   // accumulated Y offset from dragging
+
     // Re-roll the spawn preview (called on right-click in spawn mode)
     void reroll_spawn_preview();
 
@@ -181,6 +186,8 @@ private:
 
     // Spawn menu
     bool spawn_menu_visible_ = true;
+    bool spawn_grid_was_visible_ = false;  // tracks spawn menu visibility for grid auto-toggle
+    bool grid_was_on_before_spawn_ = false; // restore grid state when spawn menu closes
 
     // Preview body for spawn ghost (fully initialized CelestialBody)
     CelestialBody preview_body_;

@@ -67,14 +67,12 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
     glfwGetCursorPos(window, &mx, &my);
 
     // ── Left-click: drag to orbit, click to select, double-click to focus ──
+    //    In spawn mode: click empty space → drag to set height, release to spawn
     if (button == GLFW_MOUSE_BUTTON_LEFT) {
         if (action == GLFW_PRESS) {
-            app->mouse_dragging = true;
-            app->camera.begin_orbit();
             app->last_mouse_x = mx;
             app->last_mouse_y = my;
 
-            // Set up click candidate for click-to-select
             app->click_pending_ = true;
             app->click_start_x_ = (float)mx;
             app->click_start_y_ = (float)my;
@@ -83,13 +81,36 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
             glfwGetFramebufferSize(window, &fb_w, &fb_h);
             app->click_candidate_ = app->pick_body((float)mx, (float)my,
                                                     (float)fb_w, (float)fb_h);
+
+            // In spawn mode clicking empty space: start spawn drag (no camera orbit)
+            if (app->is_spawn_mode() && app->click_candidate_ < 0) {
+                app->spawn_dragging_ = true;
+                app->spawn_drag_base_pos_ = viewport_spawn_position(app, window, mx, my);
+                app->spawn_drag_y_offset_ = 0.0f;
+                // Don't start camera orbit — mouse movement adjusts spawn height
+            } else {
+                app->mouse_dragging = true;
+                app->camera.begin_orbit();
+            }
         } else { // RELEASE
             float drag_dist = std::sqrt(
                 (float)((mx - app->click_start_x_) * (mx - app->click_start_x_) +
                         (my - app->click_start_y_) * (my - app->click_start_y_)));
 
-            // If the user barely moved the mouse, treat as a click (not a drag)
-            if (app->click_pending_ && drag_dist < 5.0f) {
+            if (app->spawn_dragging_) {
+                // Finalize spawn at base position + vertical offset from drag
+                glm::vec3 final_pos = app->spawn_drag_base_pos_;
+                final_pos.y += app->spawn_drag_y_offset_;
+                app->selected_body = -1;
+                int spawned = app->spawn_preview_body(final_pos);
+                if (spawned >= 0 && spawned < (int)app->state.bodies.size()) {
+                    const auto& b = app->state.bodies[spawned];
+                    app->selected_body = spawned;
+                    app->camera.focus_on(b.pos, spawned, b.radius);
+                }
+                app->spawn_dragging_ = false;
+                app->spawn_drag_y_offset_ = 0.0f;
+            } else if (app->click_pending_ && drag_dist < 5.0f) {
                 double now = glfwGetTime();
                 float click_dist = std::sqrt(
                     (app->click_start_x_ - app->last_click_x_) *
@@ -106,18 +127,8 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
                     app->camera.focus_on(b.pos, app->click_candidate_, b.radius);
                     app->camera.target_distance = std::max(b.radius * 8.0f, 30.0f);
                 } else {
-                    // Single click on body → select. Empty space → spawn (if spawn menu open) or deselect.
                     if (app->click_candidate_ >= 0) {
                         app->selected_body = app->click_candidate_;
-                    } else if (app->is_spawn_mode()) {
-                        app->selected_body = -1;
-                        glm::vec3 spawn_pos = viewport_spawn_position(app, window, mx, my);
-                        int spawned = app->spawn_preview_body(spawn_pos);
-                        if (spawned >= 0 && spawned < (int)app->state.bodies.size()) {
-                            const auto& b = app->state.bodies[spawned];
-                            app->selected_body = spawned;
-                            app->camera.focus_on(b.pos, spawned, b.radius);
-                        }
                     } else {
                         app->selected_body = -1;
                     }
@@ -130,6 +141,7 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
 
             app->click_pending_ = false;
             app->mouse_dragging = false;
+            app->spawn_dragging_ = false;
             app->camera.end_orbit();
         }
     }
@@ -178,13 +190,21 @@ static void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
     app->last_mouse_x = xpos;
     app->last_mouse_y = ypos;
 
-    // Pan (middle-drag)
+    // Spawn drag: vertical mouse movement sets spawn height (inclination)
+    if (app->spawn_dragging_) {
+        // Scale Y offset by camera distance so dragging feels consistent at any zoom
+        float height_scale = app->camera.distance * 0.003f;
+        app->spawn_drag_y_offset_ -= (float)dy * height_scale;
+        return;
+    }
+
+    // Pan (middle-drag or right-drag)
     if (app->mouse_panning) {
         app->camera.pan((float)dx, (float)dy);
         return;
     }
 
-    // Orbit (right-drag)
+    // Orbit (left-drag, not in spawn mode)
     if (app->mouse_dragging) {
         app->camera.orbit((float)dx, (float)dy);
     }

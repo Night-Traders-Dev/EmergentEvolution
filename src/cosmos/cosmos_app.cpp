@@ -329,27 +329,54 @@ void CosmosApp::tick(GLFWwindow* window, float dt) {
     raytracer_.preview.body = nullptr;
     if (spawn_menu_visible_ && !show_splash && !show_pause_menu &&
         !mouse_dragging && !mouse_panning && !io.WantCaptureMouse) {
-        int fb_w, fb_h;
-        glfwGetFramebufferSize(window, &fb_w, &fb_h);
-        spawn_preview_pos_ = screen_to_spawn_pos(last_mouse_x, last_mouse_y, fb_w, fb_h);
-        bool spawn_pos_valid = std::isfinite(spawn_preview_pos_.x) &&
-                               std::isfinite(spawn_preview_pos_.y) &&
-                               std::isfinite(spawn_preview_pos_.z);
-
-        // Only show preview when no body is under cursor (click would select, not spawn)
-        int hover_body = pick_body((float)last_mouse_x, (float)last_mouse_y,
-                                    (float)fb_w, (float)fb_h);
-        if (hover_body < 0 && spawn_pos_valid) {
-            // Rebuild preview body when spawn type, mass, or draft settings change
-            uint32_t dh = draft_settings_hash();
-            if (!preview_body_valid_ || preview_last_type_ != spawn_type ||
-                preview_last_mass_ != spawn_mass || preview_last_draft_hash_ != dh) {
-                build_preview_body();
-            }
-            // Update position to follow cursor
-            preview_body_.pos = spawn_preview_pos_;
-            raytracer_.preview.body = &preview_body_;
+        // Rebuild preview body when spawn type, mass, or draft settings change
+        uint32_t dh = draft_settings_hash();
+        if (!preview_body_valid_ || preview_last_type_ != spawn_type ||
+            preview_last_mass_ != spawn_mass || preview_last_draft_hash_ != dh) {
+            build_preview_body();
         }
+
+        if (spawn_dragging_) {
+            // During spawn drag: body stays at click XZ, Y offset from drag
+            glm::vec3 drag_pos = spawn_drag_base_pos_;
+            drag_pos.y += spawn_drag_y_offset_;
+            spawn_preview_pos_ = drag_pos;
+            preview_body_.pos = drag_pos;
+            raytracer_.preview.body = &preview_body_;
+        } else {
+            int fb_w, fb_h;
+            glfwGetFramebufferSize(window, &fb_w, &fb_h);
+            spawn_preview_pos_ = screen_to_spawn_pos(last_mouse_x, last_mouse_y, fb_w, fb_h);
+            bool spawn_pos_valid = std::isfinite(spawn_preview_pos_.x) &&
+                                   std::isfinite(spawn_preview_pos_.y) &&
+                                   std::isfinite(spawn_preview_pos_.z);
+
+            // Only show preview when no body is under cursor (click would select, not spawn)
+            int hover_body = pick_body((float)last_mouse_x, (float)last_mouse_y,
+                                        (float)fb_w, (float)fb_h);
+            if (hover_body < 0 && spawn_pos_valid) {
+                preview_body_.pos = spawn_preview_pos_;
+                raytracer_.preview.body = &preview_body_;
+            }
+        }
+    }
+
+    // Dynamic grid sizing — scale grid squares with camera zoom (like Universe Sandbox)
+    if (cfg.cosmos_space_fabric) {
+        float fov_rad = glm::radians(camera.fov);
+        float visible_width = 2.0f * camera.distance * std::tan(fov_rad * 0.5f);
+        float ideal = visible_width / 12.0f; // ~12 squares across screen
+        // Snap to nearest 1-2-5 step
+        float log10_ideal = std::log10(std::max(ideal, 1.0e-6f));
+        float decade = std::floor(log10_ideal);
+        float frac = log10_ideal - decade;
+        float base = std::pow(10.0f, decade);
+        float snapped;
+        if (frac < 0.15f)       snapped = base;
+        else if (frac < 0.50f)  snapped = base * 2.0f;
+        else if (frac < 0.85f)  snapped = base * 5.0f;
+        else                    snapped = base * 10.0f;
+        cfg.cosmos_space_fabric_grid_size = std::max(snapped, 1.0f);
     }
 
     // GPU raytraced scene (draws within the active render pass)

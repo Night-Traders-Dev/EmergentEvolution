@@ -435,13 +435,86 @@ void CosmosApp::render_overlay() {
         fg->AddText(ImVec2(tx, ty), IM_COL32(255, 200, 80, (int)alpha), track_label);
     }
 
+    // Spawn drag height indicator — vertical line from orbital plane to spawn position
+    if (spawn_dragging_ && std::abs(spawn_drag_y_offset_) > 0.1f) {
+        glm::vec3 base_pos = spawn_drag_base_pos_;
+        glm::vec3 drag_pos = base_pos;
+        drag_pos.y += spawn_drag_y_offset_;
+
+        // Project both points to screen
+        Projected p_base = project(base_pos, vp, W, H);
+        Projected p_drag = project(drag_pos, vp, W, H);
+
+        if (p_base.visible && p_drag.visible) {
+            // Dashed vertical line
+            ImU32 line_col = IM_COL32(100, 200, 255, 180);
+            float dash_len = 6.0f, gap_len = 4.0f;
+            float lx = p_base.sx;
+            float y0 = p_base.sy, y1 = p_drag.sy;
+            float dir = (y1 < y0) ? -1.0f : 1.0f;
+            float total = std::abs(y1 - y0);
+            float drawn = 0.0f;
+            while (drawn < total) {
+                float seg = std::min(dash_len, total - drawn);
+                fg->AddLine(ImVec2(lx, y0 + dir * drawn),
+                            ImVec2(lx, y0 + dir * (drawn + seg)), line_col, 1.5f);
+                drawn += seg + gap_len;
+            }
+
+            // Small horizontal tick at base (orbital plane marker)
+            fg->AddLine(ImVec2(lx - 8, y0), ImVec2(lx + 8, y0), line_col, 1.5f);
+
+            // Height label next to the drag point
+            float height_km = spawn_drag_y_offset_ * SIM_UNIT_TO_KM;
+            char height_label[64];
+            if (std::abs(height_km) < 10000.0f)
+                snprintf(height_label, sizeof(height_label), "%+.0f km", height_km);
+            else
+                snprintf(height_label, sizeof(height_label), "%+.1f Earth R",
+                         height_km / EARTH_RADIUS_KM_REAL);
+            ImVec2 hl_size = ImGui::CalcTextSize(height_label);
+            float lbl_x = p_drag.sx + 12.0f;
+            float lbl_y = p_drag.sy - hl_size.y * 0.5f;
+            fg->AddRectFilled(ImVec2(lbl_x - 4, lbl_y - 2),
+                              ImVec2(lbl_x + hl_size.x + 4, lbl_y + hl_size.y + 2),
+                              IM_COL32(10, 14, 24, 200), 3.0f);
+            fg->AddText(ImVec2(lbl_x, lbl_y), IM_COL32(100, 200, 255, 240), height_label);
+        }
+    }
+
     if (cfg.cosmos_space_fabric) {
-        char fabric_label[96];
-        snprintf(fabric_label, sizeof(fabric_label), "Space fabric: %.1f units per square",
-                 cfg.cosmos_space_fabric_grid_size);
+        // Convert grid square size from sim units to human-readable distance
+        float grid_km = cfg.cosmos_space_fabric_grid_size * SIM_UNIT_TO_KM;
+        constexpr float AU_KM = 149597870.7f;
+        constexpr float LY_KM = 9.461e12f;
+        char fabric_label[128];
+        if (grid_km < 1.0f) {
+            snprintf(fabric_label, sizeof(fabric_label), "Grid: %.0f m per square", grid_km * 1000.0f);
+        } else if (grid_km < 10000.0f) {
+            snprintf(fabric_label, sizeof(fabric_label), "Grid: %.0f km per square", grid_km);
+        } else if (grid_km < EARTH_RADIUS_KM_REAL * 4.0f) {
+            snprintf(fabric_label, sizeof(fabric_label), "Grid: %.1f Earth radii per square",
+                     grid_km / EARTH_RADIUS_KM_REAL);
+        } else if (grid_km < AU_KM * 0.01f) {
+            if (grid_km >= 1e6f)
+                snprintf(fabric_label, sizeof(fabric_label), "Grid: %.2f million km per square", grid_km / 1e6f);
+            else
+                snprintf(fabric_label, sizeof(fabric_label), "Grid: %.0f km per square", grid_km);
+        } else if (grid_km < AU_KM * 1000.0f) {
+            snprintf(fabric_label, sizeof(fabric_label), "Grid: %.2f AU per square", grid_km / AU_KM);
+        } else if (grid_km < LY_KM) {
+            snprintf(fabric_label, sizeof(fabric_label), "Grid: %.0f AU per square", grid_km / AU_KM);
+        } else {
+            snprintf(fabric_label, sizeof(fabric_label), "Grid: %.2f ly per square", grid_km / LY_KM);
+        }
+
+        // Position: centered horizontally, just above the bottom bar + spawn menu
+        // (like Universe Sandbox's grid label placement)
+        float bar_h = 36.0f;
+        float spawn_h = spawn_menu_visible_ ? 210.0f : 0.0f;
         ImVec2 label_size = ImGui::CalcTextSize(fabric_label);
-        float px = 16.0f;
-        float py = H - label_size.y - 18.0f;
+        float px = W * 0.5f - label_size.x * 0.5f;
+        float py = H - bar_h - spawn_h - label_size.y - 12.0f;
         fg->AddRectFilled(ImVec2(px - 8.0f, py - 4.0f),
                           ImVec2(px + label_size.x + 8.0f, py + label_size.y + 4.0f),
                           IM_COL32(10, 14, 24, 180), 4.0f);
