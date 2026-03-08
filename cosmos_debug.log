@@ -17,3 +17,36 @@
 [2026-03-07 21:06:21][step=9600] heartbeat bodies=3 fps=223.22 sim_time=7.72684
 [2026-03-07 21:06:24][step=10200] heartbeat bodies=3 fps=219.86 sim_time=10.4763
 [2026-03-07 21:06:26][step=10800] heartbeat bodies=3 fps=239.03 sim_time=13.2216
+[2026-03-08 07:54:35][step=0] init complete diagnostics=1 pause_on_invalid=1 bh=1 gpu_bh=0 verlet=1
+[2026-03-08 07:54:55][step=0] init complete diagnostics=1 pause_on_invalid=1 bh=1 gpu_bh=0 verlet=1
+[2026-03-08 07:54:58][step=600] heartbeat bodies=0 fps=587.87 sim_time=2.78835
+[2026-03-08 07:55:01][step=1200] heartbeat bodies=0 fps=262.71 sim_time=5.54914
+[2026-03-08 07:55:04][step=1800] heartbeat bodies=0 fps=569.35 sim_time=8.28577
+[2026-03-08 07:55:07][step=2400] heartbeat bodies=0 fps=693.81 sim_time=10.9068
+[2026-03-08 07:55:09][step=3000] heartbeat bodies=0 fps=248.35 sim_time=13.5366
+[2026-03-08 07:55:12][step=3600] heartbeat bodies=0 fps=721.13 sim_time=16.1381
+[2026-03-08 07:55:15][step=4200] heartbeat bodies=0 fps=496.34 sim_time=18.8448
+[2026-03-08 07:55:17][step=4800] heartbeat bodies=0 fps=293.25 sim_time=21.5978
+[2026-03-08 07:55:20][step=5400] heartbeat bodies=0 fps=597.87 sim_time=24.3437
+[2026-03-08 07:55:23][step=6000] heartbeat bodies=0 fps=221.57 sim_time=27.0767
+[2026-03-08 07:55:26][step=6600] heartbeat bodies=0 fps=363.83 sim_time=29.8235
+[2026-03-08 07:55:29][step=7200] heartbeat bodies=0 fps=138.41 sim_time=32.8856
+[2026-03-08 07:55:32][step=7800] heartbeat bodies=0 fps=198.76 sim_time=36.5776
+[2026-03-08 07:55:36][step=8400] heartbeat bodies=0 fps=241.49 sim_time=40.7617
+[2026-03-08 07:55:40][step=9000] heartbeat bodies=0 fps=249.61 sim_time=43.9664
+[2026-03-08 07:55:43][step=9600] heartbeat bodies=0 fps=212.18 sim_time=47.1445
+[2026-03-08 07:55:46][step=10200] heartbeat bodies=0 fps=647.18 sim_time=50.393
+[2026-03-08 07:55:49][step=10800] heartbeat bodies=0 fps=193.40 sim_time=53.5886
+[2026-03-08 07:55:52][step=11400] heartbeat bodies=0 fps=281.07 sim_time=56.7192
+[2026-03-08 07:55:56][step=12000] heartbeat bodies=0 fps=195.22 sim_time=59.8433
+[2026-03-08 07:55:59][step=12600] heartbeat bodies=0 fps=515.69 sim_time=63.6915
+[2026-03-08 07:56:03][step=13200] heartbeat bodies=1 fps=663.62 sim_time=66.9197
+[2026-03-08 07:56:06][step=13800] heartbeat bodies=1 fps=464.79 sim_time=70.2635
+[2026-03-08 07:56:09][step=14400] heartbeat bodies=1 fps=949.66 sim_time=73.4688
+[2026-03-08 07:56:12][step=15000] heartbeat bodies=1 fps=1104.74 sim_time=76.6554
+[2026-03-08 07:56:16][step=15600] heartbeat bodies=1 fps=349.15 sim_time=79.8553
+[2026-03-08 07:56:19][step=16200] heartbeat bodies=1 fps=185.28 sim_time=83.0632
+[2026-03-08 07:56:22][step=16800] heartbeat bodies=1 fps=1107.20 sim_time=86.2708
+[2026-03-08 07:56:25][step=17400] heartbeat bodies=1 fps=321.28 sim_time=89.5002
+[2026-03-08 07:56:28][step=18000] heartbeat bodies=1 fps=262.79 sim_time=92.7334
+[2026-03-08 07:56:48][step=18600] heartbeat bodies=684 fps=10.00 sim_time=108.339

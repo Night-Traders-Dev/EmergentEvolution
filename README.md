@@ -20,61 +20,23 @@
 
 ---
 
-Emergent Evolution is a suite of GPU-accelerated science simulations sharing a common Vulkan
-rendering framework. A unified launcher lets you pick between three sandbox applications:
+A suite of GPU-accelerated science simulations built on a shared Vulkan framework.
+A unified launcher lets you pick between three sandbox applications:
 
 **Particle Physics** &mdash;
-Real-time particle physics sandbox simulating 282 particle types: the full Standard Model,
-Beyond Standard Model, 34 hypothetical particles, 7 quasiparticles, and 188 PDG meson states.
-All four fundamental forces run simultaneously on Vulkan compute shaders with optional general
-relativity extensions. CPU-side processes handle nuclear reactions, decay, orbital mechanics,
-covalent bonding, chirality detection, hadronization, carrier exchange, and more. Up to
-**100,000 particles** in real time with O(n) spatial-grid neighbor queries and OpenMP parallelization.
+282 particle types (full Standard Model, BSM, 188 PDG mesons) with all four fundamental
+forces on Vulkan compute shaders. Nuclear reactions, decay, orbital mechanics, covalent
+bonding, chirality, and hadronization. Up to 100k particles in real time.
 
 **Cosmic Sandbox** &mdash;
-3D celestial mechanics simulator with GPU-raytraced sphere rendering. 23 celestial body types
-including 11 star spectral classes (O through Y plus Wolf-Rayet), 4 black hole subtypes
-(stellar, intermediate, supermassive, primordial), and procedurally generated planets with
-terrain, oceans, clouds, vegetation, atmospheric rim lighting, and city lights on populated
-worlds. Bodies interact via N-body gravity (CPU or GPU Barnes-Hut compute shader) with
-optional general relativity corrections (perihelion precession, gravitational time dilation,
-frame dragging). 6 numerical integrators from Euler through fourth-order PEFRL with adaptive
-substepping and orbital-period-aware substep refinement (up to 512 substeps).
-Nebulae spawn as gravitationally collapsing particle clouds of 40&ndash;300 dust
-bodies with protostar sink formation. Procedural GPU textures are driven by physical
-properties &mdash; changing a planet&rsquo;s temperature melts ice into oceans, and gas giants display
-Jupiter-like banding with great spots. Stellar evolution through 9 stages with supernova
-events, magnetic field signatures (magnetospheres, pulsars, particle jets), Roche limit
-tidal disruption, Hawking radiation, tidal locking, stellar wind pressure, and collision
-physics (merging, fragmentation, SPH, rigid-body dynamics). 7 planetary ring styles from
-Saturn-like to resonance gaps. A logarithmic timestep system spans 30 orders of magnitude
-from nanoseconds/s to trillions of years/s. 20 procedural background presets from realistic
-starfields to Milky Way panoramas, nebulae, and supernova remnants. Spawn Studio with 5
-catalog tabs, live 3D ghost preview, planet look presets, moon/ring spawning, and known
-astronomical objects. Quality-of-life features include body lock/pin, duplication, search
-filter, velocity arrows, keyboard shortcuts overlay, and screenshot capture. Orbit camera
-with WASD panning, mouse drag, scroll zoom, body tracking, and auto-hiding bottom taskbar.
-25 preset scenarios from Solar System and TRAPPIST-1 to nebula collapse, figure-eight
-choreography, and supermassive black holes. Loading screen with progress bar.
+3D celestial mechanics with GPU-raytraced rendering. 23 body types, procedural planet
+generation, N-body gravity with optional GR corrections, stellar evolution, nebula collapse,
+and 25 preset scenarios. Logarithmic timestep spans nanoseconds to trillions of years.
 
 **Biochemical Simulator** &mdash;
-3D cellular biology sandbox with GPU SDF-raytraced rendering and 9 entity types (cells,
-bacteria, viruses, nutrients, toxins, antibodies, red blood cells, white blood cells,
-phagocytes) with 19 morphological variants (8 cell, 6 bacteria, 5 virus) and unique SDF
-shapes showing organelle interiors. Features metabolism with telomere tracking and
-senescence, cell division with heritable gene mutations (16 traits including metabolic
-efficiency, telomere length, mitotic clock, stress tolerance, defense, sensing, and
-antibiotic spectrum), multi-stage viral infection with replication gates and lysis
-bursts (30&ndash;120 virions), bacterial antibiotic film warfare with quorum-sensing-like
-defense, immune response with WBC/antibody spawning, phagocyte corpse cleanup, AI-driven
-entity movement (seek/flee/spacing behaviors with passive Brownian diffusion for viruses),
-and fluid dynamics. 8 environment presets (Human Lung, Pond Water, Petri Dish, Cat Brain,
-Gut Microbiome, Blood Stream, Soil Rhizosphere, Wound Site) with 16 structure shapes,
-distinct temperature, pH, oxygen, immune conditions, and placed features (membranes,
-nutrient zones, toxin zones, currents, terrain-scale SDF structures with CPU collision
-detection). Organized settings UI with collapsible sections and parameter tooltips.
-Color-coded event log tracks division, infection, immune, and lifecycle events. WASD camera
-panning and auto-hiding bottom taskbar with panel management.
+Cellular biology sandbox with GPU SDF-raytraced rendering. 9 entity types with 19 morphological
+variants, heritable 18-gene system, ATP metabolism, viral infection, immune response with
+T/B cell differentiation, quorum sensing, and complement cascade. 8 environment presets.
 
 ---
 
