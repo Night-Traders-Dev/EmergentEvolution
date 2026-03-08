@@ -205,7 +205,7 @@ void CosmosApp::step_physics(float dt) {
             return;
         parallel_for(n, 256, [&](size_t begin, size_t end) {
             for (size_t i = begin; i < end; ++i) {
-                if (bodies[i].marked_for_removal)
+                if (bodies[i].marked_for_removal || bodies[i].non_attracting)
                     continue;
                 glm::vec3 ai(0.0f);
                 for (size_t src : source_indices) {
@@ -402,13 +402,13 @@ void CosmosApp::step_physics(float dt) {
         if (can_parallel && n >= kParallelBhTraverseThreshold) {
             run_parallel_chunks(n, std::min(hw_threads, n), [&](size_t begin, size_t end) {
                 for (size_t i = begin; i < end; ++i) {
-                    if (bodies[i].marked_for_removal) continue;
+                    if (bodies[i].marked_for_removal || bodies[i].non_attracting) continue;
                     traverse(traverse, i, root);
                 }
             });
         } else {
             for (size_t i = 0; i < n; ++i) {
-                if (bodies[i].marked_for_removal) continue;
+                if (bodies[i].marked_for_removal || bodies[i].non_attracting) continue;
                 traverse(traverse, i, root);
             }
         }

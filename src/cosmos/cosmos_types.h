@@ -1031,10 +1031,10 @@ struct CosmosConfig {
 
     // Dynamic performance budget
     bool     dynamic_budget_enabled      = true;
-    int      dynamic_max_fragments       = 300;   // attracting fragment cap
-    int      dynamic_max_non_attracting  = 900;   // debris cap
+    int      dynamic_max_fragments       = 80;    // attracting fragment cap
+    int      dynamic_max_non_attracting  = 200;   // debris cap
     float    dynamic_explosion_density   = 0.25f; // per-event share of non-attracting budget (0-1)
-    float    dynamic_reduction_percent   = 0.20f; // cull percent when reducing (0-1)
+    float    dynamic_reduction_percent   = 0.50f; // cull percent when reducing (0-1)
     float    dynamic_target_fps          = 60.0f; // target framerate
     bool     dust_debug_non_attracting   = true;  // debug: dust sources gravity when false
     float    ring_inner_scale            = 1.0f;  // global ring inner radius multiplier
@@ -1104,7 +1104,7 @@ struct CosmosConfig {
     float    nebula_sink_spawn_fraction = 0.018f; // nominal host-mass fraction converted to each sink
     float    nebula_sink_consume_fraction = 0.95f; // fraction of sink mass consumed from host cloud
     float    barnes_hut_theta     = 0.72f;   // opening angle (smaller = more accurate)
-    int      barnes_hut_min_bodies = 128;    // body-count threshold before BH engages
+    int      barnes_hut_min_bodies = 32;     // body-count threshold before BH engages
 
     // Persisted settings must only append new fields after this point.
     bool     show_body_labels = false;
