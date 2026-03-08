@@ -468,18 +468,23 @@ void CosmosApp::process_collisions(float dt) {
             bool fragment_candidate = catastrophic_fragment || optional_fragment || spin_fragment_contact ||
                 (soft_body_pair && swept_hit && impact_speed > fragment_speed_limit * 0.75f);
             bool ultra_gentle_soft = soft_body_pair &&
-                impact_speed < merge_speed_limit * 1.0f &&
-                combined_disruption < 0.15f &&
-                overlap_fraction < 0.25f;
+                impact_speed < merge_speed_limit * 1.05f &&
+                combined_disruption < 0.20f &&
+                overlap_fraction < 0.30f;
             if (small_soft_pair) {
-                ultra_gentle_soft = impact_speed < merge_speed_limit * 0.80f &&
-                    combined_disruption < 0.04f &&
-                    overlap_fraction < 0.06f;
+                // Relaxed from 0.04/0.06 — previous values made virtually ALL
+                // small-body collisions classify as non-gentle → always fragment.
+                ultra_gentle_soft = impact_speed < merge_speed_limit * 0.90f &&
+                    combined_disruption < 0.12f &&
+                    overlap_fraction < 0.15f;
             }
             if (ultra_gentle_soft)
                 fragment_candidate = false;
+            // Small soft body forced fragmentation only for genuinely energetic impacts,
+            // not every single overlap.
             if (small_soft_pair && cfg.collision_fragmentation &&
-                (overlap_now || swept_hit) && !ultra_gentle_soft)
+                (overlap_now || swept_hit) && !ultra_gentle_soft &&
+                impact_speed > fragment_speed_limit * 0.60f)
                 fragment_candidate = true;
 
             bool sticky_soft_merge = soft_body_pair && !cfg.collision_fragmentation &&
@@ -487,18 +492,25 @@ void CosmosApp::process_collisions(float dt) {
                 impact_speed < fragment_speed_limit * 0.95f &&
                 combined_disruption < 0.20f;
 
+            // CCD-detected collisions can also merge if the approach is gentle
+            // (prevents fast-approach bodies from getting stuck in dead zone).
+            bool swept_gentle = swept_hit && !overlap_now &&
+                rel_speed <= merge_speed_limit &&
+                closing_speed <= merge_speed_limit * 1.10f &&
+                combined_disruption < (soft_body_pair ? 0.25f : 0.40f);
             bool merge_candidate = cfg.collision_merging &&
-                !swept_hit &&
+                ((!swept_hit || swept_gentle) &&
                 ((overlap_now &&
                   rel_speed <= merge_speed_limit &&
                   closing_speed <= merge_speed_limit &&
                   impact_speed <= fragment_speed_limit * (soft_body_pair ? 0.85f : 0.90f) &&
                   overlap_fraction >= (soft_body_pair ? 0.005f : 0.006f) &&
                   combined_disruption < (soft_body_pair ? 0.20f : 0.55f)) ||
-                 sticky_soft_merge) &&
+                 swept_gentle ||
+                 sticky_soft_merge)) &&
                 !fragment_candidate;
             if (soft_body_pair && cfg.collision_fragmentation)
-                merge_candidate = merge_candidate && ultra_gentle_soft;
+                merge_candidate = merge_candidate && (ultra_gentle_soft || swept_gentle);
 
             if (merge_candidate) {
                 size_t big = (bodies[i].mass >= bodies[j].mass) ? i : j;
@@ -600,11 +612,14 @@ void CosmosApp::process_collisions(float dt) {
 
             bool fragmenting = fragment_candidate;
             if (use_rigid_response) {
+                // Soft bodies get reduced restitution (not zero) so they bounce
+                // instead of getting stuck in a jittering dead zone.
                 float restitution = fragmenting ? 0.0f
-                    : (soft_body_pair ? 0.0f : std::clamp(cfg.rigid_collision_restitution, 0.0f, 1.2f));
+                    : std::clamp(cfg.rigid_collision_restitution * (soft_body_pair ? 0.45f : 1.0f), 0.0f, 1.2f);
                 float inv_mass_sum = (1.0f / std::max(bodies[i].mass, 1.0e-6f)) +
                                      (1.0f / std::max(bodies[j].mass, 1.0e-6f));
-                float impulse_speed = (vel_along < -1.0e-5f) ? vel_along : (soft_body_pair ? 0.0f : -impact_speed * 0.35f);
+                float impulse_speed = (vel_along < -1.0e-5f) ? vel_along
+                    : (soft_body_pair ? -closing_speed * 0.25f : -impact_speed * 0.35f);
                 float j_impulse = -(1.0f + restitution) * impulse_speed / std::max(inv_mass_sum, 1.0e-6f);
                 glm::vec3 impulse = normal * j_impulse;
                 bodies[i].vel -= impulse / std::max(bodies[i].mass, 1.0e-6f);
@@ -649,6 +664,78 @@ void CosmosApp::process_collisions(float dt) {
                     fragment_i = true;
                     fragment_j = true;
                 }
+
+                // Similar-mass bodies: if fragment_candidate triggered but neither
+                // body would actually be disrupted, promote to MERGE instead of the
+                // useless bounce-with-token-fragment outcome.
+                if (!fragment_i && !fragment_j && soft_body_pair && cfg.collision_merging) {
+                    bool low_disruption = combined_disruption < 0.30f &&
+                        disruption_i < 0.35f && disruption_j < 0.35f;
+                    if (low_disruption && !catastrophic_fragment) {
+                        // Demote: merge the bodies instead of bouncing with a token fragment
+                        size_t big = (bodies[i].mass >= bodies[j].mass) ? i : j;
+                        size_t sml = (big == i) ? j : i;
+                        CelestialBody pre_big = bodies[big];
+                        CelestialBody pre_small = bodies[sml];
+                        glm::vec3 com_pos = (pre_big.pos * pre_big.mass + pre_small.pos * pre_small.mass) /
+                                            std::max(total_mass, 1.0e-6f);
+                        glm::vec3 com_vel = (pre_big.vel * pre_big.mass + pre_small.vel * pre_small.mass) /
+                                            std::max(total_mass, 1.0e-6f);
+                        float merged_temp = (pre_big.temperature * pre_big.mass + pre_small.temperature * pre_small.mass) /
+                                            std::max(total_mass, 1.0e-6f);
+                        bodies[big].pos = com_pos;
+                        bodies[big].vel = com_vel;
+                        bodies[big].mass = total_mass;
+                        bodies[big].radius = std::cbrt(std::max(pre_big.radius * pre_big.radius * pre_big.radius +
+                                                                pre_small.radius * pre_small.radius * pre_small.radius,
+                                                                1.0e-6f));
+                        bodies[big].temperature = merged_temp +
+                            std::min(impact_energy * 28.0f / std::max(total_mass, 1.0e-6f), 4500.0f);
+                        bodies[big].internal_energy = pre_big.internal_energy + pre_small.internal_energy + impact_energy * 0.06f;
+                        float I_big = pre_big.mass * pre_big.radius * pre_big.radius;
+                        float I_sml = pre_small.mass * pre_small.radius * pre_small.radius;
+                        glm::vec3 r_rel = pre_small.pos - com_pos;
+                        glm::vec3 v_rel = pre_small.vel - com_vel;
+                        float L_orbital = (r_rel.x * v_rel.y - r_rel.y * v_rel.x) * pre_small.mass;
+                        float I_merged = total_mass * bodies[big].radius * bodies[big].radius;
+                        bodies[big].angular_vel = (I_big * pre_big.angular_vel + I_sml * pre_small.angular_vel + L_orbital) /
+                                                  std::max(I_merged, 1.0e-6f);
+                        if (!std::isfinite(bodies[big].angular_vel)) bodies[big].angular_vel = 0.0f;
+                        bodies[big].fuel = std::max(pre_big.fuel, pre_small.fuel);
+                        // Post-merge ejecta
+                        if (cfg.collision_fragmentation) {
+                            float ejecta_frac = std::clamp((combined_disruption - 0.08f) * 0.30f, 0.0f, 0.15f);
+                            float ejecta_mass = total_mass * ejecta_frac;
+                            if (ejecta_mass > 1.0e-8f) {
+                                int ejecta_count = std::clamp(std::max(2, cfg.fragment_count / 2), 2, 6);
+                                float merger_ejecta_speed = std::clamp(
+                                    escape_speed * 0.55f + closing_speed * 0.20f, 0.004f, 0.045f);
+                                spawn_fragments((pre_big.pos + pre_small.pos) * 0.5f, com_vel, ejecta_mass,
+                                                ejecta_count, std::max(pre_big.frag_generation, pre_small.frag_generation),
+                                                std::max(pre_big.temperature, pre_small.temperature),
+                                                (big == i) ? normal : -normal,
+                                                merger_ejecta_speed,
+                                                &pre_small, combined_disruption);
+                                register_mass_loss(bodies[big], ejecta_mass, std::max(dt, 1.0e-4f));
+                                float remaining_mass = std::max(total_mass - ejecta_mass, 1.0e-8f);
+                                float ms = std::cbrt(remaining_mass / std::max(total_mass, 1.0e-8f));
+                                bodies[big].mass = remaining_mass;
+                                bodies[big].radius = std::max(bodies[big].radius * ms, 0.1f);
+                            }
+                        }
+                        apply_impact_signature(
+                            bodies[big], (big == i) ? normal : -normal,
+                            std::clamp(combined_disruption, 0.0f, 1.2f),
+                            pre_small.mass / std::max(total_mass, 1.0e-6f),
+                            std::clamp(impact_energy * cfg.collision_heating / std::max(total_mass, 1.0e-6f), 0.0f, 1.5f),
+                            std::clamp(pre_small.radius / std::max(bodies[big].radius, 0.1f), 0.08f, 0.95f));
+                        bodies[big].props_valid = false;
+                        bodies[big].visuals_valid = false;
+                        bodies[sml].marked_for_removal = true;
+                        continue;
+                    }
+                }
+
                 if (!fragment_i && !fragment_j) {
                     if (bodies[i].mass <= bodies[j].mass && (can_fragment(bodies[i]) || bodies[i].mass > 2.0e-9f))
                         fragment_i = true;
@@ -682,11 +769,11 @@ void CosmosApp::process_collisions(float dt) {
                     if (soft_body_pair && !compact_vs_soft &&
                         (bodies[i].type == CTYPE_PLANET || bodies[i].type == CTYPE_MOON)) {
                         float severity = std::clamp(
-                            0.28f + combined_disruption * 0.32f + disruption_i * 0.24f +
+                            0.28f + combined_disruption * 0.42f + disruption_i * 0.32f +
                             std::min(overlap_fraction, 0.6f) * 0.30f +
-                            spin_over_i * 0.16f, 0.10f, 0.70f);
+                            spin_over_i * 0.16f, 0.10f, 0.85f);
                         float remnant_fraction = std::max(1.0f - severity,
-                            impact_speed < fragment_speed_limit * 1.10f ? 0.45f : 0.28f);
+                            impact_speed < fragment_speed_limit * 1.10f ? 0.25f : 0.12f);
                         float remnant_mass = bodies[i].mass * remnant_fraction;
                         if (remnant_mass > effective_min_frag_mass * 2.0f) {
                             keep_remnant = true;
@@ -742,11 +829,11 @@ void CosmosApp::process_collisions(float dt) {
                     if (soft_body_pair && !compact_vs_soft &&
                         (bodies[j].type == CTYPE_PLANET || bodies[j].type == CTYPE_MOON)) {
                         float severity = std::clamp(
-                            0.28f + combined_disruption * 0.32f + disruption_j * 0.24f +
+                            0.28f + combined_disruption * 0.42f + disruption_j * 0.32f +
                             std::min(overlap_fraction, 0.6f) * 0.30f +
-                            spin_over_j * 0.16f, 0.10f, 0.70f);
+                            spin_over_j * 0.16f, 0.10f, 0.85f);
                         float remnant_fraction = std::max(1.0f - severity,
-                            impact_speed < fragment_speed_limit * 1.10f ? 0.45f : 0.28f);
+                            impact_speed < fragment_speed_limit * 1.10f ? 0.25f : 0.12f);
                         float remnant_mass = bodies[j].mass * remnant_fraction;
                         if (remnant_mass > effective_min_frag_mass * 2.0f) {
                             keep_remnant = true;

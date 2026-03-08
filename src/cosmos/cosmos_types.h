@@ -1020,7 +1020,7 @@ struct CosmosConfig {
     float    fragment_speed_threshold = 20.0f;   // relative speed above which bodies fragment
     int      fragment_count          = 4;        // number of fragments from collision/tidal breakup (1-12)
     float    min_fragment_mass       = 1.0e-8f;  // bodies below this mass cannot fragment (just bounce)
-    int      max_frag_generation     = 2;        // max times a body can be re-fragmented (0=originals only)
+    int      max_frag_generation     = 4;        // max times a body can be re-fragmented (0=originals only)
 
     // Roche limit
     bool     roche_limit        = true;
