@@ -257,12 +257,51 @@ target_compile_definitions(pp_launcher PRIVATE APP_VERSION="1.0.0")
 add_executable(particle_cosmos
     src/cosmos/main.cpp
     src/cosmos/cosmos_app.cpp
+
+    # Core — body model, gravity engine, tracking, cleanup, diagnostics
     src/cosmos/core/cosmos_body_model.cpp
+    src/cosmos/core/cosmos_gravity.cpp
+    src/cosmos/core/cosmos_tracking.cpp
+    src/cosmos/core/cosmos_cleanup.cpp
+    src/cosmos/core/cosmos_diagnostics.cpp
+
+    # Data — preset scenarios
+    src/cosmos/data/cosmos_presets.cpp
+
+    # Processes — physics subsystems
+    src/cosmos/processes/cosmos_spawning.cpp
+    src/cosmos/processes/cosmos_dust_rings.cpp
+    src/cosmos/processes/cosmos_nebula.cpp
+    src/cosmos/processes/cosmos_fragments.cpp
+    src/cosmos/processes/cosmos_collisions.cpp
+    src/cosmos/processes/cosmos_roche.cpp
+    src/cosmos/processes/cosmos_spin_fragmentation.cpp
+    src/cosmos/processes/cosmos_temperature.cpp
+    src/cosmos/processes/cosmos_material_phases.cpp
+    src/cosmos/processes/cosmos_weather.cpp
+    src/cosmos/processes/cosmos_evaporation.cpp
+    src/cosmos/processes/cosmos_stellar_evolution.cpp
+    src/cosmos/processes/cosmos_orbital.cpp
+    src/cosmos/processes/cosmos_hawking.cpp
+    src/cosmos/processes/cosmos_yarkovsky.cpp
+
+    # Rendering — GPU raytracer, compute pipelines, projection
+    src/cosmos/rendering/cosmos_raytracer.cpp
+    src/cosmos/rendering/cosmos_gravity_compute.cpp
+    src/cosmos/rendering/cosmos_nebula_compute.cpp
+    src/cosmos/rendering/cosmos_projection.cpp
+
+    # IO — save/load
     src/cosmos/io/cosmos_app_io.cpp
+
+    # UI — shared data, panels and overlays
+    src/cosmos/ui/cosmos_ui_data.cpp
     src/cosmos/ui/cosmos_app_ui.cpp
-    src/cosmos/cosmos_gravity_compute.cpp
-    src/cosmos/cosmos_nebula_compute.cpp
-    src/cosmos/cosmos_raytracer.cpp
+    src/cosmos/ui/cosmos_overlay.cpp
+    src/cosmos/ui/cosmos_spawn_menu.cpp
+    src/cosmos/ui/cosmos_inspector.cpp
+    src/cosmos/ui/cosmos_bottom_bar.cpp
+    src/cosmos/ui/cosmos_dialogs.cpp
 )
 target_link_libraries(particle_cosmos PRIVATE pp_common)
 target_compile_definitions(particle_cosmos PRIVATE APP_VERSION="1.2.0")
@@ -301,7 +340,7 @@ add_test(NAME cosmos_tests COMMAND cosmos_tests)
 add_executable(cosmos_gpu_tests
     tests/cosmos_gpu_tests.cpp
     src/cosmos/core/cosmos_body_model.cpp
-    src/cosmos/cosmos_gravity_compute.cpp
+    src/cosmos/rendering/cosmos_gravity_compute.cpp
 )
 target_include_directories(cosmos_gpu_tests PRIVATE
     tests/

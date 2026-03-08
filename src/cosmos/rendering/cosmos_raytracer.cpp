@@ -1,4 +1,4 @@
-#include "cosmos/cosmos_raytracer.h"
+#include "cosmos/rendering/cosmos_raytracer.h"
 #include <cstring>
 #include <algorithm>
 #include <cmath>

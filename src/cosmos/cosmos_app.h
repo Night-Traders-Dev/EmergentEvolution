@@ -2,8 +2,8 @@
 // ── Cosmic Sandbox — Application ────────────────────────────────────────────
 
 #include "cosmos/cosmos_types.h"
-#include "cosmos/cosmos_raytracer.h"
-#include "cosmos/cosmos_gravity_compute.h"
+#include "cosmos/rendering/cosmos_raytracer.h"
+#include "cosmos/rendering/cosmos_gravity_compute.h"
 #include "common/simple_renderer.h"
 #include <glm/glm.hpp>
 #include <vector>

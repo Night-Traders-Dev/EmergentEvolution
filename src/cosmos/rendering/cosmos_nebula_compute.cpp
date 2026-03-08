@@ -1,4 +1,4 @@
-#include "cosmos/cosmos_nebula_compute.h"
+#include "cosmos/rendering/cosmos_nebula_compute.h"
 
 #include <algorithm>
 #include <stdexcept>

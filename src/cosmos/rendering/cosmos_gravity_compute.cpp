@@ -1,4 +1,4 @@
-#include "cosmos/cosmos_gravity_compute.h"
+#include "cosmos/rendering/cosmos_gravity_compute.h"
 
 #include <algorithm>
 #include <cstring>

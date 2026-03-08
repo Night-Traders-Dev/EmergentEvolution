@@ -2,7 +2,7 @@
 #include "doctest.h"
 
 #include "common/vulkan_context.h"
-#include "cosmos/cosmos_gravity_compute.h"
+#include "cosmos/rendering/cosmos_gravity_compute.h"
 #include "cosmos/cosmos_types.h"
 #include "cosmos/cosmos_app_internal.h"
 

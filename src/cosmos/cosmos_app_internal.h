@@ -110,3 +110,10 @@ void add_ring_material(CelestialBody& primary, const CelestialBody& source,
 float magnetic_shielding_score(const CelestialBody& b, float G);
 void enforce_body_physical_limits(CelestialBody& b);
 float stellar_luminosity_units(const CelestialBody& b);
+
+void cosmos_install_crash_handlers();
+
+// Spin fragmentation helpers (defined in processes/cosmos_spin_fragmentation.cpp)
+float spin_fragmentation_critical_omega(const CelestialBody& body, float G);
+float spin_fragmentation_ratio(const CelestialBody& body, float G);
+glm::vec3 spin_fragmentation_axis(const CelestialBody& body);
