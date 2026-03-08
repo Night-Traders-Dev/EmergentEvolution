@@ -535,10 +535,22 @@ void PhysicsSimulation::reset() {
     apply_colorblind_correction(particles, iface.prefs.colorblind_mode);
     cfg.particle_count = static_cast<uint32_t>(particles.positions.size());
 
+    // Ensure all auxiliary particle vectors are consistently sized
+    particles.excitation_timer.resize(cfg.particle_count, 0);
+    particles.cascade_tag.resize(cfg.particle_count, 0);
+    particles.entangled_partner.resize(cfg.particle_count, UINT32_MAX);
+    particles.birth_frames.resize(cfg.particle_count, 0);
+    particles.orbital_parent.resize(cfg.particle_count, -1);
+    particles.orbital_shell.resize(cfg.particle_count, -1);
+
     // Pre-allocate readback buffers to avoid per-frame reallocation
     readback_positions_.reserve(cfg.pool_size);
     readback_velocities_.reserve(cfg.pool_size);
     readback_energies_.reserve(cfg.pool_size);
+
+    // Pre-allocate GPU grid buffers to avoid per-frame reallocation
+    gpu_grid_.cell_start.reserve(GPUGrid::TOTAL_CELLS + 1);
+    gpu_grid_.sorted_indices.reserve(cfg.pool_size);
 
     // Particle Accelerator: auto-place EM force objects as bending magnets
     if (cfg.environment_mode == 10) {

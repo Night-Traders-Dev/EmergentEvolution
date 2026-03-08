@@ -4,10 +4,17 @@
 
 **GPU-accelerated science simulation suite**
 
+[![Version](https://img.shields.io/badge/version-1.0.0-orange.svg)]()
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
 [![Vulkan](https://img.shields.io/badge/Vulkan-1.3-red.svg)](https://www.vulkan.org/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey.svg)]()
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+| Simulation | Version |
+| --- | --- |
+| Particle Physics | v1.2.0 |
+| Cosmic Sandbox | v1.0.0 |
+| Biochemical Simulator | v0.3.0 |
 
 </div>
 

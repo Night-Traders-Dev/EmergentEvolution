@@ -96,7 +96,7 @@ void PhysicsInterface::draw_top_bar(SimConfig& cfg) {
         ImGui::TextColored(ImVec4(0.180f, 0.220f, 0.349f, 0.80f), "|");
         ImGui::SameLine(0, 10);
         ImGui::SetNextItemWidth(80);
-        ImGui::SliderFloat("##TimeScale", &cfg.time_scale, 0.0f, 16.0f, "%.2fx");
+        ImGui::SliderFloat("Speed", &cfg.time_scale, 0.0f, 16.0f, "%.2fx");
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Simulation speed  [ = slower, ] = faster\nSpace = pause/resume");
         {
@@ -870,6 +870,11 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
 
         if (!cfg.start_empty) {
             ImGui::SliderFloat("Count", &prefs.particle_count_slider, 1.0f, 317.0f, "%.0f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Particle count = slider\xc2\xb2 (quadratic scaling)");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Def##pc")) prefs.particle_count_slider = 100.0f;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset to default (10,000 particles)");
             int pc = static_cast<int>(std::max(2.0f, std::pow(prefs.particle_count_slider, 2.0f)));
             ImGui::TextColored(ImVec4(0.451f, 0.478f, 0.580f, 1.0f),
                 "Particles: %d  (applied on Reset)", pc);
@@ -926,9 +931,9 @@ void PhysicsInterface::draw_settings_panel(SimConfig& cfg) {
 
     // ── Temperature ──────────────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Temperature", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::SliderFloat("##TempSlider", &log_temperature, 0.0f, 13.0f, "");
+        ImGui::SliderFloat("T (log\xe2\x82\x81\xe2\x82\x80)", &log_temperature, 0.0f, 13.0f, "10^%.1f K");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Logarithmic temperature scale\n1 = 10 K, 3 = 1000 K, 7 = 10 MK");
+            ImGui::SetTooltip("Logarithmic temperature scale (T = 10^x Kelvin)\n1 = 10 K, 3 = 1000 K, 7 = 10 MK, 10 = 10 GK");
         cfg.temperature_kelvin = std::pow(10.0f, log_temperature);
 
         char temp_buf[64];
@@ -2228,7 +2233,8 @@ void PhysicsInterface::draw_spawn_menu(const SimConfig& /*cfg*/) {
         ImGui::SliderFloat("Energy", &spawn_energy_mev, 0.0f, MAX_ENERGY_MEV, e_label,
                            ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
     }
-    ImGui::SliderFloat("Scatter", &spawn_scatter, 1.0f, 5000.0f, "%.0f");
+    ImGui::SliderFloat("Scatter", &spawn_scatter, 1.0f, 5000.0f, "%.0f",
+                       ImGuiSliderFlags_Logarithmic);
 
     // Status text
     if (pending_spawn) {

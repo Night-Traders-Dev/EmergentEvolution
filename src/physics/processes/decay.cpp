@@ -182,6 +182,9 @@ void PhysicsSimulation::check_decay() {
             }
 
             // ── W+ → hadronic (67%) or leptonic (33%) ──
+            // Hadronic BRs use CKM matrix (PDG 2024): |Vij|² normalized within 67%
+            // ud̄: 0.9490, us̄: 0.0509, cd̄: 0.0503, cs̄: 0.9481 → sum=1.9983
+            // Normalized: ud̄=31.8%, us̄=1.7%, cd̄=1.7%, cs̄=31.8%
             case W_PLUS_TYPE_PHYS: {
                 uint32_t p2_slot = find_dormant(i + 1);
                 std::uniform_real_distribution<float> br(0.0f, 1.0f);
@@ -189,19 +192,26 @@ void PhysicsSimulation::check_decay() {
                 uint32_t type1, type2;
                 const char* notif_msg;
                 const char* event_msg;
-                if (roll < 0.32f) {
+                // CKM-weighted hadronic channels (67% total)
+                constexpr float ckm_sum = CKM_BR[0][0] + CKM_BR[0][1] + CKM_BR[1][0] + CKM_BR[1][1];
+                constexpr float had_frac = 0.67f;
+                constexpr float br_ud = had_frac * CKM_BR[0][0] / ckm_sum;  // ~31.8%
+                constexpr float br_us = had_frac * CKM_BR[0][1] / ckm_sum;  // ~1.7%
+                constexpr float br_cd = had_frac * CKM_BR[1][0] / ckm_sum;  // ~1.7%
+                // br_cs fills the rest of hadronic: ~31.8%
+                if (roll < br_ud) {
                     type1 = UP_QUARK_TYPE; type2 = ANTI_DOWN_TYPE;
                     notif_msg = "Decay: W\xe2\x81\xba \xe2\x86\x92 u + d\xcc\x84";
                     event_msg = "W\xe2\x81\xba \xe2\x86\x92 u + d\xcc\x84";
-                } else if (roll < 0.335f) {
+                } else if (roll < br_ud + br_us) {
                     type1 = UP_QUARK_TYPE; type2 = ANTI_STRANGE_TYPE;
                     notif_msg = "Decay: W\xe2\x81\xba \xe2\x86\x92 u + s\xcc\x84";
                     event_msg = "W\xe2\x81\xba \xe2\x86\x92 u + s\xcc\x84";
-                } else if (roll < 0.35f) {
+                } else if (roll < br_ud + br_us + br_cd) {
                     type1 = CHARM_QUARK_TYPE; type2 = ANTI_DOWN_TYPE;
                     notif_msg = "Decay: W\xe2\x81\xba \xe2\x86\x92 c + d\xcc\x84";
                     event_msg = "W\xe2\x81\xba \xe2\x86\x92 c + d\xcc\x84";
-                } else if (roll < 0.67f) {
+                } else if (roll < had_frac) {
                     type1 = CHARM_QUARK_TYPE; type2 = ANTI_STRANGE_TYPE;
                     notif_msg = "Decay: W\xe2\x81\xba \xe2\x86\x92 c + s\xcc\x84";
                     event_msg = "W\xe2\x81\xba \xe2\x86\x92 c + s\xcc\x84";
@@ -246,6 +256,7 @@ void PhysicsSimulation::check_decay() {
             }
 
             // ── W- → hadronic (67%) or leptonic (33%) ──
+            // CKM-weighted (charge conjugate of W+)
             case W_MINUS_TYPE_PHYS: {
                 uint32_t p2_slot = find_dormant(i + 1);
                 std::uniform_real_distribution<float> br(0.0f, 1.0f);
@@ -253,19 +264,24 @@ void PhysicsSimulation::check_decay() {
                 uint32_t type1, type2;
                 const char* notif_msg;
                 const char* event_msg;
-                if (roll < 0.32f) {
+                constexpr float ckm_sum_m = CKM_BR[0][0] + CKM_BR[0][1] + CKM_BR[1][0] + CKM_BR[1][1];
+                constexpr float had_frac_m = 0.67f;
+                constexpr float br_du = had_frac_m * CKM_BR[0][0] / ckm_sum_m;
+                constexpr float br_su = had_frac_m * CKM_BR[0][1] / ckm_sum_m;
+                constexpr float br_dc = had_frac_m * CKM_BR[1][0] / ckm_sum_m;
+                if (roll < br_du) {
                     type1 = DOWN_QUARK_TYPE; type2 = ANTI_UP_TYPE;
                     notif_msg = "Decay: W\xe2\x81\xbb \xe2\x86\x92 d + u\xcc\x84";
                     event_msg = "W\xe2\x81\xbb \xe2\x86\x92 d + u\xcc\x84";
-                } else if (roll < 0.335f) {
+                } else if (roll < br_du + br_su) {
                     type1 = STRANGE_QUARK_TYPE; type2 = ANTI_UP_TYPE;
                     notif_msg = "Decay: W\xe2\x81\xbb \xe2\x86\x92 s + u\xcc\x84";
                     event_msg = "W\xe2\x81\xbb \xe2\x86\x92 s + u\xcc\x84";
-                } else if (roll < 0.35f) {
+                } else if (roll < br_du + br_su + br_dc) {
                     type1 = DOWN_QUARK_TYPE; type2 = ANTI_CHARM_TYPE;
                     notif_msg = "Decay: W\xe2\x81\xbb \xe2\x86\x92 d + c\xcc\x84";
                     event_msg = "W\xe2\x81\xbb \xe2\x86\x92 d + c\xcc\x84";
-                } else if (roll < 0.67f) {
+                } else if (roll < had_frac_m) {
                     type1 = STRANGE_QUARK_TYPE; type2 = ANTI_CHARM_TYPE;
                     notif_msg = "Decay: W\xe2\x81\xbb \xe2\x86\x92 s + c\xcc\x84";
                     event_msg = "W\xe2\x81\xbb \xe2\x86\x92 s + c\xcc\x84";
@@ -2129,7 +2145,15 @@ void PhysicsSimulation::check_bremsstrahlung() {
         readback_energies_[i] -= E_photon;
 
         glm::vec2 vel = readback_velocities_[i];
-        glm::vec2 perp = glm::normalize(glm::vec2(-vel.y, vel.x));
+        float vel_len = glm::length(vel);
+        glm::vec2 perp = (vel_len > 0.01f)
+            ? glm::normalize(glm::vec2(-vel.y, vel.x))
+            : glm::vec2(1.0f, 0.0f);
+
+        // Apply recoil to charged particle (momentum conservation)
+        // Photon momentum p_γ = E_γ/c, applied opposite to photon direction
+        float recoil_speed = E_photon * C_SIM * 0.1f;  // scaled recoil
+        readback_velocities_[i] -= perp * recoil_speed;
 
         write_spawn_genome(particles, slot, PHOTON_TYPE_PHYS, rng, frame_counter_);
         readback_positions_[slot] = readback_positions_[i];

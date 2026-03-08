@@ -131,19 +131,32 @@ void PhysicsSimulation::check_annihilation() {
             float cos_com = glm::dot(dir_com, beta_hat);
             // Aberration formula: tan(θ_lab) = sin(θ_com) / (γ(cos(θ_com) + β))
             float denom1 = gamma_cm * (cos_com + beta_cm);
-            dir1 = glm::normalize(beta_hat * denom1 + (dir_com - beta_hat * cos_com));
             float denom2 = gamma_cm * (-cos_com + beta_cm);
-            dir2 = glm::normalize(beta_hat * denom2 - (dir_com - beta_hat * cos_com));
+            // Guard against near-zero denominators (degenerate boost directions)
+            glm::vec2 v1 = beta_hat * denom1 + (dir_com - beta_hat * cos_com);
+            glm::vec2 v2 = beta_hat * denom2 - (dir_com - beta_hat * cos_com);
+            float len1 = glm::length(v1), len2 = glm::length(v2);
+            dir1 = (len1 > 1e-6f) ? v1 / len1 : dir_com;
+            dir2 = (len2 > 1e-6f) ? v2 / len2 : -dir_com;
         } else {
             dir1 = dir_com;
             dir2 = -dir_com;
         }
 
-        // Doppler-shifted photon energies
+        // Relativistic Doppler-shifted photon energies
+        // Each photon has E_com = E_total/(2γ_cm) in COM frame
+        // Boost to lab: E_lab = γ_cm · E_com · (1 ± β_cm · cos θ_com)
+        // Photon 1 travels along +dir_com, photon 2 along -dir_com
         float E_com_half = E_total / (2.0f * gamma_cm);
         float cos_theta = (beta_cm > 0.001f) ? glm::dot(dir_com, glm::normalize(v_cm)) : 0.0f;
         float E_photon1 = E_com_half * gamma_cm * (1.0f + beta_cm * cos_theta);
-        float E_photon2 = E_total - E_photon1;
+        float E_photon2 = E_com_half * gamma_cm * (1.0f - beta_cm * cos_theta);
+        // Normalize to conserve total energy exactly (handles floating point drift)
+        float E_sum = E_photon1 + E_photon2;
+        if (E_sum > 0.001f) {
+            E_photon1 *= E_total / E_sum;
+            E_photon2 *= E_total / E_sum;
+        }
 
         // All annihilation → 2 photons (+ optional neutrino for baryon pairs)
         particles.types[i] = PHOTON_TYPE_PHYS;
@@ -242,7 +255,9 @@ void PhysicsSimulation::check_fusion() {
     // Non-relativistic: KE_cm = ½ μ v_rel²  where μ = m₁m₂/(m₁+m₂)
     // v_rel in sim units, convert to fraction of c for MeV calculation
     auto cm_kinetic_energy = [](float m1_MeV, float m2_MeV, float v_rel_sq) -> float {
-        float mu = (m1_MeV * m2_MeV) / (m1_MeV + m2_MeV);  // reduced mass (MeV/c²)
+        if (m1_MeV + m2_MeV < 0.001f) return 0.0f;
+        // Use harmonic mean form to avoid float overflow for extreme masses
+        float mu = 1.0f / (1.0f / m1_MeV + 1.0f / m2_MeV);  // reduced mass (MeV/c²)
         float beta_rel_sq = v_rel_sq / (C_SIM * C_SIM);
         return 0.5f * mu * beta_rel_sq;  // KE_cm in MeV
     };

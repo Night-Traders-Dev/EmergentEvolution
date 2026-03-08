@@ -23,7 +23,7 @@
 #endif
 
 #ifndef APP_VERSION
-#define APP_VERSION "0.1.0"
+#define APP_VERSION "1.0.0"
 #endif
 
 // ── Resolve directory containing this executable ────────────────────────────

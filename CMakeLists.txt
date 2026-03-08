@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(particle_playground VERSION 0.1.0 LANGUAGES C CXX)
+project(particle_playground VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -137,9 +137,8 @@ elseif(WIN32)
     target_compile_definitions(pp_common PUBLIC  HAS_HTTP)
 endif()
 
-# Version info (propagated to all expansion targets)
+# Version info (major/minor/patch propagated to all targets)
 target_compile_definitions(pp_common PUBLIC
-    APP_VERSION="${CMAKE_PROJECT_VERSION}"
     APP_VERSION_MAJOR=${CMAKE_PROJECT_VERSION_MAJOR}
     APP_VERSION_MINOR=${CMAKE_PROJECT_VERSION_MINOR}
     APP_VERSION_PATCH=${CMAKE_PROJECT_VERSION_PATCH}
@@ -208,6 +207,7 @@ add_executable(particle_physics
 )
 
 target_link_libraries(particle_physics PRIVATE pp_common)
+target_compile_definitions(particle_physics PRIVATE APP_VERSION="1.2.0")
 
 # cJSON — needed for repository JSON parsing (when HTTP is available)
 if(CURL_FOUND OR WIN32)
@@ -248,6 +248,7 @@ add_executable(pp_launcher
     src/launcher/main.cpp
 )
 target_link_libraries(pp_launcher PRIVATE pp_common)
+target_compile_definitions(pp_launcher PRIVATE APP_VERSION="1.0.0")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Cosmic Sandbox — celestial body / universe simulation
@@ -264,6 +265,7 @@ add_executable(particle_cosmos
     src/cosmos/cosmos_raytracer.cpp
 )
 target_link_libraries(particle_cosmos PRIVATE pp_common)
+target_compile_definitions(particle_cosmos PRIVATE APP_VERSION="1.0.0")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Biochemical Simulator — cells, bacteria, viruses
@@ -275,6 +277,7 @@ add_executable(particle_biochem
     src/biochem/biochem_raytracer.cpp
 )
 target_link_libraries(particle_biochem PRIVATE pp_common)
+target_compile_definitions(particle_biochem PRIVATE APP_VERSION="0.3.0")
 
 # ── Shader compilation ────────────────────────────────────────────────────────
 

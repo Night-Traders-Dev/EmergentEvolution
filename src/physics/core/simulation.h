@@ -191,7 +191,7 @@ private:
 
     // Detected nuclei (populated by update_orbitals each frame)
     struct NucleusInfo {
-        glm::vec2 center;
+        glm::vec2 center{0.0f, 0.0f};
         int Z = 0, N = 0;
         uint32_t rep = 0;
         bool is_anti = false;       // antimatter nucleus (antiprotons)

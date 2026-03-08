@@ -10,7 +10,7 @@
 #include <limits>
 
 #ifndef APP_VERSION
-#define APP_VERSION "0.1.0"
+#define APP_VERSION "0.3.0"
 #endif
 
 #ifdef _WIN32

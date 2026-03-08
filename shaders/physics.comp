@@ -516,9 +516,13 @@ void apply_physics(uint i) {
                 float inv_r = 1.0 / max(dist, 0.5);
 
                 // Cornell potential: color-Coulomb + linear confinement
-                // Running coupling: asymptotic freedom at short distance
+                // Running coupling with asymptotic freedom:
+                // α_s(r) = α_s₀ / (1 + (β₀/2π)·ln(Λ/r)) where Λ~30px is confinement scale
+                // Short distance (r→0): ln(Λ/r) large → α_s small (asymptotic freedom)
+                // Long distance (r→Λ): α_s diverges (confinement)
+                float log_ratio = fast_log(max(30.0 / max(dist, 0.3), 1.0));
                 float alpha_eff = params.alpha_s_scale * COLOR_ALPHA_S
-                    * max(0.3, 1.0 + 0.3 * fast_log(max(dist, 0.5)));
+                    / max(0.3, 1.0 + 0.25 * log_ratio);
                 float short_range = alpha_eff * inv_r * inv_r;
                 float confine = params.string_tension * 0.1;
 
@@ -1090,7 +1094,9 @@ void apply_physics(uint i) {
 
                 // Short-range color Coulomb with running coupling (asymptotic freedom)
                 // α_s decreases at short distances, increases at long distances
-                float alpha_eff = params.alpha_s_scale * COLOR_ALPHA_S * max(0.3, 1.0 + 0.3 * fast_log(max(dist, 0.5)));
+                float log_ratio_m = fast_log(max(30.0 / max(dist, 0.3), 1.0));
+                float alpha_eff = params.alpha_s_scale * COLOR_ALPHA_S
+                    / max(0.3, 1.0 + 0.25 * log_ratio_m);
                 float short_range = alpha_eff * inv_r * inv_r;
                 // Linear confinement: V=σr → F=σ (constant string tension)
                 float confine = sigma * 0.1;
@@ -1366,6 +1372,12 @@ void apply_physics(uint i) {
         vec2 nuc_normal = closest_nuc_delta / max(closest_nuc_dist, 0.1);
         float L_ground = get_color(i);  // genome[2] repurposed for orbital L
         if (L_ground < 1.0) L_ground = L_MIN;  // free electron: default
+        // Scale Bohr radius by reduced mass ratio: a₀ ∝ 1/m_reduced
+        // Muon orbits ~14× closer (sqrt of mass ratio for L scaling), tau ~59× closer
+        if (type_a == MUON_TYPE || type_a == ANTIMUON_TYPE)
+            L_ground *= 0.07;   // 1/√207 ≈ 0.07 — muonic atom
+        else if (type_a == TAU_TYPE || type_a == ANTITAU_TYPE)
+            L_ground *= 0.017;  // 1/√3477 ≈ 0.017 — tauonic atom
 
         // ── Centrifugal barrier (ALWAYS active — quantum ground state) ──
         // The Heisenberg uncertainty principle guarantees a minimum angular

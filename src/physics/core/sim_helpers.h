@@ -67,6 +67,7 @@ inline float mev_to_ebuf(float MeV) {
 
 // 2-body decay kinematics: returns child momentum magnitude in parent rest frame (MeV/c)
 inline float two_body_decay_momentum(float M, float m1, float m2) {
+    if (M < 0.001f) return 0.0f;
     float sum = m1 + m2, diff = m1 - m2;
     float arg = (M * M - sum * sum) * (M * M - diff * diff);
     return (arg > 0.0f) ? std::sqrt(arg) / (2.0f * M) : 0.0f;
@@ -110,4 +111,10 @@ inline void write_spawn_genome(Particles& particles, uint32_t slot, uint32_t typ
     // Stamp birth frame for age tracking
     if (slot < particles.birth_frames.size())
         particles.birth_frames[slot] = frame;
+    // Ensure auxiliary vectors are sized to match (prevents OOB in other code)
+    if (slot >= particles.excitation_timer.size() && slot < particles.types.size()) {
+        particles.excitation_timer.resize(particles.types.size(), 0);
+        particles.cascade_tag.resize(particles.types.size(), 0);
+        particles.entangled_partner.resize(particles.types.size(), UINT32_MAX);
+    }
 }

@@ -117,12 +117,14 @@ int main() {
     glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
 
     GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-    const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+    const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
+    int init_w = 1280, init_h = 720;
+    if (mode) { init_w = mode->width; init_h = mode->height; }
 #ifndef APP_VERSION
-#define APP_VERSION "0.1.0"
+#define APP_VERSION "1.2.0"
 #endif
     GLFWwindow* window = glfwCreateWindow(
-        mode->width, mode->height,
+        init_w, init_h,
         "Particle Playground v" APP_VERSION,
         nullptr, nullptr);
 

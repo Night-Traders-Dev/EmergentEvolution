@@ -129,8 +129,10 @@ LoadResult load_simulation(const std::string& filepath) {
 
     // Determine saved type count
     uint32_t saved_max_types = PPSG_V1_MAX_TYPES;  // v1 default
+    uint32_t file_max_types  = PPSG_V1_MAX_TYPES;  // actual count in file (for skipping)
     if (version >= 2) {
         read_val(f, saved_max_types);
+        file_max_types = saved_max_types;
         if (saved_max_types > MAX_PARTICLE_TYPES) saved_max_types = MAX_PARTICLE_TYPES;
     }
 
@@ -192,18 +194,30 @@ LoadResult load_simulation(const std::string& filepath) {
         f.read(reinterpret_cast<char*>(r.behavior_flags.data()),
                MAX_PARTICLE_TYPES * sizeof(uint32_t));
     } else {
-        // Smaller saved size — read row-by-row for force matrix, then colors/flags
-        // Force matrix: saved_max_types × saved_max_types
-        for (uint32_t row = 0; row < saved_max_types; ++row) {
-            f.read(reinterpret_cast<char*>(&r.forces[row * MAX_PARTICLE_TYPES]),
-                   saved_max_types * sizeof(float));
+        // Different saved size — read row-by-row for force matrix, skip extra columns/rows
+        // Force matrix: file_max_types × file_max_types on disk, read saved_max_types × saved_max_types
+        for (uint32_t row = 0; row < file_max_types; ++row) {
+            if (row < saved_max_types) {
+                f.read(reinterpret_cast<char*>(&r.forces[row * MAX_PARTICLE_TYPES]),
+                       std::min(file_max_types, saved_max_types) * sizeof(float));
+                // Skip extra columns if file has more types than we support
+                if (file_max_types > saved_max_types)
+                    f.seekg((file_max_types - saved_max_types) * sizeof(float), std::ios::cur);
+            } else {
+                // Skip entire row (file has more types than MAX_PARTICLE_TYPES)
+                f.seekg(file_max_types * sizeof(float), std::ios::cur);
+            }
         }
-        // Colors
+        // Colors: read saved portion, skip extra
         f.read(reinterpret_cast<char*>(r.colors.data()),
                saved_max_types * sizeof(glm::vec4));
-        // Behavior flags
+        if (file_max_types > saved_max_types)
+            f.seekg((file_max_types - saved_max_types) * sizeof(glm::vec4), std::ios::cur);
+        // Behavior flags: read saved portion, skip extra
         f.read(reinterpret_cast<char*>(r.behavior_flags.data()),
                saved_max_types * sizeof(uint32_t));
+        if (file_max_types > saved_max_types)
+            f.seekg((file_max_types - saved_max_types) * sizeof(uint32_t), std::ios::cur);
     }
 
     // Force objects

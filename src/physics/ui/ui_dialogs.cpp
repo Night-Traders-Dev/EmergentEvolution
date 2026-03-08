@@ -554,12 +554,12 @@ void PhysicsInterface::draw_splash_screen() {
         ImGui::PopFont();
 
 #ifndef APP_VERSION
-#define APP_VERSION "0.1.0"
+#define APP_VERSION "1.2.0"
 #endif
         // Subtitle
         ImGui::SetCursorPos(ImVec2(left_margin, title_y + 40.0f * scale));
         ImGui::TextColored(ImVec4(0.0f, 0.78f, 1.0f, 0.7f),
-            "Standard Model  |  Fusion  |  Fission  |  67 Particle Types  |  v" APP_VERSION);
+            "Standard Model  |  Fusion  |  Fission  |  282 Particle Types  |  v" APP_VERSION);
 
         // Top-right badge "QUANTUM PHYSICS SANDBOX"
         {
@@ -876,12 +876,12 @@ void PhysicsInterface::draw_splash_blue_orb() {
         ImGui::PopFont();
 
 #ifndef APP_VERSION
-#define APP_VERSION "0.1.0"
+#define APP_VERSION "1.2.0"
 #endif
         // Subtitle
         ImGui::SetCursorPos(ImVec2(left_margin, title_y + 40.0f * scale));
         ImGui::TextColored(ImVec4(0.3f, 0.65f, 1.0f, 0.7f),
-            "Standard Model  |  Fusion  |  Fission  |  67 Particle Types  |  v" APP_VERSION);
+            "Standard Model  |  Fusion  |  Fission  |  282 Particle Types  |  v" APP_VERSION);
 
         // Top-right badge
         {
@@ -1179,11 +1179,11 @@ void PhysicsInterface::draw_splash_nebula() {
         ImGui::PopFont();
 
 #ifndef APP_VERSION
-#define APP_VERSION "0.1.0"
+#define APP_VERSION "1.2.0"
 #endif
         ImGui::SetCursorPos(ImVec2(left_margin, title_y + 40.0f * scale));
         ImGui::TextColored(ImVec4(0.7f, 0.4f, 0.6f, 0.7f),
-            "Standard Model  |  Fusion  |  Fission  |  67 Particle Types  |  v" APP_VERSION);
+            "Standard Model  |  Fusion  |  Fission  |  282 Particle Types  |  v" APP_VERSION);
 
         // Top-right badge
         {
@@ -1499,11 +1499,11 @@ void PhysicsInterface::draw_splash_collider() {
         ImGui::PopFont();
 
 #ifndef APP_VERSION
-#define APP_VERSION "0.1.0"
+#define APP_VERSION "1.2.0"
 #endif
         ImGui::SetCursorPos(ImVec2(left_margin, title_y + 40.0f * scale));
         ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 0.7f),
-            "Standard Model  |  Fusion  |  Fission  |  67 Particle Types  |  v" APP_VERSION);
+            "Standard Model  |  Fusion  |  Fission  |  282 Particle Types  |  v" APP_VERSION);
 
         // Top-right badge
         {
