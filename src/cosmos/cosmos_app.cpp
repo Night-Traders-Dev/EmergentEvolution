@@ -1981,63 +1981,144 @@ int CosmosApp::spawn_preview_body(glm::vec3 pos) {
         return idx;
     }
 
-    CelestialBody nb = preview_body_;
-    nb.pos = pos;
-    nb.vel = glm::vec3(0.0f);
+    // Batch spawning for small bodies (asteroids, comets, dust)
+    const bool is_small_body = (spawn_type == CTYPE_ASTEROID || spawn_type == CTYPE_COMET || spawn_type == CTYPE_DUST);
+    const int requested_count = std::clamp(spawn_draft_.small_body_spawn_count, 1, 1000);
+    const bool use_batch = is_small_body && requested_count > 1;
+    const int spawn_count = use_batch ? requested_count : 1;
 
-    // Orbit insertion
-    if (spawn_in_orbit_ && !state.bodies.empty()) {
-        int nearest = -1;
-        float nearest_dist = 1e9f;
-        for (size_t i = 0; i < state.bodies.size(); i++) {
-            float d = glm::length(state.bodies[i].pos - nb.pos);
-            if (d > 0.1f && d < nearest_dist && state.bodies[i].mass > nb.mass) {
-                nearest_dist = d;
-                nearest = (int)i;
+    float nominal_radius = preview_body_.radius;
+    float cluster_radius = std::max(6.0f, std::cbrt((float)spawn_count) * std::max(1.2f, nominal_radius) * 4.0f);
+
+    uint32_t layout_seed = hash_combine(hash_combine(float_bits(pos.x), float_bits(pos.y)), float_bits(pos.z));
+    layout_seed = hash_combine(layout_seed, (uint32_t)(sim_time_ * 1000.0f));
+    std::mt19937 layout_rng(layout_seed ^ 0x9E3779B9u);
+    std::uniform_real_distribution<float> unit01(0.0f, 1.0f);
+    std::uniform_real_distribution<float> jitter01(-1.0f, 1.0f);
+
+    auto layout_offset = [&](int index) -> glm::vec3 {
+        if (!use_batch) return glm::vec3(0.0f);
+        const float two_pi = 6.28318530718f;
+        const int layout = std::clamp(spawn_draft_.small_body_layout, 0, 3);
+        switch (layout) {
+        case 1: { // Sphere
+            float u = ((float)index + 0.5f) / (float)spawn_count;
+            float y = 1.0f - 2.0f * u;
+            float rr = std::sqrt(std::max(0.0f, 1.0f - y * y));
+            float theta = 2.39996323f * (float)index;
+            glm::vec3 dir(std::cos(theta) * rr, y, std::sin(theta) * rr);
+            float radial = cluster_radius * (0.42f + 0.58f * unit01(layout_rng));
+            return dir * radial;
+        }
+        case 2: { // Cube
+            int side = std::max(1, (int)std::ceil(std::cbrt((float)spawn_count)));
+            int ix = index % side;
+            int iy = (index / side) % side;
+            int iz = index / (side * side);
+            float denom = (side > 1) ? (float)(side - 1) : 1.0f;
+            float spacing = (cluster_radius * 2.0f) / denom;
+            return glm::vec3(
+                ((float)ix - 0.5f * (float)(side - 1)) * spacing,
+                ((float)iy - 0.5f * (float)(side - 1)) * spacing,
+                ((float)iz - 0.5f * (float)(side - 1)) * spacing);
+        }
+        case 3: { // Torus
+            float t = (float)index / (float)spawn_count;
+            float u = t * two_pi;
+            float frac = std::fmod((float)index * 0.61803398875f + unit01(layout_rng) * 0.2f, 1.0f);
+            if (frac < 0.0f) frac += 1.0f;
+            float v = frac * two_pi;
+            float major = cluster_radius;
+            float minor = cluster_radius * 0.30f;
+            float ring = major + minor * std::cos(v);
+            return glm::vec3(ring * std::cos(u), minor * std::sin(v), ring * std::sin(u));
+        }
+        default: { // Random
+            return glm::vec3(
+                jitter01(layout_rng) * cluster_radius,
+                jitter01(layout_rng) * cluster_radius,
+                jitter01(layout_rng) * cluster_radius);
+        }
+        }
+    };
+
+    int first_idx = (int)state.bodies.size();
+    for (int batch_i = 0; batch_i < spawn_count; ++batch_i) {
+        glm::vec3 spawn_pos = pos + layout_offset(batch_i);
+
+        CelestialBody nb = preview_body_;
+        nb.pos = spawn_pos;
+        nb.vel = glm::vec3(0.0f);
+
+        // Re-seed each batch body uniquely
+        if (use_batch) {
+            nb.seed = hash_combine(preview_body_.seed, (uint32_t)(batch_i * 2654435761u + 9719u));
+            std::mt19937 body_rng(nb.seed);
+            if (spawn_type == CTYPE_ASTEROID)
+                randomize_small_body_properties(nb, body_rng, false);
+            else if (spawn_type == CTYPE_COMET)
+                randomize_small_body_properties(nb, body_rng, true);
+            else if (spawn_type == CTYPE_DUST)
+                randomize_dust_properties(nb, body_rng);
+            if (spawn_draft_.override_radius)
+                nb.radius = std::max(0.04f, spawn_draft_.radius);
+            if (spawn_draft_.override_temperature)
+                nb.temperature = std::clamp(spawn_draft_.temperature, 2.7f, 120000.0f);
+        }
+
+        // Orbit insertion
+        if (spawn_in_orbit_ && !state.bodies.empty()) {
+            int nearest = -1;
+            float nearest_dist = 1e9f;
+            for (size_t i = 0; i < state.bodies.size(); i++) {
+                float d = glm::length(state.bodies[i].pos - nb.pos);
+                if (d > 0.1f && d < nearest_dist && state.bodies[i].mass > nb.mass) {
+                    nearest_dist = d;
+                    nearest = (int)i;
+                }
+            }
+            if (nearest >= 0) {
+                nb.parent = nearest;
+                glm::vec3 diff = nb.pos - state.bodies[nearest].pos;
+                float dist = glm::length(diff);
+                if (dist > 0.1f) {
+                    float v = std::sqrt(cfg.G * state.bodies[nearest].mass / dist);
+                    glm::vec3 dir = glm::normalize(diff);
+                    glm::vec3 perp(-dir.z, 0.0f, dir.x);
+                    nb.vel = state.bodies[nearest].vel + perp * v;
+                }
             }
         }
-        if (nearest >= 0) {
-            nb.parent = nearest;
-            glm::vec3 diff = nb.pos - state.bodies[nearest].pos;
-            float dist = glm::length(diff);
-            if (dist > 0.1f) {
-                float v = std::sqrt(cfg.G * state.bodies[nearest].mass / dist);
-                glm::vec3 dir = glm::normalize(diff);
-                glm::vec3 perp(-dir.z, 0.0f, dir.x);
-                nb.vel = state.bodies[nearest].vel + perp * v;
-            }
+        if (spawn_draft_.override_velocity)
+            nb.vel += spawn_draft_.velocity_kms / SIM_UNIT_TO_KM;
+
+        nb.name = generate_body_name(nb.seed, nb.type);
+        nb.non_attracting = (nb.type == CTYPE_DUST) ? cfg.dust_debug_non_attracting : nb.non_attracting;
+        refresh_body_render_state(nb, &state);
+        state.bodies.push_back(nb);
+        state.trails.emplace_back();
+
+        int host_idx = (int)state.bodies.size() - 1;
+        const auto spawned = state.bodies[(size_t)host_idx];
+        int ring_style = std::clamp(spawn_draft_.ring_layout_type, 0, 6);
+        if (cfg.planetary_rings && spawned.ring_density > 0.001f &&
+            body_can_host_rings(spawned)) {
+            float annulus = std::max(spawned.ring_outer_radius * spawned.ring_outer_radius -
+                                     spawned.ring_inner_radius * spawned.ring_inner_radius, 1.0f);
+            float mass_hint = std::max(spawned.mass * spawned.ring_density * 0.00012f *
+                                       (annulus / std::max(spawned.radius * spawned.radius, 1.0e-5f)),
+                                       std::max(cfg.min_fragment_mass, 1.0e-12f) * 48.0f);
+            spawn_dust_ring(host_idx, mass_hint, spawned.ring_inner_radius, spawned.ring_outer_radius,
+                            spawned.ring_density, spawned.ring_ice_fraction, spawned.seed ^ 0xD05751EDu,
+                            ring_style);
         }
-    }
-    if (spawn_draft_.override_velocity)
-        nb.vel += spawn_draft_.velocity_kms / SIM_UNIT_TO_KM;
-
-    nb.name = generate_body_name(nb.seed, nb.type);
-    nb.non_attracting = (nb.type == CTYPE_DUST) ? cfg.dust_debug_non_attracting : nb.non_attracting;
-    refresh_body_render_state(nb, &state);
-    state.bodies.push_back(nb);
-    state.trails.emplace_back();
-
-    int host_idx = (int)state.bodies.size() - 1;
-    const auto spawned = state.bodies[(size_t)host_idx];
-    int ring_style = std::clamp(spawn_draft_.ring_layout_type, 0, 6);
-    if (cfg.planetary_rings && spawned.ring_density > 0.001f &&
-        body_can_host_rings(spawned)) {
-        float annulus = std::max(spawned.ring_outer_radius * spawned.ring_outer_radius -
-                                 spawned.ring_inner_radius * spawned.ring_inner_radius, 1.0f);
-        float mass_hint = std::max(spawned.mass * spawned.ring_density * 0.00012f *
-                                   (annulus / std::max(spawned.radius * spawned.radius, 1.0e-5f)),
-                                   std::max(cfg.min_fragment_mass, 1.0e-12f) * 48.0f);
-        spawn_dust_ring(host_idx, mass_hint, spawned.ring_inner_radius, spawned.ring_outer_radius,
-                        spawned.ring_density, spawned.ring_ice_fraction, spawned.seed ^ 0xD05751EDu,
-                        ring_style);
-        // Keep ring visual data on host for shader ring overlay
-    }
-    if (spawn_draft_.spawn_moons && host_idx >= 0 && host_idx < (int)state.bodies.size()) {
-        spawn_moons_for_host(host_idx,
-                             std::clamp(spawn_draft_.moon_count, 1, 100),
-                             std::clamp(spawn_draft_.moon_orbit_layout, 0, 4),
-                             std::clamp(spawn_draft_.moon_inclination_deg, 0.0f, 85.0f),
-                             std::clamp(spawn_draft_.moon_spacing_scale, 0.35f, 4.0f));
+        if (spawn_draft_.spawn_moons && host_idx >= 0 && host_idx < (int)state.bodies.size()) {
+            spawn_moons_for_host(host_idx,
+                                 std::clamp(spawn_draft_.moon_count, 1, 100),
+                                 std::clamp(spawn_draft_.moon_orbit_layout, 0, 4),
+                                 std::clamp(spawn_draft_.moon_inclination_deg, 0.0f, 85.0f),
+                                 std::clamp(spawn_draft_.moon_spacing_scale, 0.35f, 4.0f));
+        }
     }
 
     if (diagnostics_enabled_)
@@ -2046,7 +2127,7 @@ int CosmosApp::spawn_preview_body(glm::vec3 pos) {
     // Re-roll preview for next spawn
     reroll_spawn_preview();
 
-    return host_idx;
+    return (first_idx < (int)state.bodies.size()) ? first_idx : -1;
 }
 
 // ── Tick ─────────────────────────────────────────────────────────────────────
@@ -3482,6 +3563,20 @@ bool CosmosApp::spawn_dust_ring(int host_index, float total_mass, float inner_ra
                                std::cbrt(dust.mass / std::max(density_factor, 0.1f)) *
                                (dust.type == CTYPE_DUST ? 11.0f : 6.0f));
         dust.pos = host.pos + rel;
+
+        // Skip ring particles that would immediately overlap with existing bodies.
+        bool overlaps_existing = false;
+        for (size_t bi = 0; bi < state.bodies.size(); ++bi) {
+            if ((int)bi == host_index || state.bodies[bi].marked_for_removal) continue;
+            float d = glm::length(dust.pos - state.bodies[bi].pos);
+            float touch = dust.radius + state.bodies[bi].radius;
+            if (d < touch * 1.05f) {
+                overlaps_existing = true;
+                break;
+            }
+        }
+        if (overlaps_existing) continue;
+
         dust.vel = host.vel;
         dust.temperature = std::clamp(base_temp * (0.88f + u01(rng) * 0.24f), 25.0f, 5000.0f);
         dust.atmosphere_retention = 0.0f;

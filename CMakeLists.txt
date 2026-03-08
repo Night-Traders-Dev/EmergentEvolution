@@ -279,6 +279,41 @@ add_executable(particle_biochem
 target_link_libraries(particle_biochem PRIVATE pp_common)
 target_compile_definitions(particle_biochem PRIVATE APP_VERSION="0.3.0")
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tests — CPU-only unit tests (no GPU/window required)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+enable_testing()
+
+add_executable(cosmos_tests
+    tests/cosmos_tests.cpp
+    src/cosmos/core/cosmos_body_model.cpp
+)
+target_include_directories(cosmos_tests PRIVATE
+    tests/
+)
+target_link_libraries(cosmos_tests PRIVATE pp_common)
+target_compile_definitions(cosmos_tests PRIVATE APP_VERSION="test")
+
+add_test(NAME cosmos_tests COMMAND cosmos_tests)
+
+# GPU tests — requires Vulkan device (headless compute)
+add_executable(cosmos_gpu_tests
+    tests/cosmos_gpu_tests.cpp
+    src/cosmos/core/cosmos_body_model.cpp
+    src/cosmos/cosmos_gravity_compute.cpp
+)
+target_include_directories(cosmos_gpu_tests PRIVATE
+    tests/
+)
+target_link_libraries(cosmos_gpu_tests PRIVATE pp_common)
+target_compile_definitions(cosmos_gpu_tests PRIVATE APP_VERSION="test")
+
+add_test(NAME cosmos_gpu_tests
+    COMMAND cosmos_gpu_tests
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # ── Shader compilation ────────────────────────────────────────────────────────
 
 # glslc is shipped with the Vulkan SDK; CMake 3.20+ exposes it

@@ -77,8 +77,11 @@ public:
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
     void init(GLFWwindow* window);
+    void init_headless();  // Compute-only — no window, surface, or swapchain
     void recreate_swapchain(GLFWwindow* window);
     void destroy();
+
+    bool headless = false; // true when initialized via init_headless()
 
     // ── Buffer helpers ────────────────────────────────────────────────────────
     Buffer create_buffer(VkDeviceSize          size,

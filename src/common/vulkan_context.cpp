@@ -77,16 +77,145 @@ void VulkanContext::init(GLFWwindow* window) {
         pipeline_cache = VK_NULL_HANDLE; // non-fatal
 }
 
+void VulkanContext::init_headless() {
+    headless = true;
+
+    // Create instance without GLFW surface extensions
+    {
+        VkApplicationInfo app_info{};
+        app_info.sType            = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+        app_info.pApplicationName = "Particle Life Tests";
+        app_info.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+        app_info.pEngineName      = "None";
+        app_info.apiVersion       = VK_API_VERSION_1_2;
+
+        std::vector<const char*> extensions;
+        // No GLFW extensions needed — compute only
+        #ifndef NDEBUG
+        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        #endif
+
+        VkInstanceCreateInfo ci{};
+        ci.sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        ci.pApplicationInfo        = &app_info;
+        ci.enabledExtensionCount   = static_cast<uint32_t>(extensions.size());
+        ci.ppEnabledExtensionNames = extensions.data();
+
+        #ifndef NDEBUG
+        ci.enabledLayerCount   = static_cast<uint32_t>(VALIDATION_LAYERS.size());
+        ci.ppEnabledLayerNames = VALIDATION_LAYERS.data();
+        #endif
+
+        VK_CHECK(vkCreateInstance(&ci, nullptr, &instance));
+    }
+
+    #ifndef NDEBUG
+    setup_debug_messenger();
+    #endif
+
+    // Pick a GPU that supports compute (no surface/present required)
+    {
+        uint32_t count = 0;
+        vkEnumeratePhysicalDevices(instance, &count, nullptr);
+        if (count == 0) throw std::runtime_error("No Vulkan-capable GPU found");
+        std::vector<VkPhysicalDevice> devices(count);
+        vkEnumeratePhysicalDevices(instance, &count, devices.data());
+
+        gpu_list.clear();
+        physical_device = VK_NULL_HANDLE;
+        for (auto dev : devices) {
+            uint32_t family_count = 0;
+            vkGetPhysicalDeviceQueueFamilyProperties(dev, &family_count, nullptr);
+            std::vector<VkQueueFamilyProperties> families(family_count);
+            vkGetPhysicalDeviceQueueFamilyProperties(dev, &family_count, families.data());
+
+            bool has_compute = false;
+            for (uint32_t i = 0; i < family_count; ++i) {
+                if (families[i].queueFlags & VK_QUEUE_COMPUTE_BIT) {
+                    has_compute = true;
+                    break;
+                }
+            }
+            if (!has_compute) continue;
+
+            VkPhysicalDeviceProperties props;
+            vkGetPhysicalDeviceProperties(dev, &props);
+            VkPhysicalDeviceMemoryProperties mem;
+            vkGetPhysicalDeviceMemoryProperties(dev, &mem);
+            VkDeviceSize vram = 0;
+            for (uint32_t i = 0; i < mem.memoryHeapCount; ++i) {
+                if (mem.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+                    vram += mem.memoryHeaps[i].size;
+            }
+            gpu_list.push_back({ props.deviceName, props.deviceType, vram });
+
+            if (physical_device == VK_NULL_HANDLE ||
+                props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
+                physical_device = dev;
+        }
+        if (physical_device == VK_NULL_HANDLE)
+            throw std::runtime_error("No compute-capable GPU found");
+    }
+
+    // Create logical device with compute queue only (no swapchain extension)
+    {
+        uint32_t family_count = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &family_count, nullptr);
+        std::vector<VkQueueFamilyProperties> families(family_count);
+        vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &family_count, families.data());
+
+        queue_family = UINT32_MAX;
+        for (uint32_t i = 0; i < family_count; ++i) {
+            if (families[i].queueFlags & VK_QUEUE_COMPUTE_BIT) {
+                queue_family = i;
+                if (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+                    break; // prefer combined graphics+compute family
+            }
+        }
+
+        float priority = 1.0f;
+        VkDeviceQueueCreateInfo queue_ci{};
+        queue_ci.sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        queue_ci.queueFamilyIndex = queue_family;
+        queue_ci.queueCount       = 1;
+        queue_ci.pQueuePriorities = &priority;
+
+        VkPhysicalDeviceFeatures features{};
+        VkDeviceCreateInfo ci{};
+        ci.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        ci.queueCreateInfoCount    = 1;
+        ci.pQueueCreateInfos       = &queue_ci;
+        ci.pEnabledFeatures        = &features;
+        ci.enabledExtensionCount   = 0; // no swapchain extension
+        ci.ppEnabledExtensionNames = nullptr;
+
+        VK_CHECK(vkCreateDevice(physical_device, &ci, nullptr, &device));
+        vkGetDeviceQueue(device, queue_family, 0, &queue);
+    }
+
+    create_command_pool();
+
+    // Pipeline cache
+    auto cache_data = load_pipeline_cache_data();
+    VkPipelineCacheCreateInfo cache_ci{};
+    cache_ci.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    cache_ci.initialDataSize = cache_data.size();
+    cache_ci.pInitialData = cache_data.empty() ? nullptr : cache_data.data();
+    if (vkCreatePipelineCache(device, &cache_ci, nullptr, &pipeline_cache) != VK_SUCCESS)
+        pipeline_cache = VK_NULL_HANDLE;
+}
+
 void VulkanContext::destroy() {
     save_pipeline_cache_data(device, pipeline_cache);
     if (pipeline_cache != VK_NULL_HANDLE) {
         vkDestroyPipelineCache(device, pipeline_cache, nullptr);
         pipeline_cache = VK_NULL_HANDLE;
     }
-    cleanup_swapchain();
+    if (!headless) cleanup_swapchain();
     vkDestroyCommandPool(device, cmd_pool, nullptr);
     vkDestroyDevice(device, nullptr);
-    vkDestroySurfaceKHR(instance, surface, nullptr);
+    if (surface != VK_NULL_HANDLE)
+        vkDestroySurfaceKHR(instance, surface, nullptr);
     if (ENABLE_VALIDATION && debug_messenger_ != VK_NULL_HANDLE) {
         auto fn = (PFN_vkDestroyDebugUtilsMessengerEXT)
             vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
