@@ -58,7 +58,7 @@ void CosmosNebulaCompute::init(VulkanContext& vk) {
     if (vkCreatePipelineLayout(vk.device, &pl_ci, nullptr, &pipeline_layout_) != VK_SUCCESS)
         throw std::runtime_error("Failed to create nebula volume compute pipeline layout");
 
-    VkShaderModule cs_mod = vk.create_shader_module("shaders/cosmos_nebula.spv");
+    VkShaderModule cs_mod = vk.create_shader_module("shaders/cosmos/cosmos_nebula.spv");
 
     VkPipelineShaderStageCreateInfo stage_ci{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
     stage_ci.stage = VK_SHADER_STAGE_COMPUTE_BIT;

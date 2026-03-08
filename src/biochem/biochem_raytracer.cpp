@@ -90,8 +90,8 @@ void BiochemRaytracer::init(VulkanContext& vk, VkRenderPass render_pass) {
     vkCreatePipelineLayout(vk.device, &pipe_layout_ci, nullptr, &pipe_layout_);
 
     // ── Shader modules ─────────────────────────────────────────────────────
-    VkShaderModule vert_mod = vk.create_shader_module("shaders/biochem_rt.vert.spv");
-    VkShaderModule frag_mod = vk.create_shader_module("shaders/biochem_rt.frag.spv");
+    VkShaderModule vert_mod = vk.create_shader_module("shaders/biochem/biochem_rt.vert.spv");
+    VkShaderModule frag_mod = vk.create_shader_module("shaders/biochem/biochem_rt.frag.spv");
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;

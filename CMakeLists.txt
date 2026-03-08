@@ -293,7 +293,9 @@ endif()
 
 set(SHADER_SRC_DIR ${CMAKE_SOURCE_DIR}/shaders)
 set(SHADER_BIN_DIR ${CMAKE_BINARY_DIR}/shaders)
-file(MAKE_DIRECTORY ${SHADER_BIN_DIR})
+file(MAKE_DIRECTORY ${SHADER_BIN_DIR}/particle)
+file(MAKE_DIRECTORY ${SHADER_BIN_DIR}/cosmos)
+file(MAKE_DIRECTORY ${SHADER_BIN_DIR}/biochem)
 
 # Helper macro — compile into BOTH build dir and source dir
 # (runtime loads from source-relative paths like "shaders/physics.spv")
@@ -310,30 +312,30 @@ macro(compile_shader INPUT OUTPUT)
     )
 endmacro()
 
-compile_shader(physics.comp      physics.spv)
-compile_shader(fullscreen.vert   fullscreen.vert.spv)
-compile_shader(fullscreen.frag   fullscreen.frag.spv)
-compile_shader(overlay.vert      overlay.vert.spv)
-compile_shader(overlay.frag      overlay.frag.spv)
-compile_shader(cosmos_rt.vert    cosmos_rt.vert.spv)
-compile_shader(cosmos_rt.frag    cosmos_rt.frag.spv)
-compile_shader(cosmos_bh.comp    cosmos_bh.spv)
-compile_shader(cosmos_nebula.comp cosmos_nebula.spv)
-compile_shader(biochem_rt.vert   biochem_rt.vert.spv)
-compile_shader(biochem_rt.frag   biochem_rt.frag.spv)
+compile_shader(particle/physics.comp      particle/physics.spv)
+compile_shader(particle/fullscreen.vert   particle/fullscreen.vert.spv)
+compile_shader(particle/fullscreen.frag   particle/fullscreen.frag.spv)
+compile_shader(particle/overlay.vert      particle/overlay.vert.spv)
+compile_shader(particle/overlay.frag      particle/overlay.frag.spv)
+compile_shader(cosmos/cosmos_rt.vert    cosmos/cosmos_rt.vert.spv)
+compile_shader(cosmos/cosmos_rt.frag    cosmos/cosmos_rt.frag.spv)
+compile_shader(cosmos/cosmos_bh.comp    cosmos/cosmos_bh.spv)
+compile_shader(cosmos/cosmos_nebula.comp cosmos/cosmos_nebula.spv)
+compile_shader(biochem/biochem_rt.vert   biochem/biochem_rt.vert.spv)
+compile_shader(biochem/biochem_rt.frag   biochem/biochem_rt.frag.spv)
 
 add_custom_target(shaders ALL DEPENDS
-    ${SHADER_BIN_DIR}/physics.spv
-    ${SHADER_BIN_DIR}/fullscreen.vert.spv
-    ${SHADER_BIN_DIR}/fullscreen.frag.spv
-    ${SHADER_BIN_DIR}/overlay.vert.spv
-    ${SHADER_BIN_DIR}/overlay.frag.spv
-    ${SHADER_BIN_DIR}/cosmos_rt.vert.spv
-    ${SHADER_BIN_DIR}/cosmos_rt.frag.spv
-    ${SHADER_BIN_DIR}/cosmos_bh.spv
-    ${SHADER_BIN_DIR}/cosmos_nebula.spv
-    ${SHADER_BIN_DIR}/biochem_rt.vert.spv
-    ${SHADER_BIN_DIR}/biochem_rt.frag.spv
+    ${SHADER_BIN_DIR}/particle/physics.spv
+    ${SHADER_BIN_DIR}/particle/fullscreen.vert.spv
+    ${SHADER_BIN_DIR}/particle/fullscreen.frag.spv
+    ${SHADER_BIN_DIR}/particle/overlay.vert.spv
+    ${SHADER_BIN_DIR}/particle/overlay.frag.spv
+    ${SHADER_BIN_DIR}/cosmos/cosmos_rt.vert.spv
+    ${SHADER_BIN_DIR}/cosmos/cosmos_rt.frag.spv
+    ${SHADER_BIN_DIR}/cosmos/cosmos_bh.spv
+    ${SHADER_BIN_DIR}/cosmos/cosmos_nebula.spv
+    ${SHADER_BIN_DIR}/biochem/biochem_rt.vert.spv
+    ${SHADER_BIN_DIR}/biochem/biochem_rt.frag.spv
 )
 add_dependencies(particle_physics shaders)
 add_dependencies(particle_cosmos shaders)

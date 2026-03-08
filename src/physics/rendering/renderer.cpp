@@ -21,8 +21,8 @@ void Renderer::init(VulkanContext& ctx, GLFWwindow* window, ComputePipeline& com
     create_framebuffers(ctx);
 
     // Quad pipeline expects SPIRVs in executable's directory
-    create_quad_pipeline(ctx, "shaders/fullscreen.vert.spv",
-                               "shaders/fullscreen.frag.spv");
+    create_quad_pipeline(ctx, "shaders/particle/fullscreen.vert.spv",
+                               "shaders/particle/fullscreen.frag.spv");
     create_quad_descriptor_set(ctx, compute);
     create_overlay_pipeline(ctx);
     create_overlay_descriptor_set(ctx, compute);
@@ -306,8 +306,8 @@ void Renderer::create_overlay_pipeline(VulkanContext& ctx) {
     VK_CHECK(vkCreatePipelineLayout(ctx.device, &pl_ci, nullptr, &overlay_pipe_layout_));
 
     // Shaders
-    VkShaderModule vert = ctx.create_shader_module("shaders/overlay.vert.spv");
-    VkShaderModule frag = ctx.create_shader_module("shaders/overlay.frag.spv");
+    VkShaderModule vert = ctx.create_shader_module("shaders/particle/overlay.vert.spv");
+    VkShaderModule frag = ctx.create_shader_module("shaders/particle/overlay.frag.spv");
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;

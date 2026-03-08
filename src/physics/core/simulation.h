@@ -217,9 +217,9 @@ private:
     VkFence          compute_fence_   = VK_NULL_HANDLE;
     VkCommandBuffer  compute_cmd_     = VK_NULL_HANDLE;  // in-flight compute cmd (for deferred free)
 
-    static constexpr const char* COMPUTE_SPV = "shaders/physics.spv";
-    static constexpr const char* VERT_SPV    = "shaders/fullscreen.vert.spv";
-    static constexpr const char* FRAG_SPV    = "shaders/fullscreen.frag.spv";
+    static constexpr const char* COMPUTE_SPV = "shaders/particle/physics.spv";
+    static constexpr const char* VERT_SPV    = "shaders/particle/fullscreen.vert.spv";
+    static constexpr const char* FRAG_SPV    = "shaders/particle/fullscreen.frag.spv";
 
     void handle_input(GLFWwindow* window, double dt);
     void do_spawn_at_world(glm::vec2 world_pos);

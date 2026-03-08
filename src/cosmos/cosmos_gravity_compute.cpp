@@ -51,7 +51,7 @@ void CosmosGravityCompute::init(VulkanContext& vk) {
     if (vkCreatePipelineLayout(vk.device, &pl_ci, nullptr, &pipeline_layout_) != VK_SUCCESS)
         throw std::runtime_error("Failed to create cosmos gravity compute pipeline layout");
 
-    VkShaderModule cs_mod = vk.create_shader_module("shaders/cosmos_bh.spv");
+    VkShaderModule cs_mod = vk.create_shader_module("shaders/cosmos/cosmos_bh.spv");
 
     VkPipelineShaderStageCreateInfo stage_ci{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
     stage_ci.stage = VK_SHADER_STAGE_COMPUTE_BIT;
