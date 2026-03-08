@@ -2978,27 +2978,33 @@ void CosmosApp::step_physics(float dt) {
         constexpr int kMinStepsPerOrbit = 32;
         constexpr int kOrbitSubstepCap = 512;
         constexpr float kTwoPi = 6.283185307f;
-        float shortest_period = std::numeric_limits<float>::max();
-        for (size_t i = 0; i < n; ++i) {
-            if (bodies[i].marked_for_removal || bodies[i].non_attracting) continue;
-            // Use pre-computed orbital_period if available
-            if (bodies[i].orbital_period > 1.0e-3f) {
-                shortest_period = std::min(shortest_period, bodies[i].orbital_period);
-                continue;
+
+        // Cache shortest period — only recompute every 30 frames
+        int current_frame = (int)(sim_time_ * 60.0f);
+        if (current_frame != cached_shortest_period_frame_) {
+            cached_shortest_period_frame_ = current_frame;
+            float shortest = std::numeric_limits<float>::max();
+            for (size_t i = 0; i < n; ++i) {
+                if (bodies[i].marked_for_removal || bodies[i].non_attracting) continue;
+                if (bodies[i].orbital_period > 1.0e-3f) {
+                    shortest = std::min(shortest, bodies[i].orbital_period);
+                    continue;
+                }
+                int primary = (tracked_primary_.size() > i) ? tracked_primary_[i] : -1;
+                if (primary < 0 || primary >= (int)n) continue;
+                const auto& host = bodies[(size_t)primary];
+                if (host.marked_for_removal) continue;
+                float r = glm::length(bodies[i].pos - host.pos);
+                float mu = cfg.G * (host.mass + bodies[i].mass);
+                if (r > 1.0e-3f && mu > 1.0e-12f) {
+                    float T = kTwoPi * std::sqrt(r * r * r / mu);
+                    if (std::isfinite(T) && T > 1.0e-3f)
+                        shortest = std::min(shortest, T);
+                }
             }
-            // Otherwise estimate from Kepler's law: T = 2π√(r³/GM)
-            int primary = (tracked_primary_.size() > i) ? tracked_primary_[i] : -1;
-            if (primary < 0 || primary >= (int)n) continue;
-            const auto& host = bodies[(size_t)primary];
-            if (host.marked_for_removal) continue;
-            float r = glm::length(bodies[i].pos - host.pos);
-            float mu = cfg.G * (host.mass + bodies[i].mass);
-            if (r > 1.0e-3f && mu > 1.0e-12f) {
-                float T = kTwoPi * std::sqrt(r * r * r / mu);
-                if (std::isfinite(T) && T > 1.0e-3f)
-                    shortest_period = std::min(shortest_period, T);
-            }
+            cached_shortest_period_ = shortest;
         }
+        float shortest_period = cached_shortest_period_;
         if (shortest_period < std::numeric_limits<float>::max() * 0.5f) {
             float abs_dt = std::abs(scaled_dt);
             int orbit_substeps = (int)std::ceil(abs_dt * (float)kMinStepsPerOrbit / shortest_period);
@@ -3028,12 +3034,14 @@ void CosmosApp::step_physics(float dt) {
 
     if (cfg.adaptive_substepping && !adaptive_substep_refining_ &&
         n > 0 && std::abs(scaled_dt) > 1.0e-9f) {
+        // Pre-allocate integration scratch buffers (avoid per-estimate allocation)
+        std::vector<glm::vec3> full_pos(n), full_vel(n);
+        std::vector<glm::vec3> half_pos(n), half_vel(n);
+        std::vector<glm::vec3> half2_pos(n), half2_vel(n);
+
         auto estimate_segment_error = [&](float segment_scaled_dt) {
             if (std::abs(segment_scaled_dt) <= 1.0e-9f)
                 return 0.0f;
-            std::vector<glm::vec3> full_pos, full_vel;
-            std::vector<glm::vec3> half_pos, half_vel;
-            std::vector<glm::vec3> half2_pos, half2_vel;
             integrate_kinematics(segment_scaled_dt, pos0, vel0, &accel0, full_pos, full_vel);
             integrate_kinematics(segment_scaled_dt * 0.5f, pos0, vel0, &accel0, half_pos, half_vel);
             integrate_kinematics(segment_scaled_dt * 0.5f, half_pos, half_vel, nullptr, half2_pos, half2_vel);
@@ -3049,7 +3057,9 @@ void CosmosApp::step_physics(float dt) {
 
         float tolerance = std::clamp(cfg.adaptive_substep_tolerance, 1.0e-6f, 1.0e6f);
         int required_substeps = 1;
-        constexpr int kSearchCap = 4096;
+        // Cap search iterations to 6 (max 64 substeps from error estimation)
+        // Higher substep counts come from orbital-period refinement above
+        constexpr int kSearchCap = 64;
         float segment_error = estimate_segment_error(scaled_dt);
         while (segment_error > tolerance && required_substeps < kSearchCap) {
             required_substeps *= 2;

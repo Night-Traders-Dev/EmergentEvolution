@@ -165,6 +165,8 @@ private:
     std::vector<int> tracked_primary_;
     std::vector<int> tracked_children_count_;
     std::vector<float> tracked_eccentricity_;
+    float cached_shortest_period_ = std::numeric_limits<float>::max();
+    int   cached_shortest_period_frame_ = -1;
 
     // Splash + menu background particles
     float splash_time_ = 0.0f;

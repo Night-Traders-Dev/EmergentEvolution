@@ -535,6 +535,11 @@ void PhysicsSimulation::reset() {
     apply_colorblind_correction(particles, iface.prefs.colorblind_mode);
     cfg.particle_count = static_cast<uint32_t>(particles.positions.size());
 
+    // Pre-allocate readback buffers to avoid per-frame reallocation
+    readback_positions_.reserve(cfg.pool_size);
+    readback_velocities_.reserve(cfg.pool_size);
+    readback_energies_.reserve(cfg.pool_size);
+
     // Particle Accelerator: auto-place EM force objects as bending magnets
     if (cfg.environment_mode == 10) {
         float cx = static_cast<float>(WORLD_W) * 0.5f;

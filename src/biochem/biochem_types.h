@@ -76,6 +76,10 @@ enum BioEnvironmentType : uint32_t {
     BIO_ENV_POND_WATER = 1,
     BIO_ENV_PETRI_DISH = 2,
     BIO_ENV_CAT_BRAIN  = 3,
+    BIO_ENV_GUT        = 4,
+    BIO_ENV_BLOOD      = 5,
+    BIO_ENV_SOIL       = 6,
+    BIO_ENV_WOUND      = 7,
     BIO_ENV_COUNT
 };
 
@@ -119,6 +123,14 @@ enum BioEnvironmentStructureShape : uint32_t {
     BIO_ENV_STRUCTURE_PETRI_AGAR = 5,
     BIO_ENV_STRUCTURE_BRAIN_FOLD = 6,
     BIO_ENV_STRUCTURE_BRAIN_VESSEL = 7,
+    BIO_ENV_STRUCTURE_GUT_VILLUS = 8,
+    BIO_ENV_STRUCTURE_GUT_CRYPT = 9,
+    BIO_ENV_STRUCTURE_BLOOD_WALL = 10,
+    BIO_ENV_STRUCTURE_BLOOD_VALVE = 11,
+    BIO_ENV_STRUCTURE_SOIL_GRAIN = 12,
+    BIO_ENV_STRUCTURE_SOIL_ROOT = 13,
+    BIO_ENV_STRUCTURE_WOUND_FIBRIN = 14,
+    BIO_ENV_STRUCTURE_WOUND_TISSUE = 15,
 };
 
 inline const BioEnvironmentPreset& bio_environment_preset(BioEnvironmentType env) {
@@ -181,6 +193,66 @@ inline const BioEnvironmentPreset& bio_environment_preset(BioEnvironmentType env
             0.03f,
             0.70f,
             0.972f,
+            true,
+        },
+        {
+            "Gut Microbiome",
+            "Warm, anaerobic intestinal lumen with dense microbial communities, villi, and active immune surveillance.",
+            {0.22f, 0.16f, 0.12f},
+            {0.6f, 0.1f, 0.8f},
+            37.0f,
+            6.80f,
+            0.08f,
+            1.85f,
+            18.0f,
+            0.22f,
+            0.95f,
+            0.970f,
+            true,
+        },
+        {
+            "Blood Stream",
+            "Fast-flowing arterial blood with high oxygen, tight pH buffering, and intense immune surveillance.",
+            {0.28f, 0.08f, 0.08f},
+            {1.0f, 0.0f, 0.0f},
+            37.0f,
+            7.40f,
+            0.95f,
+            1.20f,
+            65.0f,
+            0.01f,
+            1.80f,
+            0.955f,
+            true,
+        },
+        {
+            "Soil Rhizosphere",
+            "Cool, variable-oxygen ground with organic matter, root exudates, and diverse microbial competition.",
+            {0.14f, 0.12f, 0.08f},
+            {0.1f, 0.9f, 0.2f},
+            18.0f,
+            6.20f,
+            0.32f,
+            1.10f,
+            3.0f,
+            0.18f,
+            0.05f,
+            0.988f,
+            false,
+        },
+        {
+            "Wound Site",
+            "Inflamed, hypoxic tissue with fibrin deposits, high immune infiltration, and bacterial colonization.",
+            {0.24f, 0.10f, 0.10f},
+            {0.3f, 0.7f, 0.4f},
+            37.5f,
+            6.40f,
+            0.25f,
+            1.40f,
+            8.0f,
+            0.35f,
+            2.50f,
+            0.968f,
             true,
         },
     };
@@ -316,9 +388,16 @@ struct BioGenes {
     float antibiotic_type = 0.0f;
     float antibiotic_yield = 0.0f;
     float antibiotic_diversity = 0.0f;
+    float resistance = 0.0f;           // antibiotic resistance (bacteria, 0-2.5)
+    float quorum_threshold = 0.5f;     // quorum sensing threshold (bacteria, 0-1)
 };
 
-inline constexpr int BIO_GENE_TRAIT_COUNT = 16;
+inline constexpr int BIO_GENE_TRAIT_COUNT = 18;
+
+// Immune cell subtypes for WBC
+inline constexpr uint32_t BIO_IMMUNE_GENERIC    = 0; // generic WBC (neutrophil-like)
+inline constexpr uint32_t BIO_IMMUNE_T_CELL     = 1; // cytotoxic T cell — kills infected cells
+inline constexpr uint32_t BIO_IMMUNE_B_CELL     = 2; // B cell — produces antibodies
 
 struct BioPathogenState {
     glm::vec3   axis{1.0f, 0.0f, 0.0f};
@@ -351,6 +430,10 @@ struct BioEntity {
     float       shape_noise  = 0.2f;
     float       shape_phase  = 0.0f;
     float       mitosis_progress = 0.0f;
+    float       atp        = 80.0f;     // ATP pool (cells ~80, bacteria ~50)
+    float       quorum_signal = 0.0f;   // autoinducer concentration (bacteria)
+    float       complement_tag = 0.0f;  // complement opsonization level (0-1)
+    float       resistance_level = 0.0f; // accumulated antibiotic resistance (bacteria)
     BioGenes     genes{};
     BioPathogenState viral_infection{};
     BioPathogenState bacterial_infection{};
@@ -362,6 +445,7 @@ struct BioEntity {
     uint32_t    division_count = 0;
     uint32_t    species_key = 0;
     uint32_t    genome    = 0;          // simple genome tag for mutations
+    uint32_t    immune_subtype = 0;     // 0=generic WBC, 1=T cell (killer), 2=B cell (antibody producer)
     bool        alive     = true;
     bool        corpse    = false;
     bool        ever_infected = false;

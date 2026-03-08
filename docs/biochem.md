@@ -1,6 +1,6 @@
 # Biochemical Simulator
 
-The Biochemical Simulator is a 3D cellular biology sandbox with GPU SDF-raytraced rendering. Entities interact through proximity-based rules covering metabolism, reproduction, infection, immune response, antibiotic warfare, and phagocytic cleanup. Four environment presets model distinct biological milieus with gene-driven entity behavior and heritable mutations.
+The Biochemical Simulator is a 3D cellular biology sandbox with GPU SDF-raytraced rendering. Entities interact through proximity-based rules covering metabolism, reproduction, infection, immune response, antibiotic warfare, and phagocytic cleanup. Eight environment presets model distinct biological milieus with terrain-scale SDF structures, CPU-side collision detection, gene-driven entity behavior, and heritable mutations.
 
 ## Entity Types
 
@@ -29,7 +29,7 @@ Each entity has:
 - **Generation** and **parent ID** for lineage tracking
 - **Genome** tag (integer for tracking mutations)
 - **Morphology** variant (determines visual shape via SDF rendering)
-- **Genes** (10 behavioral/metabolic traits &mdash; see Gene System)
+- **Genes** (18 behavioral/metabolic traits &mdash; see Gene System)
 - **Shape** parameters (aspect ratio, noise amplitude, phase)
 - **Organelle health** (0&ndash;1, cellular vitality)
 - **Nutrient reserve** (0&ndash;1, stored food)
@@ -37,12 +37,17 @@ Each entity has:
 - **Antibiotic film** (0&ndash;1, bacterial defense secretion)
 - **Infection state** (progress, virion load, source ID)
 - **Mitosis progress** (0&ndash;1, division animation state)
+- **ATP** pool (cellular energy currency, default 80 for cells, 50 for bacteria)
+- **Quorum signal** (autoinducer concentration, bacteria only)
+- **Complement tag** (opsonization level 0&ndash;1, marks targets for immune clearance)
+- **Resistance level** (accumulated antibiotic resistance, bacteria only)
+- **Immune subtype** (WBC only: generic, T cell, or B cell)
 - **Corpse** flag and **corpse age** (dead husk state)
 - **Alive** flag
 
 ## Gene System
 
-Each entity carries a `BioGenes` struct with 16 heritable traits that modulate behavior:
+Each entity carries a `BioGenes` struct with 18 heritable traits that modulate behavior:
 
 | Gene | Range | Default | Effect |
 |---|---|---|---|
@@ -62,19 +67,25 @@ Each entity carries a `BioGenes` struct with 16 heritable traits that modulate b
 | `antibiotic_type` | 0.00&ndash;1.00 | varies | Antibiotic spectrum band (bacteria only) |
 | `antibiotic_yield` | 0.00&ndash;2.50 | varies | Antibiotic potency (bacteria only) |
 | `antibiotic_diversity` | 0.00&ndash;1.00 | varies | Antibiotic spectrum width (bacteria only) |
+| `resistance` | 0.00&ndash;2.50 | 0.0 | Antibiotic resistance level (bacteria only) |
+| `quorum_threshold` | 0.00&ndash;1.00 | 0.5 | Quorum sensing activation threshold (bacteria only) |
 
 During cell division, each gene has a chance to mutate (scaled by `mutation_rate`, default 1%), plus a 25% chance of morphology shift, creating heritable variation in the population.
 
 ## Environment Presets
 
-4 environment presets, each configuring temperature, acidity, oxygen, nutrients, flow, toxicity, immune pressure, and fluid damping:
+8 environment presets, each configuring temperature, acidity, oxygen, nutrients, flow, toxicity, immune pressure, and fluid damping:
 
 | Preset | Temp | pH | O&#8322; | Immune | Description |
 |---|---|---|---|---|---|
-| Human Lung | 37.0 &deg;C | 7.25 | 0.98 | Active | Warm, oxygen-rich tissue with active immune surveillance and rhythmic airflow. Lung alveolar structure with branching membrane features. |
-| Pond Water | 18.0 &deg;C | 6.70 | 0.58 | Inactive | Cool, nutrient-rich water (density 1.45) with suspended toxins, weak immunity, and slow currents. Scattered circular membrane features. |
-| Petri Dish | 30.0 &deg;C | 7.05 | 0.76 | Inactive | Engineered culture media with high nutrient availability (density 1.65), minimal flow, and weak immunity. Ring-shaped membrane arrangement. |
-| Cat Brain | 38.2 &deg;C | 7.32 | 0.88 | Active | Warm, protected neural tissue with highest metabolic demand and selective immunity. Bilateral lobe structure with neural-like features. |
+| Human Lung | 37.0 &deg;C | 7.25 | 0.98 | Active | Warm, oxygen-rich tissue with active immune surveillance and rhythmic airflow. Bronchiole tunnels and alveolar sac structures. |
+| Pond Water | 18.0 &deg;C | 6.70 | 0.58 | Inactive | Cool, nutrient-rich water (density 1.45) with suspended toxins, weak immunity, and slow currents. Massive rocks and reed stem pillars. |
+| Petri Dish | 30.0 &deg;C | 7.05 | 0.76 | Inactive | Engineered culture media with high nutrient availability (density 1.65), minimal flow, and weak immunity. Glass rim, agar floor, and streak zones. |
+| Cat Brain | 38.2 &deg;C | 7.32 | 0.88 | Active | Warm, protected neural tissue with highest metabolic demand and selective immunity. Cortical fold walls and cell-scale capillaries. |
+| Gut Microbiome | 37.0 &deg;C | 6.80 | 0.08 | Active | Warm, anaerobic intestinal lumen with dense microbial communities. Intestinal villi, crypts of Lieberkuhn, mucus membranes, peristaltic currents. |
+| Blood Stream | 37.0 &deg;C | 7.40 | 0.95 | Active | Fast-flowing arterial blood with tight pH buffering and intense immune surveillance. Vessel endothelium wall, valve leaflets, strong laminar flow. |
+| Soil Rhizosphere | 18.0 &deg;C | 6.20 | 0.32 | Inactive | Cool, variable-oxygen ground with organic matter and root exudates. Mineral grain boulders, branching plant roots, slow percolation. |
+| Wound Site | 37.5 &deg;C | 6.40 | 0.25 | Active | Inflamed, hypoxic tissue with high immune infiltration and bacterial colonization. Ragged wound-edge tissue, fibrin mesh with platelet aggregates. |
 
 Each preset also defines a visual tint, flow axis and strength, and whether the immune system is active.
 
@@ -88,6 +99,30 @@ Environments contain placed features that locally modify conditions:
 | Nutrient | Local nutrient-rich zone &mdash; spawn location bias, 18% nutrient relief |
 | Toxin | Local toxic zone &mdash; 55% toxin stress increase |
 | Current | Directed fluid flow overlay |
+| Structure | Terrain-scale SDF solid (16 shapes) with GPU raytraced rendering and CPU collision detection |
+
+### Environment Structures
+
+16 SDF structure shapes provide terrain-scale solid geometry in each environment. Each has a matching GPU shader SDF for rendering and a CPU-side SDF for collision detection and spawn avoidance:
+
+| Shape | Environment | Description |
+|---|---|---|
+| Lung Branch | Human Lung | Branching bronchiole with cartilage rings and mucosal texture |
+| Alveolar Cluster | Human Lung | Grape-like hollow alveolar sacs with capillary network |
+| Pond Reed | Pond Water | Towering plant stem column with cell wall and vascular bundle texture |
+| Pond Rock | Pond Water | Massive submerged boulder with erosion channels and biofilm |
+| Petri Rim | Petri Dish | Glass dish wall with base disk and lid |
+| Petri Agar | Petri Dish | Flat agar gel floor with streak marks and colony dimples |
+| Brain Fold | Cat Brain | Cortical gyrus wall with sulcus grooves and neuronal texture |
+| Brain Vessel | Cat Brain | Branching arteriole with bifurcation and terminal capillaries |
+| Gut Villus | Gut Microbiome | Finger-like intestinal projection with brush border microvilli and goblet cells |
+| Gut Crypt | Gut Microbiome | Tubular crypt of Lieberkuhn with Paneth cell granules |
+| Blood Wall | Blood Stream | Curved vessel endothelium with glycocalyx and smooth muscle layers |
+| Blood Valve | Blood Stream | Venous valve leaflet cusps with endothelial covering |
+| Soil Grain | Soil Rhizosphere | Weathered mineral boulder with crystal facets and biofilm |
+| Soil Root | Soil Rhizosphere | Branching plant root with lateral roots and root cap |
+| Wound Fibrin | Wound Site | Criss-crossing fibrin strands with trapped platelet aggregates |
+| Wound Tissue | Wound Site | Ragged wound-edge tissue with exposed collagen fibers |
 
 ## Simulation Systems
 
@@ -99,6 +134,18 @@ Entities consume energy at a rate combining base metabolism, environmental stres
 - **Starvation**: increases when `nutrient_reserve < 0.18`, accelerating energy drain
 - **Organelle health**: tracks cellular vitality (0&ndash;1 scale), degrades under infection and antibiotic pressure
 - **Nutrient reserve**: replenished by feeding, depleted by metabolism and antibiotics
+
+### ATP-Based Metabolism
+
+Cells and bacteria maintain an ATP pool that drives cellular processes:
+
+- **ATP production**: generated from nutrient reserves at a rate proportional to O&#8322; availability
+  - Aerobic (O&#8322; &ge; 0.3): up to 36 ATP per nutrient unit (oxidative phosphorylation efficiency)
+  - Anaerobic (O&#8322; &lt; 0.3): ~2 ATP per nutrient unit (glycolysis only)
+- **ATP consumption**: proportional to metabolic demand (movement, defense, division)
+- **Low ATP stress**: when ATP &lt; 20, organelle health degrades (mitochondrial damage)
+- **ATP depletion death**: entity dies if ATP reaches 0
+- **Division requirement**: cells need &ge; 35 ATP to divide, bacteria need &ge; 20 ATP
 
 ### Environmental Stresses
 
@@ -113,11 +160,11 @@ Entities experience stress from environmental conditions:
 
 When a cell or bacterium accumulates energy above `division_energy` (default 150) and cooldown has elapsed, it divides:
 
-- **Duration**: 2.45&ndash;4.9 seconds depending on entity type and `mitotic_clock` gene
+- **Duration**: 8&ndash;22 seconds depending on entity type and `mitotic_clock` gene (bacteria ~8s, cells ~18s, WBC ~22s)
 - **Process**: `mitosis_progress` ramps 0&rarr;1 over the duration, visually morphing the entity
 - **Completion**: parent keeps 50% energy, child spawned with 50%
 - **Mutation**: 1% base chance per gene, 25% chance of morphology shift
-- **Cooldown**: 4&ndash;15 seconds post-division (bacteria faster than cells)
+- **Cooldown**: 10&ndash;35 seconds post-division (bacteria ~10s, cells ~25s, WBC ~35s)
 - **Telomere cost**: each division shortens telomeres by `1/capacity` (capacity = 10 + gene*8 for cells, ~7 for WBC)
 - **Senescence**: at telomere &le; 12%, entities enter late-life senescence with +30% damage multiplier
 
@@ -128,7 +175,7 @@ Viruses infect cells and bacteria through a multi-stage process:
 - **Contact**: virus within `infection_radius` (default 20 units) of uninfected cell
 - **Probability**: modulated by temperature alignment, immune drag, O&#8322; levels, and membrane shelter
 - **Stages**: ingress (0.04&rarr;0.22), replication (0.14&rarr;0.82), burst (&ge;0.96 load or progress &ge; 1.08)
-- **Viral burst**: spawns 6&ndash;22 virions at random directions, killing the host cell
+- **Viral burst**: spawns 30&ndash;120 virions at random directions, killing the host cell
 - **Energy drain**: 4.4 + replication_progress * 2.2 + load * 1.35 per tick
 - **Organelle damage**: 0.012 + replication_progress * 0.09 per tick
 - **Mutation boost**: virions from burst have 50% higher mutation rate
@@ -157,6 +204,27 @@ Bacteria secrete antibiotic films in a quorum-sensing analog:
 - **Resistance**: bacteria with different `antibiotic_type` genes resist neighboring bacteria's antibiotics
 - **Damage**: energy drain, nutrient reserve depletion, and organelle damage proportional to film strength
 
+### Quorum Sensing
+
+Bacteria accumulate autoinducer signal based on local kin density:
+
+- **Signal accumulation**: increases when same-species bacteria are nearby, decays otherwise
+- **Threshold**: gated by `quorum_threshold` gene (0.25&ndash;0.75, heritable)
+- **Quorum-activated effects**:
+  - Upregulated antibiotic secretion (1.6&times; potency when quorum reached)
+  - Biofilm-mode ATP conservation (reduced metabolic cost)
+  - Coordinated defense behavior across the colony
+
+### Antibiotic Resistance
+
+Bacteria develop resistance through two mechanisms:
+
+- **Heritable resistance gene**: `resistance` gene (0&ndash;2.5) reduces antibiotic damage proportionally
+- **Adaptive resistance**: bacteria that survive antibiotic exposure accumulate `resistance_level` (epigenetic)
+  - Exposure-proportional: stronger antibiotic pressure &rarr; faster adaptation
+  - Partial protection: resistance reduces but does not eliminate damage
+  - Complement MAC damage is also partially blocked by resistance gene
+
 ### Immune Response
 
 When enabled, the immune system spawns defenders and attacks pathogens:
@@ -166,6 +234,30 @@ When enabled, the immune system spawns defenders and attacks pathogens:
 - **WBC behavior**: seeks nearest virus/toxin, engulfs on contact (energy += 10, target dies)
 - **Antibody behavior**: seeks viruses within infection radius, neutralizes on contact
 - **Auto-cap**: immune spawning stops at 1200 total entities
+
+### T Cell / B Cell Differentiation
+
+White blood cells spawn with one of three immune subtypes:
+
+| Subtype | Probability | Behavior |
+|---|---|---|
+| Generic (neutrophil) | 30% | Attacks any pathogen or toxin on contact |
+| T Cell | 40% | Prioritizes infected host cells; 1.2&times; chase speed; 35% better viral clearance |
+| B Cell | 30% | Detects viruses and produces antibodies (costs 8 energy + 5 ATP per antibody) |
+
+All subtypes inherit their `immune_subtype` through division.
+
+### Complement Cascade
+
+Innate immune opsonization system that tags pathogens for enhanced clearance:
+
+- **Classical pathway**: antibody-mediated &mdash; entities near antibodies receive complement tagging faster
+- **Lectin pathway**: bacteria tagged 1.3&times; faster than other entity types
+- **Opsonization tag**: accumulates from 0&rarr;1 on pathogen surfaces; decays slowly
+- **MAC damage**: at complement tag &gt; 0.70, membrane attack complex deals direct damage
+  - Resistance gene partially blocks MAC damage
+- **Immune priority**: complement-tagged targets get 0.4&times; effective distance for WBC targeting (prioritized)
+- **Clearance bonus**: WBC get enhanced clearance rate against tagged targets
 
 ### Phagocyte Cleanup
 
@@ -183,7 +275,7 @@ Entities use behavior-based AI steering, modulated by individual gene values:
 |---|---|---|---|
 | Cell | Nearest nutrient (150u) | Virus/toxin (100u) | 60 |
 | Bacterium | Nearest nutrient (150u) | Virus/toxin (100u) | 80 |
-| Virus | Uninfected cells (200u) | Infected cells (80u) | 100 |
+| Virus | Uninfected cells (25u, weak drift) | &mdash; | 35 (passive Brownian diffusion) |
 | White Blood Cell | Virus/toxin (unlimited) | &mdash; | 80 |
 | Antibody | Viruses (120u) | &mdash; | 70 |
 | Phagocyte | Corpses (unlimited) | &mdash; | 68 |

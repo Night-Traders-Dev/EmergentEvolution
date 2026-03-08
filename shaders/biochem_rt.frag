@@ -56,6 +56,14 @@ const int STRUCT_PETRI_RIM = 4;
 const int STRUCT_PETRI_AGAR = 5;
 const int STRUCT_BRAIN_FOLD = 6;
 const int STRUCT_BRAIN_VESSEL = 7;
+const int STRUCT_GUT_VILLUS = 8;
+const int STRUCT_GUT_CRYPT = 9;
+const int STRUCT_BLOOD_WALL = 10;
+const int STRUCT_BLOOD_VALVE = 11;
+const int STRUCT_SOIL_GRAIN = 12;
+const int STRUCT_SOIL_ROOT = 13;
+const int STRUCT_WOUND_FIBRIN = 14;
+const int STRUCT_WOUND_TISSUE = 15;
 
 float hash3d(vec3 p);
 
@@ -1177,14 +1185,34 @@ vec3 subsurface(vec3 normal, vec3 light_dir, vec3 view_dir, vec3 color, float ra
 
 float structure_bound_scale(int shape) {
     if (shape == STRUCT_PETRI_RIM)
-        return 1.45;
-    if (shape == STRUCT_LUNG_BRANCH || shape == STRUCT_BRAIN_VESSEL)
+        return 1.50;
+    if (shape == STRUCT_LUNG_BRANCH)
+        return 1.40;
+    if (shape == STRUCT_ALVEOLAR_CLUSTER)
         return 1.35;
-    if (shape == STRUCT_POND_REED)
-        return 1.32;
-    if (shape == STRUCT_BRAIN_FOLD || shape == STRUCT_ALVEOLAR_CLUSTER)
-        return 1.28;
-    return 1.18;
+    if (shape == STRUCT_POND_ROCK || shape == STRUCT_POND_REED)
+        return 1.35;
+    if (shape == STRUCT_BRAIN_FOLD)
+        return 1.35;
+    if (shape == STRUCT_PETRI_AGAR)
+        return 1.30;
+    if (shape == STRUCT_BRAIN_VESSEL)
+        return 1.30;
+    if (shape == STRUCT_BLOOD_WALL)
+        return 1.40;
+    if (shape == STRUCT_GUT_VILLUS || shape == STRUCT_GUT_CRYPT)
+        return 1.30;
+    if (shape == STRUCT_SOIL_GRAIN)
+        return 1.30;
+    if (shape == STRUCT_SOIL_ROOT)
+        return 1.35;
+    if (shape == STRUCT_WOUND_FIBRIN)
+        return 1.25;
+    if (shape == STRUCT_WOUND_TISSUE)
+        return 1.35;
+    if (shape == STRUCT_BLOOD_VALVE)
+        return 1.25;
+    return 1.20;
 }
 
 float sd_environment_structure_local(vec3 p, EnvFeature feature) {
@@ -1239,99 +1267,96 @@ float sd_environment_structure_local(vec3 p, EnvFeature feature) {
         return result - capillaries;
     }
     if (shape == STRUCT_POND_REED) {
-        // Aquatic macrophyte (Typha-like) — hollow stem, flat blade leaves, seed head
-        // Main stem — slightly tapered, hollow
-        float taper = mix(0.07, 0.04, smoothstep(-0.90, 0.95, p.y));
-        float stem = sd_capsule(p, vec3(0.0, -0.90, 0.0), vec3(0.0, 0.85, 0.0), taper);
-        // Seed head (cattail) at top
-        float head = sd_capsule(p, vec3(0.0, 0.68, 0.0), vec3(0.0, 0.95, 0.0), 0.09);
-        head -= sin(p.y * 32.0 + detail_phase) * 0.008; // fuzzy texture
-        // Blade leaves — flat and curving
-        vec3 leaf_a_start = vec3(0.0, 0.04, 0.0);
-        vec3 leaf_a_end = vec3(0.42, 0.48, 0.06);
-        float leaf_a = sd_capsule(p, leaf_a_start, leaf_a_end, 0.035);
-        // Make leaves flat (compress in one direction)
-        vec3 leaf_dir = normalize(leaf_a_end - leaf_a_start);
-        vec3 leaf_flat = normalize(cross(leaf_dir, vec3(0.0, 0.0, 1.0)));
-        float flatten_a = abs(dot(p - (leaf_a_start + leaf_a_end) * 0.5, leaf_flat));
-        leaf_a = max(leaf_a, flatten_a - 0.012);
-        vec3 leaf_b_start = vec3(0.0, -0.06, 0.0);
-        vec3 leaf_b_end = vec3(-0.38, 0.38, 0.10);
-        float leaf_b = sd_capsule(p, leaf_b_start, leaf_b_end, 0.032);
-        vec3 leaf_b_dir = normalize(leaf_b_end - leaf_b_start);
-        vec3 leaf_b_flat = normalize(cross(leaf_b_dir, vec3(0.0, 0.0, 1.0)));
-        float flatten_b = abs(dot(p - (leaf_b_start + leaf_b_end) * 0.5, leaf_b_flat));
-        leaf_b = max(leaf_b, flatten_b - 0.011);
-        // Third drooping leaf
-        vec3 leaf_c_end = vec3(0.30, -0.18, -0.12);
-        float leaf_c = sd_capsule(p, vec3(0.0, -0.20, 0.0), leaf_c_end, 0.028);
-        return min(min(stem, head), min(min(leaf_a, leaf_b), leaf_c));
+        // Massive plant stem — towering column at microscale
+        // At cell scale, a reed stem is like a building-sized pillar
+        // Main stem — thick column (cm-scale, enormous relative to cells)
+        float stem = sd_capsule(p, vec3(0.0, -0.95, 0.0), vec3(0.0, 0.95, 0.0), 0.22);
+        // Cell wall texture (plant cells ~30-100 μm, visible as rectangular pattern)
+        float cell_wall = sin(p.y * 8.0 + detail_phase) * 0.008
+                        + sin(p.y * 22.0 + p.x * 18.0 + detail_phase * 1.3) * 0.004;
+        // Vascular bundles running along stem (xylem/phloem)
+        float vascular = sin(atan(p.x, p.z) * 6.0 + detail_phase * 0.5) * 0.012;
+        // Epidermal ridges along the stem surface
+        float ridges = sin(atan(p.x, p.z) * 12.0) * 0.006;
+        return stem - cell_wall - vascular - ridges;
     }
     if (shape == STRUCT_POND_ROCK) {
-        // Submerged rock with biofilm, erosion, and sediment
+        // Massive submerged rock — terrain-scale ground surface
+        // At microscale, rock is an enormous boulder/ground plane
         vec3 q = p;
-        q.y *= 1.28;
-        float rock = sd_ellipsoid(q, vec3(0.96, 0.60, 0.82));
-        // Erosion channels
-        float erosion = sin(p.x * 6.0 + detail_phase) * sin(p.z * 5.0 - detail_phase * 0.8) * 0.065;
-        // Pitting from chemical weathering
-        float pits = sin(p.x * 14.0 + p.y * 11.0 + detail_phase * 1.3) *
-                     sin(p.z * 12.0 - p.x * 9.0 + detail_phase * 0.6) * 0.022;
-        // Sediment accumulation on top (flatter upper surface)
-        float sediment = sd_ellipsoid(q + vec3(0.0, -0.22, 0.0), vec3(0.80, 0.18, 0.70));
+        q.y *= 1.15; // slightly flattened
+        float rock = sd_ellipsoid(q, vec3(0.98, 0.55, 0.92));
+        // Broad erosion channels (weathering grooves in rock surface)
+        float erosion = sin(p.x * 3.0 + detail_phase) * sin(p.z * 2.5 - detail_phase * 0.8) * 0.06;
+        // Micro-pitting (mineral grain texture visible at cell scale)
+        float pits = sin(p.x * 18.0 + p.y * 14.0 + detail_phase * 1.3) *
+                     sin(p.z * 16.0 - p.x * 12.0 + detail_phase * 0.6) * 0.015;
+        // Sediment layer on top
+        float sediment = sd_ellipsoid(q + vec3(0.0, -0.18, 0.0), vec3(0.88, 0.14, 0.82));
         rock = min(rock, sediment);
-        return rock - erosion - max(pits, 0.0);
+        // Biofilm coating (thin organic layer)
+        float biofilm = sin(p.x * 8.0 + p.z * 6.0 + detail_phase * 0.4) * 0.008;
+        return rock - erosion - max(pits, 0.0) - biofilm;
     }
     if (shape == STRUCT_PETRI_RIM) {
-        // Standard 90mm Petri dish — borosilicate glass rim with lid
+        // Petri dish wall — at bacterial scale this is a massive glass cliff
+        // 90mm dish at 0.625 μm/unit → rim is impossibly far, but we render it
+        // as the world boundary wall (thick glass enclosure)
         vec3 q = p;
-        q.y *= 1.35;
-        // Bottom dish rim
-        float rim = sd_torus(q, vec2(1.04, 0.14));
-        // Flat base
-        float base_disk = max(sd_sphere(q + vec3(0.0, 0.16, 0.0), 1.10),
-                              -(sd_sphere(q + vec3(0.0, 0.16, 0.0), 1.06)));
-        base_disk = max(base_disk, q.y + 0.10);
-        base_disk = max(base_disk, -(q.y + 0.30));
-        // Lid rim (slightly larger, sits on top)
-        float lid = sd_torus(q + vec3(0.0, -0.14, 0.0), vec2(1.08, 0.10));
+        q.y *= 1.20;
+        // Massive glass wall ring (thick torus forming the enclosure)
+        float rim = sd_torus(q, vec2(1.02, 0.16));
+        // Flat glass base (floor)
+        float base_disk = max(sd_sphere(q + vec3(0.0, 0.20, 0.0), 1.12),
+                              -(sd_sphere(q + vec3(0.0, 0.20, 0.0), 1.06)));
+        base_disk = max(base_disk, q.y + 0.12);
+        base_disk = max(base_disk, -(q.y + 0.35));
+        // Glass lid above
+        float lid = sd_torus(q + vec3(0.0, -0.18, 0.0), vec2(1.06, 0.10));
         return min(min(rim, lid), base_disk);
     }
     if (shape == STRUCT_PETRI_AGAR) {
-        // Agar gel layer — translucent with streak marks and colony dimples
+        // Agar gel — massive flat floor plane at bacterial scale
+        // The agar surface extends far beyond what bacteria can see
         vec3 q = p;
-        q.y += 0.30;
-        float mound = sd_ellipsoid(q, vec3(0.96, 0.26, 0.96));
-        // Streak plate pattern (inoculation lines)
-        float streak = sin(q.x * 5.0 + q.z * 3.0 + detail_phase) * 0.018;
-        // Colony growth dimples
+        q.y += 0.35;
+        // Flat slab — very wide, not very tall (floor-like)
+        float slab = sd_ellipsoid(q, vec3(1.02, 0.18, 1.02));
+        // Surface micro-texture (agar gel pores: 0.1-2.7 μm, sub-cell scale)
+        float surface_tex = sin(q.x * 28.0 + detail_phase) * sin(q.z * 24.0 - detail_phase * 0.6) * 0.005;
+        // Streak plate pattern (inoculation lines scored into surface)
+        float streak = sin(q.x * 4.0 + q.z * 2.5 + detail_phase) * 0.012;
+        // Colony growth dimples (bacterial colonies growing on surface)
         float colonies = 0.0;
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < 5; ++i) {
             float fi = float(i);
-            vec3 col_pos = vec3(sin(fi * 2.3 + detail_phase) * 0.52,
-                                -0.06,
-                                cos(fi * 1.9 + detail_phase * 0.7) * 0.48);
-            colonies = max(colonies, -sd_sphere(q - col_pos, 0.06 + fi * 0.01));
+            vec3 col_pos = vec3(sin(fi * 2.3 + detail_phase) * 0.55,
+                                -0.12,
+                                cos(fi * 1.9 + detail_phase * 0.7) * 0.50);
+            colonies = max(colonies, -sd_sphere(q - col_pos, 0.04 + fi * 0.008));
         }
-        return mound - streak + colonies * 0.3;
+        return slab - surface_tex - streak + colonies * 0.25;
     }
     if (shape == STRUCT_BRAIN_FOLD) {
-        // Cerebral cortex gyrus — with sulcus groove and grey/white matter layering
+        // Massive cerebral cortex gyrus wall — terrain-scale tissue boundary
+        // At cell scale, grey matter is an enormous undulating wall/cliff
         vec3 q = p;
-        // Gyrus undulation (realistic cortical folding pattern)
-        q.y += sin(p.z * 4.0 + detail_phase) * 0.16
-             + sin(p.z * 7.0 - detail_phase * 0.4) * 0.06;
-        q.x += sin(p.z * 3.0 - detail_phase * 0.6) * 0.10
-             + cos(p.z * 5.5 + detail_phase * 0.3) * 0.04;
-        float fold = sd_ellipsoid(q, vec3(0.92, 0.52, 0.72));
-        // Primary sulcus — deeper groove
-        float sulcus = sd_capsule(q, vec3(0.0, -0.14, -0.76), vec3(0.0, 0.22, 0.76), 0.16);
+        // Gentle gyral undulation at macro scale
+        q.y += sin(p.z * 2.5 + detail_phase) * 0.14
+             + sin(p.z * 4.5 - detail_phase * 0.4) * 0.05;
+        q.x += sin(p.z * 2.0 - detail_phase * 0.6) * 0.08
+             + cos(p.z * 3.5 + detail_phase * 0.3) * 0.03;
+        // Elongated wall shape (tall and wide, like a cliff face)
+        float fold = sd_ellipsoid(q, vec3(0.85, 0.70, 0.90));
+        // Primary sulcus — deep groove carved into the tissue wall
+        float sulcus = sd_capsule(q, vec3(0.0, -0.20, -0.85), vec3(0.0, 0.30, 0.85), 0.14);
         // Secondary sulcus (perpendicular, shallower)
-        float sulcus2 = sd_capsule(q, vec3(-0.56, 0.08, 0.0), vec3(0.56, 0.12, 0.0), 0.10);
+        float sulcus2 = sd_capsule(q, vec3(-0.65, 0.10, 0.0), vec3(0.65, 0.15, 0.0), 0.09);
         float grooved = max(fold, -min(sulcus, sulcus2));
-        // Molecular layer texture (outermost cortical layer I)
-        float cortical_layer = sin(length(p.xz) * 18.0 + p.y * 12.0 + detail_phase) * 0.008;
-        return grooved - cortical_layer;
+        // Cell-scale surface texture (neuronal soma bumps, ~20 μm)
+        float cell_tex = sin(p.x * 12.0 + p.y * 10.0 + detail_phase) *
+                         sin(p.z * 14.0 - detail_phase * 0.5) * 0.006;
+        return grooved - cell_tex;
     }
     if (shape == STRUCT_BRAIN_VESSEL) {
         // Cerebral blood vessel — branching arteriole with bifurcation
@@ -1347,6 +1372,122 @@ float sd_environment_structure_local(vec3 p, EnvFeature feature) {
         // Vessel wall texture (smooth muscle wrapping)
         float wall = sin(p.y * 26.0 + p.z * 8.0 + detail_phase) * 0.005;
         return vessels - wall;
+    }
+
+    if (shape == STRUCT_GUT_VILLUS) {
+        // Intestinal villus — finger-like projection with brush border microvilli
+        float stem = sd_capsule(p, vec3(0.0, -0.80, 0.0), vec3(0.0, 0.72, 0.0), 0.16);
+        float tip = sd_sphere(p - vec3(0.0, 0.72, 0.0), 0.20);
+        float body = min(stem, tip);
+        // Brush border microvilli texture (dense surface projections)
+        float microvilli = sin(p.y * 30.0 + detail_phase) * sin(atan(p.x, p.z) * 14.0 + detail_phase * 0.6) * 0.008;
+        // Epithelial cell boundaries (columnar cells ~20 μm)
+        float cell_boundary = sin(p.y * 12.0 + detail_phase * 0.8) * 0.004
+                            + sin(atan(p.x, p.z) * 8.0 + detail_phase * 1.2) * 0.003;
+        // Goblet cell indentations (mucus-secreting cells interspersed)
+        float goblet = sin(p.y * 6.0 + detail_phase * 1.5) * sin(atan(p.x, p.z) * 4.0) * 0.010;
+        return body - microvilli - cell_boundary - max(goblet, 0.0) * 0.4;
+    }
+    if (shape == STRUCT_GUT_CRYPT) {
+        // Crypt of Lieberkuhn — tubular gland invagination
+        float outer = sd_capsule(p, vec3(0.0, -0.85, 0.0), vec3(0.0, 0.10, 0.0), 0.20);
+        float inner = sd_capsule(p, vec3(0.0, -0.75, 0.0), vec3(0.0, 0.15, 0.0), 0.13);
+        float crypt = max(outer, -inner);
+        // Crypt epithelial cells (stem cells at base, differentiated at top)
+        float cells = sin(p.y * 16.0 + detail_phase) * sin(atan(p.x, p.z) * 10.0 + detail_phase * 0.7) * 0.005;
+        // Paneth cell granules at crypt base
+        float paneth = smoothstep(-0.85, -0.55, p.y) * (1.0 - smoothstep(-0.55, -0.20, p.y));
+        float granules = sin(atan(p.x, p.z) * 6.0 + detail_phase * 1.8) * paneth * 0.008;
+        return crypt - cells - granules;
+    }
+    if (shape == STRUCT_BLOOD_WALL) {
+        // Blood vessel endothelium — curved tube wall
+        vec3 q = p;
+        q.y *= 1.10;
+        float wall = sd_ellipsoid(q, vec3(0.95, 0.85, 0.95));
+        float lumen = sd_ellipsoid(q, vec3(0.82, 0.72, 0.82));
+        float vessel = max(wall, -lumen);
+        // Endothelial cell junctions (cobblestone pattern)
+        float junctions = sin(atan(q.x, q.z) * 16.0 + detail_phase) *
+                          sin(q.y * 14.0 + detail_phase * 0.8) * 0.004;
+        // Glycocalyx brush border on inner surface
+        float glycocalyx = sin(atan(q.x, q.z) * 28.0 + q.y * 22.0 + detail_phase * 1.3) * 0.003;
+        // Smooth muscle layer wrapping (tunica media)
+        float muscle = sin(atan(q.x, q.z) * 6.0 + detail_phase * 0.4) * 0.008;
+        return vessel - junctions - glycocalyx - muscle;
+    }
+    if (shape == STRUCT_BLOOD_VALVE) {
+        // Venous valve — thin leaflet cusps
+        float cusp_a = sd_ellipsoid(p - vec3(0.15, 0.0, 0.0), vec3(0.06, 0.35, 0.28));
+        float cusp_b = sd_ellipsoid(p + vec3(0.15, 0.0, 0.0), vec3(0.06, 0.35, 0.28));
+        float valve = min(cusp_a, cusp_b);
+        // Endothelial covering on valve surface
+        float endothelium = sin(p.y * 20.0 + p.z * 16.0 + detail_phase) * 0.003;
+        return valve - endothelium;
+    }
+    if (shape == STRUCT_SOIL_GRAIN) {
+        // Soil mineral grain — weathered irregular boulder
+        vec3 q = p;
+        q.x += sin(p.y * 3.0 + detail_phase) * 0.08;
+        q.z += cos(p.y * 2.5 - detail_phase * 0.6) * 0.06;
+        float grain = sd_ellipsoid(q, vec3(0.82, 0.65, 0.76));
+        // Mineral crystal facets
+        float facets = sin(q.x * 6.0 + q.y * 5.0 + detail_phase) *
+                       sin(q.z * 7.0 - detail_phase * 0.5) * 0.025;
+        // Micro-pitting from weathering
+        float pits = sin(q.x * 22.0 + q.z * 18.0 + detail_phase * 1.4) *
+                     sin(q.y * 20.0 - q.x * 14.0 + detail_phase * 0.8) * 0.010;
+        // Biofilm coating on exposed surfaces
+        float biofilm = sin(q.x * 10.0 + q.z * 8.0 + detail_phase * 0.3) * 0.006;
+        return grain - facets - max(pits, 0.0) - biofilm;
+    }
+    if (shape == STRUCT_SOIL_ROOT) {
+        // Plant root — branching structure with root hairs
+        float main_root = sd_capsule(p, vec3(0.0, -0.90, 0.0), vec3(0.0, 0.85, 0.0), 0.12);
+        // Lateral roots branching off
+        float lat_a = sd_capsule(p, vec3(0.0, -0.20, 0.0), vec3(0.50, 0.30, 0.25), 0.06);
+        float lat_b = sd_capsule(p, vec3(0.0, 0.15, 0.0), vec3(-0.40, 0.55, -0.30), 0.05);
+        float tip_a = sd_capsule(p, vec3(0.40, 0.22, 0.20), vec3(0.65, 0.42, 0.38), 0.035);
+        float roots = min(main_root, min(min(lat_a, lat_b), tip_a));
+        // Root epidermis cell texture
+        float cells = sin(p.y * 14.0 + detail_phase) * 0.005
+                    + sin(atan(p.x, p.z) * 10.0 + detail_phase * 0.9) * 0.004;
+        // Root cap at growing tips (slightly bulbous)
+        float root_cap = sd_sphere(p - vec3(0.0, -0.92, 0.0), 0.15);
+        roots = min(roots, root_cap);
+        return roots - cells;
+    }
+    if (shape == STRUCT_WOUND_FIBRIN) {
+        // Fibrin mesh — criss-crossing strands forming clot scaffold
+        float strand_a = sd_capsule(p, vec3(-0.70, -0.30, -0.20), vec3(0.65, 0.40, 0.30), 0.04);
+        float strand_b = sd_capsule(p, vec3(0.20, -0.50, -0.60), vec3(-0.30, 0.55, 0.50), 0.035);
+        float strand_c = sd_capsule(p, vec3(-0.50, 0.10, -0.45), vec3(0.55, -0.15, 0.55), 0.038);
+        float strand_d = sd_capsule(p, vec3(-0.10, -0.60, 0.30), vec3(0.25, 0.65, -0.20), 0.032);
+        float strand_e = sd_capsule(p, vec3(0.50, -0.40, 0.10), vec3(-0.45, 0.50, -0.15), 0.036);
+        float mesh = min(strand_a, min(min(strand_b, strand_c), min(strand_d, strand_e)));
+        // Fibrin cross-linking texture (D-D bonds)
+        float cross_links = sin(dot(p, vec3(18.0, 14.0, 16.0)) + detail_phase) * 0.003;
+        // Platelet aggregates trapped in mesh
+        float platelet_a = sd_sphere(p - vec3(0.10, 0.05, -0.08), 0.06);
+        float platelet_b = sd_sphere(p - vec3(-0.25, -0.15, 0.20), 0.05);
+        mesh = min(mesh, min(platelet_a, platelet_b));
+        return mesh - cross_links;
+    }
+    if (shape == STRUCT_WOUND_TISSUE) {
+        // Wound edge — ragged tissue boundary with inflammatory damage
+        vec3 q = p;
+        q.y += sin(p.x * 3.5 + detail_phase) * 0.12 + sin(p.z * 2.8 - detail_phase * 0.7) * 0.08;
+        float tissue = sd_ellipsoid(q, vec3(0.90, 0.60, 0.85));
+        // Torn edge — irregular cavity from tissue damage
+        float cavity = sd_ellipsoid(q + vec3(0.15, -0.10, 0.0), vec3(0.55, 0.40, 0.50));
+        float wound = max(tissue, -cavity);
+        // Exposed collagen fibers on wound surface
+        float collagen = sin(q.x * 8.0 + q.z * 6.0 + detail_phase * 0.5) *
+                         sin(q.y * 10.0 - detail_phase * 0.3) * 0.008;
+        // Cellular debris texture
+        float debris = sin(q.x * 20.0 + q.y * 18.0 + detail_phase * 1.2) *
+                       sin(q.z * 16.0 + detail_phase * 0.6) * 0.005;
+        return wound - collagen - debris;
     }
 
     return sd_sphere(p, 0.80);
@@ -1371,11 +1512,11 @@ bool refine_structure_hit(vec3 ro, vec3 rd, EnvFeature feature, float bound_t,
     float end_t = bound_t + bound_radius * 1.25;
     float t = start_t;
 
-    for (int step = 0; step < 44; ++step) {
+    for (int step = 0; step < 64; ++step) {
         vec3 pos = ro + rd * t;
         vec3 local = transpose(basis) * ((pos - feature.pos_radius.xyz) / radius);
         float dist = sd_environment_structure_local(local, feature) * radius;
-        if (dist < radius * 0.004) {
+        if (dist < radius * 0.003) {
             vec3 normal_local = structure_normal_local(local, feature);
             refined_t = t;
             refined_pos = pos;
@@ -1383,7 +1524,7 @@ bool refine_structure_hit(vec3 ro, vec3 rd, EnvFeature feature, float bound_t,
             local_surface = local;
             return true;
         }
-        t += max(dist * 0.72, radius * 0.010);
+        t += max(dist * 0.68, radius * 0.008);
         if (t > end_t)
             break;
     }
@@ -1448,12 +1589,12 @@ vec3 shade_environment_structure(EnvFeature feature, vec3 pos, vec3 normal, vec3
         color = mix(base, vec3(0.90, 0.68, 0.62), detail * 0.35);
         color = mix(color, vec3(0.82, 0.28, 0.24), capillary * 0.22); // blood vessels
     } else if (shape == STRUCT_POND_REED) {
-        // Plant: chlorophyll-green with vein pattern
-        float veins = smoothstep(0.65, 0.85, abs(sin(local_pos.y * 22.0 + local_pos.z * 6.0)));
-        float tip_brown = smoothstep(0.60, 0.90, local_pos.y); // seed head is brown
+        // Massive plant stem surface — chlorophyll-green with cell wall pattern
+        float cell_walls = smoothstep(0.55, 0.75, abs(sin(local_pos.y * 8.0 + local_pos.x * 6.0)));
+        float vascular = smoothstep(0.6, 0.8, abs(sin(atan(local_pos.x, local_pos.z) * 6.0)));
         color = mix(base, vec3(0.28, 0.52, 0.14), detail * 0.50);
-        color = mix(color, vec3(0.18, 0.38, 0.08), veins * 0.20); // darker veins
-        color = mix(color, vec3(0.48, 0.34, 0.16), tip_brown * 0.55); // cattail
+        color = mix(color, vec3(0.18, 0.40, 0.08), cell_walls * 0.18); // cell walls
+        color = mix(color, vec3(0.14, 0.32, 0.06), vascular * 0.22); // vascular bundles
     } else if (shape == STRUCT_POND_ROCK) {
         // Submerged rock: grey-brown with algae biofilm on top
         float algae = smoothstep(-0.10, 0.20, -local_pos.y); // green on top
@@ -1482,6 +1623,65 @@ vec3 shade_environment_structure(EnvFeature feature, vec3 pos, vec3 normal, vec3
         float vessel_stripe = 0.5 + 0.5 * sin(local_pos.y * 26.0 + local_pos.z * 8.0);
         color = mix(base, vec3(0.72, 0.16, 0.14), detail * 0.35);
         color = mix(color, vec3(0.84, 0.26, 0.20), vessel_stripe * 0.12); // endothelium
+    } else if (shape == STRUCT_GUT_VILLUS) {
+        // Villus: pink-salmon mucosa with brush border highlights
+        float brush = 0.5 + 0.5 * sin(local_pos.y * 30.0 + atan(local_pos.x, local_pos.z) * 14.0);
+        color = mix(base, vec3(0.85, 0.58, 0.52), detail * 0.40);
+        color = mix(color, vec3(0.92, 0.72, 0.66), brush * 0.15); // microvilli
+        // Goblet cells (mucus secreting — lighter patches)
+        float goblet = smoothstep(0.7, 0.9, sin(local_pos.y * 6.0 + atan(local_pos.x, local_pos.z) * 4.0));
+        color = mix(color, vec3(0.90, 0.88, 0.80), goblet * 0.20);
+    } else if (shape == STRUCT_GUT_CRYPT) {
+        // Crypt: darker than villi, stem cell niche at base
+        float depth_gradient = smoothstep(-0.85, 0.10, local_pos.y);
+        color = mix(vec3(0.52, 0.36, 0.32), vec3(0.78, 0.54, 0.48), depth_gradient);
+        color = mix(color, base, 0.25);
+        // Paneth cell granules at base (yellowish)
+        float paneth = (1.0 - smoothstep(-0.85, -0.40, local_pos.y));
+        color = mix(color, vec3(0.75, 0.68, 0.42), paneth * 0.25);
+    } else if (shape == STRUCT_BLOOD_WALL) {
+        // Vessel wall: layered — endothelium (inner), smooth muscle (middle), adventitia (outer)
+        float radial = length(local_pos.xz);
+        float layer = smoothstep(0.72, 0.95, radial); // inner to outer
+        color = mix(vec3(0.80, 0.24, 0.20), vec3(0.55, 0.18, 0.16), layer); // endothelium to muscle
+        color = mix(color, base, 0.20);
+        // Endothelial junctions
+        float junctions = smoothstep(0.6, 0.8, abs(sin(atan(local_pos.x, local_pos.z) * 16.0)));
+        color = mix(color, vec3(0.72, 0.30, 0.26), junctions * 0.12);
+    } else if (shape == STRUCT_BLOOD_VALVE) {
+        // Valve leaflet: smooth pale tissue
+        color = mix(base, vec3(0.78, 0.38, 0.34), detail * 0.30);
+        color += vec3(0.04, 0.02, 0.02) * rim; // slight sheen
+    } else if (shape == STRUCT_SOIL_GRAIN) {
+        // Mineral grain: brown-grey with crystal facets and biofilm
+        float facet = 0.5 + 0.5 * sin(dot(local_pos, vec3(6.0, 5.0, 7.0)));
+        color = mix(base, vec3(0.48, 0.42, 0.32), detail * 0.35);
+        color = mix(color, vec3(0.56, 0.50, 0.38), facet * 0.18); // crystal
+        // Biofilm patches (greenish on exposed surfaces)
+        float bio = smoothstep(-0.10, 0.15, -local_pos.y);
+        color = mix(color, vec3(0.24, 0.38, 0.18), bio * 0.25);
+    } else if (shape == STRUCT_SOIL_ROOT) {
+        // Plant root: brown-white with cortex/epidermis layers
+        float depth_root = smoothstep(0.0, 0.12, abs(length(local_pos.xz) - 0.10));
+        color = mix(vec3(0.72, 0.62, 0.48), vec3(0.42, 0.34, 0.22), depth_root);
+        color = mix(color, base, 0.20);
+        // Root cap at tips (slightly greenish)
+        float tip = smoothstep(-0.95, -0.85, local_pos.y);
+        color = mix(color, vec3(0.52, 0.58, 0.38), tip * 0.30);
+    } else if (shape == STRUCT_WOUND_FIBRIN) {
+        // Fibrin mesh: pale golden-yellow strands
+        color = mix(base, vec3(0.82, 0.74, 0.52), detail * 0.40);
+        // Platelet aggregates (slightly darker reddish spots)
+        float platelet_zone = smoothstep(0.05, 0.08, sd_sphere(local_pos - vec3(0.10, 0.05, -0.08), 0.08));
+        color = mix(vec3(0.72, 0.32, 0.28), color, platelet_zone);
+    } else if (shape == STRUCT_WOUND_TISSUE) {
+        // Wound edge: inflamed reddish tissue with exposed collagen (white)
+        float inflammation = 0.5 + 0.5 * sin(dot(local_pos, vec3(3.5, 4.0, 2.8)) + time * 0.15);
+        color = mix(base, vec3(0.72, 0.28, 0.24), detail * 0.35);
+        color = mix(color, vec3(0.85, 0.40, 0.32), inflammation * 0.20); // inflammation
+        // Exposed collagen (white fibers at wound edge)
+        float edge = 1.0 - smoothstep(0.35, 0.60, length(local_pos.xz));
+        color = mix(color, vec3(0.88, 0.86, 0.82), edge * 0.25);
     }
 
     vec3 lit = color * (ambient * 0.90 + key * 0.70 + fill * 0.24);

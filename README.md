@@ -58,13 +58,16 @@ shapes showing organelle interiors. Features metabolism with telomere tracking a
 senescence, cell division with heritable gene mutations (16 traits including metabolic
 efficiency, telomere length, mitotic clock, stress tolerance, defense, sensing, and
 antibiotic spectrum), multi-stage viral infection with replication gates and lysis
-bursts, bacterial antibiotic film warfare with quorum-sensing-like defense, immune response
-with WBC/antibody spawning, phagocyte corpse cleanup, AI-driven entity movement
-(seek/flee/spacing behaviors), and fluid dynamics. 4 environment presets (Human Lung, Pond
-Water, Petri Dish, Cat Brain) with distinct temperature, pH, oxygen, immune conditions, and
-placed features (membranes, nutrient zones, toxin zones, currents). Color-coded event log
-tracks division, infection, immune, and lifecycle events. WASD camera panning and auto-hiding
-bottom taskbar with panel management.
+bursts (30&ndash;120 virions), bacterial antibiotic film warfare with quorum-sensing-like
+defense, immune response with WBC/antibody spawning, phagocyte corpse cleanup, AI-driven
+entity movement (seek/flee/spacing behaviors with passive Brownian diffusion for viruses),
+and fluid dynamics. 8 environment presets (Human Lung, Pond Water, Petri Dish, Cat Brain,
+Gut Microbiome, Blood Stream, Soil Rhizosphere, Wound Site) with 16 structure shapes,
+distinct temperature, pH, oxygen, immune conditions, and placed features (membranes,
+nutrient zones, toxin zones, currents, terrain-scale SDF structures with CPU collision
+detection). Organized settings UI with collapsible sections and parameter tooltips.
+Color-coded event log tracks division, infection, immune, and lifecycle events. WASD camera
+panning and auto-hiding bottom taskbar with panel management.
 
 ---
 

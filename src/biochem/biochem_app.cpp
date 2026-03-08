@@ -35,7 +35,11 @@ static const char* const BIO_ENVIRONMENT_NAMES[] = {
     "Human Lung",
     "Pond Water",
     "Petri Dish",
-    "Cat Brain"
+    "Cat Brain",
+    "Gut Microbiome",
+    "Blood Stream",
+    "Soil Rhizosphere",
+    "Wound Site"
 };
 
 enum BioEventType : uint32_t {
@@ -208,6 +212,8 @@ static void blend_gene_block(BioGenes& dst, const BioGenes& src, float weight) {
     dst.antibiotic_type += (src.antibiotic_type - dst.antibiotic_type) * weight;
     dst.antibiotic_yield += (src.antibiotic_yield - dst.antibiotic_yield) * weight;
     dst.antibiotic_diversity += (src.antibiotic_diversity - dst.antibiotic_diversity) * weight;
+    dst.resistance += (src.resistance - dst.resistance) * weight;
+    dst.quorum_threshold += (src.quorum_threshold - dst.quorum_threshold) * weight;
 }
 
 static bool virus_targets_host(const BioEntity& virus, const BioEntity& host) {
@@ -431,13 +437,13 @@ static float type_default_energy(uint32_t type) {
 
 static BioGenes type_gene_baseline(uint32_t type) {
     switch (type) {
-    case BIO_CELL:        return {1.00f, 1.00f, 1.05f, 0.80f, 1.00f, 1.00f, 1.00f, 0.96f, 0.94f, 0.96f, 1.02f, 0.92f, 1.02f, 0.0f, 0.0f, 0.0f};
-    case BIO_BACTERIUM:   return {1.15f, 0.80f, 0.85f, 1.30f, 0.90f, 0.00f, 1.30f, 1.18f, 1.22f, 1.08f, 0.82f, 1.10f, 0.88f, 0.50f, 0.90f, 0.50f};
-    case BIO_VIRUS:       return {1.20f, 0.30f, 0.55f, 0.55f, 0.75f, 0.00f, 0.40f, 0.92f, 0.70f, 0.92f, 1.10f, 1.05f, 0.76f, 0.0f, 0.0f, 0.0f};
-    case BIO_ANTIBODY:    return {1.10f, 0.40f, 0.90f, 0.45f, 0.95f, 0.00f, 0.65f, 1.02f, 0.72f, 1.08f, 1.16f, 1.08f, 1.06f, 0.0f, 0.0f, 0.0f};
-    case BIO_RED_BLOOD:   return {0.10f, 0.05f, 0.60f, 1.10f, 1.05f, 0.00f, 0.55f, 1.12f, 0.88f, 1.04f, 0.98f, 0.68f, 1.04f, 0.0f, 0.0f, 0.0f};
-    case BIO_WHITE_BLOOD: return {1.30f, 0.75f, 1.10f, 0.70f, 1.20f, 0.82f, 0.78f, 0.98f, 0.90f, 1.18f, 1.22f, 1.18f, 1.08f, 0.0f, 0.0f, 0.0f};
-    case BIO_JANITOR:     return {1.18f, 0.28f, 0.95f, 0.55f, 1.10f, 0.00f, 0.72f, 1.08f, 0.98f, 1.14f, 1.12f, 1.06f, 1.04f, 0.0f, 0.0f, 0.0f};
+    case BIO_CELL:        return {1.00f, 1.00f, 1.05f, 0.80f, 1.00f, 1.00f, 1.00f, 0.96f, 0.94f, 0.96f, 1.02f, 0.92f, 1.02f, 0.0f, 0.0f, 0.0f, 0.0f, 0.5f};
+    case BIO_BACTERIUM:   return {1.15f, 0.80f, 0.85f, 1.30f, 0.90f, 0.00f, 1.30f, 1.18f, 1.22f, 1.08f, 0.82f, 1.10f, 0.88f, 0.50f, 0.90f, 0.50f, 0.15f, 0.50f};
+    case BIO_VIRUS:       return {1.20f, 0.30f, 0.55f, 0.55f, 0.75f, 0.00f, 0.40f, 0.92f, 0.70f, 0.92f, 1.10f, 1.05f, 0.76f, 0.0f, 0.0f, 0.0f, 0.0f, 0.5f};
+    case BIO_ANTIBODY:    return {1.10f, 0.40f, 0.90f, 0.45f, 0.95f, 0.00f, 0.65f, 1.02f, 0.72f, 1.08f, 1.16f, 1.08f, 1.06f, 0.0f, 0.0f, 0.0f, 0.0f, 0.5f};
+    case BIO_RED_BLOOD:   return {0.10f, 0.05f, 0.60f, 1.10f, 1.05f, 0.00f, 0.55f, 1.12f, 0.88f, 1.04f, 0.98f, 0.68f, 1.04f, 0.0f, 0.0f, 0.0f, 0.0f, 0.5f};
+    case BIO_WHITE_BLOOD: return {1.30f, 0.75f, 1.10f, 0.70f, 1.20f, 0.82f, 0.78f, 0.98f, 0.90f, 1.18f, 1.22f, 1.18f, 1.08f, 0.0f, 0.0f, 0.0f, 0.0f, 0.5f};
+    case BIO_JANITOR:     return {1.18f, 0.28f, 0.95f, 0.55f, 1.10f, 0.00f, 0.72f, 1.08f, 0.98f, 1.14f, 1.12f, 1.06f, 1.04f, 0.0f, 0.0f, 0.0f, 0.0f, 0.5f};
     default:              return {};
     }
 }
@@ -460,6 +466,8 @@ static BioGenes zero_genes() {
     genes.antibiotic_type = 0.0f;
     genes.antibiotic_yield = 0.0f;
     genes.antibiotic_diversity = 0.0f;
+    genes.resistance = 0.0f;
+    genes.quorum_threshold = 0.0f;
     return genes;
 }
 
@@ -489,6 +497,8 @@ static void accumulate_gene_aggregate(BioGeneAggregate& agg, const BioGenes& gen
     agg.sum.antibiotic_type += genes.antibiotic_type;
     agg.sum.antibiotic_yield += genes.antibiotic_yield;
     agg.sum.antibiotic_diversity += genes.antibiotic_diversity;
+    agg.sum.resistance += genes.resistance;
+    agg.sum.quorum_threshold += genes.quorum_threshold;
     agg.count += 1;
 }
 
@@ -513,6 +523,8 @@ static BioGenes average_genes(const BioGeneAggregate& agg) {
     avg.antibiotic_type *= inv;
     avg.antibiotic_yield *= inv;
     avg.antibiotic_diversity *= inv;
+    avg.resistance *= inv;
+    avg.quorum_threshold *= inv;
     return avg;
 }
 
@@ -521,7 +533,8 @@ static const char* gene_trait_name(int idx) {
         "Seek", "Flee", "Spacing", "Brownian", "Energy",
         "Telomere", "Mitotic Clock", "Metabolism", "Nutrient Affinity",
         "Stress Tolerance", "Defense", "Sensing", "Mutation Stability",
-        "Antibiotic Type", "Antibiotic Yield", "Antibiotic Diversity"
+        "Antibiotic Type", "Antibiotic Yield", "Antibiotic Diversity",
+        "Resistance", "Quorum Threshold"
     };
     return names[idx];
 }
@@ -544,6 +557,8 @@ static float gene_trait_value(const BioGenes& genes, int idx) {
     case 13: return genes.antibiotic_type;
     case 14: return genes.antibiotic_yield;
     case 15: return genes.antibiotic_diversity;
+    case 16: return genes.resistance;
+    case 17: return genes.quorum_threshold;
     default: return 0.0f;
     }
 }
@@ -626,6 +641,8 @@ static void clamp_genes(BioGenes& genes) {
     genes.antibiotic_type = std::clamp(genes.antibiotic_type, 0.00f, 1.00f);
     genes.antibiotic_yield = std::clamp(genes.antibiotic_yield, 0.00f, 2.50f);
     genes.antibiotic_diversity = std::clamp(genes.antibiotic_diversity, 0.00f, 1.00f);
+    genes.resistance = std::clamp(genes.resistance, 0.00f, 2.50f);
+    genes.quorum_threshold = std::clamp(genes.quorum_threshold, 0.05f, 1.00f);
 }
 
 static void randomize_entity_genes(BioEntity& e, std::mt19937& rng) {
@@ -685,6 +702,8 @@ static void randomize_entity_genes(BioEntity& e, std::mt19937& rng) {
         e.genes.antibiotic_type = std::uniform_real_distribution<float>(0.0f, 1.0f)(rng);
         e.genes.antibiotic_yield *= jitter(0.30f);
         e.genes.antibiotic_diversity *= jitter(0.45f);
+        e.genes.resistance = std::uniform_real_distribution<float>(0.0f, 0.35f)(rng);
+        e.genes.quorum_threshold = std::uniform_real_distribution<float>(0.25f, 0.75f)(rng);
         e.genes.metabolism_efficiency *= 1.08f;
         e.genes.nutrient_affinity *= 1.14f;
         e.genes.defense *= 0.92f;
@@ -694,6 +713,7 @@ static void randomize_entity_genes(BioEntity& e, std::mt19937& rng) {
             e.genes.spacing *= 1.08f;
             e.genes.antibiotic_yield *= 1.10f;
             e.genes.metabolism_efficiency *= 1.05f;
+            e.genes.resistance *= 1.15f;
         } else if (bio_bacteria_visual_family(e.morphology) == BIO_BACTERIA_FAMILY_SPIRAL) {
             e.genes.brownian *= 1.20f;
             e.genes.flee *= 1.10f;
@@ -728,11 +748,30 @@ static void randomize_entity_genes(BioEntity& e, std::mt19937& rng) {
         e.genes.antibiotic_type = 0.0f;
         e.genes.antibiotic_yield = 0.0f;
         e.genes.antibiotic_diversity = 0.0f;
+        e.genes.resistance = 0.0f;
+        e.genes.quorum_threshold = 0.5f;
         e.genes.telomere *= 0.92f;
         e.genes.mitotic_clock *= 0.82f;
         e.genes.defense *= 1.18f;
         e.genes.stress_tolerance *= 1.16f;
         e.genes.sensing *= 1.22f;
+        // Assign immune subtype: 40% T cell, 30% B cell, 30% generic (neutrophil)
+        {
+            float roll = std::uniform_real_distribution<float>(0.0f, 1.0f)(rng);
+            if (roll < 0.40f) {
+                e.immune_subtype = BIO_IMMUNE_T_CELL;
+                e.genes.seek *= 1.25f;     // T cells are aggressive hunters
+                e.genes.defense *= 1.12f;
+                e.genes.sensing *= 1.18f;
+            } else if (roll < 0.70f) {
+                e.immune_subtype = BIO_IMMUNE_B_CELL;
+                e.genes.seek *= 0.75f;     // B cells are less mobile
+                e.genes.defense *= 1.08f;
+                e.genes.sensing *= 1.30f;  // but better at detection
+            } else {
+                e.immune_subtype = BIO_IMMUNE_GENERIC;
+            }
+        }
         break;
     case BIO_JANITOR:
         e.genes.antibiotic_type = 0.0f;
@@ -779,6 +818,8 @@ static void mutate_entity_genes(BioEntity& e, std::mt19937& rng, float mutation_
     mutate_trait(e.genes.antibiotic_type, 0.00f, 1.00f);
     mutate_trait(e.genes.antibiotic_yield, 0.00f, 2.50f);
     mutate_trait(e.genes.antibiotic_diversity, 0.00f, 1.00f);
+    mutate_trait(e.genes.resistance, 0.00f, 2.50f);
+    mutate_trait(e.genes.quorum_threshold, 0.05f, 1.00f);
 
     float major_mutation_chance = std::min(0.24f, effective_rate * 0.80f + 0.03f);
     if (std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) < major_mutation_chance) {
@@ -866,10 +907,12 @@ static bool type_uses_telomeres(uint32_t type) {
 }
 
 static float type_cycle_cooldown_base(uint32_t type) {
+    // Post-division refractory period before next cycle can begin
+    // Scaled to match longer division durations
     switch (type) {
-    case BIO_CELL:        return 9.0f;
-    case BIO_WHITE_BLOOD: return 15.0f;
-    case BIO_BACTERIUM:   return 4.0f;
+    case BIO_CELL:        return 25.0f;
+    case BIO_WHITE_BLOOD: return 35.0f;
+    case BIO_BACTERIUM:   return 10.0f;
     default:              return 0.0f;
     }
 }
@@ -967,6 +1010,11 @@ static void initialize_entity_lifecycle(BioEntity& e, std::mt19937& rng) {
     e.division_cooldown = std::max(0.0f, type_cycle_cooldown_base(e.type) / std::max(e.genes.mitotic_clock, 0.25f) * randf(0.15f, 0.65f));
     e.division_count = 0;
     e.antibiotic_film = 0.0f;
+    e.atp = (e.type == BIO_CELL) ? 80.0f : (e.type == BIO_BACTERIUM ? 50.0f : 60.0f);
+    e.quorum_signal = 0.0f;
+    e.complement_tag = 0.0f;
+    e.resistance_level = 0.0f;
+    e.immune_subtype = 0;
     e.species_key = base_species_key(e.type, e.morphology);
     e.ever_infected = false;
     reset_infection_state(e);
@@ -1403,6 +1451,289 @@ static glm::vec3 environment_flow(const BiochemConfig& cfg,
     return flow;
 }
 
+// ── CPU-side SDF primitives (matching shader exactly) ───────────────────────
+
+static float sdf_sphere(glm::vec3 p, float r) {
+    return glm::length(p) - r;
+}
+
+static float sdf_capsule(glm::vec3 p, glm::vec3 a, glm::vec3 b, float r) {
+    glm::vec3 pa = p - a;
+    glm::vec3 ba = b - a;
+    float h = glm::clamp(glm::dot(pa, ba) / std::max(glm::dot(ba, ba), 1e-5f), 0.0f, 1.0f);
+    return glm::length(pa - ba * h) - r;
+}
+
+static float sdf_ellipsoid(glm::vec3 p, glm::vec3 r) {
+    glm::vec3 pr = p / r;
+    glm::vec3 pr2 = p / (r * r);
+    float k0 = glm::length(pr);
+    float k1 = glm::length(pr2);
+    return k0 * (k0 - 1.0f) / std::max(k1, 1e-5f);
+}
+
+static float sdf_torus(glm::vec3 p, float R, float r) {
+    float qx = std::sqrt(p.x * p.x + p.z * p.z) - R;
+    float qy = p.y;
+    return std::sqrt(qx * qx + qy * qy) - r;
+}
+
+static glm::mat3 basis_from_axis_cpu(glm::vec3 axis) {
+    glm::vec3 up = glm::length(axis) > 1e-5f ? glm::normalize(axis) : glm::vec3(0.0f, 1.0f, 0.0f);
+    glm::vec3 tangent = std::abs(up.y) < 0.95f
+        ? glm::normalize(glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), up))
+        : glm::normalize(glm::cross(glm::vec3(1.0f, 0.0f, 0.0f), up));
+    glm::vec3 bitangent = glm::cross(up, tangent);
+    return glm::mat3(tangent, bitangent, up);
+}
+
+// Evaluate structure SDF in local space [-1,1] — matches shader sd_environment_structure_local
+// Simplified: skips tiny detail textures (rings, mucosa, pits) that don't affect collision
+static float structure_sdf_local(glm::vec3 p, uint32_t shape) {
+    if (shape == BIO_ENV_STRUCTURE_LUNG_BRANCH) {
+        float trunk_r = glm::mix(0.18f, 0.12f, glm::smoothstep(-0.88f, 0.10f, p.y));
+        float trunk = sdf_capsule(p, {0, -0.88f, 0}, {0, 0.10f, 0}, trunk_r);
+        float arm_a_r = glm::mix(0.13f, 0.08f, glm::smoothstep(0.0f, 0.74f, glm::length(p - glm::vec3(0.56f, 0.74f, 0))));
+        float arm_a = sdf_capsule(p, {0, 0.02f, 0}, {0.56f, 0.74f, 0.08f}, arm_a_r);
+        float arm_b = sdf_capsule(p, {0, 0.02f, 0}, {-0.56f, 0.74f, -0.08f}, arm_a_r);
+        float twig_a = sdf_capsule(p, {0.42f, 0.54f, 0.06f}, {0.72f, 0.92f, 0.18f}, 0.055f);
+        float twig_b = sdf_capsule(p, {-0.38f, 0.50f, -0.06f}, {-0.68f, 0.88f, -0.22f}, 0.050f);
+        return std::min(trunk, std::min(std::min(arm_a, arm_b), std::min(twig_a, twig_b)));
+    }
+    if (shape == BIO_ENV_STRUCTURE_ALVEOLAR_CLUSTER) {
+        float duct = sdf_capsule(p, {0, -0.38f, 0}, {0, 0.10f, 0}, 0.08f);
+        float cluster = 1e5f;
+        for (int i = 0; i < 8; ++i) {
+            float fi = (float)i;
+            float theta = fi * 2.39996f;
+            float z = 1.0f - 2.0f * (fi + 0.5f) / 8.0f;
+            float r_xy = std::sqrt(std::max(1.0f - z * z, 0.0f));
+            glm::vec3 c = glm::vec3(std::cos(theta) * r_xy, z, std::sin(theta) * r_xy) * 0.38f;
+            float alv_r = 0.22f + std::sin(fi * 1.7f) * 0.04f;
+            float outer = sdf_sphere(p - c, alv_r);
+            float inner = sdf_sphere(p - c, alv_r - 0.04f);
+            cluster = std::min(cluster, std::max(outer, -inner));
+        }
+        return std::min(duct, cluster);
+    }
+    if (shape == BIO_ENV_STRUCTURE_POND_REED) {
+        return sdf_capsule(p, {0, -0.95f, 0}, {0, 0.95f, 0}, 0.22f);
+    }
+    if (shape == BIO_ENV_STRUCTURE_POND_ROCK) {
+        glm::vec3 q = p;
+        q.y *= 1.15f;
+        float rock = sdf_ellipsoid(q, {0.98f, 0.55f, 0.92f});
+        float sediment = sdf_ellipsoid(q + glm::vec3(0, -0.18f, 0), {0.88f, 0.14f, 0.82f});
+        return std::min(rock, sediment);
+    }
+    if (shape == BIO_ENV_STRUCTURE_PETRI_RIM) {
+        glm::vec3 q = p;
+        q.y *= 1.20f;
+        float rim = sdf_torus(q, 1.02f, 0.16f);
+        float base_outer = sdf_sphere(q + glm::vec3(0, 0.20f, 0), 1.12f);
+        float base_inner = sdf_sphere(q + glm::vec3(0, 0.20f, 0), 1.06f);
+        float base_disk = std::max(std::max(base_outer, -base_inner),
+                                   std::max(q.y + 0.12f, -(q.y + 0.35f)));
+        float lid = sdf_torus(q + glm::vec3(0, -0.18f, 0), 1.06f, 0.10f);
+        return std::min(std::min(rim, lid), base_disk);
+    }
+    if (shape == BIO_ENV_STRUCTURE_PETRI_AGAR) {
+        glm::vec3 q = p;
+        q.y += 0.35f;
+        return sdf_ellipsoid(q, {1.02f, 0.18f, 1.02f});
+    }
+    if (shape == BIO_ENV_STRUCTURE_BRAIN_FOLD) {
+        glm::vec3 q = p;
+        q.y += std::sin(p.z * 2.5f) * 0.14f + std::sin(p.z * 4.5f) * 0.05f;
+        q.x += std::sin(p.z * 2.0f) * 0.08f + std::cos(p.z * 3.5f) * 0.03f;
+        float fold = sdf_ellipsoid(q, {0.85f, 0.70f, 0.90f});
+        float sulcus = sdf_capsule(q, {0, -0.20f, -0.85f}, {0, 0.30f, 0.85f}, 0.14f);
+        float sulcus2 = sdf_capsule(q, {-0.65f, 0.10f, 0}, {0.65f, 0.15f, 0}, 0.09f);
+        return std::max(fold, -std::min(sulcus, sulcus2));
+    }
+    if (shape == BIO_ENV_STRUCTURE_BRAIN_VESSEL) {
+        float trunk = sdf_capsule(p, {0, -0.76f, -0.20f}, {0, 0.78f, 0.20f}, 0.09f);
+        float br_a = sdf_capsule(p, {0, 0.18f, 0.04f}, {0.44f, 0.62f, 0.36f}, 0.065f);
+        float br_b = sdf_capsule(p, {0, 0.18f, 0.04f}, {-0.32f, 0.54f, -0.28f}, 0.058f);
+        float cap_a = sdf_capsule(p, {0.34f, 0.50f, 0.28f}, {0.58f, 0.78f, 0.52f}, 0.035f);
+        float cap_b = sdf_capsule(p, {-0.24f, 0.42f, -0.20f}, {-0.50f, 0.68f, -0.44f}, 0.032f);
+        return std::min(trunk, std::min(std::min(br_a, br_b), std::min(cap_a, cap_b)));
+    }
+    if (shape == BIO_ENV_STRUCTURE_GUT_VILLUS) {
+        // Intestinal villus — finger-like projection ~0.5-1.6mm tall, ~0.1mm wide
+        float stem = sdf_capsule(p, {0, -0.80f, 0}, {0, 0.72f, 0}, 0.16f);
+        // Rounded tip (bulbous villus apex with brush border)
+        float tip = sdf_sphere(p - glm::vec3(0, 0.72f, 0), 0.20f);
+        // Lateral micro-ridges (epithelial cell outlines)
+        return std::min(stem, tip);
+    }
+    if (shape == BIO_ENV_STRUCTURE_GUT_CRYPT) {
+        // Intestinal crypt of Lieberkuhn — tubular gland between villi
+        // Invagination into lamina propria
+        float outer = sdf_capsule(p, {0, -0.85f, 0}, {0, 0.10f, 0}, 0.20f);
+        float inner = sdf_capsule(p, {0, -0.75f, 0}, {0, 0.15f, 0}, 0.13f);
+        return std::max(outer, -inner); // hollow tube
+    }
+    if (shape == BIO_ENV_STRUCTURE_BLOOD_WALL) {
+        // Blood vessel endothelium — curved wall section
+        glm::vec3 q = p;
+        q.y *= 1.10f;
+        float wall = sdf_ellipsoid(q, {0.95f, 0.85f, 0.95f});
+        // Hollow interior where blood flows
+        float lumen = sdf_ellipsoid(q, {0.82f, 0.72f, 0.82f});
+        return std::max(wall, -lumen);
+    }
+    if (shape == BIO_ENV_STRUCTURE_BLOOD_VALVE) {
+        // Venous valve — two leaflet cusps
+        float cusp_a = sdf_ellipsoid(p - glm::vec3(0.15f, 0, 0), {0.06f, 0.35f, 0.28f});
+        float cusp_b = sdf_ellipsoid(p + glm::vec3(0.15f, 0, 0), {0.06f, 0.35f, 0.28f});
+        return std::min(cusp_a, cusp_b);
+    }
+    if (shape == BIO_ENV_STRUCTURE_SOIL_GRAIN) {
+        // Soil mineral grain — irregular rounded boulder
+        glm::vec3 q = p;
+        q.x += std::sin(p.y * 3.0f) * 0.08f;
+        q.z += std::cos(p.y * 2.5f) * 0.06f;
+        float grain = sdf_ellipsoid(q, {0.82f, 0.65f, 0.76f});
+        return grain;
+    }
+    if (shape == BIO_ENV_STRUCTURE_SOIL_ROOT) {
+        // Plant root — branching tubular structure
+        float main = sdf_capsule(p, {0, -0.90f, 0}, {0, 0.85f, 0}, 0.12f);
+        float lat_a = sdf_capsule(p, {0, -0.20f, 0}, {0.50f, 0.30f, 0.25f}, 0.06f);
+        float lat_b = sdf_capsule(p, {0, 0.15f, 0}, {-0.40f, 0.55f, -0.30f}, 0.05f);
+        float tip_a = sdf_capsule(p, {0.40f, 0.22f, 0.20f}, {0.65f, 0.42f, 0.38f}, 0.035f);
+        return std::min(main, std::min(std::min(lat_a, lat_b), tip_a));
+    }
+    if (shape == BIO_ENV_STRUCTURE_WOUND_FIBRIN) {
+        // Fibrin mesh — criss-crossing strands forming clot scaffold
+        float strand_a = sdf_capsule(p, {-0.70f, -0.30f, -0.20f}, {0.65f, 0.40f, 0.30f}, 0.04f);
+        float strand_b = sdf_capsule(p, {0.20f, -0.50f, -0.60f}, {-0.30f, 0.55f, 0.50f}, 0.035f);
+        float strand_c = sdf_capsule(p, {-0.50f, 0.10f, -0.45f}, {0.55f, -0.15f, 0.55f}, 0.038f);
+        float strand_d = sdf_capsule(p, {-0.10f, -0.60f, 0.30f}, {0.25f, 0.65f, -0.20f}, 0.032f);
+        float strand_e = sdf_capsule(p, {0.50f, -0.40f, 0.10f}, {-0.45f, 0.50f, -0.15f}, 0.036f);
+        return std::min(strand_a, std::min(std::min(strand_b, strand_c), std::min(strand_d, strand_e)));
+    }
+    if (shape == BIO_ENV_STRUCTURE_WOUND_TISSUE) {
+        // Wound edge — ragged tissue boundary
+        glm::vec3 q = p;
+        q.y += std::sin(p.x * 3.5f) * 0.12f + std::sin(p.z * 2.8f) * 0.08f;
+        float tissue = sdf_ellipsoid(q, {0.90f, 0.60f, 0.85f});
+        // Torn edge — irregular cavity
+        float cavity = sdf_ellipsoid(q + glm::vec3(0.15f, -0.10f, 0), {0.55f, 0.40f, 0.50f});
+        return std::max(tissue, -cavity);
+    }
+    return sdf_sphere(p, 0.80f);
+}
+
+static glm::vec3 structure_sdf_gradient(glm::vec3 p, uint32_t shape) {
+    constexpr float eps = 0.005f;
+    return glm::normalize(glm::vec3(
+        structure_sdf_local(p + glm::vec3(eps, 0, 0), shape) - structure_sdf_local(p - glm::vec3(eps, 0, 0), shape),
+        structure_sdf_local(p + glm::vec3(0, eps, 0), shape) - structure_sdf_local(p - glm::vec3(0, eps, 0), shape),
+        structure_sdf_local(p + glm::vec3(0, 0, eps), shape) - structure_sdf_local(p - glm::vec3(0, 0, eps), shape)
+    ));
+}
+
+struct StructCollider {
+    glm::vec3 pos;
+    float radius;
+    uint32_t shape;
+    glm::mat3 basis;
+    glm::mat3 basis_inv;
+    float bound_scale;
+};
+
+static float structure_bound_scale_cpu(uint32_t shape) {
+    if (shape == BIO_ENV_STRUCTURE_PETRI_RIM) return 1.50f;
+    if (shape == BIO_ENV_STRUCTURE_LUNG_BRANCH) return 1.40f;
+    if (shape == BIO_ENV_STRUCTURE_ALVEOLAR_CLUSTER) return 1.35f;
+    if (shape == BIO_ENV_STRUCTURE_POND_ROCK || shape == BIO_ENV_STRUCTURE_POND_REED) return 1.35f;
+    if (shape == BIO_ENV_STRUCTURE_BRAIN_FOLD) return 1.35f;
+    if (shape == BIO_ENV_STRUCTURE_PETRI_AGAR) return 1.30f;
+    if (shape == BIO_ENV_STRUCTURE_BRAIN_VESSEL) return 1.30f;
+    if (shape == BIO_ENV_STRUCTURE_BLOOD_WALL) return 1.40f;
+    if (shape == BIO_ENV_STRUCTURE_GUT_VILLUS || shape == BIO_ENV_STRUCTURE_GUT_CRYPT) return 1.30f;
+    if (shape == BIO_ENV_STRUCTURE_SOIL_GRAIN) return 1.30f;
+    if (shape == BIO_ENV_STRUCTURE_SOIL_ROOT) return 1.35f;
+    if (shape == BIO_ENV_STRUCTURE_WOUND_FIBRIN) return 1.25f;
+    if (shape == BIO_ENV_STRUCTURE_WOUND_TISSUE) return 1.35f;
+    if (shape == BIO_ENV_STRUCTURE_BLOOD_VALVE) return 1.25f;
+    return 1.20f;
+}
+
+static std::vector<StructCollider> build_colliders(const BiochemEnvironment& env) {
+    std::vector<StructCollider> colliders;
+    for (const auto& f : env.features) {
+        if (f.type != BIO_ENV_FEATURE_STRUCTURE) continue;
+        StructCollider sc;
+        sc.pos = f.pos;
+        sc.radius = f.radius;
+        sc.shape = static_cast<uint32_t>(f.shape + 0.5f);
+        sc.basis = basis_from_axis_cpu(f.axis);
+        sc.basis_inv = glm::transpose(sc.basis);
+        sc.bound_scale = structure_bound_scale_cpu(sc.shape);
+        colliders.push_back(sc);
+    }
+    return colliders;
+}
+
+static bool resolve_structure_collision(const StructCollider& sc, glm::vec3& pos, glm::vec3& vel, float entity_radius) {
+    float bound_r = sc.radius * sc.bound_scale;
+    float dist_to_center = glm::length(pos - sc.pos);
+    if (dist_to_center > bound_r + entity_radius)
+        return false;
+
+    glm::vec3 local = sc.basis_inv * ((pos - sc.pos) / sc.radius);
+    float local_sdf = structure_sdf_local(local, sc.shape);
+    float world_sdf = local_sdf * sc.radius;
+
+    float penetration = entity_radius - world_sdf;
+    if (penetration <= 0.0f)
+        return false;
+
+    glm::vec3 local_normal = structure_sdf_gradient(local, sc.shape);
+    glm::vec3 world_normal = glm::normalize(sc.basis * local_normal);
+
+    pos += world_normal * (penetration + 0.5f);
+
+    float vn = glm::dot(vel, world_normal);
+    if (vn < 0.0f)
+        vel -= world_normal * vn * 1.5f;
+
+    return true;
+}
+
+static bool position_inside_any_structure(const std::vector<StructCollider>& colliders,
+                                           glm::vec3 pos, float entity_radius) {
+    for (const auto& sc : colliders) {
+        float bound_r = sc.radius * sc.bound_scale;
+        if (glm::length(pos - sc.pos) > bound_r + entity_radius)
+            continue;
+        glm::vec3 local = sc.basis_inv * ((pos - sc.pos) / sc.radius);
+        float world_sdf = structure_sdf_local(local, sc.shape) * sc.radius;
+        if (world_sdf < entity_radius + 0.5f)
+            return true;
+    }
+    return false;
+}
+
+static glm::vec3 push_out_of_structures(const std::vector<StructCollider>& colliders,
+                                         glm::vec3 pos, float entity_radius) {
+    glm::vec3 dummy_vel(0.0f);
+    for (int iter = 0; iter < 8; ++iter) {
+        bool any_hit = false;
+        for (const auto& sc : colliders) {
+            if (resolve_structure_collision(sc, pos, dummy_vel, entity_radius))
+                any_hit = true;
+        }
+        if (!any_hit) break;
+    }
+    return pos;
+}
+
+// ── Population seeding ──────────────────────────────────────────────────────
+
 static void seed_default_population(BiochemState& state,
                                     const BiochemConfig& cfg,
                                     const BiochemEnvironment& environment,
@@ -1421,6 +1752,9 @@ static void seed_default_population(BiochemState& state,
             p *= max_radius / len;
         return p;
     };
+
+    auto colliders = build_colliders(environment);
+
     auto spawn_group = [&](BioEntityType type, int count, float speed, float spread,
                            float energy_scale, int anchor_type) {
         for (int i = 0; i < count; ++i) {
@@ -1439,12 +1773,21 @@ static void seed_default_population(BiochemState& state,
             e.type = type;
             e.morphology = random_morphology_for(type, static_cast<BioEnvironmentType>(cfg.environment), rng);
             e.pos = clamp_world(center + sample_local_offset(rng, local_spread));
+            configure_entity_shape(e, rng);
+
+            // Retry position if inside a structure (up to 6 attempts, then push out)
+            for (int attempt = 0; attempt < 6; ++attempt) {
+                if (!position_inside_any_structure(colliders, e.pos, e.radius))
+                    break;
+                e.pos = clamp_world(center + sample_local_offset(rng, local_spread * 1.2f));
+            }
+            e.pos = push_out_of_structures(colliders, e.pos, e.radius);
+
             e.vel = sample_local_offset(rng, speed);
             e.genome = (uint32_t)rng();
             randomize_entity_genes(e, rng);
             e.energy = type_default_energy(type) * e.genes.energy * energy_scale * randf(0.85f, 1.15f);
             initialize_entity_lifecycle(e, rng);
-            configure_entity_shape(e, rng);
             e.entity_id = next_entity_id++;
             state.entities.push_back(e);
         }
@@ -1517,6 +1860,8 @@ void BiochemApp::mark_entity_corpse(BioEntity& e, uint32_t event_type, const std
         e.starvation = 1.25f;
         e.organelle_health = 0.0f;
         e.antibiotic_film = 0.0f;
+        e.atp = 0.0f;
+        e.quorum_signal = 0.0f;
         reset_infection_state(e);
         e.vel *= 0.35f;
     }
@@ -1654,229 +1999,457 @@ void BiochemApp::regenerate_environment(bool advance_seed) {
     switch (cfg.environment) {
     case BIO_ENV_HUMAN_LUNG:
     default:
-        // Anatomically: bronchioles (~500 μm) branch into terminal bronchioles (~200 μm)
-        // which end in alveolar ducts and sacs (~200 μm). Cells are ~15 μm.
-        // At world_radius=200, cells=radius ~8, so bronchioles=wr*0.18, alveoli=wr*0.12
-        // Two main bronchiolar branches flanking the scene
-        for (int side = -1; side <= 1; side += 2) {
-            // Main bronchiole trunk running along flow axis
-            glm::vec3 trunk_pos = cross_axis * (float)side * (wr * 0.22f) +
-                                  up_axis * randf(-wr * 0.06f, wr * 0.06f);
-            add_structure(BIO_ENV_STRUCTURE_LUNG_BRANCH, trunk_pos, randf(wr * 0.16f, wr * 0.20f),
-                          normalized_or(flow_axis * 0.65f + cross_axis * (float)side * 0.50f + up_axis * 0.15f, flow_axis),
-                          randf(0.88f, 1.08f), preset.tint * 0.65f + glm::vec3(0.24f, 0.18f, 0.16f),
+        // Scale: 1 unit ≈ 0.625 μm. Cell radius ~8 units (10 μm diameter).
+        // Terminal bronchiole: ~500 μm diameter → radius ~400 units (2× world_radius!)
+        // Alveolus: 200-300 μm diameter → radius ~160-240 units (world-scale caves)
+        // Alveolar wall: 0.2-0.5 μm → <1 unit (tissue boundary)
+        // Capillary: 5-8 μm → radius 4-6 units (cell-scale)
+        // Scene: interior of alveolar duct/sac region at end of terminal bronchiole.
+        // One massive bronchiolar tunnel running through the scene
+        {
+            glm::vec3 tunnel_pos = up_axis * (wr * 0.70f); // above the action
+            add_structure(BIO_ENV_STRUCTURE_LUNG_BRANCH, tunnel_pos, wr * 0.90f,
+                          flow_axis,
+                          1.0f, preset.tint * 0.65f + glm::vec3(0.24f, 0.18f, 0.16f),
                           0.55f, randf(0.0f, 1.0f), 0.78f);
-            // 3 alveolar clusters budding off each bronchiole
-            for (int sac = 0; sac < 3; ++sac) {
-                float t = -0.20f + sac * 0.22f;
-                glm::vec3 sac_pos = trunk_pos + flow_axis * (wr * t) +
-                                    cross_axis * (float)side * randf(wr * 0.06f, wr * 0.10f) +
-                                    sample_local_offset(rng, wr * 0.03f);
-                add_structure(BIO_ENV_STRUCTURE_ALVEOLAR_CLUSTER, sac_pos, randf(wr * 0.10f, wr * 0.14f),
-                              normalized_or(cross_axis * (float)side * 0.7f + up_axis * 0.4f + flow_axis * 0.2f, up_axis),
-                              randf(0.82f, 1.05f), preset.tint * 0.78f + glm::vec3(0.28f, 0.18f, 0.16f),
-                              0.48f, randf(0.0f, 1.0f), 0.68f);
-            }
         }
-        // Alveolar membrane surfaces (type I pneumocyte epithelium) filling space
-        for (int branch = 0; branch < 3; ++branch) {
-            float branch_t = branch / 2.0f;
-            glm::vec3 branch_center = flow_axis * (-wr * 0.28f + branch_t * wr * 0.32f);
-            for (int side = -1; side <= 1; side += 2) {
-                for (int sac = 0; sac < 4; ++sac) {
-                    glm::vec3 pos = branch_center
-                        + cross_axis * (side * (wr * 0.10f + randf(0.0f, wr * 0.08f)))
-                        + up_axis * randf(-wr * 0.16f, wr * 0.16f)
-                        + sample_local_offset(rng, wr * 0.03f);
-                    add_feature(BIO_ENV_FEATURE_MEMBRANE, pos, randf(wr * 0.09f, wr * 0.14f),
-                                cross_axis * (float)side + up_axis * randf(-0.3f, 0.3f),
-                                randf(0.7f, 1.0f), preset.tint * 0.9f + glm::vec3(0.08f, 0.12f, 0.10f),
-                                randf(0.4f, 0.7f), randf(0.0f, 1.0f));
-                }
-            }
-            // Oxygen-rich nutrient zone near each alveolar cluster
+        // 3-4 alveolar sacs — world-scale hollow cavities that entities inhabit
+        for (int i = 0; i < 4; ++i) {
+            float angle = (float)i / 4.0f * 6.2831853f + randf(0.0f, 0.8f);
+            float dist = wr * randf(0.45f, 0.65f);
+            glm::vec3 sac_pos(std::cos(angle) * dist,
+                              randf(-wr * 0.30f, wr * 0.10f),
+                              std::sin(angle) * dist);
+            // Alveolus radius ~160-200 units — these are massive cave-like enclosures
+            float alv_r = wr * randf(0.60f, 0.85f);
+            glm::vec3 outward = normalized_or(sac_pos, up_axis);
+            add_structure(BIO_ENV_STRUCTURE_ALVEOLAR_CLUSTER, sac_pos, alv_r,
+                          outward,
+                          randf(0.82f, 1.05f), preset.tint * 0.78f + glm::vec3(0.28f, 0.18f, 0.16f),
+                          0.48f, randf(0.0f, 1.0f), 0.68f);
+        }
+        // Alveolar membrane surfaces (type I pneumocyte epithelium)
+        for (int i = 0; i < 8; ++i) {
+            glm::vec3 pos = sample_local_offset(rng, wr * 0.60f);
+            add_feature(BIO_ENV_FEATURE_MEMBRANE, pos, randf(wr * 0.18f, wr * 0.30f),
+                        rand_dir(),
+                        randf(0.7f, 1.0f), preset.tint * 0.9f + glm::vec3(0.08f, 0.12f, 0.10f),
+                        randf(0.4f, 0.7f), randf(0.0f, 1.0f));
+        }
+        // Oxygen-rich nutrient zones (gas exchange surfaces)
+        for (int i = 0; i < 5; ++i) {
             add_feature(BIO_ENV_FEATURE_NUTRIENT,
-                        branch_center + up_axis * randf(-wr * 0.08f, wr * 0.08f),
-                        randf(wr * 0.08f, wr * 0.12f), up_axis,
+                        sample_local_offset(rng, wr * 0.50f),
+                        randf(wr * 0.14f, wr * 0.22f), up_axis,
                         randf(0.50f, 0.80f), glm::vec3(0.20f, 0.48f, 0.30f), 0.35f, randf(0.0f, 1.0f));
         }
         // Tidal airflow currents (rhythmic breathing)
         for (int i = 0; i < 5; ++i) {
             float t = -0.35f + 0.18f * (float)i;
             add_feature(BIO_ENV_FEATURE_CURRENT,
-                        flow_axis * (wr * t) + sample_local_offset(rng, wr * 0.05f),
-                        randf(wr * 0.12f, wr * 0.18f), flow_axis + rand_dir() * 0.20f,
+                        flow_axis * (wr * t) + sample_local_offset(rng, wr * 0.10f),
+                        randf(wr * 0.20f, wr * 0.30f), flow_axis + rand_dir() * 0.20f,
                         randf(0.65f, 0.95f), glm::vec3(0.24f, 0.42f, 0.36f), 0.30f, randf(0.0f, 1.0f));
         }
         break;
 
     case BIO_ENV_POND_WATER:
-        // Pond micro-habitat: bottom substrate with rocks, rooted macrophytes rising up,
-        // organic detritus zones, suspended algae, slow convective currents.
-        // Rocks are massive compared to microorganisms (rocks ~mm, cells ~μm)
-        // Substrate layer: rocks along bottom
-        for (int i = 0; i < 6; ++i) {
-            glm::vec3 pos(randf(-wr * 0.65f, wr * 0.65f),
-                          -wr * 0.38f + randf(-wr * 0.04f, wr * 0.02f),
-                          randf(-wr * 0.65f, wr * 0.65f));
-            float rock_size = randf(wr * 0.10f, wr * 0.16f);
-            add_structure(BIO_ENV_STRUCTURE_POND_ROCK, pos, rock_size,
-                          normalized_or(up_axis * 0.3f + rand_dir() * 0.7f, up_axis),
+        // Scale: 1 unit ≈ 0.625 μm. Cells ~8 unit radius.
+        // Rocks: mm-scale → thousands of units → world-boundary terrain.
+        // Reeds/cattails: cm-scale → massively bigger than world → towering columns.
+        // Biofilm: few μm → cell-scale patches.
+        // Scene: microscopic view at pond bottom, on/between rock surfaces.
+        // 2-3 massive rocks forming the ground/walls (world-boundary scale)
+        for (int i = 0; i < 3; ++i) {
+            float angle = (float)i / 3.0f * 6.2831853f + randf(0.0f, 1.0f);
+            float dist = wr * randf(0.40f, 0.70f);
+            glm::vec3 pos(std::cos(angle) * dist,
+                          -wr * 0.50f + randf(-wr * 0.05f, wr * 0.05f),
+                          std::sin(angle) * dist);
+            // Rocks are mm-scale → radius ≈ world_radius or larger
+            add_structure(BIO_ENV_STRUCTURE_POND_ROCK, pos, wr * randf(0.70f, 0.95f),
+                          normalized_or(up_axis * 0.5f + rand_dir() * 0.5f, up_axis),
                           randf(0.75f, 0.98f), glm::vec3(0.28f, 0.24f, 0.18f),
                           0.72f, randf(0.0f, 1.0f), 0.84f);
         }
-        // Rooted macrophytes (reeds/cattails) rising from substrate
-        for (int i = 0; i < 5; ++i) {
+        // 2-3 massive reed stems — towering pillars (cm-scale, far bigger than world)
+        for (int i = 0; i < 3; ++i) {
             glm::vec3 pos(randf(-wr * 0.55f, wr * 0.55f),
-                          -wr * 0.38f + randf(-wr * 0.02f, wr * 0.01f),
+                          0.0f,
                           randf(-wr * 0.55f, wr * 0.55f));
-            add_structure(BIO_ENV_STRUCTURE_POND_REED, pos, randf(wr * 0.14f, wr * 0.22f),
-                          normalized_or(up_axis * 0.94f + rand_dir() * 0.12f, up_axis),
+            // Reed stem is cm-scale → fills a large portion of scene as a column
+            add_structure(BIO_ENV_STRUCTURE_POND_REED, pos, wr * randf(0.70f, 0.95f),
+                          normalized_or(up_axis * 0.96f + rand_dir() * 0.08f, up_axis),
                           randf(0.72f, 0.95f), glm::vec3(0.22f, 0.34f, 0.12f),
                           0.65f, randf(0.0f, 1.0f), 0.72f);
         }
-        // Organic detritus membranes (decomposing leaf litter, biofilms)
+        // Organic detritus / biofilm membranes (μm-scale, appropriate size)
         for (int i = 0; i < 10; ++i) {
             glm::vec3 pos(randf(-wr * 0.60f, wr * 0.60f),
                           randf(-wr * 0.42f, wr * 0.12f),
                           randf(-wr * 0.60f, wr * 0.60f));
-            add_feature(BIO_ENV_FEATURE_MEMBRANE, pos, randf(wr * 0.06f, wr * 0.12f), rand_dir(),
+            add_feature(BIO_ENV_FEATURE_MEMBRANE, pos, randf(wr * 0.10f, wr * 0.20f), rand_dir(),
                         randf(0.45f, 0.72f), glm::vec3(0.18f, 0.28f, 0.18f), 0.65f, randf(0.0f, 1.0f));
         }
-        // Dissolved nutrient plumes (from decay, photosynthesis)
+        // Dissolved nutrient plumes
         for (int i = 0; i < 7; ++i) {
             glm::vec3 pos(randf(-wr * 0.65f, wr * 0.65f),
                           randf(-wr * 0.25f, wr * 0.30f),
                           randf(-wr * 0.65f, wr * 0.65f));
-            add_feature(BIO_ENV_FEATURE_NUTRIENT, pos, randf(wr * 0.08f, wr * 0.14f),
+            add_feature(BIO_ENV_FEATURE_NUTRIENT, pos, randf(wr * 0.12f, wr * 0.22f),
                         rand_dir(), randf(0.55f, 0.90f), glm::vec3(0.22f, 0.50f, 0.24f),
                         0.45f, randf(0.0f, 1.0f));
         }
-        // Toxin zones (anaerobic pockets near substrate, H2S, ammonia)
+        // Toxin zones (anaerobic pockets near substrate)
         for (int i = 0; i < 5; ++i) {
             glm::vec3 pos(randf(-wr * 0.70f, wr * 0.70f),
                           randf(-wr * 0.50f, -wr * 0.10f),
                           randf(-wr * 0.70f, wr * 0.70f));
-            add_feature(BIO_ENV_FEATURE_TOXIN, pos, randf(wr * 0.08f, wr * 0.14f),
+            add_feature(BIO_ENV_FEATURE_TOXIN, pos, randf(wr * 0.12f, wr * 0.20f),
                         rand_dir(), randf(0.55f, 0.95f), glm::vec3(0.36f, 0.18f, 0.26f),
                         0.55f, randf(0.0f, 1.0f));
         }
         // Slow convective currents (thermal stratification)
         for (int i = 0; i < 4; ++i) {
             add_feature(BIO_ENV_FEATURE_CURRENT, sample_local_offset(rng, wr * 0.50f),
-                        randf(wr * 0.14f, wr * 0.22f), normalized_or(flow_axis + rand_dir() * 0.7f, flow_axis),
+                        randf(wr * 0.20f, wr * 0.30f), normalized_or(flow_axis + rand_dir() * 0.7f, flow_axis),
                         randf(0.40f, 0.75f), glm::vec3(0.16f, 0.32f, 0.30f), 0.30f, randf(0.0f, 1.0f));
         }
         break;
 
     case BIO_ENV_PETRI_DISH: {
-        // Standard 90mm Petri dish. At this scale bacteria (~1 μm) are radius ~5-8 units,
-        // so the dish rim (~90mm / 1μm = 90,000×) is effectively the world boundary.
-        // Agar gel fills the bottom ~3mm of the dish.
-        float ring_r = wr * 0.62f;
-        // Glass dish rim — large torus encircling the world
-        add_structure(BIO_ENV_STRUCTURE_PETRI_RIM, glm::vec3(0.0f), ring_r,
+        // Scale: 1 unit ≈ 0.625 μm. Bacteria ~1 μm → radius ~1-2 units.
+        // Petri dish: 90mm diameter → 72,000 units radius → effectively infinite.
+        // Agar: 3mm thick → 4800 units → massive floor plane.
+        // Agar pores: 0.1-2.7 μm → 0.2-4 units → sub-cell scale.
+        // Scene: tiny patch of agar surface with bacteria colonies.
+        // The "rim" is the world boundary itself — impossibly far away at this scale.
+        // Glass dish rim — world-boundary scale (bacteria can never reach the edge)
+        add_structure(BIO_ENV_STRUCTURE_PETRI_RIM, glm::vec3(0.0f), wr * 0.92f,
                       up_axis, 0.92f, glm::vec3(0.48f, 0.46f, 0.38f),
                       0.90f, randf(0.0f, 1.0f), 0.86f);
-        // Agar gel substrate — flat layer covering the bottom
-        // One large central agar pad + smaller streak regions
-        add_structure(BIO_ENV_STRUCTURE_PETRI_AGAR, glm::vec3(0.0f, -wr * 0.10f, 0.0f),
-                      wr * 0.50f, up_axis, 0.95f, glm::vec3(0.56f, 0.52f, 0.28f),
+        // Agar gel — massive flat floor filling entire bottom half of world
+        // The agar is effectively an infinite plane at bacterial scale
+        add_structure(BIO_ENV_STRUCTURE_PETRI_AGAR, glm::vec3(0.0f, -wr * 0.30f, 0.0f),
+                      wr * 0.92f, up_axis, 0.95f, glm::vec3(0.56f, 0.52f, 0.28f),
                       0.38f, randf(0.0f, 1.0f), 0.58f);
-        // Streak plate inoculation zones (where bacteria were plated)
+        // Streak plate inoculation zones (nutrient-rich lines on agar surface)
         for (int i = 0; i < 3; ++i) {
             float a = (float)i / 3.0f * 6.2831853f + randf(0.0f, 0.5f);
-            glm::vec3 pos(std::cos(a) * wr * 0.22f, -wr * 0.06f, std::sin(a) * wr * 0.22f);
-            add_structure(BIO_ENV_STRUCTURE_PETRI_AGAR, pos, randf(wr * 0.10f, wr * 0.14f),
+            glm::vec3 pos(std::cos(a) * wr * 0.30f, -wr * 0.22f, std::sin(a) * wr * 0.30f);
+            add_structure(BIO_ENV_STRUCTURE_PETRI_AGAR, pos, randf(wr * 0.30f, wr * 0.45f),
                           up_axis, randf(0.78f, 1.02f), glm::vec3(0.54f, 0.52f, 0.26f),
                           0.42f, randf(0.0f, 1.0f), 0.62f);
         }
-        // Condensation/boundary membrane effects around rim
-        for (int i = 0; i < 12; ++i) {
-            float a = (float)i / 12.0f * 6.2831853f;
-            glm::vec3 ring_pos(std::cos(a) * ring_r, randf(-wr * 0.04f, wr * 0.04f), std::sin(a) * ring_r);
-            add_feature(BIO_ENV_FEATURE_MEMBRANE, ring_pos, randf(wr * 0.06f, wr * 0.10f),
+        // Condensation membrane around edges
+        for (int i = 0; i < 8; ++i) {
+            float a = (float)i / 8.0f * 6.2831853f;
+            float edge_r = wr * 0.80f;
+            glm::vec3 ring_pos(std::cos(a) * edge_r, randf(-wr * 0.06f, wr * 0.06f), std::sin(a) * edge_r);
+            add_feature(BIO_ENV_FEATURE_MEMBRANE, ring_pos, randf(wr * 0.12f, wr * 0.20f),
                         glm::vec3(-std::sin(a), 0.0f, std::cos(a)), randf(0.65f, 0.88f),
                         glm::vec3(0.34f, 0.34f, 0.18f), 0.75f, randf(0.0f, 1.0f));
         }
-        // Nutrient-rich agar zones (LB broth, blood agar, etc.)
+        // Nutrient-rich agar zones
         for (int i = 0; i < 6; ++i) {
-            glm::vec3 pos = sample_local_offset(rng, wr * 0.28f);
-            pos.y = pos.y * 0.15f - wr * 0.02f;
-            add_feature(BIO_ENV_FEATURE_NUTRIENT, pos, randf(wr * 0.08f, wr * 0.14f),
+            glm::vec3 pos = sample_local_offset(rng, wr * 0.45f);
+            pos.y = pos.y * 0.15f - wr * 0.15f;
+            add_feature(BIO_ENV_FEATURE_NUTRIENT, pos, randf(wr * 0.14f, wr * 0.22f),
                         up_axis, randf(0.80f, 1.15f), glm::vec3(0.34f, 0.54f, 0.24f),
                         0.30f, randf(0.0f, 1.0f));
         }
-        // Minimal currents (still medium, only diffusion-driven)
+        // Minimal currents (still medium, diffusion-driven)
         for (int i = 0; i < 2; ++i) {
-            add_feature(BIO_ENV_FEATURE_CURRENT, sample_local_offset(rng, wr * 0.24f),
-                        randf(wr * 0.10f, wr * 0.16f), rand_dir(),
+            add_feature(BIO_ENV_FEATURE_CURRENT, sample_local_offset(rng, wr * 0.30f),
+                        randf(wr * 0.16f, wr * 0.24f), rand_dir(),
                         randf(0.15f, 0.35f), glm::vec3(0.26f, 0.30f, 0.18f), 0.25f, randf(0.0f, 1.0f));
         }
         break;
     }
 
     case BIO_ENV_CAT_BRAIN:
-        // Cat cerebral cortex: neurons ~20 μm, astrocytes ~10 μm, capillaries ~5-10 μm.
-        // Cortex has gyri (ridges) and sulci (grooves), ~2-3mm thick grey matter.
-        // At scale: gyri are wr*0.14-0.18, capillaries wr*0.10-0.14.
-        // Bilateral cortical folds forming the scene boundary
+        // Scale: 1 unit ≈ 0.625 μm. Neurons ~20 μm (radius ~16 units).
+        // Cortical gyri: 2-3mm thick → 3200-4800 units → far beyond world (terrain walls).
+        // Capillaries: 5-8 μm diameter → radius 4-6 units (CELL-SCALE, not terrain).
+        // Axons: ~1 μm diameter → ~1.6 unit radius (tiny fibers).
+        // Scene: microscopic view within cortical grey matter.
+        // Massive cortical fold walls forming the scene boundary (gyri/sulci)
+        // These are enormous tissue walls — entities live in the crevices between them
         for (int side = -1; side <= 1; side += 2) {
-            // 5 gyri per hemisphere (cat cortex has prominent gyri)
-            for (int fold = 0; fold < 5; ++fold) {
-                float t = -0.36f + fold * 0.18f;
-                glm::vec3 pos = cross_axis * (float)side * (wr * 0.20f + randf(0.0f, wr * 0.04f)) +
+            // 2-3 massive gyri per side forming canyon walls
+            for (int fold = 0; fold < 3; ++fold) {
+                float t = -0.30f + fold * 0.30f;
+                glm::vec3 pos = cross_axis * (float)side * (wr * 0.60f + randf(0.0f, wr * 0.10f)) +
                                 flow_axis * (wr * t) +
-                                up_axis * randf(-wr * 0.02f, wr * 0.16f);
-                add_structure(BIO_ENV_STRUCTURE_BRAIN_FOLD, pos, randf(wr * 0.14f, wr * 0.18f),
+                                up_axis * randf(-wr * 0.05f, wr * 0.10f);
+                // Gyri are mm-scale → massive walls (radius ≈ 0.6-0.9 × world_radius)
+                add_structure(BIO_ENV_STRUCTURE_BRAIN_FOLD, pos, wr * randf(0.55f, 0.80f),
                               normalized_or(up_axis * 0.70f + flow_axis * 0.24f + cross_axis * (float)side * 0.22f, up_axis),
                               randf(0.86f, 1.06f), glm::vec3(0.36f, 0.30f, 0.42f),
                               0.58f, randf(0.0f, 1.0f), 0.74f);
             }
         }
-        // Cerebral arterioles and capillary network
-        for (int i = 0; i < 6; ++i) {
-            glm::vec3 pos = flow_axis * randf(-wr * 0.28f, wr * 0.28f) +
-                            up_axis * randf(-wr * 0.04f, wr * 0.20f) +
-                            cross_axis * randf(-wr * 0.18f, wr * 0.18f);
-            add_structure(BIO_ENV_STRUCTURE_BRAIN_VESSEL, pos, randf(wr * 0.10f, wr * 0.14f),
+        // Cerebral capillaries — CELL-SCALE (5-8 μm = radius 4-6 units)
+        // These are the same size as neurons, threading between cells
+        for (int i = 0; i < 8; ++i) {
+            glm::vec3 pos = flow_axis * randf(-wr * 0.50f, wr * 0.50f) +
+                            up_axis * randf(-wr * 0.20f, wr * 0.30f) +
+                            cross_axis * randf(-wr * 0.35f, wr * 0.35f);
+            // Capillary radius 4-8 units (cell-scale!) — NOT terrain-scale
+            add_structure(BIO_ENV_STRUCTURE_BRAIN_VESSEL, pos, randf(5.0f, 10.0f),
                           normalized_or(flow_axis * 0.60f + up_axis * 0.45f + rand_dir() * 0.12f, flow_axis),
                           randf(0.72f, 0.94f), glm::vec3(0.58f, 0.18f, 0.18f),
                           0.48f, randf(0.0f, 1.0f), 0.74f);
         }
-        // Neuropil membranes (dense synaptic regions between neurons)
+        // Neuropil membranes (dense synaptic regions)
         for (int side = -1; side <= 1; side += 2) {
             for (int lobe = 0; lobe < 6; ++lobe) {
                 float u = lobe / 5.0f;
-                glm::vec3 pos = cross_axis * (side * (wr * 0.14f + randf(0.0f, wr * 0.08f)))
-                    + flow_axis * randf(-wr * 0.24f, wr * 0.24f)
-                    + up_axis * (-wr * 0.06f + u * wr * 0.28f)
-                    + sample_local_offset(rng, wr * 0.03f);
-                add_feature(BIO_ENV_FEATURE_MEMBRANE, pos, randf(wr * 0.08f, wr * 0.13f),
+                glm::vec3 pos = cross_axis * (side * (wr * 0.20f + randf(0.0f, wr * 0.15f)))
+                    + flow_axis * randf(-wr * 0.40f, wr * 0.40f)
+                    + up_axis * (-wr * 0.10f + u * wr * 0.40f)
+                    + sample_local_offset(rng, wr * 0.05f);
+                add_feature(BIO_ENV_FEATURE_MEMBRANE, pos, randf(wr * 0.12f, wr * 0.22f),
                             up_axis + cross_axis * (float)side * 0.4f, randf(0.75f, 1.00f),
                             glm::vec3(0.28f, 0.26f, 0.38f), 0.55f, randf(0.0f, 1.0f));
             }
         }
-        // Glucose/oxygen-rich nutrient zones (high metabolic demand tissue)
+        // Glucose/oxygen-rich nutrient zones
         for (int i = 0; i < 8; ++i) {
-            glm::vec3 pos = flow_axis * randf(-wr * 0.24f, wr * 0.24f)
-                + up_axis * randf(-wr * 0.08f, wr * 0.28f)
-                + cross_axis * randf(-wr * 0.18f, wr * 0.18f);
-            add_feature(BIO_ENV_FEATURE_NUTRIENT, pos, randf(wr * 0.06f, wr * 0.10f),
+            glm::vec3 pos = flow_axis * randf(-wr * 0.40f, wr * 0.40f)
+                + up_axis * randf(-wr * 0.12f, wr * 0.35f)
+                + cross_axis * randf(-wr * 0.30f, wr * 0.30f);
+            add_feature(BIO_ENV_FEATURE_NUTRIENT, pos, randf(wr * 0.10f, wr * 0.16f),
                         flow_axis + up_axis * 0.3f, randf(0.58f, 0.82f),
                         glm::vec3(0.30f, 0.22f, 0.18f), 0.35f, randf(0.0f, 1.0f));
         }
-        // Cerebrospinal fluid currents (slow perfusion)
+        // Cerebrospinal fluid currents
         for (int i = 0; i < 4; ++i) {
-            add_feature(BIO_ENV_FEATURE_CURRENT, sample_local_offset(rng, wr * 0.32f),
-                        randf(wr * 0.12f, wr * 0.18f), normalized_or(up_axis + rand_dir() * 0.35f, up_axis),
+            add_feature(BIO_ENV_FEATURE_CURRENT, sample_local_offset(rng, wr * 0.40f),
+                        randf(wr * 0.18f, wr * 0.28f), normalized_or(up_axis + rand_dir() * 0.35f, up_axis),
                         randf(0.38f, 0.68f), glm::vec3(0.26f, 0.28f, 0.40f), 0.28f, randf(0.0f, 1.0f));
         }
-        // Toxin zones (metabolic waste, β-amyloid accumulation)
+        // Toxin zones (metabolic waste)
         for (int i = 0; i < 2; ++i) {
-            add_feature(BIO_ENV_FEATURE_TOXIN, sample_local_offset(rng, wr * 0.16f),
-                        randf(wr * 0.05f, wr * 0.09f), rand_dir(), randf(0.15f, 0.35f),
+            add_feature(BIO_ENV_FEATURE_TOXIN, sample_local_offset(rng, wr * 0.20f),
+                        randf(wr * 0.08f, wr * 0.14f), rand_dir(), randf(0.15f, 0.35f),
                         glm::vec3(0.34f, 0.18f, 0.22f), 0.55f, randf(0.0f, 1.0f));
+        }
+        break;
+
+    case BIO_ENV_GUT:
+        // Scale: 1 unit ≈ 0.625 μm. Villus: ~0.5-1.6mm tall → 800-2560 units (terrain-scale).
+        // Crypt: ~0.3-0.5mm deep → 480-800 units. Epithelial cells: ~20 μm → radius ~16 units.
+        // Scene: microscopic view in the intestinal lumen between villi.
+        // Intestinal villi — massive finger-like projections forming terrain walls
+        for (int i = 0; i < 5; ++i) {
+            float angle = (float)i / 5.0f * 6.2831853f + randf(0.0f, 0.6f);
+            float dist = wr * randf(0.40f, 0.70f);
+            glm::vec3 pos(std::cos(angle) * dist,
+                          -wr * 0.15f + randf(-wr * 0.10f, wr * 0.10f),
+                          std::sin(angle) * dist);
+            add_structure(BIO_ENV_STRUCTURE_GUT_VILLUS, pos, wr * randf(0.55f, 0.80f),
+                          normalized_or(up_axis * 0.92f + rand_dir() * 0.12f, up_axis),
+                          randf(0.85f, 1.05f), preset.tint * 0.80f + glm::vec3(0.30f, 0.18f, 0.14f),
+                          0.50f, randf(0.0f, 1.0f), 0.72f);
+        }
+        // Crypts of Lieberkuhn — invaginations between villi bases
+        for (int i = 0; i < 3; ++i) {
+            float angle = (float)i / 3.0f * 6.2831853f + randf(0.3f, 0.9f);
+            float dist = wr * randf(0.25f, 0.45f);
+            glm::vec3 pos(std::cos(angle) * dist,
+                          -wr * 0.45f + randf(-wr * 0.05f, wr * 0.05f),
+                          std::sin(angle) * dist);
+            add_structure(BIO_ENV_STRUCTURE_GUT_CRYPT, pos, wr * randf(0.30f, 0.45f),
+                          normalized_or(up_axis * 0.95f + rand_dir() * 0.08f, up_axis),
+                          randf(0.78f, 0.95f), preset.tint * 0.65f + glm::vec3(0.22f, 0.14f, 0.10f),
+                          0.45f, randf(0.0f, 1.0f), 0.65f);
+        }
+        // Mucus layer membranes (protective glycocalyx covering epithelium)
+        for (int i = 0; i < 8; ++i) {
+            glm::vec3 pos = sample_local_offset(rng, wr * 0.55f);
+            pos.y = pos.y * 0.5f - wr * 0.10f;
+            add_feature(BIO_ENV_FEATURE_MEMBRANE, pos, randf(wr * 0.14f, wr * 0.24f),
+                        rand_dir(), randf(0.60f, 0.90f),
+                        glm::vec3(0.28f, 0.22f, 0.16f), 0.55f, randf(0.0f, 1.0f));
+        }
+        // Dense nutrient zones (chyme — digested food particles)
+        for (int i = 0; i < 7; ++i) {
+            glm::vec3 pos = sample_local_offset(rng, wr * 0.50f);
+            pos.y = std::abs(pos.y) * 0.6f; // nutrients concentrate in lumen
+            add_feature(BIO_ENV_FEATURE_NUTRIENT, pos, randf(wr * 0.12f, wr * 0.20f),
+                        rand_dir(), randf(0.70f, 1.10f),
+                        glm::vec3(0.38f, 0.32f, 0.16f), 0.40f, randf(0.0f, 1.0f));
+        }
+        // Bile acid toxin zones
+        for (int i = 0; i < 4; ++i) {
+            add_feature(BIO_ENV_FEATURE_TOXIN, sample_local_offset(rng, wr * 0.45f),
+                        randf(wr * 0.10f, wr * 0.16f), rand_dir(),
+                        randf(0.40f, 0.70f), glm::vec3(0.40f, 0.30f, 0.12f), 0.50f, randf(0.0f, 1.0f));
+        }
+        // Peristaltic currents (slow rhythmic push along gut axis)
+        for (int i = 0; i < 4; ++i) {
+            float t = -0.30f + 0.20f * (float)i;
+            add_feature(BIO_ENV_FEATURE_CURRENT,
+                        flow_axis * (wr * t) + sample_local_offset(rng, wr * 0.08f),
+                        randf(wr * 0.18f, wr * 0.28f), flow_axis + rand_dir() * 0.15f,
+                        randf(0.50f, 0.80f), glm::vec3(0.24f, 0.20f, 0.14f), 0.30f, randf(0.0f, 1.0f));
+        }
+        break;
+
+    case BIO_ENV_BLOOD:
+        // Scale: 1 unit ≈ 0.625 μm. RBC: ~8 μm diameter → radius ~6 units.
+        // Arteriole: 10-100 μm diameter → radius 8-80 units (cell-to-terrain scale).
+        // Scene: inside a small arteriole/capillary, blood flowing through.
+        // Vessel wall — curved endothelial tube forming the scene boundary
+        {
+            add_structure(BIO_ENV_STRUCTURE_BLOOD_WALL, glm::vec3(0.0f), wr * 0.88f,
+                          flow_axis,
+                          1.0f, glm::vec3(0.40f, 0.14f, 0.14f),
+                          0.55f, randf(0.0f, 1.0f), 0.80f);
+        }
+        // Venous valve leaflets (if present in this section)
+        for (int i = 0; i < 2; ++i) {
+            float offset = (i == 0) ? 0.35f : -0.25f;
+            glm::vec3 pos = flow_axis * (wr * offset);
+            add_structure(BIO_ENV_STRUCTURE_BLOOD_VALVE, pos, wr * randf(0.20f, 0.35f),
+                          normalized_or(cross_axis * ((i == 0) ? 1.0f : -1.0f) + flow_axis * 0.3f, cross_axis),
+                          randf(0.80f, 1.00f), glm::vec3(0.52f, 0.20f, 0.20f),
+                          0.40f, randf(0.0f, 1.0f), 0.70f);
+        }
+        // Endothelial membranes (glycocalyx lining)
+        for (int i = 0; i < 6; ++i) {
+            float angle = (float)i / 6.0f * 6.2831853f;
+            float edge_r = wr * 0.72f;
+            glm::vec3 pos = cross_axis * std::cos(angle) * edge_r +
+                            up_axis * std::sin(angle) * edge_r +
+                            flow_axis * randf(-wr * 0.35f, wr * 0.35f);
+            add_feature(BIO_ENV_FEATURE_MEMBRANE, pos, randf(wr * 0.12f, wr * 0.20f),
+                        normalized_or(pos, up_axis), randf(0.70f, 0.95f),
+                        glm::vec3(0.36f, 0.14f, 0.14f), 0.60f, randf(0.0f, 1.0f));
+        }
+        // Oxygen/glucose nutrient zones (dissolved in plasma)
+        for (int i = 0; i < 6; ++i) {
+            add_feature(BIO_ENV_FEATURE_NUTRIENT, sample_local_offset(rng, wr * 0.50f),
+                        randf(wr * 0.14f, wr * 0.22f), flow_axis,
+                        randf(0.60f, 0.90f), glm::vec3(0.50f, 0.20f, 0.20f), 0.35f, randf(0.0f, 1.0f));
+        }
+        // Strong laminar flow currents (blood flow along vessel axis)
+        for (int i = 0; i < 6; ++i) {
+            float t = -0.40f + 0.16f * (float)i;
+            add_feature(BIO_ENV_FEATURE_CURRENT,
+                        flow_axis * (wr * t) + sample_local_offset(rng, wr * 0.06f),
+                        randf(wr * 0.16f, wr * 0.24f), flow_axis,
+                        randf(0.80f, 1.20f), glm::vec3(0.42f, 0.12f, 0.12f), 0.25f, randf(0.0f, 1.0f));
+        }
+        break;
+
+    case BIO_ENV_SOIL:
+        // Scale: 1 unit ≈ 0.625 μm. Bacteria ~1 μm → radius ~1-2 units.
+        // Sand grains: 0.05-2mm → 80-3200 units → terrain-scale boulders.
+        // Root hairs: ~10 μm diameter → radius ~8 units (cell-scale).
+        // Scene: microscopic view in soil pore spaces between mineral grains.
+        // Massive mineral grains forming ground/walls
+        for (int i = 0; i < 4; ++i) {
+            float angle = (float)i / 4.0f * 6.2831853f + randf(0.0f, 0.8f);
+            float dist = wr * randf(0.35f, 0.65f);
+            glm::vec3 pos(std::cos(angle) * dist,
+                          -wr * 0.30f + randf(-wr * 0.15f, wr * 0.15f),
+                          std::sin(angle) * dist);
+            add_structure(BIO_ENV_STRUCTURE_SOIL_GRAIN, pos, wr * randf(0.55f, 0.85f),
+                          normalized_or(up_axis * 0.6f + rand_dir() * 0.5f, up_axis),
+                          randf(0.80f, 1.00f), glm::vec3(0.32f, 0.26f, 0.18f),
+                          0.65f, randf(0.0f, 1.0f), 0.80f);
+        }
+        // Plant root structures threading through soil
+        for (int i = 0; i < 2; ++i) {
+            glm::vec3 pos(randf(-wr * 0.40f, wr * 0.40f),
+                          randf(-wr * 0.10f, wr * 0.30f),
+                          randf(-wr * 0.40f, wr * 0.40f));
+            add_structure(BIO_ENV_STRUCTURE_SOIL_ROOT, pos, wr * randf(0.45f, 0.70f),
+                          normalized_or(up_axis * 0.85f + rand_dir() * 0.20f, up_axis),
+                          randf(0.75f, 0.95f), glm::vec3(0.24f, 0.30f, 0.14f),
+                          0.55f, randf(0.0f, 1.0f), 0.70f);
+        }
+        // Organic matter membranes (decomposing leaf litter, humus)
+        for (int i = 0; i < 8; ++i) {
+            glm::vec3 pos = sample_local_offset(rng, wr * 0.55f);
+            add_feature(BIO_ENV_FEATURE_MEMBRANE, pos, randf(wr * 0.10f, wr * 0.18f),
+                        rand_dir(), randf(0.50f, 0.80f),
+                        glm::vec3(0.20f, 0.18f, 0.10f), 0.60f, randf(0.0f, 1.0f));
+        }
+        // Nutrient zones (root exudates, decomposing organics)
+        for (int i = 0; i < 6; ++i) {
+            glm::vec3 pos = sample_local_offset(rng, wr * 0.50f);
+            add_feature(BIO_ENV_FEATURE_NUTRIENT, pos, randf(wr * 0.10f, wr * 0.18f),
+                        rand_dir(), randf(0.50f, 0.85f),
+                        glm::vec3(0.22f, 0.28f, 0.12f), 0.40f, randf(0.0f, 1.0f));
+        }
+        // Heavy metal toxin pockets
+        for (int i = 0; i < 3; ++i) {
+            add_feature(BIO_ENV_FEATURE_TOXIN, sample_local_offset(rng, wr * 0.40f),
+                        randf(wr * 0.08f, wr * 0.14f), rand_dir(),
+                        randf(0.35f, 0.65f), glm::vec3(0.30f, 0.22f, 0.16f), 0.55f, randf(0.0f, 1.0f));
+        }
+        // Very slow percolation currents
+        for (int i = 0; i < 2; ++i) {
+            add_feature(BIO_ENV_FEATURE_CURRENT, sample_local_offset(rng, wr * 0.35f),
+                        randf(wr * 0.14f, wr * 0.22f), normalized_or(up_axis * -0.8f + rand_dir() * 0.3f, up_axis),
+                        randf(0.15f, 0.35f), glm::vec3(0.18f, 0.16f, 0.10f), 0.25f, randf(0.0f, 1.0f));
+        }
+        break;
+
+    case BIO_ENV_WOUND:
+        // Scale: 1 unit ≈ 0.625 μm. Neutrophils ~12 μm → radius ~10 units.
+        // Fibrin strands: 50-100 nm thick but μm-long → cell-scale mesh.
+        // Wound edge: mm-scale → terrain wall.
+        // Scene: microscopic view at wound bed, tissue edge visible as terrain.
+        // Wound edge tissue — massive ragged wall on one side
+        for (int i = 0; i < 3; ++i) {
+            float angle = (float)i / 3.0f * 3.14159f - 0.5f; // half-circle arrangement
+            float dist = wr * randf(0.50f, 0.70f);
+            glm::vec3 pos(std::cos(angle) * dist,
+                          randf(-wr * 0.10f, wr * 0.10f),
+                          std::sin(angle) * dist);
+            add_structure(BIO_ENV_STRUCTURE_WOUND_TISSUE, pos, wr * randf(0.50f, 0.75f),
+                          normalized_or(glm::vec3(-std::cos(angle), 0.2f, -std::sin(angle)), up_axis),
+                          randf(0.85f, 1.05f), glm::vec3(0.38f, 0.16f, 0.14f),
+                          0.55f, randf(0.0f, 1.0f), 0.76f);
+        }
+        // Fibrin mesh — criss-crossing strands forming clot scaffold
+        for (int i = 0; i < 4; ++i) {
+            glm::vec3 pos = sample_local_offset(rng, wr * 0.40f);
+            pos.y = pos.y * 0.5f; // concentrate near wound surface
+            add_structure(BIO_ENV_STRUCTURE_WOUND_FIBRIN, pos, wr * randf(0.25f, 0.45f),
+                          rand_dir(),
+                          randf(0.70f, 0.92f), glm::vec3(0.60f, 0.52f, 0.38f),
+                          0.35f, randf(0.0f, 1.0f), 0.55f);
+        }
+        // Inflammatory membranes (edema fluid boundaries)
+        for (int i = 0; i < 6; ++i) {
+            glm::vec3 pos = sample_local_offset(rng, wr * 0.50f);
+            add_feature(BIO_ENV_FEATURE_MEMBRANE, pos, randf(wr * 0.12f, wr * 0.20f),
+                        rand_dir(), randf(0.65f, 0.90f),
+                        glm::vec3(0.32f, 0.14f, 0.12f), 0.50f, randf(0.0f, 1.0f));
+        }
+        // Serum nutrient zones (leaked plasma proteins, glucose)
+        for (int i = 0; i < 5; ++i) {
+            add_feature(BIO_ENV_FEATURE_NUTRIENT, sample_local_offset(rng, wr * 0.45f),
+                        randf(wr * 0.12f, wr * 0.18f), rand_dir(),
+                        randf(0.65f, 0.95f), glm::vec3(0.40f, 0.22f, 0.18f), 0.35f, randf(0.0f, 1.0f));
+        }
+        // Toxin zones (ROS, inflammatory cytokines, bacterial toxins)
+        for (int i = 0; i < 5; ++i) {
+            add_feature(BIO_ENV_FEATURE_TOXIN, sample_local_offset(rng, wr * 0.40f),
+                        randf(wr * 0.10f, wr * 0.16f), rand_dir(),
+                        randf(0.50f, 0.85f), glm::vec3(0.44f, 0.18f, 0.24f), 0.45f, randf(0.0f, 1.0f));
+        }
+        // Mild edema currents (fluid seepage from damaged capillaries)
+        for (int i = 0; i < 3; ++i) {
+            add_feature(BIO_ENV_FEATURE_CURRENT, sample_local_offset(rng, wr * 0.35f),
+                        randf(wr * 0.14f, wr * 0.22f),
+                        normalized_or(up_axis * -0.5f + rand_dir() * 0.6f, up_axis),
+                        randf(0.25f, 0.50f), glm::vec3(0.30f, 0.14f, 0.12f), 0.30f, randf(0.0f, 1.0f));
         }
         break;
     }
@@ -1981,6 +2554,11 @@ void BiochemApp::spawn_at(glm::vec3 pos) {
     randomize_entity_genes(e, rng);
     initialize_entity_lifecycle(e, rng);
     configure_entity_shape(e, rng);
+    // Push out of structures
+    {
+        auto colliders = build_colliders(environment_);
+        e.pos = push_out_of_structures(colliders, e.pos, e.radius);
+    }
     assign_entity_identity(e);
 
     state.entities.push_back(e);
@@ -2067,10 +2645,15 @@ void BiochemApp::spawn_nutrient() {
     if (pos_len > cfg.world_radius && pos_len > 0.0f)
         spawn_pos *= cfg.world_radius / pos_len;
     e.pos = spawn_pos;
-    e.vel = axis * (cfg.flow_strength * 0.12f) +
-            glm::vec3(randf_range(-2.0f, 2.0f), randf_range(-2.0f, 2.0f), randf_range(-2.0f, 2.0f));
     e.radius = type_default_radius(BIO_NUTRIENT);
     e.type   = BIO_NUTRIENT;
+    // Push out of structures
+    {
+        auto colliders = build_colliders(environment_);
+        e.pos = push_out_of_structures(colliders, e.pos, e.radius);
+    }
+    e.vel = axis * (cfg.flow_strength * 0.12f) +
+            glm::vec3(randf_range(-2.0f, 2.0f), randf_range(-2.0f, 2.0f), randf_range(-2.0f, 2.0f));
     e.genome = rand_u32();
     std::mt19937 rng(e.genome ^ 0xA341316Cu);
     randomize_entity_genes(e, rng);
@@ -2236,6 +2819,16 @@ bool BiochemApp::spawn_autospawn_entity() {
     e.energy = std::max(1.0f, spawn_energy_) * randf(0.90f, 1.10f);
     initialize_entity_lifecycle(e, rng);
     configure_entity_shape(e, rng);
+    // Push out of structures
+    {
+        auto colliders = build_colliders(environment_);
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            if (!position_inside_any_structure(colliders, e.pos, e.radius))
+                break;
+            e.pos = clamp_world(sample_local_offset(rng, cfg.world_radius * 0.60f));
+        }
+        e.pos = push_out_of_structures(colliders, e.pos, e.radius);
+    }
     assign_entity_identity(e);
     state.entities.push_back(e);
     return true;
@@ -2326,7 +2919,7 @@ void BiochemApp::step_simulation(float dt) {
             e.vel *= 0.8f;
         }
 
-        // Metabolism + starvation + organelle aging
+        // Metabolism + ATP + starvation + organelle aging
         if (e.type == BIO_CELL || e.type == BIO_BACTERIUM ||
             e.type == BIO_WHITE_BLOOD || e.type == BIO_RED_BLOOD ||
             e.type == BIO_ANTIBODY || e.type == BIO_JANITOR) {
@@ -2362,6 +2955,16 @@ void BiochemApp::step_simulation(float dt) {
             if (reserve_gain > 0.0f || energy_gain > 0.0f)
                 feed_entity(e, reserve_gain, energy_gain);
 
+            // ATP production from nutrient reserve (glycolysis + oxidative phosphorylation)
+            // Aerobic: ~36 ATP/glucose; anaerobic: ~2 ATP/glucose
+            float atp_efficiency = (e.type == BIO_BACTERIUM)
+                ? (0.60f + cfg.oxygen_level * 0.40f)   // bacteria: partial anaerobic
+                : (0.25f + cfg.oxygen_level * 0.75f);   // eukaryotes: strongly O2-dependent
+            atp_efficiency *= e.genes.metabolism_efficiency;
+            float atp_production = e.nutrient_reserve * atp_efficiency * scaled_dt * 12.0f;
+            float atp_max = (e.type == BIO_CELL) ? 100.0f : (e.type == BIO_BACTERIUM ? 60.0f : 80.0f);
+            e.atp = std::min(atp_max, e.atp + atp_production);
+
             float reserve_drain = base_metabolism * scaled_dt * 0.055f;
             e.nutrient_reserve = std::max(0.0f, e.nutrient_reserve - reserve_drain);
 
@@ -2384,13 +2987,22 @@ void BiochemApp::step_simulation(float dt) {
                 ? (0.18f + (0.12f - telomere_frac) * 3.2f) : 0.0f;
             senescence += division_wear * 0.30f;
             float defense_drag = 1.08f - std::clamp(e.genes.defense, 0.35f, 2.50f) * 0.10f;
-            e.energy -= base_metabolism * scaled_dt *
+
+            // ATP consumption drives energy drain — low ATP accelerates metabolic failure
+            float atp_factor = std::clamp(e.atp / atp_max, 0.0f, 1.0f);
+            float metabolic_drain = base_metabolism * scaled_dt *
                         (1.0f + stress + e.starvation * 1.45f + senescence + infection_burden * 0.28f) *
                         std::clamp(defense_drag, 0.72f, 1.08f);
+            e.energy -= metabolic_drain;
+            e.atp -= metabolic_drain * 2.5f; // ATP consumed proportional to metabolic demand
+            e.atp = std::max(0.0f, e.atp);
+
+            // Low ATP accelerates organelle damage
+            float atp_stress = (atp_factor < 0.25f) ? (0.25f - atp_factor) * 1.2f : 0.0f;
 
             float target_health = 0.20f + std::clamp(e.nutrient_reserve, 0.0f, 1.0f) * 0.42f;
             target_health += std::clamp(telomere_frac, 0.0f, 1.0f) * 0.33f;
-            target_health -= e.starvation * 0.34f + senescence * 0.22f + division_wear * 0.24f;
+            target_health -= e.starvation * 0.34f + senescence * 0.22f + division_wear * 0.24f + atp_stress * 0.18f;
             target_health = std::clamp(target_health, 0.0f, 1.0f);
             e.organelle_health += (target_health - e.organelle_health) * std::min(1.0f, scaled_dt * 1.8f);
 
@@ -2399,7 +3011,9 @@ void BiochemApp::step_simulation(float dt) {
                     e.energy = 0.0f;
                     continue;
                 }
-                std::string reason = (e.starvation > 0.65f || e.nutrient_reserve <= 0.01f)
+                std::string reason = (e.atp <= 1.0f)
+                    ? "suffered ATP depletion and collapsed into a dead husk"
+                    : (e.starvation > 0.65f || e.nutrient_reserve <= 0.01f)
                     ? "starved and collapsed into a dead husk"
                     : "metabolically failed and collapsed into a dead husk";
                 mark_entity_corpse(e, BIO_EVENT_LIFECYCLE, reason);
@@ -2421,6 +3035,9 @@ void BiochemApp::step_simulation(float dt) {
             e.alive = false;
     }
 
+    // Position-modifying subsystems first, then single spatial index rebuild
+    process_repulsion();
+    process_structure_collision();
     rebuild_spatial_index();
 
     // AI steering behaviors
@@ -2455,16 +3072,16 @@ void BiochemApp::step_simulation(float dt) {
         }
     }
 
-    // Subsystems
+    // Subsystems (spatial index already current)
     process_bacteria_antibiotics(scaled_dt);
     process_gene_exchange(scaled_dt);
-    process_repulsion();
-    rebuild_spatial_index();
     process_cell_division(scaled_dt);
     process_virus_infection(scaled_dt);
     process_bacterial_colonization(scaled_dt);
-    if (cfg.immune_system)
+    if (cfg.immune_system) {
+        process_complement_cascade(scaled_dt);
         process_antibody_response(scaled_dt);
+    }
     process_phagocyte_cleanup(scaled_dt);
 
     // Remove dead entities periodically
@@ -2503,6 +3120,10 @@ void BiochemApp::process_cell_division(float dt) {
             continue;
         if (type_uses_telomeres(e.type) && e.telomere_state <= 0.08f)
             continue;
+        // Division requires sufficient ATP (energy currency)
+        float atp_min_for_division = (e.type == BIO_BACTERIUM) ? 20.0f : 35.0f;
+        if (e.atp < atp_min_for_division)
+            continue;
         float threshold = division_threshold_for(cfg, e);
         float previous_mitosis = e.mitosis_progress;
         bool uses_mitosis = (e.type == BIO_CELL || e.type == BIO_WHITE_BLOOD);
@@ -2510,11 +3131,14 @@ void BiochemApp::process_cell_division(float dt) {
         bool uses_staged_division = uses_mitosis || uses_binary_fission;
 
         if (uses_staged_division) {
-            float duration_base = 3.6f;
+            // Realistic-ish timescales (still compressed ~100x for gameplay):
+            // Real: cell cycle ~20h, bacteria ~30min, WBC ~36h
+            // Sim: cell ~18s, bacteria ~8s, WBC ~22s
+            float duration_base = 18.0f;
             if (e.type == BIO_WHITE_BLOOD)
-                duration_base = 4.9f;
+                duration_base = 22.0f;
             else if (e.type == BIO_BACTERIUM)
-                duration_base = 2.45f;
+                duration_base = 8.0f;
             float division_duration = duration_base /
                 std::clamp(e.genes.energy * e.genes.mitotic_clock * e.genes.metabolism_efficiency, 0.55f, 2.40f);
             bool cycle_ready = (e.division_cooldown <= 0.0f);
@@ -2574,6 +3198,7 @@ void BiochemApp::process_cell_division(float dt) {
         child.mitosis_progress = 0.0f;
         e.mitosis_progress = 0.0f;
         initialize_entity_lifecycle(child, mutation_rng);
+        child.immune_subtype = e.immune_subtype; // WBC: inherit T/B/neutrophil subtype
         child.species_key = e.species_key;
         if (type_uses_telomeres(e.type)) {
             float attrition = 1.0f / telomere_division_capacity(e);
@@ -2632,14 +3257,40 @@ void BiochemApp::process_bacteria_antibiotics(float dt) {
     std::vector<int> damage_source(n, -1);
     std::vector<int> nearby;
 
+    // Quorum sensing: compute local same-species density for each bacterium
+    // Autoinducer molecules accumulate when kin density exceeds quorum threshold
     for (size_t i = 0; i < n; ++i) {
-        const auto& producer = ents[i];
-        if (!producer.alive || producer.type != BIO_BACTERIUM)
+        auto& bact = ents[i];
+        if (!bact.alive || bact.type != BIO_BACTERIUM)
             continue;
 
+        float qs_range = 45.0f + bact.genes.sensing * 15.0f;
+        int kin_count = 0;
+        int rival_count = 0;
+        query_spatial_neighbors(bact.pos, qs_range, nearby);
+        for (int j : nearby) {
+            if (j == static_cast<int>(i) || !ents[j].alive) continue;
+            if (ents[j].type != BIO_BACTERIUM) continue;
+            float overlap = antibiotic_spectrum_overlap(bact, ents[j]);
+            if (overlap > 0.5f) kin_count++;
+            else rival_count++;
+        }
+        // Autoinducer signal: rises with kin density, falls without neighbors
+        float kin_density = static_cast<float>(kin_count) / std::max(1.0f, qs_range * 0.1f);
+        float signal_target = std::clamp(kin_density / std::max(0.1f, bact.genes.quorum_threshold * 3.0f), 0.0f, 1.0f);
+        bact.quorum_signal += (signal_target - bact.quorum_signal) * std::min(1.0f, dt * 2.0f);
+
+        // Quorum-activated behaviors:
+        // 1. Upregulated antibiotic production when quorum is met and rivals are near
+        float quorum_boost = (bact.quorum_signal > bact.genes.quorum_threshold && rival_count > 0)
+            ? (1.0f + bact.quorum_signal * 0.8f) : 1.0f;
+        // 2. Reduced metabolism (biofilm-like metabolic slowdown at high quorum)
+        if (bact.quorum_signal > 0.7f)
+            bact.atp += dt * bact.quorum_signal * 1.5f; // biofilm protection conserves ATP
+
         float local_pressure = 0.0f;
-        float range = antibiotic_range(producer);
-        query_spatial_neighbors(producer.pos, range, nearby);
+        float range = antibiotic_range(bact);
+        query_spatial_neighbors(bact.pos, range, nearby);
         for (int j_idx : nearby) {
             if (static_cast<int>(i) == j_idx)
                 continue;
@@ -2647,13 +3298,13 @@ void BiochemApp::process_bacteria_antibiotics(float dt) {
             if (!target.alive || target.type != BIO_BACTERIUM)
                 continue;
 
-            float dist = glm::length(target.pos - producer.pos);
+            float dist = glm::length(target.pos - bact.pos);
             if (dist > range)
                 continue;
 
-            float overlap = antibiotic_spectrum_overlap(producer, target);
+            float overlap = antibiotic_spectrum_overlap(bact, target);
             float genomic_mismatch = std::min(1.0f,
-                static_cast<float>(__builtin_popcount(static_cast<unsigned int>(producer.genome ^ target.genome))) / 10.0f);
+                static_cast<float>(__builtin_popcount(static_cast<unsigned int>(bact.genome ^ target.genome))) / 10.0f);
             float hostility = std::clamp((1.0f - overlap) * (0.25f + genomic_mismatch * 0.75f), 0.0f, 1.0f);
             if (hostility <= 0.04f)
                 continue;
@@ -2662,9 +3313,13 @@ void BiochemApp::process_bacteria_antibiotics(float dt) {
             float pressure = hostility * falloff;
             local_pressure = std::max(local_pressure, pressure);
 
-            float potency = (1.8f + producer.genes.antibiotic_yield * 3.8f +
-                             producer.genes.antibiotic_diversity * 1.8f) * pressure * dt;
-            potency *= 0.75f + producer.genes.sensing * 0.20f;
+            float potency = (1.8f + bact.genes.antibiotic_yield * 3.8f +
+                             bact.genes.antibiotic_diversity * 1.8f) * pressure * dt;
+            potency *= 0.75f + bact.genes.sensing * 0.20f;
+            potency *= quorum_boost; // quorum-upregulated potency
+            // Antibiotic resistance: target's resistance gene reduces incoming damage
+            float resistance_factor = std::max(0.15f, 1.0f - target.genes.resistance * 0.35f);
+            potency *= resistance_factor;
             potency /= std::max(0.35f, defense_gene_scale(target));
             damage_accum[j_idx] += potency;
             if (potency > strongest_hit[j_idx]) {
@@ -2673,7 +3328,7 @@ void BiochemApp::process_bacteria_antibiotics(float dt) {
             }
         }
 
-        film_targets[i] = antibiotic_film_target(producer, local_pressure);
+        film_targets[i] = antibiotic_film_target(bact, local_pressure);
     }
 
     for (size_t i = 0; i < n; ++i) {
@@ -2689,6 +3344,14 @@ void BiochemApp::process_bacteria_antibiotics(float dt) {
 
         if (damage_accum[i] <= 0.0f)
             continue;
+
+        // Adaptive resistance: surviving antibiotic exposure slightly increases resistance
+        if (bacterium.energy > 10.0f && damage_accum[i] > 0.5f) {
+            bacterium.resistance_level = std::min(1.0f, bacterium.resistance_level + damage_accum[i] * 0.003f * dt);
+            // Epigenetic resistance boost feeds into effective resistance
+            bacterium.genes.resistance = std::min(2.50f,
+                bacterium.genes.resistance + bacterium.resistance_level * 0.001f * dt);
+        }
 
         bacterium.energy -= damage_accum[i];
         bacterium.starvation = std::min(1.6f, bacterium.starvation + damage_accum[i] * 0.015f);
@@ -2827,10 +3490,12 @@ void BiochemApp::process_virus_infection(float dt) {
         float host_mutation_pressure = mutation_pressure_for(cfg, environment_, host);
         glm::vec3 burst_origin = host.pos;
         glm::vec3 burst_velocity = host.vel;
+        // Real burst sizes: adenovirus ~100, influenza ~1000, T4 phage ~200
+        // Capped for sim performance but biologically more accurate
         int burst_count = std::clamp(
-            static_cast<int>(std::round(infection.load * (0.88f + source_genes.energy * 0.10f) +
-                                        (source_morphology == BIO_VIRUS_BACTERIOPHAGE_T4 ? 1.0f : 0.0f))),
-            6, 22);
+            static_cast<int>(std::round(infection.load * (6.0f + source_genes.energy * 2.5f) +
+                                        (source_morphology == BIO_VIRUS_BACTERIOPHAGE_T4 ? 30.0f : 0.0f))),
+            30, 120);
 
         mark_entity_corpse(host, BIO_EVENT_INFECTION, "was lysed into a dead husk");
 
@@ -3123,6 +3788,55 @@ void BiochemApp::process_bacterial_colonization(float dt) {
     }
 }
 
+// ── Complement Cascade ─────────────────────────────────────────────────────
+// Innate immune system: complement proteins opsonize (tag) pathogens, making
+// them easier for WBC/phagocytes to find and destroy. Also causes direct
+// membrane attack on bacteria (MAC — membrane attack complex).
+
+void BiochemApp::process_complement_cascade(float dt) {
+    auto& ents = state.entities;
+    float effective_immune = cfg.immune_strength * (0.45f + cfg.immune_pressure);
+    std::vector<int> nearby;
+
+    for (auto& e : ents) {
+        if (!e.alive) continue;
+        bool is_pathogen = (e.type == BIO_VIRUS) ||
+                           (e.type == BIO_BACTERIUM && e.antibiotic_film < 0.3f);
+        bool is_infected = (e.type == BIO_CELL || e.type == BIO_BACTERIUM) && entity_has_active_infection(e);
+
+        if (is_pathogen || is_infected) {
+            // Complement activation — tag increases based on immune pressure and pathogen exposure
+            // Classical pathway: antibodies near pathogen trigger faster complement activation
+            float antibody_boost = 0.0f;
+            query_spatial_neighbors(e.pos, 40.0f, nearby);
+            for (int j : nearby) {
+                if (ents[j].alive && ents[j].type == BIO_ANTIBODY)
+                    antibody_boost += 0.15f;
+            }
+            float activation_rate = (0.02f + effective_immune * 0.03f + antibody_boost) * dt;
+            // Lectin pathway: bacteria with certain surface markers activate faster
+            if (e.type == BIO_BACTERIUM) activation_rate *= 1.3f;
+            e.complement_tag = std::min(1.0f, e.complement_tag + activation_rate);
+
+            // Membrane Attack Complex (MAC) — direct bacterial damage at high complement
+            if (e.type == BIO_BACTERIUM && e.complement_tag > 0.7f) {
+                float mac_damage = (e.complement_tag - 0.7f) * effective_immune * 2.5f * dt;
+                // Resistance gene partially blocks MAC pore formation
+                mac_damage *= std::max(0.2f, 1.0f - e.genes.resistance * 0.25f);
+                e.energy -= mac_damage;
+                e.organelle_health = std::max(0.0f, e.organelle_health - mac_damage * 0.008f);
+                if (e.energy <= 0.0f && e.alive) {
+                    mark_entity_corpse(e, BIO_EVENT_IMMUNE,
+                        "was lysed by complement membrane attack complex (MAC)");
+                }
+            }
+        } else {
+            // Non-pathogen: complement tag decays
+            e.complement_tag = std::max(0.0f, e.complement_tag - dt * 0.08f);
+        }
+    }
+}
+
 // ── Antibody / Immune Response ──────────────────────────────────────────────
 
 void BiochemApp::process_antibody_response(float dt) {
@@ -3138,6 +3852,13 @@ void BiochemApp::process_antibody_response(float dt) {
         if (e.type == BIO_BACTERIUM) bacteria_count++;
         if ((e.type == BIO_CELL || e.type == BIO_BACTERIUM) && entity_has_active_infection(e)) infected_host_count++;
         if (e.type == BIO_WHITE_BLOOD) wbc_count++;
+    }
+
+    size_t t_cell_count = 0, b_cell_count = 0;
+    for (auto& e : ents) {
+        if (!e.alive || e.type != BIO_WHITE_BLOOD) continue;
+        if (e.immune_subtype == BIO_IMMUNE_T_CELL) t_cell_count++;
+        else if (e.immune_subtype == BIO_IMMUNE_B_CELL) b_cell_count++;
     }
 
     size_t immune_threat_count = virus_count + bacteria_count / 2 + infected_host_count;
@@ -3156,18 +3877,38 @@ void BiochemApp::process_antibody_response(float dt) {
         initialize_entity_lifecycle(wbc, wrng);
         assign_entity_identity(wbc);
         configure_entity_shape(wbc, wrng);
+        const char* subtype_name = (wbc.immune_subtype == BIO_IMMUNE_T_CELL) ? "T cell"
+            : (wbc.immune_subtype == BIO_IMMUNE_B_CELL) ? "B cell" : "neutrophil";
         char msg[192];
-        std::snprintf(msg, sizeof(msg), "Immune system deployed %s.", bio_entity_label(wbc).c_str());
+        std::snprintf(msg, sizeof(msg), "Immune system deployed %s (%s).",
+                      bio_entity_label(wbc).c_str(), subtype_name);
         ents.push_back(wbc);
         push_event(BIO_EVENT_IMMUNE, msg);
     }
 
+    // B cells produce antibodies — replaces direct antibody spawning
+    // Antibodies are now spawned near B cells rather than at random positions
+    bool b_cell_antibody_spawned = false;
     if (virus_count > 0 && cfg.immune_pressure > 0.4f && ents.size() < cfg.max_entities &&
         randf_range(0.0f, 1.0f) < std::min(0.45f, cfg.immune_pressure * 0.06f * dt * 60.0f)) {
+        // Find a B cell to produce the antibody from
+        glm::vec3 spawn_pos = {randf_range(-wr * 0.6f, wr * 0.6f),
+                                randf_range(-wr * 0.6f, wr * 0.6f),
+                                randf_range(-wr * 0.6f, wr * 0.6f)};
+        for (auto& e : ents) {
+            if (!e.alive || e.type != BIO_WHITE_BLOOD || e.immune_subtype != BIO_IMMUNE_B_CELL) continue;
+            if (e.energy > 30.0f) {
+                spawn_pos = e.pos + glm::vec3(randf_range(-12.0f, 12.0f),
+                                               randf_range(-12.0f, 12.0f),
+                                               randf_range(-12.0f, 12.0f));
+                e.energy -= 8.0f;  // B cell energy cost for antibody production
+                e.atp -= 5.0f;
+                b_cell_antibody_spawned = true;
+                break;
+            }
+        }
         BioEntity antibody;
-        antibody.pos = {randf_range(-wr * 0.6f, wr * 0.6f),
-                        randf_range(-wr * 0.6f, wr * 0.6f),
-                        randf_range(-wr * 0.6f, wr * 0.6f)};
+        antibody.pos = spawn_pos;
         antibody.vel = {0, 0, 0};
         antibody.type = BIO_ANTIBODY;
         antibody.genome = rand_u32();
@@ -3178,7 +3919,9 @@ void BiochemApp::process_antibody_response(float dt) {
         assign_entity_identity(antibody);
         configure_entity_shape(antibody, arng);
         char msg[192];
-        std::snprintf(msg, sizeof(msg), "Immune system released %s.", bio_entity_label(antibody).c_str());
+        std::snprintf(msg, sizeof(msg), "%s %s.",
+                      b_cell_antibody_spawned ? "B cell produced" : "Immune system released",
+                      bio_entity_label(antibody).c_str());
         ents.push_back(antibody);
         push_event(BIO_EVENT_IMMUNE, msg);
     }
@@ -3191,11 +3934,28 @@ void BiochemApp::process_antibody_response(float dt) {
         query_spatial_neighbors(wbc.pos, 260.0f * sensing_gene_scale(wbc), nearby);
         for (int j : nearby) {
             if (!ents[j].alive) continue;
-            bool is_target = ents[j].type == BIO_VIRUS || ents[j].type == BIO_TOXIN || ents[j].type == BIO_BACTERIUM;
-            if (!is_target && (ents[j].type == BIO_CELL || ents[j].type == BIO_BACTERIUM))
-                is_target = entity_has_active_infection(ents[j]);
+            bool is_target = false;
+            bool is_infected_host = (ents[j].type == BIO_CELL || ents[j].type == BIO_BACTERIUM) &&
+                                     entity_has_active_infection(ents[j]);
+            // T cells preferentially target infected host cells (adaptive immunity)
+            if (wbc.immune_subtype == BIO_IMMUNE_T_CELL) {
+                is_target = is_infected_host;
+                // Also target complement-tagged entities (opsonization)
+                if (!is_target && ents[j].complement_tag > 0.5f &&
+                    (ents[j].type == BIO_VIRUS || ents[j].type == BIO_BACTERIUM))
+                    is_target = true;
+            } else if (wbc.immune_subtype == BIO_IMMUNE_B_CELL) {
+                // B cells are less aggressive, mainly detect and signal
+                is_target = ents[j].type == BIO_VIRUS;
+            } else {
+                // Generic neutrophils: attack anything hostile
+                is_target = ents[j].type == BIO_VIRUS || ents[j].type == BIO_TOXIN || ents[j].type == BIO_BACTERIUM;
+                if (!is_target) is_target = is_infected_host;
+            }
             if (!is_target) continue;
             float d = glm::length(ents[j].pos - wbc.pos);
+            // Complement-tagged targets get priority (smaller effective distance)
+            if (ents[j].complement_tag > 0.3f) d *= (1.0f - ents[j].complement_tag * 0.4f);
             if (d < best_dist) {
                 best_dist = d;
                 best_idx = (int)j;
@@ -3209,6 +3969,8 @@ void BiochemApp::process_antibody_response(float dt) {
                 dir /= dist;
                 float mitosis_slow = 1.0f - 0.65f * wbc.mitosis_progress;
                 float chase_speed = 60.0f * effective_immune * wbc.genes.seek * mitosis_slow;
+                // T cells are faster hunters
+                if (wbc.immune_subtype == BIO_IMMUNE_T_CELL) chase_speed *= 1.20f;
                 wbc.vel += dir * chase_speed * dt;
                 float spd = glm::length(wbc.vel);
                 if (spd > 80.0f) wbc.vel *= 80.0f / spd;
@@ -3219,16 +3981,27 @@ void BiochemApp::process_antibody_response(float dt) {
                 std::string target_label = bio_entity_label(ents[best_idx]);
                 float defense = defense_gene_scale(ents[best_idx]);
                 float clear_chance = std::clamp((0.48f + effective_immune * 0.10f) / defense, 0.18f, 0.98f);
+                // T cells are more effective at clearing infected cells
+                if (wbc.immune_subtype == BIO_IMMUNE_T_CELL && entity_has_active_infection(ents[best_idx]))
+                    clear_chance = std::min(0.98f, clear_chance * 1.35f);
+                // Complement tagging boosts clearance
+                if (ents[best_idx].complement_tag > 0.3f)
+                    clear_chance = std::min(0.98f, clear_chance + ents[best_idx].complement_tag * 0.15f);
                 if (randf_range(0.0f, 1.0f) > clear_chance)
                     continue;
                 if (ents[best_idx].type == BIO_CELL || ents[best_idx].type == BIO_BACTERIUM)
-                    mark_entity_corpse(ents[best_idx], BIO_EVENT_IMMUNE, "was cleared by a white blood cell");
+                    mark_entity_corpse(ents[best_idx], BIO_EVENT_IMMUNE,
+                        wbc.immune_subtype == BIO_IMMUNE_T_CELL
+                            ? "was killed by a cytotoxic T cell"
+                            : "was cleared by a white blood cell");
                 else
                     ents[best_idx].alive = false;
                 wbc.energy += 10.0f;
+                const char* wbc_type = (wbc.immune_subtype == BIO_IMMUNE_T_CELL) ? "T cell"
+                    : (wbc.immune_subtype == BIO_IMMUNE_B_CELL) ? "B cell" : "Neutrophil";
                 char msg[224];
-                std::snprintf(msg, sizeof(msg), "%s neutralized %s.",
-                              bio_entity_label(wbc).c_str(), target_label.c_str());
+                std::snprintf(msg, sizeof(msg), "%s (%s) neutralized %s.",
+                              bio_entity_label(wbc).c_str(), wbc_type, target_label.c_str());
                 push_event(BIO_EVENT_IMMUNE, msg);
             }
         }
@@ -3392,61 +4165,69 @@ void BiochemApp::process_ai_movement(float dt) {
         if (e.type == BIO_CELL || e.type == BIO_BACTERIUM) {
             max_speed = (e.type == BIO_CELL) ? 60.0f : 80.0f;
 
-            // Seek nearest nutrient
+            // Single spatial query covers all behaviors (food, host, threat, spacing)
+            float max_query_radius = std::max({150.0f * sensing, 180.0f * sensing,
+                                                100.0f * sensing, std::max(48.0f, e.radius * 4.0f)});
+            query_spatial_neighbors(e.pos, max_query_radius, nearby);
+
             float best_food_dist = 150.0f * sensing;
             int best_food = -1;
-            query_spatial_neighbors(e.pos, best_food_dist, nearby);
+            float best_host_score = 0.0f;
+            int best_host = -1;
+            float best_threat_dist = 100.0f * sensing;
+            int best_threat = -1;
+            float spacing_radius = std::max(48.0f, e.radius * 4.0f);
+
             for (int j : nearby) {
-                if (!ents[j].alive || ents[j].type != BIO_NUTRIENT) continue;
+                if (!ents[j].alive) continue;
                 float d = glm::length(ents[j].pos - e.pos);
-                if (d < best_food_dist) { best_food_dist = d; best_food = (int)j; }
+
+                // Food check
+                if (ents[j].type == BIO_NUTRIENT && d < best_food_dist) {
+                    best_food_dist = d; best_food = j;
+                }
+                // Threat check
+                if (d < 100.0f * sensing) {
+                    bool is_threat = (ents[j].type == BIO_VIRUS || ents[j].type == BIO_TOXIN);
+                    if (!is_threat && e.type == BIO_CELL && ents[j].type == BIO_BACTERIUM)
+                        is_threat = bacteria_host_tropism(ents[j], e) > 0.85f;
+                    if (is_threat && d < best_threat_dist) {
+                        best_threat_dist = d; best_threat = j;
+                    }
+                }
+                // Host check (bacteria only)
+                if (e.type == BIO_BACTERIUM && ents[j].type == BIO_CELL && d <= 180.0f * sensing && d > 1.0f) {
+                    if (!entity_has_bacterial_infection(ents[j])) {
+                        float tropism = bacteria_host_tropism(e, ents[j]);
+                        if (tropism > 0.0f) {
+                            float score = tropism * (1.0f - d / (180.0f * sensing));
+                            if (score > best_host_score) {
+                                best_host_score = score; best_host = j;
+                            }
+                        }
+                    }
+                }
+                // Spacing check
+                if (d < spacing_radius && static_cast<size_t>(j) != i && ents[j].type == e.type) {
+                    float min_dist = (e.radius + ents[j].radius) * (1.35f + 0.65f * e.genes.spacing);
+                    if (d < min_dist && d > 0.1f)
+                        e.vel += glm::normalize(e.pos - ents[j].pos) * spacing_force * dt;
+                }
             }
+
             if (best_food >= 0) {
                 glm::vec3 dir = ents[best_food].pos - e.pos;
                 float d = glm::length(dir);
                 if (d > 1.0f)
                     e.vel += glm::normalize(dir) * seek_force * dt;
             }
-
-            if (e.type == BIO_BACTERIUM) {
-                float best_host_score = 0.0f;
-                int best_host = -1;
-                query_spatial_neighbors(e.pos, 180.0f * sensing, nearby);
-                for (int j : nearby) {
-                    if (!ents[j].alive || ents[j].type != BIO_CELL) continue;
-                    if (entity_has_bacterial_infection(ents[j])) continue;
-                    float tropism = bacteria_host_tropism(e, ents[j]);
-                    if (tropism <= 0.0f) continue;
-                    float d = glm::length(ents[j].pos - e.pos);
-                    if (d <= 1.0f || d > 180.0f * sensing) continue;
-                    float score = tropism * (1.0f - d / (180.0f * sensing));
-                    if (score > best_host_score) {
-                        best_host_score = score;
-                        best_host = (int)j;
-                    }
+            if (best_host >= 0) {
+                glm::vec3 dir = ents[best_host].pos - e.pos;
+                float d = glm::length(dir);
+                if (d > 1.0f) {
+                    float colonize_bias = 0.14f + (1.0f - std::min(1.0f, e.nutrient_reserve)) * 0.26f;
+                    e.vel += glm::normalize(dir) * seek_force * colonize_bias * dt;
                 }
-                if (best_host >= 0) {
-                    glm::vec3 dir = ents[best_host].pos - e.pos;
-                    float d = glm::length(dir);
-                    if (d > 1.0f) {
-                        float colonize_bias = 0.14f + (1.0f - std::min(1.0f, e.nutrient_reserve)) * 0.26f;
-                        e.vel += glm::normalize(dir) * seek_force * colonize_bias * dt;
-                    }
-                }
-            }
-
-            // Flee nearest virus/toxin
-            float best_threat_dist = 100.0f * sensing;
-            int best_threat = -1;
-            query_spatial_neighbors(e.pos, best_threat_dist, nearby);
-            for (int j : nearby) {
-                if (!ents[j].alive) continue;
-                bool is_threat = (ents[j].type == BIO_VIRUS || ents[j].type == BIO_TOXIN);
-                if (!is_threat && e.type == BIO_CELL && ents[j].type == BIO_BACTERIUM)
-                    is_threat = bacteria_host_tropism(ents[j], e) > 0.85f;
-                if (!is_threat) continue;
-                float d = glm::length(ents[j].pos - e.pos);
-                if (d < best_threat_dist) { best_threat_dist = d; best_threat = (int)j; }
             }
             if (best_threat >= 0) {
                 glm::vec3 away = e.pos - ents[best_threat].pos;
@@ -3454,49 +4235,35 @@ void BiochemApp::process_ai_movement(float dt) {
                 if (d > 1.0f)
                     e.vel += glm::normalize(away) * flee_force * dt;
             }
-
-            // Spacing from same type
-            query_spatial_neighbors(e.pos, std::max(48.0f, e.radius * 4.0f), nearby);
-            for (int j : nearby) {
-                if (static_cast<size_t>(j) == i || !ents[j].alive || ents[j].type != e.type) continue;
-                glm::vec3 diff = e.pos - ents[j].pos;
-                float d = glm::length(diff);
-                float min_dist = (e.radius + ents[j].radius) * (1.35f + 0.65f * e.genes.spacing);
-                if (d < min_dist && d > 0.1f)
-                    e.vel += glm::normalize(diff) * spacing_force * dt;
-            }
         }
         else if (e.type == BIO_VIRUS) {
-            max_speed = 100.0f;
-            // Seek nearest cell
-            float best_dist = 200.0f * sensing;
+            // Viruses are passive particles — they don't actively seek hosts.
+            // Movement is primarily Brownian diffusion with weak drift toward
+            // nearby cells (modeling receptor-mediated adhesion at close range).
+            max_speed = 35.0f;
+            // Brownian diffusion (dominant movement mode for viruses)
+            float rx = randf_range(-1.0f, 1.0f);
+            float ry = randf_range(-1.0f, 1.0f);
+            float rz = randf_range(-1.0f, 1.0f);
+            e.vel += glm::vec3(rx, ry, rz) * brownian_force * 1.2f * dt;
+            // Very weak short-range drift toward nearby host cells
+            // (models receptor binding probability increasing at close proximity)
+            float detect_range = 25.0f * sensing;
             int best = -1;
-            int best_infected = -1;
-            float best_infected_dist = 80.0f * sensing;
-            query_spatial_neighbors(e.pos, best_dist, nearby);
+            float best_dist = detect_range;
+            query_spatial_neighbors(e.pos, detect_range, nearby);
             for (int j : nearby) {
                 if (!ents[j].alive || (ents[j].type != BIO_CELL && ents[j].type != BIO_BACTERIUM)) continue;
                 if (!virus_targets_host(e, ents[j])) continue;
+                if (entity_has_viral_infection(ents[j])) continue;
                 float d = glm::length(ents[j].pos - e.pos);
-                if (entity_has_viral_infection(ents[j])) {
-                    if (d < best_infected_dist) {
-                        best_infected_dist = d;
-                        best_infected = (int)j;
-                    }
-                    continue;
-                }
                 if (d < best_dist) { best_dist = d; best = (int)j; }
             }
             if (best >= 0) {
                 glm::vec3 dir = ents[best].pos - e.pos;
                 float d = glm::length(dir);
                 if (d > 1.0f)
-                    e.vel += glm::normalize(dir) * seek_force * 0.72f * dt;
-            } else if (best_infected >= 0) {
-                glm::vec3 away = e.pos - ents[best_infected].pos;
-                float d = glm::length(away);
-                if (d > 1.0f)
-                    e.vel += glm::normalize(away) * flee_force * 0.40f * dt;
+                    e.vel += glm::normalize(dir) * seek_force * 0.15f * dt;
             }
         }
         else if (e.type == BIO_RED_BLOOD) {
@@ -3576,6 +4343,24 @@ void BiochemApp::process_repulsion() {
                 ents[i].vel -= dir * push * 2.0f;
                 ents[j_idx].vel += dir * push * 2.0f;
             }
+        }
+    }
+}
+
+void BiochemApp::process_structure_collision() {
+    auto& ents = state.entities;
+    auto colliders = build_colliders(environment_);
+    if (colliders.empty()) return;
+
+    for (auto& e : ents) {
+        if (!e.alive && !e.corpse) continue;
+        // Run up to 3 iterations to resolve multi-structure penetration
+        for (int iter = 0; iter < 3; ++iter) {
+            bool any_hit = false;
+            for (const auto& sc : colliders)
+                if (resolve_structure_collision(sc, e.pos, e.vel, e.radius))
+                    any_hit = true;
+            if (!any_hit) break;
         }
     }
 }
@@ -4041,13 +4826,14 @@ void BiochemApp::draw_spawn_menu() {
         ImGui::PopStyleColor(3);
     }
 
-    if (ImGui::CollapsingHeader("Quick Presets")) {
+    if (ImGui::CollapsingHeader("Quick Presets", ImGuiTreeNodeFlags_DefaultOpen)) {
         float wr = cfg.world_radius * 0.5f;
         auto randf = [](float lo, float hi) {
             return randf_range(lo, hi);
         };
 
         if (ImGui::Button("Add Cell Colony (10)", ImVec2(-1, 0))) {
+            auto colliders = build_colliders(environment_);
             for (int i = 0; i < 10; i++) {
                 if (state.entities.size() >= cfg.max_entities)
                     break;
@@ -4064,11 +4850,13 @@ void BiochemApp::draw_spawn_menu() {
                 initialize_entity_lifecycle(e, rng);
                 assign_entity_identity(e);
                 configure_entity_shape(e, rng);
+                e.pos = push_out_of_structures(colliders, e.pos, e.radius);
                 state.entities.push_back(e);
             }
         }
 
         if (ImGui::Button("Virus Outbreak (8)", ImVec2(-1, 0))) {
+            auto colliders = build_colliders(environment_);
             for (int i = 0; i < 8; i++) {
                 if (state.entities.size() >= cfg.max_entities)
                     break;
@@ -4086,6 +4874,7 @@ void BiochemApp::draw_spawn_menu() {
                 initialize_entity_lifecycle(e, rng);
                 assign_entity_identity(e);
                 configure_entity_shape(e, rng);
+                e.pos = push_out_of_structures(colliders, e.pos, e.radius);
                 state.entities.push_back(e);
             }
         }
@@ -4096,6 +4885,7 @@ void BiochemApp::draw_spawn_menu() {
         }
 
         if (ImGui::Button("Immune Response (5 WBC)", ImVec2(-1, 0))) {
+            auto colliders = build_colliders(environment_);
             for (int i = 0; i < 5; i++) {
                 if (state.entities.size() >= cfg.max_entities)
                     break;
@@ -4109,6 +4899,7 @@ void BiochemApp::draw_spawn_menu() {
                 initialize_entity_lifecycle(e, rng);
                 assign_entity_identity(e);
                 configure_entity_shape(e, rng);
+                e.pos = push_out_of_structures(colliders, e.pos, e.radius);
                 state.entities.push_back(e);
             }
         }
@@ -4145,100 +4936,162 @@ void BiochemApp::render_ui() {
 
     // Top bar
     ImGui::SetNextWindowPos({0, 0});
-    ImGui::SetNextWindowSize({io.DisplaySize.x, 36});
+    ImGui::SetNextWindowSize({io.DisplaySize.x, 32});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {8, 6});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.06f, 0.08f, 0.92f));
     ImGui::Begin("##TopBar", nullptr,
         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBringToFrontOnFocus);
-    ImGui::TextColored({0.3f, 0.9f, 0.4f, 1.0f}, "Biochemical Simulator");
-    ImGui::SameLine();
-    ImGui::TextColored({0.35f, 0.75f, 0.85f, 1.0f}, "[%s]", BIO_ENVIRONMENT_NAMES[cfg.environment % BIO_ENV_COUNT]);
-    ImGui::SameLine();
-    ImGui::TextColored({0.5f, 0.5f, 0.6f, 1.0f},
-        "  |  Entities: %zu alive", state.count_alive());
-    ImGui::SameLine();
-    ImGui::TextColored({0.62f, 0.54f, 0.48f, 1.0f}, "  Husks: %zu", state.count_corpses());
-    ImGui::SameLine();
-    ImGui::TextColored({0.45f, 0.60f, 0.70f, 1.0f}, "  Features: %zu", environment_.count());
+    ImGui::TextColored({0.35f, 0.90f, 0.45f, 1.0f}, "Biochem Sim");
+    ImGui::SameLine(0, 6);
+    ImGui::TextColored({0.40f, 0.78f, 0.88f, 1.0f}, "%s", BIO_ENVIRONMENT_NAMES[cfg.environment % BIO_ENV_COUNT]);
+    ImGui::SameLine(0, 12);
+    ImGui::TextColored({0.60f, 0.60f, 0.70f, 1.0f}, "%zu alive", state.count_alive());
+    ImGui::SameLine(0, 8);
+    ImGui::TextColored({0.55f, 0.48f, 0.42f, 1.0f}, "%zu dead", state.count_corpses());
     if (cfg.autospawn_enabled) {
-        ImGui::SameLine();
-        ImGui::TextColored({0.55f, 0.82f, 0.42f, 1.0f}, "  Auto: %s %.2f/s",
-            cfg.autospawn_mode == BIO_AUTOSPAWN_DYNAMIC ? "Dyn" : "Static",
+        ImGui::SameLine(0, 8);
+        ImGui::TextColored({0.55f, 0.82f, 0.42f, 1.0f}, "Auto %.1f/s",
             compute_autospawn_rate(count_alive_matching_spawn_selection()));
     }
-    ImGui::SameLine();
-    if (ImGui::SmallButton(paused ? "Resume" : "Pause"))
+    ImGui::SameLine(0, 12);
+    if (ImGui::SmallButton(paused ? "> Resume" : "|| Pause"))
         paused = !paused;
-    ImGui::SameLine();
-    ImGui::TextColored({0.4f, 0.4f, 0.5f, 1.0f}, "  %.0f FPS", io.Framerate);
-    ImGui::SameLine();
-    ImGui::TextColored({0.3f, 0.3f, 0.4f, 1.0f},
-        "  |  WASD: pan  Click: inspect  Drag: orbit  Scroll: zoom  Middle: spawn  Esc: menu");
+    ImGui::SameLine(0, 8);
+    ImGui::TextColored({0.45f, 0.45f, 0.55f, 1.0f}, "%.0f fps", io.Framerate);
+    // Right-aligned help text
+    float help_width = ImGui::CalcTextSize("WASD:move  Scroll:zoom  Click:inspect  Esc:menu").x;
+    float avail = ImGui::GetContentRegionAvail().x;
+    if (avail > help_width + 20.0f) {
+        ImGui::SameLine(io.DisplaySize.x - help_width - 16.0f);
+        ImGui::TextColored({0.35f, 0.35f, 0.45f, 1.0f}, "WASD:move  Scroll:zoom  Click:inspect  Esc:menu");
+    }
     ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
 
     // Settings panel
     if (settings_visible_) {
     ImGui::SetNextWindowPos({10, 46}, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize({300, 560}, ImGuiCond_FirstUseEver);
-    ImGui::Begin("Biochem Settings");
+    ImGui::SetNextWindowSize({320, 620}, ImGuiCond_FirstUseEver);
+    ImGui::Begin("Settings");
     const BioEnvironmentPreset& env = bio_environment_preset(static_cast<BioEnvironmentType>(cfg.environment));
-    ImGui::Text("Environment");
-    int environment = static_cast<int>(cfg.environment);
-    if (ImGui::Combo("Biome", &environment, BIO_ENVIRONMENT_NAMES, BIO_ENV_COUNT))
-        apply_environment_preset(static_cast<BioEnvironmentType>(environment), false);
-    ImGui::TextWrapped("%s", env.summary);
-    ImGui::Text("Seed: %u", cfg.environment_seed);
-    if (ImGui::Button("Apply Preset + Reseed", ImVec2(-1, 0)))
-        apply_environment_preset(static_cast<BioEnvironmentType>(cfg.environment), true);
-    if (ImGui::Button("Regenerate Environment", ImVec2(-1, 0)))
-        regenerate_environment(true);
-    ImGui::Text("Generated: %zu features", environment_.count());
-    ImGui::Text("Membranes %zu  Nutrients %zu  Toxins %zu  Currents %zu",
-        environment_.count_type(BIO_ENV_FEATURE_MEMBRANE),
-        environment_.count_type(BIO_ENV_FEATURE_NUTRIENT),
-        environment_.count_type(BIO_ENV_FEATURE_TOXIN),
-        environment_.count_type(BIO_ENV_FEATURE_CURRENT));
-    ImGui::Text("Structures %zu", environment_.count_type(BIO_ENV_FEATURE_STRUCTURE));
-    ImGui::Separator();
-    ImGui::Text("Environment Parameters");
-    ImGui::SliderFloat("Temperature C",  &cfg.temperature_c,    4.0f, 42.0f, "%.1f");
-    ImGui::SliderFloat("Acidity pH",     &cfg.acidity_ph,       5.0f, 8.4f, "%.2f");
-    ImGui::SliderFloat("Oxygen Level",   &cfg.oxygen_level,     0.0f, 1.2f, "%.2f");
-    ImGui::SliderFloat("Nutrient Density", &cfg.nutrient_density, 0.2f, 2.0f, "%.2f");
-    ImGui::SliderFloat("Flow Strength",  &cfg.flow_strength,    0.0f, 40.0f, "%.1f");
-    ImGui::SliderFloat("Toxicity",       &cfg.toxicity,         0.0f, 0.5f, "%.2f");
-    ImGui::SliderFloat("Immune Pressure", &cfg.immune_pressure, 0.0f, 2.0f, "%.2f");
-    ImGui::SliderFloat("Fluid Damping",  &cfg.fluid_damping,    0.92f, 0.995f, "%.3f");
-    ImGui::SliderFloat("Nutrient Rate",   &cfg.nutrient_rate,   0.1f, 10.0f);
-    ImGui::SliderFloat("Metabolism",       &cfg.metabolism_rate,  0.1f, 5.0f);
-    ImGui::SliderFloat("Division Energy",  &cfg.division_energy,  50.0f, 300.0f);
-    ImGui::SliderFloat("Mutation Rate",    &cfg.mutation_rate,    0.0f, 0.1f, "%.3f");
-    ImGui::SliderFloat("Infection Radius", &cfg.infection_radius, 5.0f, 50.0f);
-    ImGui::SliderFloat("Infection Rate",   &cfg.infection_rate,   0.1f, 2.0f);
-    ImGui::SliderFloat("Immune Strength",  &cfg.immune_strength,  0.1f, 5.0f);
-    ImGui::SliderFloat("Antibiotic Visibility", &cfg.antibiotic_visibility, 0.4f, 3.0f, "%.2f");
-    int max_entities = static_cast<int>(cfg.max_entities);
-    if (ImGui::SliderInt("Max Entities", &max_entities, 500, 20000))
-        cfg.max_entities = static_cast<uint32_t>(std::max(500, max_entities));
-    ImGui::SliderFloat("Viscosity",        &cfg.viscosity,        0.90f, 1.0f, "%.3f");
-    ImGui::SliderFloat("Time Scale",       &cfg.dt_scale,         0.1f, 5.0f);
-    ImGui::Checkbox("Immune System",       &cfg.immune_system);
-    ImGui::Checkbox("Energy Bars",         &cfg.show_energy_bars);
-    ImGui::Separator();
-    ImGui::Text("AI Movement");
-    ImGui::Checkbox("Enable AI", &cfg.ai_movement);
-    if (cfg.ai_movement) {
-        ImGui::SliderFloat("Seek",     &cfg.seek_strength,     0.0f, 100.0f);
-        ImGui::SliderFloat("Flee",     &cfg.flee_strength,     0.0f, 100.0f);
-        ImGui::SliderFloat("Spacing",  &cfg.spacing_strength,  0.0f, 50.0f);
-        ImGui::SliderFloat("Brownian", &cfg.brownian_strength, 0.0f, 50.0f);
+
+    // Helper for tooltips on hover
+    auto tooltip = [](const char* text) {
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+            ImGui::BeginTooltip();
+            ImGui::PushTextWrapPos(280.0f);
+            ImGui::TextUnformatted(text);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+    };
+
+    // ── Environment Selection ──
+    if (ImGui::CollapsingHeader("Environment", ImGuiTreeNodeFlags_DefaultOpen)) {
+        int environment = static_cast<int>(cfg.environment);
+        if (ImGui::Combo("##Biome", &environment, BIO_ENVIRONMENT_NAMES, BIO_ENV_COUNT))
+            apply_environment_preset(static_cast<BioEnvironmentType>(environment), false);
+        tooltip("Select the biological environment to simulate");
+        ImGui::TextWrapped("%s", env.summary);
+        ImGui::TextColored({0.5f, 0.5f, 0.6f, 1.0f}, "Seed: %u", cfg.environment_seed);
+        if (ImGui::Button("Apply Preset + Reseed", ImVec2(-1, 0)))
+            apply_environment_preset(static_cast<BioEnvironmentType>(cfg.environment), true);
+        tooltip("Reset all parameters to preset defaults and regenerate population");
+        if (ImGui::Button("Regenerate Terrain", ImVec2(-1, 0)))
+            regenerate_environment(true);
+        tooltip("Rebuild structures and features with a new random seed");
+        ImGui::TextColored({0.45f, 0.60f, 0.70f, 1.0f},
+            "Features: %zu  (M:%zu N:%zu T:%zu C:%zu S:%zu)",
+            environment_.count(),
+            environment_.count_type(BIO_ENV_FEATURE_MEMBRANE),
+            environment_.count_type(BIO_ENV_FEATURE_NUTRIENT),
+            environment_.count_type(BIO_ENV_FEATURE_TOXIN),
+            environment_.count_type(BIO_ENV_FEATURE_CURRENT),
+            environment_.count_type(BIO_ENV_FEATURE_STRUCTURE));
     }
-    ImGui::Separator();
-    ImGui::Text("World");
-    ImGui::SliderFloat("World Radius",     &cfg.world_radius,     50.0f, 500.0f);
-    ImGui::SliderFloat("Ambient",          &cfg.ambient_strength,  0.0f, 0.5f);
-    if (ImGui::Button("Reset Camera")) {
-        reset_camera_pose();
+
+    // ── Environmental Conditions ──
+    if (ImGui::CollapsingHeader("Conditions")) {
+        ImGui::SliderFloat("Temperature", &cfg.temperature_c, 4.0f, 42.0f, "%.1f C");
+        tooltip("Environmental temperature in Celsius. Affects metabolic rates and organism viability.");
+        ImGui::SliderFloat("pH", &cfg.acidity_ph, 5.0f, 8.4f, "%.2f");
+        tooltip("Acidity/alkalinity. 7.0 = neutral, <7 = acidic, >7 = alkaline.");
+        ImGui::SliderFloat("Oxygen", &cfg.oxygen_level, 0.0f, 1.2f, "%.2f");
+        tooltip("Dissolved oxygen level. 0 = anaerobic, 1.0 = fully oxygenated.");
+        ImGui::SliderFloat("Nutrients", &cfg.nutrient_density, 0.2f, 2.0f, "%.2f");
+        tooltip("Background nutrient concentration in the environment.");
+        ImGui::SliderFloat("Toxicity", &cfg.toxicity, 0.0f, 0.5f, "%.2f");
+        tooltip("Level of harmful chemicals or metabolic waste products.");
+        ImGui::SliderFloat("Flow", &cfg.flow_strength, 0.0f, 80.0f, "%.1f");
+        tooltip("Fluid flow strength (airflow, blood flow, currents).");
+        ImGui::SliderFloat("Immune Pressure", &cfg.immune_pressure, 0.0f, 3.0f, "%.2f");
+        tooltip("Strength of immune system activity against pathogens.");
+        ImGui::SliderFloat("Damping", &cfg.fluid_damping, 0.92f, 0.995f, "%.3f");
+        tooltip("Fluid viscosity damping. Lower = thicker fluid, slower movement.");
     }
+
+    // ── Biology Settings ──
+    if (ImGui::CollapsingHeader("Biology")) {
+        ImGui::SliderFloat("Nutrient Rate", &cfg.nutrient_rate, 0.1f, 10.0f, "%.1f/s");
+        tooltip("Rate at which new nutrient particles spawn per second.");
+        ImGui::SliderFloat("Metabolism", &cfg.metabolism_rate, 0.1f, 5.0f, "%.2f");
+        tooltip("Global metabolic rate multiplier. Higher = faster energy consumption.");
+        ImGui::SliderFloat("Division Energy", &cfg.division_energy, 50.0f, 300.0f, "%.0f");
+        tooltip("Minimum energy a cell needs before it can divide.");
+        ImGui::SliderFloat("Mutation Rate", &cfg.mutation_rate, 0.0f, 0.1f, "%.3f");
+        tooltip("Probability of genetic mutation per cell division event.");
+        ImGui::Separator();
+        ImGui::SliderFloat("Infection Radius", &cfg.infection_radius, 5.0f, 50.0f, "%.1f");
+        tooltip("Maximum distance at which a virus can infect a host cell.");
+        ImGui::SliderFloat("Infection Rate", &cfg.infection_rate, 0.1f, 2.0f, "%.2f");
+        tooltip("Probability multiplier for successful infection per contact.");
+        ImGui::SliderFloat("Immune Strength", &cfg.immune_strength, 0.1f, 5.0f, "%.2f");
+        tooltip("Effectiveness of antibodies and white blood cells.");
+        ImGui::SliderFloat("Antibiotic Vis.", &cfg.antibiotic_visibility, 0.4f, 3.0f, "%.2f");
+        tooltip("Visual size of antibiotic secretion halos around bacteria.");
+        ImGui::Separator();
+        ImGui::Checkbox("Immune System", &cfg.immune_system);
+        tooltip("Enable/disable immune cell spawning and antibody production.");
+        ImGui::Checkbox("Energy Bars", &cfg.show_energy_bars);
+        tooltip("Show health/energy bars above entities.");
+    }
+
+    // ── AI & Movement ──
+    if (ImGui::CollapsingHeader("Movement")) {
+        ImGui::Checkbox("Enable AI", &cfg.ai_movement);
+        tooltip("Toggle intelligent organism movement (chemotaxis, flee, seek).");
+        if (cfg.ai_movement) {
+            ImGui::SliderFloat("Seek", &cfg.seek_strength, 0.0f, 100.0f, "%.0f");
+            tooltip("Strength of nutrient-seeking behavior.");
+            ImGui::SliderFloat("Flee", &cfg.flee_strength, 0.0f, 100.0f, "%.0f");
+            tooltip("Strength of threat-avoidance behavior.");
+            ImGui::SliderFloat("Spacing", &cfg.spacing_strength, 0.0f, 50.0f, "%.0f");
+            tooltip("Repulsion force between same-type organisms.");
+            ImGui::SliderFloat("Brownian", &cfg.brownian_strength, 0.0f, 50.0f, "%.0f");
+            tooltip("Random thermal motion intensity.");
+        }
+    }
+
+    // ── Simulation ──
+    if (ImGui::CollapsingHeader("Simulation")) {
+        int max_entities = static_cast<int>(cfg.max_entities);
+        if (ImGui::SliderInt("Max Entities", &max_entities, 500, 20000))
+            cfg.max_entities = static_cast<uint32_t>(std::max(500, max_entities));
+        tooltip("Maximum number of entities allowed in the simulation.");
+        ImGui::SliderFloat("Viscosity", &cfg.viscosity, 0.90f, 1.0f, "%.3f");
+        tooltip("Global velocity damping. 1.0 = no damping, lower = more friction.");
+        ImGui::SliderFloat("Time Scale", &cfg.dt_scale, 0.1f, 5.0f, "%.1fx");
+        tooltip("Simulation speed multiplier. 1.0 = real-time.");
+        ImGui::SliderFloat("World Radius", &cfg.world_radius, 50.0f, 500.0f, "%.0f");
+        tooltip("Size of the simulation volume. Entities wrap at the boundary.");
+        ImGui::SliderFloat("Ambient Light", &cfg.ambient_strength, 0.0f, 0.5f, "%.2f");
+        tooltip("Minimum lighting level for all surfaces.");
+        if (ImGui::Button("Reset Camera", ImVec2(-1, 0)))
+            reset_camera_pose();
+    }
+
     ImGui::End();
     } // settings_visible_
 
@@ -4527,10 +5380,13 @@ void BiochemApp::render_ui() {
             ImGui::Text("Speed:   %.1f", glm::length(e.vel));
             ImGui::Text("Stress:  %.2f", compute_environment_stress(cfg, environment_, e));
             ImGui::Text("Reserve: %.2f", e.nutrient_reserve);
+            ImGui::Text("ATP:     %.1f", e.atp);
             ImGui::Text("Starve:  %.2f", e.starvation);
             if (type_uses_telomeres(e.type))
                 ImGui::Text("Telomere %.0f%%", telomere_fraction_remaining(e) * 100.0f);
             ImGui::Text("Organs:  %.0f%%", e.organelle_health * 100.0f);
+            if (e.complement_tag > 0.01f)
+                ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "Complement: %.0f%%", e.complement_tag * 100.0f);
             ImGui::Text("Stage:   %s", bio_lifecycle_stage_name(e));
             ImGui::Text("Cycle CD %.1f s", e.division_cooldown);
             ImGui::Text("Divides: %u", e.division_count);
@@ -4549,9 +5405,18 @@ void BiochemApp::render_ui() {
                 if (dominant && dominant->source_id != 0)
                     ImGui::Text("Primary Source: %u", dominant->source_id);
             }
+            if (e.type == BIO_WHITE_BLOOD) {
+                const char* subtype = (e.immune_subtype == BIO_IMMUNE_T_CELL) ? "Cytotoxic T Cell"
+                    : (e.immune_subtype == BIO_IMMUNE_B_CELL) ? "B Cell (antibody producer)"
+                    : "Neutrophil";
+                ImGui::TextColored(ImVec4(0.6f, 0.85f, 1.0f, 1.0f), "Subtype: %s", subtype);
+            }
             if (e.type == BIO_BACTERIUM) {
                 ImGui::Text("Antibiotic Film: %.0f%%", e.antibiotic_film * 100.0f);
                 ImGui::Text("Antibiotic Types: %d", antibiotic_type_count(e));
+                ImGui::Text("Quorum Signal: %.0f%%", e.quorum_signal * 100.0f);
+                if (e.resistance_level > 0.01f)
+                    ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f), "Resistance: %.0f%%", e.resistance_level * 100.0f);
             }
             if (e.corpse)
                 ImGui::Text("Corpse:  %.1f s", e.corpse_age);
@@ -4583,6 +5448,8 @@ void BiochemApp::render_ui() {
                 ImGui::Text("AntiType: %.2f", e.genes.antibiotic_type);
                 ImGui::Text("AntiOut:  %.2f", e.genes.antibiotic_yield);
                 ImGui::Text("AntiMix:  %.2f", e.genes.antibiotic_diversity);
+                ImGui::Text("Resist:   %.2f", e.genes.resistance);
+                ImGui::Text("Quorum:   %.2f", e.genes.quorum_threshold);
             }
             ImGui::Spacing();
             if (!e.corpse) {

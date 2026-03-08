@@ -73,8 +73,10 @@ private:
     void process_gene_exchange(float dt);
     void process_virus_infection(float dt);
     void process_antibody_response(float dt);
+    void process_complement_cascade(float dt);
     void process_phagocyte_cleanup(float dt);
     void process_repulsion();
+    void process_structure_collision();
     void process_ai_movement(float dt);
 
     float nutrient_timer_ = 0.0f;
