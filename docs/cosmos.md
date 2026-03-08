@@ -157,7 +157,7 @@ Pairwise gravitational interaction with configurable gravitational constant scal
 | Forest-Ruth | Fourth-order symplectic |
 | PEFRL | Position-Extended Forest-Ruth-Like, fourth-order |
 
-Adaptive substepping available with configurable tolerance (position error), safety factor, and max substep count (up to 32).
+Adaptive substepping available with configurable tolerance (position error), safety factor, and max substep count (up to 512). Orbital-period-aware substep refinement ensures at least 32 integration steps per shortest orbital period, using precomputed orbital elements with a Kepler estimate fallback for bodies without computed periods.
 
 ### General Relativity Corrections
 Optional GR effects:
@@ -201,8 +201,10 @@ Rings are composed of non-attracting dust particles (minimum 8) with configurabl
 ### Evaporation & Mass Loss
 Bodies lose mass through stellar wind, atmospheric erosion, and evaporation. Atmosphere retention tracks cumulative erosion &mdash; stripped atmospheres reduce clouds, weather, and surface features. Escaped mass, energy, and momentum are tracked globally.
 
+Stellar evolution fuel burn and wind mass loss are rate-capped per step to prevent catastrophic star death at extreme time scales. Wind mass loss is capped at 0.005% of stellar mass per step, and fuel burn at 0.05% per step, ensuring stable planetary systems even at time scales of 1 Myr/s and beyond.
+
 ### Stellar Wind Pressure
-Luminous stars exert radiation/wind pressure on nearby bodies, with configurable strength scaling.
+Luminous stars exert radiation/wind pressure on nearby bodies, with configurable strength scaling. Wind and Yarkovsky forces use a physical beta-ratio check (radiation pressure / gravitational acceleration) and are only applied when the ratio exceeds 0.1%, preventing spurious velocity kicks on planets at high time scales.
 
 ### Tidal Locking
 Bodies orbiting close to a massive primary experience tidal torque and evolve toward synchronous rotation. Configurable locking rate.
@@ -246,6 +248,62 @@ Logarithmic timescale spanning 30 orders of magnitude:
 - Adaptive timestepping available &mdash; dynamically limits dt for stability with configurable safety factor, min/max bounds
 - Reverse time support for rewinding simulations
 - Physics substeps per rendered frame (configurable)
+
+## Preset Scenarios
+
+25 built-in scenarios covering a range of astrophysical systems:
+
+| # | Name | Description |
+|---|---|---|
+| 0 | Solar System | Sun with 4 planets, a moon, and an asteroid belt |
+| 1 | Binary Stars | Two stars in mutual orbit with circumbinary planets |
+| 2 | TRAPPIST-1 | Red dwarf with 7 tightly packed rocky/water worlds |
+| 3 | Hot Jupiter | Gas giant dangerously close to its star |
+| 4 | Giant Impact | Earth and Theia moments before the Moon-forming collision |
+| 5 | Stellar Graveyard | Neutron star, white dwarf, and stellar black hole |
+| 6 | Protoplanetary Disk | Young star surrounded by a disk of dust and forming planets |
+| 7 | Ringed Worlds | Gas giants and rocky planets with spectacular ring systems |
+| 8 | Star Cluster | A dozen diverse stars in a loose open cluster |
+| 9 | Comet Shower | Inner solar system under bombardment from Oort cloud comets |
+| 10 | Rogue Planet | A wandering gas giant with moons and captured asteroids |
+| 11 | Supermassive Black Hole | Galactic center with stars orbiting a 4-million solar mass black hole |
+| 12 | Habitable Zone Tour | Four different habitable worlds around various star types |
+| 13 | Stellar Evolution | Stars at every life stage from main sequence to neutron star |
+| 14 | Figure Eight | Three equal-mass stars in a stable figure-8 choreography |
+| 15 | Asteroid Belt | Rocky planets, a dense asteroid belt, and outer gas giants |
+| 16 | Wolf-Rayet Star | Massive dying star shedding its outer layers |
+| 17 | Collision Course | Two star systems on a direct approach toward each other |
+| 18 | Nebula Collapse | Giant gas cloud collapsing under gravity to form stars |
+| 19 | Pulsar Binary | Millisecond pulsar stripping mass from a white dwarf companion |
+| 20 | Trojan Asteroids | Jupiter-like planet with asteroid swarms at L4 and L5 points |
+| 21 | Exomoon System | Gas giant with volcanic, ocean, and icy moons in detail |
+| 22 | Hierarchical Triple | Close binary star orbited by a distant third star with planets |
+| 23 | Tatooine | Habitable world orbiting twin suns with two moons |
+| 24 | Black Hole Accretion | Stellar black hole tearing apart a blue supergiant companion |
+
+All presets initialize bodies with physically correct orbital velocities (circular Keplerian for single-star systems, center-of-mass balanced for binaries). Camera position and distance are set to frame the scene appropriately.
+
+## Numerical Stability
+
+Several safeguards prevent numerical blow-up at extreme time scales and close encounters:
+
+### Acceleration Clamping
+Gravitational accelerations are clamped to 10&#8312; per step. Non-finite accelerations (NaN/Inf from close encounters) are discarded entirely.
+
+### Velocity & Position Sanitization
+After each integration step, all body velocities are clamped to 10&#8310;. NaN velocities revert to their pre-integration values; NaN positions revert and zero the velocity.
+
+### Orbital-Period Substepping
+When time acceleration is high, the integrator ensures a minimum of 32 steps per shortest orbital period using precomputed orbital elements or a Kepler estimate (T = 2&pi;&radic;(r&sup3;/GM)). Substeps are capped at 512 to bound computational cost.
+
+### Stellar Evolution Rate Caps
+Per-step fuel burn (max 0.05%) and wind mass loss (max 0.005% of stellar mass) prevent catastrophic stellar aging at high time scales. Without these caps, a TRAPPIST-1-class red dwarf would lose 96% of its mass in under one second at 1 yr/s time scale.
+
+### Beta-Ratio Gating
+Stellar wind and Yarkovsky forces are only applied when the radiation-to-gravity acceleration ratio exceeds 0.1%, preventing spurious velocity kicks on massive bodies.
+
+### NaN Guards
+Tidal locking, YORP torque, and merger momentum calculations include explicit NaN checks with safe fallback values, preventing NaN propagation through angular velocity and position fields.
 
 ## Rendering
 

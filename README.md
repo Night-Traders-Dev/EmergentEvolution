@@ -32,7 +32,8 @@ terrain, oceans, clouds, vegetation, atmospheric rim lighting, and city lights o
 worlds. Bodies interact via N-body gravity (CPU or GPU Barnes-Hut compute shader) with
 optional general relativity corrections (perihelion precession, gravitational time dilation,
 frame dragging). 6 numerical integrators from Euler through fourth-order PEFRL with adaptive
-substepping. Nebulae spawn as gravitationally collapsing particle clouds of 40&ndash;300 dust
+substepping and orbital-period-aware substep refinement (up to 512 substeps).
+Nebulae spawn as gravitationally collapsing particle clouds of 40&ndash;300 dust
 bodies with protostar sink formation. Procedural GPU textures are driven by physical
 properties &mdash; changing a planet&rsquo;s temperature melts ice into oceans, and gas giants display
 Jupiter-like banding with great spots. Stellar evolution through 9 stages with supernova
@@ -46,7 +47,8 @@ catalog tabs, live 3D ghost preview, planet look presets, moon/ring spawning, an
 astronomical objects. Quality-of-life features include body lock/pin, duplication, search
 filter, velocity arrows, keyboard shortcuts overlay, and screenshot capture. Orbit camera
 with WASD panning, mouse drag, scroll zoom, body tracking, and auto-hiding bottom taskbar.
-Loading screen with progress bar.
+25 preset scenarios from Solar System and TRAPPIST-1 to nebula collapse, figure-eight
+choreography, and supermassive black holes. Loading screen with progress bar.
 
 **Biochemical Simulator** &mdash;
 3D cellular biology sandbox with GPU SDF-raytraced rendering and 9 entity types (cells,
@@ -84,6 +86,8 @@ bottom taskbar with panel management.
   - [Procedural Planet Generation](docs/cosmos.md#procedural-planet-generation)
   - [Physics Systems](docs/cosmos.md#physics-systems)
   - [Spawn Studio](docs/cosmos.md#spawn-studio)
+  - [Preset Scenarios](docs/cosmos.md#preset-scenarios)
+  - [Numerical Stability](docs/cosmos.md#numerical-stability)
   - [Rendering](docs/cosmos.md#rendering)
 
 **Biochemical Simulator**

@@ -148,6 +148,7 @@ target_compile_definitions(pp_common PUBLIC
 # Windows: prevent <windows.h> macro pollution
 target_compile_definitions(pp_common PUBLIC
     $<$<PLATFORM_ID:Windows>:NOMINMAX WIN32_LEAN_AND_MEAN>
+    GLM_ENABLE_EXPERIMENTAL
 )
 
 # Compiler warnings

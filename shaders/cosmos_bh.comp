@@ -65,19 +65,23 @@ vec3 apply_source_accel(float src_mass, float src_spin_y, vec3 src_pos,
     vec3 acc = r_hat * (GM / dist2);
 
     if (pc.gr_enabled != 0u && pc.c2 > 0.0) {
+        // 1PN post-Newtonian correction (EIH equations)
         if (pc.gr_precession_scale > 0.0) {
             float v2 = dot(tgt_vel, tgt_vel);
             float vr = dot(tgt_vel, r_hat);
             float pn_scale = GM / (dist * pc.c2) * pc.gr_precession_scale;
-            acc += pn_scale * ((4.0 * GM / dist - v2) * r_hat + 4.0 * vr * tgt_vel);
+            acc += pn_scale * ((4.0 * GM / dist - v2 + 3.0 * vr * vr) * r_hat
+                                + 4.0 * vr * tgt_vel);
         }
+        // Gravitational time dilation: gravity strengthens in deep potential wells
         if (pc.gr_time_dilation > 0.0) {
-            float phi = -GM / dist;
-            float td = 1.0 + pc.gr_time_dilation * phi / pc.c2;
+            float phi_over_c2 = GM / (dist * pc.c2);
+            float td = 1.0 + pc.gr_time_dilation * phi_over_c2;
             acc *= td;
         }
+        // Lense-Thirring frame-dragging (factor of 2 from GR)
         if (pc.gr_frame_dragging > 0.0 && abs(src_spin_y) > 1.0e-9) {
-            float coeff = pc.gr_frame_dragging * pc.G * src_spin_y /
+            float coeff = 2.0 * pc.gr_frame_dragging * pc.G * src_spin_y /
                           (pc.c2 * dist * dist * dist);
             vec3 J_hat = vec3(0.0, 1.0, 0.0);
             vec3 vxJ = cross(tgt_vel, J_hat);

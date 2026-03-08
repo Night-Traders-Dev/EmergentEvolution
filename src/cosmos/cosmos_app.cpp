@@ -223,7 +223,7 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
         float v = std::sqrt(cfg.G * sun.mass / orbit_radii[i]);
         p.vel  = glm::vec3(-std::sin(angle) * v, 0.0f, std::cos(angle) * v);
         p.mass = planet_mass[i];
-        p.radius = 8.0f + planet_mass[i] * 3.0f;
+        p.radius = expected_planet_radius(planet_mass[i]);
         p.temperature = planet_temp[i];
         p.type = CTYPE_PLANET;
         p.parent = 0;
@@ -439,7 +439,11 @@ void CosmosApp::capture_screenshot(GLFWwindow* window) {
     auto now = std::chrono::system_clock::now();
     auto time_t = std::chrono::system_clock::to_time_t(now);
     struct tm tm_buf;
+#ifdef _WIN32
+    localtime_s(&tm_buf, &time_t);
+#else
     localtime_r(&time_t, &tm_buf);
+#endif
     char filename[256];
     snprintf(filename, sizeof(filename), "cosmos_screenshot_%04d%02d%02d_%02d%02d%02d.png",
              tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
@@ -1074,10 +1078,16 @@ static void preset_wolf_rayet(CosmosState& state, const CosmosConfig& cfg, Orbit
     s.name = "WR 104";
     state.bodies.push_back(s); state.trails.emplace_back();
 
-    // Companion star
+    // Companion star — both orbit COM
+    float m_comp = 8.0f;
     float comp_r = 400.0f;
-    float comp_v = std::sqrt(cfg.G * s.mass / comp_r);
-    push_star(state, glm::vec3(comp_r, 0, 0), glm::vec3(0, 0, comp_v), 8.0f, 0.55f, 17002);
+    float mu_wr = m_comp / (s.mass + m_comp);
+    float v_orb = std::sqrt(cfg.G * (s.mass + m_comp) / comp_r);
+    // Adjust WR star to orbit COM
+    state.bodies[0].pos = glm::vec3(-comp_r * mu_wr, 0, 0);
+    state.bodies[0].vel = glm::vec3(0, 0, -v_orb * mu_wr);
+    push_star(state, glm::vec3(comp_r * (1.0f - mu_wr), 0, 0),
+              glm::vec3(0, 0, v_orb * (1.0f - mu_wr)), m_comp, 0.55f, 17002);
 
     // Ejected material / nebular shell
     std::mt19937 rng(17171);
@@ -1181,10 +1191,16 @@ static void preset_nebula_collapse(CosmosState& state, const CosmosConfig& cfg, 
 static void preset_pulsar_binary(CosmosState& state, const CosmosConfig& cfg, OrbitCamera& cam) {
     state.clear();
 
-    // Millisecond pulsar
+    float m1 = 1.8f, m2 = 0.4f;
+    float sep = 60.0f;
+    float mu = m2 / (m1 + m2);  // mass fraction for COM
+    float v_orb = std::sqrt(cfg.G * (m1 + m2) / sep);
+
+    // Millisecond pulsar — orbits COM
     CelestialBody ns;
-    ns.pos = glm::vec3(-30, 0, 0); ns.vel = glm::vec3(0, 0, -0.06f);
-    ns.mass = 1.8f; ns.temperature = 200000.0f;
+    ns.pos = glm::vec3(-sep * mu, 0, 0);
+    ns.vel = glm::vec3(0, 0, -v_orb * mu);
+    ns.mass = m1; ns.temperature = 200000.0f;
     ns.stellar_stage = SSTAGE_NEUTRON_STAR; ns.fuel = 0.0f; ns.seed = 19001;
     ns.type = classify_star_spectral(ns.temperature, ns.mass);
     ns.radius = expected_star_radius(ns);
@@ -1193,12 +1209,11 @@ static void preset_pulsar_binary(CosmosState& state, const CosmosConfig& cfg, Or
     ns.name = "PSR J1614-2230";
     state.bodies.push_back(ns); state.trails.emplace_back();
 
-    // White dwarf companion being stripped
+    // White dwarf companion — orbits COM
     CelestialBody wd;
-    float sep = 60.0f;
-    float v = std::sqrt(cfg.G * (ns.mass + 0.4f) / sep);
-    wd.pos = glm::vec3(sep - 30, 0, 0); wd.vel = glm::vec3(0, 0, v * 0.55f);
-    wd.mass = 0.4f; wd.temperature = 18000.0f;
+    wd.pos = glm::vec3(sep * (1.0f - mu), 0, 0);
+    wd.vel = glm::vec3(0, 0, v_orb * (1.0f - mu));
+    wd.mass = m2; wd.temperature = 18000.0f;
     wd.stellar_stage = SSTAGE_WHITE_DWARF; wd.fuel = 0.0f; wd.seed = 19002;
     wd.type = classify_star_spectral(wd.temperature, wd.mass);
     wd.radius = expected_star_radius(wd);
@@ -1355,22 +1370,27 @@ static void preset_tatooine(CosmosState& state, const CosmosConfig& cfg, OrbitCa
 static void preset_bh_accretion(CosmosState& state, const CosmosConfig& cfg, OrbitCamera& cam) {
     state.clear();
 
-    // Stellar black hole
+    float m_bh = 15.0f, m_donor = 8.0f;
+    float orbit_r = 200.0f;
+    float mu = m_donor / (m_bh + m_donor);
+    float v_orb = std::sqrt(cfg.G * (m_bh + m_donor) / orbit_r);
+
+    // Stellar black hole — orbits COM
     CelestialBody bh;
-    bh.pos = glm::vec3(0); bh.vel = glm::vec3(0);
-    bh.mass = 15.0f; bh.temperature = 0.0f; bh.seed = 24001;
+    bh.pos = glm::vec3(-orbit_r * mu, 0, 0);
+    bh.vel = glm::vec3(0, 0, -v_orb * mu);
+    bh.mass = m_bh; bh.temperature = 0.0f; bh.seed = 24001;
     bh.type = classify_black_hole(bh.mass);
     bh.radius = std::max(2.0f * cfg.G * bh.mass / (300.0f * 300.0f) * 80.0f, 3.0f);
     bh.angular_vel = 50.0f;
     bh.name = "Cygnus X-1";
     state.bodies.push_back(bh); state.trails.emplace_back();
 
-    // Donor star being stripped
-    float orbit_r = 200.0f;
-    float v = std::sqrt(cfg.G * bh.mass / orbit_r);
+    // Donor star — orbits COM
     CelestialBody donor;
-    donor.pos = glm::vec3(orbit_r, 0, 0); donor.vel = glm::vec3(0, 0, v);
-    donor.mass = 8.0f; donor.fuel = 0.50f; donor.seed = 24002;
+    donor.pos = glm::vec3(orbit_r * (1.0f - mu), 0, 0);
+    donor.vel = glm::vec3(0, 0, v_orb * (1.0f - mu));
+    donor.mass = m_donor; donor.fuel = 0.50f; donor.seed = 24002;
     donor.stellar_stage = SSTAGE_SUPERGIANT;
     donor.temperature = 25000.0f;
     donor.type = classify_star_spectral(donor.temperature, donor.mass);
@@ -1942,6 +1962,9 @@ void CosmosApp::reroll_spawn_preview() {
 }
 
 int CosmosApp::spawn_preview_body(glm::vec3 pos) {
+    if (!std::isfinite(pos.x) || !std::isfinite(pos.y) || !std::isfinite(pos.z))
+        return -1;
+
     if (!preview_body_valid_)
         build_preview_body();
 
@@ -2086,11 +2109,14 @@ void CosmosApp::tick(GLFWwindow* window, float dt) {
         int fb_w, fb_h;
         glfwGetFramebufferSize(window, &fb_w, &fb_h);
         spawn_preview_pos_ = screen_to_spawn_pos(last_mouse_x, last_mouse_y, fb_w, fb_h);
+        bool spawn_pos_valid = std::isfinite(spawn_preview_pos_.x) &&
+                               std::isfinite(spawn_preview_pos_.y) &&
+                               std::isfinite(spawn_preview_pos_.z);
 
         // Only show preview when no body is under cursor (click would select, not spawn)
         int hover_body = pick_body((float)last_mouse_x, (float)last_mouse_y,
                                     (float)fb_w, (float)fb_h);
-        if (hover_body < 0) {
+        if (hover_body < 0 && spawn_pos_valid) {
             // Rebuild preview body when spawn type, mass, or draft settings change
             uint32_t dh = draft_settings_hash();
             if (!preview_body_valid_ || preview_last_type_ != spawn_type ||
@@ -2375,19 +2401,24 @@ void CosmosApp::step_physics(float dt) {
         }
 
         if (cfg.gr_enabled && c2 > 0.0f) {
+            // 1PN post-Newtonian correction (EIH equations, Schwarzschild limit)
             if (cfg.gr_precession_scale > 0.0f) {
                 float v2 = glm::dot(tgt_vel, tgt_vel);
                 float vr = glm::dot(tgt_vel, r_hat);
                 float pn_scale = GM / (dist * c2) * cfg.gr_precession_scale;
-                acc += pn_scale * ((4.0f * GM / dist - v2) * r_hat + 4.0f * vr * tgt_vel);
+                // Correct 1PN: {4GM/r - v² + 3(v·r̂)²} r̂ + 4(v·r̂) v
+                acc += pn_scale * ((4.0f * GM / dist - v2 + 3.0f * vr * vr) * r_hat
+                                    + 4.0f * vr * tgt_vel);
             }
+            // Gravitational time dilation: gravity strengthens in deep potential wells
             if (cfg.gr_time_dilation > 0.0f) {
-                float phi = -GM / dist;
-                float td = 1.0f + cfg.gr_time_dilation * phi / c2;
+                float phi_over_c2 = GM / (dist * c2);
+                float td = 1.0f + cfg.gr_time_dilation * phi_over_c2;
                 acc *= td;
             }
+            // Lense-Thirring frame-dragging (factor of 2 from GR)
             if (cfg.gr_frame_dragging > 0.0f && std::abs(src_spin_y) > 1.0e-9f) {
-                float coeff = cfg.gr_frame_dragging * cfg.G * src_spin_y /
+                float coeff = 2.0f * cfg.gr_frame_dragging * cfg.G * src_spin_y /
                               (c2 * dist * dist * dist);
                 glm::vec3 J_hat(0.0f, 1.0f, 0.0f);
                 glm::vec3 vxJ = glm::cross(tgt_vel, J_hat);
@@ -2397,6 +2428,17 @@ void CosmosApp::step_physics(float dt) {
             }
         }
 
+        // Clamp acceleration to prevent overflow from extreme close encounters
+        float acc_mag2 = glm::dot(acc, acc);
+        constexpr float kMaxAccel = 1.0e8f;
+        constexpr float kMaxAccel2 = kMaxAccel * kMaxAccel;
+        if (!std::isfinite(acc_mag2) || acc_mag2 > kMaxAccel2) {
+            if (std::isfinite(acc_mag2) && acc_mag2 > 0.0f) {
+                acc *= kMaxAccel / std::sqrt(acc_mag2);
+            } else {
+                return; // NaN/Inf — discard this contribution
+            }
+        }
         out_accel += acc;
     };
 
@@ -2863,6 +2905,29 @@ void CosmosApp::step_physics(float dt) {
                 out_vel[i] *= cfg.damping;
             }
         });
+
+        // Sanitize: clamp extreme velocities and fix NaN/Inf
+        constexpr float kMaxVel = 1.0e6f;
+        constexpr float kMaxVel2 = kMaxVel * kMaxVel;
+        parallel_for(n, 384, [&](size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i) {
+                if (bodies[i].marked_for_removal || bodies[i].locked) continue;
+                auto finite_v3 = [](const glm::vec3& v) {
+                    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+                };
+                if (!finite_v3(out_vel[i])) {
+                    out_vel[i] = in_vel[i]; // revert to previous velocity
+                }
+                if (!finite_v3(out_pos[i])) {
+                    out_pos[i] = in_pos[i]; // revert to previous position
+                    out_vel[i] = glm::vec3(0.0f);
+                }
+                float v2 = glm::dot(out_vel[i], out_vel[i]);
+                if (v2 > kMaxVel2) {
+                    out_vel[i] *= kMaxVel / std::sqrt(v2);
+                }
+            }
+        });
     };
 
     std::vector<glm::vec3> accel0(n, glm::vec3(0.0f));
@@ -2906,6 +2971,61 @@ void CosmosApp::step_physics(float dt) {
     }
     if (!std::isfinite(scaled_dt))
         scaled_dt = 0.0f;
+
+    // Orbital-period-aware substepping: ensure enough steps per shortest orbit
+    // to maintain stable integration at high time scales (e.g. TRAPPIST-1 at 1yr/s).
+    if (!adaptive_substep_refining_ && n > 1 && std::abs(scaled_dt) > 1.0e-9f) {
+        constexpr int kMinStepsPerOrbit = 32;
+        constexpr int kOrbitSubstepCap = 512;
+        constexpr float kTwoPi = 6.283185307f;
+        float shortest_period = std::numeric_limits<float>::max();
+        for (size_t i = 0; i < n; ++i) {
+            if (bodies[i].marked_for_removal || bodies[i].non_attracting) continue;
+            // Use pre-computed orbital_period if available
+            if (bodies[i].orbital_period > 1.0e-3f) {
+                shortest_period = std::min(shortest_period, bodies[i].orbital_period);
+                continue;
+            }
+            // Otherwise estimate from Kepler's law: T = 2π√(r³/GM)
+            int primary = (tracked_primary_.size() > i) ? tracked_primary_[i] : -1;
+            if (primary < 0 || primary >= (int)n) continue;
+            const auto& host = bodies[(size_t)primary];
+            if (host.marked_for_removal) continue;
+            float r = glm::length(bodies[i].pos - host.pos);
+            float mu = cfg.G * (host.mass + bodies[i].mass);
+            if (r > 1.0e-3f && mu > 1.0e-12f) {
+                float T = kTwoPi * std::sqrt(r * r * r / mu);
+                if (std::isfinite(T) && T > 1.0e-3f)
+                    shortest_period = std::min(shortest_period, T);
+            }
+        }
+        if (shortest_period < std::numeric_limits<float>::max() * 0.5f) {
+            float abs_dt = std::abs(scaled_dt);
+            int orbit_substeps = (int)std::ceil(abs_dt * (float)kMinStepsPerOrbit / shortest_period);
+            if (orbit_substeps > 1) {
+                orbit_substeps = std::min(orbit_substeps, kOrbitSubstepCap);
+                float sub_scaled_dt = scaled_dt / (float)orbit_substeps;
+                float denom = cfg.dt_scale * time_sign;
+                float sub_real_dt = (std::abs(denom) > 1.0e-9f)
+                    ? (sub_scaled_dt / denom)
+                    : (dt / (float)orbit_substeps);
+                float applied_total = sub_scaled_dt * (float)orbit_substeps;
+                adaptive_substeps_required_ = orbit_substeps;
+                adaptive_substeps_last_ = orbit_substeps;
+                adaptive_substeps_saturated_ = (orbit_substeps >= kOrbitSubstepCap);
+                adaptive_substep_refining_ = true;
+                for (int substep = 0; substep < orbit_substeps; ++substep)
+                    step_physics(sub_real_dt);
+                adaptive_substep_refining_ = false;
+                displayed_time_rate_ = (std::abs(dt) > 1.0e-9f)
+                    ? (double)applied_total / (double)dt : 0.0;
+                if (!std::isfinite(displayed_time_rate_))
+                    displayed_time_rate_ = 0.0;
+                return;
+            }
+        }
+    }
+
     if (cfg.adaptive_substepping && !adaptive_substep_refining_ &&
         n > 0 && std::abs(scaled_dt) > 1.0e-9f) {
         auto estimate_segment_error = [&](float segment_scaled_dt) {
@@ -3731,6 +3851,7 @@ bool CosmosApp::handle_stellar_collision_supernova(size_t i, size_t j, float rel
     merged.internal_energy = a.internal_energy + b.internal_energy + impact_energy * 0.15f;
     merged.angular_vel = (a.angular_vel * a.mass + b.angular_vel * b.mass) /
                          std::max(total_mass, 1.0e-6f);
+    if (!std::isfinite(merged.angular_vel)) merged.angular_vel = 0.0f;
     merged.type = classify_star_spectral(std::max(merged.temperature, 250.0f), std::max(merged.mass, 0.003f));
     merged.stellar_stage = thermonuclear ? SSTAGE_WHITE_DWARF :
         ((a.stellar_stage == SSTAGE_RED_GIANT || b.stellar_stage == SSTAGE_RED_GIANT)
@@ -3955,9 +4076,10 @@ void CosmosApp::process_collisions(float dt) {
             bool compact_j = is_star_type(bodies[j].type) || is_black_hole_type(bodies[j].type);
             bool compact_vs_soft = (compact_i != compact_j);
 
-            // For soft bodies, use actual measured speeds — no artificial infall floor
-            // that would prevent gentle mergers between equal-mass planets.
-            float infall_speed = soft_body_pair ? closing_speed : closing_speed;
+            // For soft bodies, use actual measured speed; for hard bodies, use at
+            // least a fraction of escape velocity as an infall floor.
+            float infall_speed = soft_body_pair ? closing_speed
+                                                : std::max(closing_speed, escape_speed * 0.15f);
             float compression_speed = overlap_fraction * escape_speed * (soft_body_pair ? 1.4f : 1.6f);
             float impact_speed = std::max(rel_speed, std::max(infall_speed, compression_speed));
             float reduced_mass = (bodies[i].mass * bodies[j].mass) / std::max(total_mass, 1.0e-6f);
@@ -4129,6 +4251,7 @@ void CosmosApp::process_collisions(float dt) {
                 float I_merged = total_mass * bodies[big].radius * bodies[big].radius;
                 bodies[big].angular_vel = (I_big * pre_big.angular_vel + I_small * pre_small.angular_vel + L_orbital) /
                                           std::max(I_merged, 1.0e-6f);
+                if (!std::isfinite(bodies[big].angular_vel)) bodies[big].angular_vel = 0.0f;
 
                 if (is_star_type(pre_big.type) && is_star_type(pre_small.type)) {
                     bodies[big].fuel = merged_star_fuel(pre_big, pre_small, total_mass);
@@ -4739,12 +4862,15 @@ void CosmosApp::process_temperature(float dt) {
                                                        b.stellar_stage, b.fuel);
             continue;
         }
-        // Stefan-Boltzmann: dT/dt ∝ (T⁴ - T_bg⁴) — proper radiative cooling
+        // Stefan-Boltzmann: dT/dt ∝ (T⁴ - T_bg⁴) / thermal_mass
+        // Thermal inertia scales with mass — massive bodies cool slower
         float T4_body = b.temperature * b.temperature * b.temperature * b.temperature;
         float T4_bg = background * background * background * background;
         float T4_diff = T4_body - T4_bg;
         if (T4_diff > 0.0f) {
-            float cool_rate = cfg.radiative_cooling * T4_diff / std::max(T4_body, 1.0e-6f) * dt;
+            float thermal_inertia = std::max(std::cbrt(b.mass) * 10.0f, 0.1f);
+            float cool_rate = cfg.radiative_cooling * T4_diff / std::max(T4_body, 1.0e-6f) * dt
+                              / thermal_inertia;
             b.temperature -= b.temperature * std::min(cool_rate, 0.5f);
         }
         if (b.temperature < background) b.temperature = background;
@@ -5049,14 +5175,35 @@ void CosmosApp::process_space_weather(float dt) {
                 float accel_mag = pressure * cross_section * shield_scale * type_scale / mass;
                 wind_accel += (delta / dist) * accel_mag;
             }
-            if (glm::dot(wind_accel, wind_accel) > 0.0f)
-                target.vel += wind_accel * dt;
+            if (glm::dot(wind_accel, wind_accel) > 0.0f) {
+                // Physical β check: skip wind when radiation/gravity ratio is negligible.
+                // For planets β ≈ 10⁻²⁰ (radiation pressure can't move planets).
+                // Only dust, comets, and small asteroids have significant β.
+                float wind_mag = glm::length(wind_accel);
+                float grav_accel = 0.0f;
+                for (size_t j = 0; j < bodies.size(); ++j) {
+                    if (i == j || bodies[j].marked_for_removal) continue;
+                    if (!is_star_type(bodies[j].type)) continue;
+                    glm::vec3 d = bodies[j].pos - target.pos;
+                    float r2 = glm::dot(d, d);
+                    if (r2 > 1.0e-6f)
+                        grav_accel += cfg.G * bodies[j].mass / r2;
+                }
+                float beta = (grav_accel > 1.0e-15f) ? (wind_mag / grav_accel) : 0.0f;
+                if (beta > 0.001f) // only apply when β > 0.1% (dust/comets)
+                    target.vel += wind_accel * dt;
+            }
         }
 
         if (cfg.temperature_system) {
             float heat_gain = heating_flux * dt * std::max(target.radius, 0.5f) * 0.55f;
             target.internal_energy += heat_gain;
-            target.temperature += heat_gain / std::max(target.mass * 8.0f, 0.02f);
+            // Limit temperature change per step to prevent thermal runaway at high time scales.
+            // Use exponential approach: T → T_eq rather than unbounded linear accumulation.
+            float thermal_inertia = std::max(target.mass * 8.0f, 0.02f);
+            float dT = heat_gain / thermal_inertia;
+            // Cap temperature increase to prevent unphysical spikes at large dt
+            target.temperature += std::min(dT, std::max(target.temperature * 0.02f, 5.0f));
         }
 
         if (cfg.evaporation &&
@@ -5109,7 +5256,7 @@ void CosmosApp::process_evaporation(float dt) {
                                      b.cached_props.planet_class == PCLASS_ICE_GIANT) ? 0.45f : 1.0f;
                 float loss = cfg.evaporation_rate * heat_factor * dt * 0.060f * class_scale /
                              std::max(escape_resist, 0.12f);
-                loss = std::min(loss, b.mass * 0.030f);
+                loss = std::min(loss, b.mass * 0.003f); // max 0.3% per step (was 3%)
                 if (loss > 0.0f) {
                     float pre_loss_mass = b.mass;
                     b.mass -= loss;
@@ -5133,7 +5280,7 @@ void CosmosApp::process_evaporation(float dt) {
         float heat_factor = (b.temperature - vapor_threshold) / std::max(vapor_threshold, 1.0f);
         float loss = cfg.evaporation_rate * heat_factor * dt *
             (b.type == CTYPE_NEBULA ? 0.12f : (b.type == CTYPE_COMET ? 0.07f : (b.type == CTYPE_DUST ? 0.018f : 0.05f)));
-        loss = std::min(loss, b.mass * (b.type == CTYPE_DUST ? 0.03f : 0.08f));
+        loss = std::min(loss, b.mass * (b.type == CTYPE_DUST ? 0.005f : 0.01f));
         if (loss <= 0.0f) continue;
 
         b.mass -= loss;
@@ -5509,12 +5656,15 @@ void CosmosApp::process_stellar_evolution(float dt) {
         float burn_rate = (burn_multiplier > 0.0f)
             ? dt_step * burn_multiplier / std::max(main_sequence_lifetime, cfg.stellar_timescale * 1200.0f)
             : 0.0f;
+        // Cap fuel burn per step to prevent catastrophic aging at high time scales
+        constexpr float kMaxFuelBurnPerStep = 0.0005f;
+        burn_rate = std::min(burn_rate, kMaxFuelBurnPerStep);
         b.fuel -= burn_rate;
         if (b.fuel < 0.0f) b.fuel = 0.0f;
 
         float wind_factor = compact_star ? 0.0f : (evolved_star ? 2.6f : 1.0f);
         float wind_loss = std::min(b.mass * wind_factor * (0.00002f + b.luminosity * 0.000002f) * dt_step,
-                                   b.mass * (compact_star ? 0.0f : 0.005f));
+                                   b.mass * (compact_star ? 0.0f : 0.00005f));
         if (wind_loss > 0.0f) {
             b.mass -= wind_loss;
             register_mass_loss(b, wind_loss, dt_step);
@@ -5593,13 +5743,16 @@ void CosmosApp::process_tidal_locking(float dt) {
 
         // Target: synchronous rotation = orbital angular velocity
         float orbital_speed = glm::length(b.vel - host.vel);
+        if (!std::isfinite(orbital_speed)) continue;
         float target_angular_vel = orbital_speed / std::max(dist, 0.01f);
 
         float delta = target_angular_vel - std::abs(b.angular_vel);
+        if (!std::isfinite(delta)) continue;
         float adjustment = std::clamp(tidal_strength * std::abs(dt), 0.0f, 1.0f);
         float sign = (b.angular_vel >= 0.0f) ? 1.0f : -1.0f;
 
         b.angular_vel += sign * delta * adjustment;
+        if (!std::isfinite(b.angular_vel)) b.angular_vel = 0.0f;
         b.tidal_lock_progress = std::clamp(
             1.0f - std::abs(delta) / std::max(target_angular_vel, 1.0e-6f),
             0.0f, 1.0f);
@@ -5745,12 +5898,19 @@ void CosmosApp::process_yarkovsky(float dt) {
         glm::vec3 v_hat = orbital_vel / v_mag;
         // Prograde spin → outward drift; retrograde → inward drift
         float spin_sign = (b.angular_vel >= 0.0f) ? 1.0f : -1.0f;
-        b.vel += v_hat * (accel_mag * spin_sign * dt);
+        {
+            // Yarkovsky only matters for small bodies — skip when accel/gravity ratio is negligible
+            float grav = cfg.G * host.mass / (star_dist * star_dist);
+            float beta_y = (grav > 1.0e-15f) ? (accel_mag / grav) : 0.0f;
+            if (beta_y > 0.001f) // only apply for small bodies where Yarkovsky matters
+                b.vel += v_hat * (accel_mag * spin_sign * dt);
+        }
 
         // YORP torque: slowly changes spin rate
         float yorp_torque = 5.0e-9f * L / (R * R * std::max(b.mass, 1.0e-6f) * star_dist * star_dist);
         yorp_torque = std::min(yorp_torque, 1.0e-4f);
-        b.angular_vel += yorp_torque * spin_sign * dt;
+        if (std::isfinite(yorp_torque))
+            b.angular_vel += yorp_torque * spin_sign * dt;
     }
 }
 

@@ -1138,7 +1138,7 @@ struct CosmosConfig {
     int      integrator_type         = INTEGRATOR_VELOCITY_VERLET; // runtime-selectable orbital integrator
     bool     adaptive_substepping    = false;  // split a physics step until integration error fits tolerance
     float    adaptive_substep_tolerance = 0.25f; // world-space position tolerance for step rejection
-    int      adaptive_substep_max    = 32;     // hardware cap for accepted substeps per requested step
+    int      adaptive_substep_max    = 512;    // hardware cap for accepted substeps per requested step
     bool     stellar_wind_pressure   = true;   // apply radiation/wind pressure from luminous stars
     float    stellar_wind_pressure_scale = 1.0f; // scale stellar pressure acceleration
 
