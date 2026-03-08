@@ -135,11 +135,12 @@ struct OrbitCamera {
         }
     }
 
-    // Focus on a position: smooth camera pan to body
+    // Focus on a position: snap camera to body, then track it
     void focus_on(glm::vec3 pos, int body_idx = -1, float body_radius = 1.0f) {
         focus_active = true;
         focus_body = body_idx;
         focus_target = pos;
+        target = pos;  // snap immediately — don't rely on slow lerp
         focus_body_radius = std::max(body_radius, 0.1f);
     }
 

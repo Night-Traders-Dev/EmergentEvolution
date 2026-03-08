@@ -281,6 +281,7 @@ const char* bottom_bar_menu_tooltip(std::string_view key) {
         {"1 Gyr/s", "Set the nominal simulation rate to 1 simulated billion years per real second."},
         {"General Relativity", "Relativistic correction controls for gravity and timing."},
         {"GR Corrections", "Enable relativistic orbit and timing corrections."},
+        {"J2 Oblateness", "Enable J2 oblateness gravity correction for oblate rotating bodies."},
         {"Parallel Gravity", "Allow multithreaded CPU-side gravity work and related packing tasks."},
         {"Precession", "Scale periapsis precession strength."},
         {"Time Dilation", "Scale gravitational time dilation strength."},
@@ -2329,9 +2330,7 @@ void CosmosApp::draw_spawn_menu() {
             const auto& b = state.bodies[spawned];
             selected_body = spawned;
             camera.focus_on(b.pos, spawned, b.radius);
-            float ideal = b.radius * 8.0f;
-            float cur = camera.target_distance;
-            camera.target_distance = std::max(ideal, cur * 0.25f);
+            camera.target_distance = std::max(b.radius * 8.0f, 30.0f);
         }
     }
     ImGui::PopStyleVar();
@@ -2938,9 +2937,7 @@ void CosmosApp::draw_inspector() {
     } else {
         if (ImGui::SmallButton("Track")) {
             camera.focus_on(b.pos, selected_body, b.radius);
-            float ideal = b.radius * 8.0f;
-            float cur = camera.target_distance;
-            camera.target_distance = std::max(ideal, cur * 0.25f);
+            camera.target_distance = std::max(b.radius * 8.0f, 30.0f);
         }
     }
 
@@ -4356,7 +4353,28 @@ void CosmosApp::draw_bottom_bar() {
                 }
 
                 if (collapsing_header_tt("General Relativity")) {
+                    // Physics mode selector
+                    ImGui::Text("Physics Mode:");
+                    ImGui::SameLine();
+                    bool is_newtonian = (cfg.physics_mode == PHYSICS_MODE_NEWTONIAN);
+                    bool is_gr = (cfg.physics_mode == PHYSICS_MODE_GR);
+                    if (is_newtonian) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.8f, 1.0f));
+                    if (ImGui::SmallButton("Newtonian##Mode")) {
+                        apply_physics_mode(cfg, PHYSICS_MODE_NEWTONIAN);
+                    }
+                    if (is_newtonian) ImGui::PopStyleColor();
+                    show_hover_tooltip("Classical Newtonian gravity. No relativistic corrections, no J2 oblateness, no Hawking radiation. Faster and simpler.");
+                    ImGui::SameLine();
+                    if (is_gr) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.8f, 1.0f));
+                    if (ImGui::SmallButton("General Relativity##Mode")) {
+                        apply_physics_mode(cfg, PHYSICS_MODE_GR);
+                    }
+                    if (is_gr) ImGui::PopStyleColor();
+                    show_hover_tooltip("1PN post-Newtonian corrections: perihelion precession, gravitational time dilation, Lense-Thirring frame dragging, J2 oblateness, Hawking radiation.");
+                    ImGui::Separator();
+
                     checkbox_tt("GR Corrections##Menu", &cfg.gr_enabled);
+                    checkbox_tt("J2 Oblateness##Menu", &cfg.j2_perturbation);
                     checkbox_tt("Parallel Gravity##Menu", &cfg.parallel_gravity);
                     slider_float_tt("Precession##Menu", &cfg.gr_precession_scale, 0.0f, 10.0f, "%.2f");
                     slider_float_tt("Time Dilation##Menu", &cfg.gr_time_dilation, 0.0f, 5.0f, "%.2f");

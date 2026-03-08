@@ -104,9 +104,7 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
                     const auto& b = app->state.bodies[app->click_candidate_];
                     app->selected_body = app->click_candidate_;
                     app->camera.focus_on(b.pos, app->click_candidate_, b.radius);
-                    float ideal = b.radius * 8.0f;
-                    float cur = app->camera.target_distance;
-                    app->camera.target_distance = std::max(ideal, cur * 0.25f);
+                    app->camera.target_distance = std::max(b.radius * 8.0f, 30.0f);
                 } else {
                     // Single click on body → select. Empty space → spawn (if spawn menu open) or deselect.
                     if (app->click_candidate_ >= 0) {
@@ -119,11 +117,6 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
                             const auto& b = app->state.bodies[spawned];
                             app->selected_body = spawned;
                             app->camera.focus_on(b.pos, spawned, b.radius);
-                            // Zoom to a comfortable distance, but don't overshoot by
-                            // zooming dramatically closer than the current view distance.
-                            float ideal = b.radius * 8.0f;
-                            float cur = app->camera.target_distance;
-                            app->camera.target_distance = std::max(ideal, cur * 0.25f);
                         }
                     } else {
                         app->selected_body = -1;
@@ -248,9 +241,7 @@ static void key_callback(GLFWwindow* window, int key, int /*scancode*/, int acti
         app->selected_body < (int)app->state.bodies.size()) {
         const auto& b = app->state.bodies[app->selected_body];
         app->camera.focus_on(b.pos, app->selected_body, b.radius);
-        float ideal = b.radius * 8.0f;
-        float cur = app->camera.target_distance;
-        app->camera.target_distance = std::max(ideal, cur * 0.25f);
+        app->camera.target_distance = std::max(b.radius * 8.0f, 30.0f);
     }
     if (key == GLFW_KEY_DELETE && app->selected_body >= 0 &&
         app->selected_body < (int)app->state.bodies.size()) {

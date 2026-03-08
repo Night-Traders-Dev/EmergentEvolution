@@ -519,7 +519,9 @@ static int push_moon(CosmosState& state, const CosmosConfig& cfg,
 // 0: Solar System (default)
 static void preset_solar_system(CosmosState& state, const CosmosConfig& cfg, OrbitCamera& cam) {
     seed_default_system(state, cfg);
-    cam.distance = 600.0f; cam.target_distance = 600.0f; cam.elevation = 0.5f;
+    // Camera far enough to see the whole system (outermost planet at ~sr*22)
+    float sr = state.bodies[0].radius;
+    cam.distance = sr * 30.0f; cam.target_distance = sr * 30.0f; cam.elevation = 0.5f;
 }
 
 // 1: Binary Stars — two sun-like stars with circumbinary planets
@@ -553,7 +555,8 @@ static void preset_binary_stars(CosmosState& state, const CosmosConfig& cfg, Orb
     push_cb_planet(420.0f, 3.0e-6f, 260.0f, 2.1f, 2002);        // temperate
     push_cb_planet(620.0f, 8.0e-4f, 110.0f, 4.2f, 2003);        // gas giant
 
-    cam.distance = 900.0f; cam.target_distance = 900.0f; cam.elevation = 0.45f;
+    // Camera far enough to see circumbinary planets (outermost at ~620)
+    cam.distance = 2000.0f; cam.target_distance = 2000.0f; cam.elevation = 0.45f;
 }
 
 // 2: TRAPPIST-1 — compact red dwarf system with 7 close-in planets
@@ -562,9 +565,9 @@ static void preset_trappist(CosmosState& state, const CosmosConfig& cfg, OrbitCa
     int star = push_star(state, glm::vec3(0), glm::vec3(0), 0.089f, 0.95f, 3001);
     float sr = state.bodies[(size_t)star].radius;
 
-    // 7 tightly packed planets
-    const float orbits[] = {sr * 4.5f, sr * 5.8f, sr * 7.2f, sr * 8.8f,
-                            sr * 11.0f, sr * 14.0f, sr * 18.0f};
+    // 7 planets at physically accurate orbital distances (real TRAPPIST-1 AU → sr multiples)
+    const float orbits[] = {sr * 17.0f, sr * 23.5f, sr * 33.0f, sr * 44.0f,
+                            sr * 57.0f, sr * 70.0f, sr * 92.0f};
     const float masses[] = {2.6e-6f, 4.0e-6f, 2.3e-6f, 3.8e-6f,
                             3.0e-6f, 4.1e-6f, 1.0e-6f};
     const float temps[] = {400.0f, 342.0f, 288.0f, 251.0f, 218.0f, 170.0f, 130.0f};
@@ -574,7 +577,7 @@ static void preset_trappist(CosmosState& state, const CosmosConfig& cfg, OrbitCa
         push_planet(state, cfg, star, orbits[i], masses[i], temps[i], angle, 3100 + i, surfs[i]);
     }
 
-    cam.distance = 200.0f; cam.target_distance = 200.0f; cam.elevation = 0.6f;
+    cam.distance = sr * 110.0f; cam.target_distance = sr * 110.0f; cam.elevation = 0.6f;
 }
 
 // 3: Hot Jupiter — sun-like star with a massive planet dangerously close
@@ -587,7 +590,7 @@ static void preset_hot_jupiter(CosmosState& state, const CosmosConfig& cfg, Orbi
     push_planet(state, cfg, star, sr * 12.0f, 3.0e-6f, 310.0f, 1.8f, 4003, 3);
     push_planet(state, cfg, star, sr * 20.0f, 5.0e-6f, 220.0f, 3.6f, 4004, 1);
 
-    cam.distance = 500.0f; cam.target_distance = 500.0f; cam.elevation = 0.3f;
+    cam.distance = sr * 28.0f; cam.target_distance = sr * 28.0f; cam.elevation = 0.3f;
 }
 
 // 4: Giant Impact — Earth and Theia approaching collision (Moon formation)
@@ -613,9 +616,10 @@ static void preset_giant_impact(CosmosState& state, const CosmosConfig& cfg, Orb
     theia.name = "Theia";
     state.bodies.push_back(theia); state.trails.emplace_back();
 
-    cam.target = eb.pos;
-    cam.distance = 200.0f; cam.target_distance = 200.0f; cam.elevation = 0.25f;
     cam.focus_on(eb.pos, earth, eb.radius);
+    cam.distance = std::max(eb.radius * 20.0f, 200.0f);
+    cam.target_distance = cam.distance;
+    cam.elevation = 0.25f;
 }
 
 // 5: Stellar Graveyard — neutron star, white dwarf, and stellar black hole
@@ -660,7 +664,7 @@ static void preset_stellar_graveyard(CosmosState& state, const CosmosConfig& cfg
     bh.name = "Stellar Black Hole";
     state.bodies.push_back(bh); state.trails.emplace_back();
 
-    cam.distance = 1200.0f; cam.target_distance = 1200.0f; cam.elevation = 0.55f;
+    cam.distance = 3000.0f; cam.target_distance = 3000.0f; cam.elevation = 0.55f;
 }
 
 // 6: Protoplanetary Disk — young star surrounded by dust and forming planets
@@ -695,7 +699,7 @@ static void preset_protoplanetary_disk(CosmosState& state, const CosmosConfig& c
     push_planet(state, cfg, star, 380.0f, 2.0e-6f, 280.0f, 2.8f, 7102);
     push_planet(state, cfg, star, 550.0f, 5.0e-5f, 150.0f, 5.0f, 7103, 4);
 
-    cam.distance = 1200.0f; cam.target_distance = 1200.0f; cam.elevation = 0.65f;
+    cam.distance = 3000.0f; cam.target_distance = 3000.0f; cam.elevation = 0.65f;
 }
 
 // 7: Ringed Worlds — Saturn-like system showcasing rings
@@ -727,7 +731,7 @@ static void preset_ringed_worlds(CosmosState& state, const CosmosConfig& cfg, Or
     push_moon(state, cfg, saturn, sb.radius * 8.0f, 6.8e-8f, 65.0f, 2.1f, 8102);
     push_moon(state, cfg, saturn, sb.radius * 12.0f, 1.0e-7f, 55.0f, 4.5f, 8103);
 
-    cam.distance = 600.0f; cam.target_distance = 600.0f; cam.elevation = 0.4f;
+    cam.distance = sr * 35.0f; cam.target_distance = sr * 35.0f; cam.elevation = 0.4f;
 }
 
 // 8: Star Cluster — loose group of diverse stars
@@ -739,7 +743,7 @@ static void preset_star_cluster(CosmosState& state, const CosmosConfig& cfg, Orb
     };
 
     int n_stars = 12;
-    float cluster_r = 600.0f;
+    float cluster_r = 40000.0f;  // must be >> star radius (~873) to avoid immediate collisions
     for (int i = 0; i < n_stars; i++) {
         // Plummer sphere distribution
         float u = randf(0.0f, 1.0f);
@@ -763,7 +767,7 @@ static void preset_star_cluster(CosmosState& state, const CosmosConfig& cfg, Orb
         push_star(state, pos, vel, mass, fuel, 9100 + i);
     }
 
-    cam.distance = 2000.0f; cam.target_distance = 2000.0f; cam.elevation = 0.35f;
+    cam.distance = 100000.0f; cam.target_distance = 100000.0f; cam.elevation = 0.35f;
 }
 
 // 9: Comet Shower — inner system with comets streaming in
@@ -803,7 +807,7 @@ static void preset_comet_shower(CosmosState& state, const CosmosConfig& cfg, Orb
         state.bodies.push_back(c); state.trails.emplace_back();
     }
 
-    cam.distance = 800.0f; cam.target_distance = 800.0f; cam.elevation = 0.55f;
+    cam.distance = sr * 28.0f; cam.target_distance = sr * 28.0f; cam.elevation = 0.55f;
 }
 
 // 10: Rogue Planet — planet with moons, drifting through space
@@ -848,7 +852,7 @@ static void preset_rogue_planet(CosmosState& state, const CosmosConfig& cfg, Orb
         state.bodies.push_back(a); state.trails.emplace_back();
     }
 
-    cam.distance = 350.0f; cam.target_distance = 350.0f; cam.elevation = 0.35f;
+    cam.distance = pb.radius * 45.0f; cam.target_distance = pb.radius * 45.0f; cam.elevation = 0.35f;
     cam.focus_on(p.pos, pi, pb.radius);
 }
 
@@ -871,7 +875,7 @@ static void preset_supermassive_bh(CosmosState& state, const CosmosConfig& cfg, 
         return std::uniform_real_distribution<float>(lo, hi)(rng);
     };
     for (int i = 0; i < 16; i++) {
-        float r = randf(150.0f, 1500.0f);
+        float r = randf(3000.0f, 30000.0f);
         float angle = randf(0.0f, 6.2832f);
         float incl = randf(-0.4f, 0.4f);
         glm::vec3 pos(std::cos(angle) * r, std::sin(incl) * r * 0.3f, std::sin(angle) * r);
@@ -885,43 +889,46 @@ static void preset_supermassive_bh(CosmosState& state, const CosmosConfig& cfg, 
         push_star(state, pos, vel, mass, randf(0.4f, 0.95f), 12100 + i);
     }
 
-    cam.distance = 3000.0f; cam.target_distance = 3000.0f; cam.elevation = 0.4f;
+    cam.distance = 80000.0f; cam.target_distance = 80000.0f; cam.elevation = 0.4f;
 }
 
 // 12: Habitable Zone Tour — 4 diverse habitable worlds around different stars
 static void preset_habitable_zone(CosmosState& state, const CosmosConfig& cfg, OrbitCamera& cam) {
     state.clear();
 
+    // Space systems far enough apart that mutual gravity is negligible
+    float sep = 50000.0f;
+
     // System 1: Earth twin around sun-like star
-    int s1 = push_star(state, glm::vec3(-400, 0, 0), glm::vec3(0), 1.0f, 0.72f, 13001);
+    int s1 = push_star(state, glm::vec3(-sep, 0, 0), glm::vec3(0), 1.0f, 0.72f, 13001);
     float sr1 = state.bodies[(size_t)s1].radius;
     push_planet(state, cfg, s1, sr1 * 14.0f, 3.0e-6f, 288.0f, 0.0f, 13101, 3); // earth-like
 
     // System 2: Ocean world around K dwarf
-    int s2 = push_star(state, glm::vec3(400, 0, 0), glm::vec3(0), 0.55f, 0.85f, 13002);
+    int s2 = push_star(state, glm::vec3(sep, 0, 0), glm::vec3(0), 0.55f, 0.85f, 13002);
     float sr2 = state.bodies[(size_t)s2].radius;
     push_planet(state, cfg, s2, sr2 * 8.0f, 5.0e-6f, 305.0f, 1.2f, 13201, 1); // water world
 
     // System 3: Desert super-Earth around F star
-    int s3 = push_star(state, glm::vec3(0, 0, -400), glm::vec3(0), 1.4f, 0.65f, 13003);
+    int s3 = push_star(state, glm::vec3(0, 0, -sep), glm::vec3(0), 1.4f, 0.65f, 13003);
     float sr3 = state.bodies[(size_t)s3].radius;
     push_planet(state, cfg, s3, sr3 * 18.0f, 7.0e-6f, 320.0f, 2.5f, 13301, 0); // rocky/desert
 
     // System 4: Icy moon candidate around gas giant orbiting a G star
-    int s4 = push_star(state, glm::vec3(0, 0, 400), glm::vec3(0), 0.9f, 0.78f, 13004);
+    int s4 = push_star(state, glm::vec3(0, 0, sep), glm::vec3(0), 0.9f, 0.78f, 13004);
     float sr4 = state.bodies[(size_t)s4].radius;
     int gj = push_planet(state, cfg, s4, sr4 * 16.0f, 6.0e-4f, 130.0f, 0.0f, 13401, 4);
     auto& gjb = state.bodies[(size_t)gj];
     push_moon(state, cfg, gj, gjb.radius * 5.0f, 8.0e-8f, 100.0f, 0.0f, 13411);
     push_moon(state, cfg, gj, gjb.radius * 8.0f, 1.3e-7f, 85.0f, 2.0f, 13412);
 
-    cam.distance = 1500.0f; cam.target_distance = 1500.0f; cam.elevation = 0.5f;
+    cam.distance = 25000.0f; cam.target_distance = 25000.0f; cam.elevation = 0.5f;
 }
 
 // 13: Stellar Evolution — stars at every life stage
 static void preset_stellar_evolution(CosmosState& state, const CosmosConfig& cfg, OrbitCamera& cam) {
     state.clear();
-    float spacing = 400.0f;
+    float spacing = 30000.0f;  // far enough apart to avoid mutual gravity
 
     // Main sequence sun
     push_star(state, glm::vec3(-spacing * 2, 0, 0), glm::vec3(0), 1.0f, 0.72f, 14001);
@@ -986,7 +993,7 @@ static void preset_stellar_evolution(CosmosState& state, const CosmosConfig& cfg
         state.bodies.push_back(s); state.trails.emplace_back();
     }
 
-    cam.distance = 2000.0f; cam.target_distance = 2000.0f; cam.elevation = 0.15f;
+    cam.distance = 80000.0f; cam.target_distance = 80000.0f; cam.elevation = 0.15f;
 }
 
 // 14: Figure Eight — three equal-mass stars in a figure-8 orbit (Chenciner-Montgomery)
@@ -1008,7 +1015,7 @@ static void preset_figure_eight(CosmosState& state, const CosmosConfig& cfg, Orb
               glm::vec3(2.0f * 0.93240737f * 0.05f, 0.0f, 2.0f * 0.86473146f * 0.05f),
               m, 0.80f, 15003);
 
-    cam.distance = 600.0f; cam.target_distance = 600.0f; cam.elevation = 0.8f;
+    cam.distance = 4000.0f; cam.target_distance = 4000.0f; cam.elevation = 0.8f;
 }
 
 // 15: Asteroid Belt — dense belt between inner rocky and outer gas planets
@@ -1049,7 +1056,7 @@ static void preset_asteroid_belt(CosmosState& state, const CosmosConfig& cfg, Or
     set_ring_system(jb, jb.radius * 1.8f, jb.radius * 2.5f, 0.15f, 0.30f, 0.10f);
     push_planet(state, cfg, star, sr * 45.0f, 2.8e-4f, 80.0f, 1.0f, 16006, 4);
 
-    cam.distance = 900.0f; cam.target_distance = 900.0f; cam.elevation = 0.5f;
+    cam.distance = sr * 55.0f; cam.target_distance = sr * 55.0f; cam.elevation = 0.5f;
 }
 
 // 16: Wolf-Rayet Supergiant — massive dying star shedding material
@@ -1095,7 +1102,7 @@ static void preset_wolf_rayet(CosmosState& state, const CosmosConfig& cfg, Orbit
         state.bodies.push_back(d); state.trails.emplace_back();
     }
 
-    cam.distance = 800.0f; cam.target_distance = 800.0f; cam.elevation = 0.3f;
+    cam.distance = 3000.0f; cam.target_distance = 3000.0f; cam.elevation = 0.3f;
 }
 
 // 17: Collision Course — two star systems approaching each other
@@ -1116,7 +1123,7 @@ static void preset_collision_course(CosmosState& state, const CosmosConfig& cfg,
     push_planet(state, cfg, sB, srB * 7.0f, 2.0e-6f, 340.0f, 1.2f, 18201, 1);
     push_planet(state, cfg, sB, srB * 14.0f, 8.0e-5f, 160.0f, 3.8f, 18202, 4);
 
-    cam.distance = 1800.0f; cam.target_distance = 1800.0f; cam.elevation = 0.4f;
+    cam.distance = 5000.0f; cam.target_distance = 5000.0f; cam.elevation = 0.4f;
 }
 
 // 18: Nebula Collapse — gas cloud collapsing into a protostar
@@ -1246,7 +1253,7 @@ static void preset_trojans(CosmosState& state, const CosmosConfig& cfg, OrbitCam
     push_planet(state, cfg, star, sr * 6.0f, 1.6e-7f, 500.0f, 1.2f, 20003, 0);
     push_planet(state, cfg, star, sr * 10.0f, 3.0e-6f, 290.0f, 3.0f, 20004, 3);
 
-    cam.distance = 800.0f; cam.target_distance = 800.0f; cam.elevation = 0.6f;
+    cam.distance = sr * 30.0f; cam.target_distance = sr * 30.0f; cam.elevation = 0.6f;
 }
 
 // 21: Exomoon System — detailed gas giant with diverse moon system
@@ -1273,9 +1280,8 @@ static void preset_exomoon_system(CosmosState& state, const CosmosConfig& cfg, O
     push_moon(state, cfg, host, hb.radius * 18.0f, 5.0e-10f, 60.0f, 5.5f, 21105);
     push_moon(state, cfg, host, hb.radius * 22.0f, 3.0e-10f, 55.0f, 0.8f, 21106);
 
-    cam.target = hb.pos;
-    cam.distance = 350.0f; cam.target_distance = 350.0f; cam.elevation = 0.35f;
     cam.focus_on(hb.pos, host, hb.radius);
+    cam.distance = hb.radius * 30.0f; cam.target_distance = hb.radius * 30.0f; cam.elevation = 0.35f;
 }
 
 // 22: Hierarchical Triple — close binary orbited by distant third star with planets
@@ -1304,7 +1310,7 @@ static void preset_hierarchical_triple(CosmosState& state, const CosmosConfig& c
     push_planet(state, cfg, s3, sr3 * 6.0f, 4.0e-6f, 260.0f, 0.5f, 22101, 3);
     push_planet(state, cfg, s3, sr3 * 10.0f, 8.0e-5f, 120.0f, 2.8f, 22102, 4);
 
-    cam.distance = 2000.0f; cam.target_distance = 2000.0f; cam.elevation = 0.45f;
+    cam.distance = 4000.0f; cam.target_distance = 4000.0f; cam.elevation = 0.45f;
 }
 
 // 23: Tatooine Sunset — circumbinary habitable planet (two suns in the sky)
@@ -1339,9 +1345,10 @@ static void preset_tatooine(CosmosState& state, const CosmosConfig& cfg, OrbitCa
     push_moon(state, cfg, pi, pb.radius * 6.0f, 2.0e-8f, 200.0f, 0.0f, 23201);
     push_moon(state, cfg, pi, pb.radius * 10.0f, 8.0e-9f, 160.0f, 2.5f, 23202);
 
-    cam.target = p.pos;
-    cam.distance = 400.0f; cam.target_distance = 400.0f; cam.elevation = 0.2f;
     cam.focus_on(p.pos, pi, pb.radius);
+    cam.distance = std::max(pb.radius * 20.0f, 200.0f);
+    cam.target_distance = cam.distance;
+    cam.elevation = 0.2f;
 }
 
 // 24: Black Hole Accretion — stellar black hole tearing apart a star
@@ -1408,7 +1415,14 @@ const int COSMOS_PRESET_COUNT = (int)(sizeof(COSMOS_PRESETS) / sizeof(COSMOS_PRE
 void CosmosApp::load_preset(int index) {
     if (index < 0 || index >= COSMOS_PRESET_COUNT) return;
     state.clear();
+
+    // Reset config to clean defaults (preserves display-only settings)
+    const int preserved_nebula_render_mode = cfg.nebula_render_mode;
+    cfg = CosmosConfig{};
+    cfg.nebula_render_mode = preserved_nebula_render_mode;
     cfg.body_count = 0;
+    cfg.dt_scale = (float)std::pow(10.0, cfg.time_exponent);
+
     selected_body = -1;
     inspector_visible_ = false;
     sim_time_ = 0.0f;
@@ -1431,6 +1445,7 @@ void CosmosApp::load_preset(int index) {
     state.trails.resize(state.bodies.size());
     cfg.body_count = static_cast<uint32_t>(state.count());
     update_body_tracking_cache();
+    apply_dust_debug_mode();
     paused = false;
 }
 
@@ -5026,7 +5041,10 @@ void CosmosApp::process_space_weather(float dt) {
                 if (dist <= 1.0e-5f)
                     continue;
                 float luminosity = std::max(estimate_stellar_luminosity_units(source), 0.0f);
-                float pressure = cfg.stellar_wind_pressure_scale * luminosity /
+                // Scale factor calibrated so radiation pressure β≈1 for micron-dust,
+                // negligible for planets, moderate for comets (physically correct).
+                constexpr float kWindSimScale = 5.0e-7f;
+                float pressure = kWindSimScale * cfg.stellar_wind_pressure_scale * luminosity /
                                  std::max(4.0f * kPi * dist2 * std::max(cfg.speed_of_light, 1.0f), 1.0e-6f);
                 float accel_mag = pressure * cross_section * shield_scale * type_scale / mass;
                 wind_accel += (delta / dist) * accel_mag;

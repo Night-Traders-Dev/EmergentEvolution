@@ -982,7 +982,16 @@ void enforce_body_physical_limits(CelestialBody& b) {
     b.radius = std::max(b.radius, min_radius);
 
     if (is_black_hole_type(b.type)) {
-        b.radius = std::max(0.5f, 2.0f * b.mass);
+        // Visual radius: linear for stellar BH, logarithmic for massive ones
+        // to avoid engulfing the entire simulation
+        float r;
+        if (b.mass < 100.0f) {
+            r = 2.0f * b.mass;  // stellar BHs: visible size
+        } else {
+            // Log scaling for intermediate/supermassive: visible but not giant
+            r = 200.0f + 40.0f * std::log10(b.mass / 100.0f);
+        }
+        b.radius = std::max(0.5f, r);
         return;
     }
 

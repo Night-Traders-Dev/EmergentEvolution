@@ -133,6 +133,11 @@ enum SmallBodyClass : uint8_t {
     SMALLBODY_ICY = 3,
 };
 
+enum PhysicsMode : uint8_t {
+    PHYSICS_MODE_NEWTONIAN = 0,
+    PHYSICS_MODE_GR        = 1,
+};
+
 enum IntegratorType : uint8_t {
     INTEGRATOR_VELOCITY_VERLET = 0,
     INTEGRATOR_EULER_EXPLICIT = 1,
@@ -1073,6 +1078,9 @@ struct CosmosConfig {
     float    cosmos_space_fabric_grid_size = 40.0f;
     float    cosmos_space_fabric_strength = 1.0f;
 
+    // Physics mode — Newtonian or General Relativity
+    int      physics_mode        = PHYSICS_MODE_GR;
+
     // General Relativity corrections
     bool     gr_enabled           = true;    // enable GR corrections
     float    gr_precession_scale  = 1.0f;    // perihelion precession strength (1 = physical)
@@ -1155,6 +1163,30 @@ struct CosmosConfig {
     // Collision broadphase
     bool     spatial_hash_collisions = true; // use spatial hashing for collision broadphase
 };
+
+// Apply a physics mode preset — configures GR and related settings as a bundle
+inline void apply_physics_mode(CosmosConfig& cfg, int mode) {
+    cfg.physics_mode = mode;
+    if (mode == PHYSICS_MODE_NEWTONIAN) {
+        // Pure Newtonian mechanics — no relativistic corrections
+        cfg.gr_enabled          = false;
+        cfg.gr_precession_scale = 0.0f;
+        cfg.gr_time_dilation    = 0.0f;
+        cfg.gr_frame_dragging   = 0.0f;
+        cfg.j2_perturbation     = false;
+        cfg.hawking_radiation   = false;
+        // Keep speed_of_light for internal use but GR terms are all disabled
+    } else {
+        // General Relativity — physically accurate 1PN corrections
+        cfg.gr_enabled          = true;
+        cfg.gr_precession_scale = 1.0f;   // physical perihelion precession
+        cfg.gr_time_dilation    = 1.0f;   // physical gravitational time dilation
+        cfg.gr_frame_dragging   = 1.0f;   // physical Lense-Thirring effect
+        cfg.speed_of_light      = 300.0f; // c in sim units (~10-300× orbital speed)
+        cfg.j2_perturbation     = true;   // oblateness gravity correction
+        cfg.hawking_radiation   = true;   // black hole evaporation
+    }
+}
 
 // ── Body collection ─────────────────────────────────────────────────────────
 
