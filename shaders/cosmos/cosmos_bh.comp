@@ -80,12 +80,14 @@ vec3 apply_source_accel(float src_mass, float src_spin_y, vec3 src_pos,
             acc *= td;
         }
         // Lense-Thirring frame-dragging (factor of 2 from GR)
+        // NOTE: GPU path assumes spin axis = Y (axial_tilt=0). CPU path
+        // uses per-body spin axis from axial_tilt for full accuracy.
         if (pc.gr_frame_dragging > 0.0 && abs(src_spin_y) > 1.0e-9) {
             float coeff = 2.0 * pc.gr_frame_dragging * pc.G * src_spin_y /
                           (pc.c2 * dist * dist * dist);
-            vec3 J_hat = vec3(0.0, 1.0, 0.0);
-            vec3 vxJ = cross(tgt_vel, J_hat);
-            float rdotJ = dot(r_hat, J_hat);
+            vec3 spin_axis = vec3(0.0, 1.0, 0.0);
+            vec3 vxJ = cross(tgt_vel, spin_axis);
+            float rdotJ = dot(r_hat, spin_axis);
             vec3 vxr = cross(tgt_vel, r_hat);
             acc += coeff * (vxJ - 3.0 * rdotJ * vxr);
         }

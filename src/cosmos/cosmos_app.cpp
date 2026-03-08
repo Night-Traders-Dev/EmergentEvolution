@@ -2339,6 +2339,7 @@ void CosmosApp::step_physics(float dt) {
     std::vector<float> source_spin_y(n, 0.0f);
     std::vector<float> source_radius(n, 0.0f);
     std::vector<float> source_angular_vel(n, 0.0f);
+    std::vector<glm::vec3> source_spin_axis(n, glm::vec3(0.0f, 1.0f, 0.0f));
     parallel_for(n, 512, [&](size_t begin, size_t end) {
         for (size_t i = begin; i < end; ++i) {
             const auto& b = bodies[i];
@@ -2351,6 +2352,9 @@ void CosmosApp::step_physics(float dt) {
                 source_angular_vel[i] = b.angular_vel;
                 float r = std::max(b.radius, 1.0e-4f);
                 source_spin_y[i] = b.mass * r * r * b.angular_vel;
+                // Compute spin axis from axial tilt (tilt from Y toward X)
+                float tilt = b.axial_tilt;
+                source_spin_axis[i] = glm::vec3(std::sin(tilt), std::cos(tilt), 0.0f);
             }
         }
     });
@@ -2370,6 +2374,7 @@ void CosmosApp::step_physics(float dt) {
                                   float src_spin_y,
                                   float src_radius,
                                   float src_angular_vel,
+                                  const glm::vec3& src_spin_axis,
                                   const glm::vec3& src_pos,
                                   const glm::vec3& tgt_pos,
                                   const glm::vec3& tgt_vel,
@@ -2391,12 +2396,13 @@ void CosmosApp::step_physics(float dt) {
             float J2 = std::clamp(omega2 * R3 / std::max(3.0f * GM, 1.0e-8f), 0.0f, 0.1f);
             if (J2 > 1.0e-8f) {
                 float R2_r2 = (src_radius * src_radius) / (dist * dist);
-                // sin²(lat) approximation: use y-component as latitude proxy
-                float sin_lat = r_hat.y;
+                // sin(lat) = projection of r_hat onto the body's spin axis
+                float sin_lat = glm::dot(r_hat, src_spin_axis);
                 float sin2_lat = sin_lat * sin_lat;
                 float j2_radial = -1.5f * J2 * R2_r2 * (3.0f * sin2_lat - 1.0f);
-                float j2_lat = -3.0f * J2 * R2_r2 * sin_lat * std::sqrt(std::max(1.0f - sin2_lat, 0.0f));
-                acc += (GM / dist2) * (j2_radial * r_hat + j2_lat * glm::vec3(0.0f, 1.0f, 0.0f));
+                float cos_lat = std::sqrt(std::max(1.0f - sin2_lat, 0.0f));
+                float j2_lat = -3.0f * J2 * R2_r2 * sin_lat * cos_lat;
+                acc += (GM / dist2) * (j2_radial * r_hat + j2_lat * src_spin_axis);
             }
         }
 
@@ -2420,9 +2426,8 @@ void CosmosApp::step_physics(float dt) {
             if (cfg.gr_frame_dragging > 0.0f && std::abs(src_spin_y) > 1.0e-9f) {
                 float coeff = 2.0f * cfg.gr_frame_dragging * cfg.G * src_spin_y /
                               (c2 * dist * dist * dist);
-                glm::vec3 J_hat(0.0f, 1.0f, 0.0f);
-                glm::vec3 vxJ = glm::cross(tgt_vel, J_hat);
-                float rdotJ = glm::dot(r_hat, J_hat);
+                glm::vec3 vxJ = glm::cross(tgt_vel, src_spin_axis);
+                float rdotJ = glm::dot(r_hat, src_spin_axis);
                 glm::vec3 vxr = glm::cross(tgt_vel, r_hat);
                 acc += coeff * (vxJ - 3.0f * rdotJ * vxr);
             }
@@ -2457,6 +2462,7 @@ void CosmosApp::step_physics(float dt) {
                     if (src == i) continue;
                     apply_source_accel(i, source_mass[src], source_spin_y[src],
                                        source_radius[src], source_angular_vel[src],
+                                       source_spin_axis[src],
                                        pos[src], pos[i], vel[i], ai);
                 }
                 out_accel[i] = ai;
@@ -2614,6 +2620,7 @@ void CosmosApp::step_physics(float dt) {
                     if (src == target) continue;
                     apply_source_accel(target, source_mass[src], source_spin_y[src],
                                        source_radius[src], source_angular_vel[src],
+                                       source_spin_axis[src],
                                        pos[src], pos[target], vel[target], out_accel[target]);
                 }
                 return;
@@ -2630,6 +2637,7 @@ void CosmosApp::step_physics(float dt) {
             if (!target_inside && dist > kMinDist && (size / dist) < theta) {
                 apply_source_accel(target, node.mass, node.spin_y,
                                    0.0f, 0.0f, // no J2 for aggregate BH nodes
+                                   glm::vec3(0.0f, 1.0f, 0.0f), // approximate axis for aggregate
                                    node.com, pos[target], vel[target], out_accel[target]);
                 return;
             }
@@ -3009,7 +3017,17 @@ void CosmosApp::step_physics(float dt) {
             float abs_dt = std::abs(scaled_dt);
             int orbit_substeps = (int)std::ceil(abs_dt * (float)kMinStepsPerOrbit / shortest_period);
             if (orbit_substeps > 1) {
-                orbit_substeps = std::min(orbit_substeps, kOrbitSubstepCap);
+                // When substep cap would be exceeded, clamp dt so orbits
+                // always get at least kMinStepsPerOrbit steps per revolution.
+                // This prevents polygonal "snake-like" trajectories at high
+                // time scales by sacrificing simulation speed for accuracy.
+                if (orbit_substeps > kOrbitSubstepCap) {
+                    float max_scaled_dt = shortest_period * (float)kOrbitSubstepCap /
+                                          (float)kMinStepsPerOrbit;
+                    scaled_dt = time_sign * max_scaled_dt;
+                    abs_dt = max_scaled_dt;
+                    orbit_substeps = kOrbitSubstepCap;
+                }
                 float sub_scaled_dt = scaled_dt / (float)orbit_substeps;
                 float denom = cfg.dt_scale * time_sign;
                 float sub_real_dt = (std::abs(denom) > 1.0e-9f)

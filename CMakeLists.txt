@@ -265,7 +265,7 @@ add_executable(particle_cosmos
     src/cosmos/cosmos_raytracer.cpp
 )
 target_link_libraries(particle_cosmos PRIVATE pp_common)
-target_compile_definitions(particle_cosmos PRIVATE APP_VERSION="1.1.0")
+target_compile_definitions(particle_cosmos PRIVATE APP_VERSION="1.2.0")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Biochemical Simulator — cells, bacteria, viruses
@@ -369,15 +369,15 @@ if(PORTABLE_BUILD)
     endmacro()
 
     # Shaders (depend on compiled SPIR-V)
-    embed_resource(${SHADER_BIN_DIR}/physics.spv              physics_spv)
-    embed_resource(${SHADER_BIN_DIR}/fullscreen.vert.spv      fullscreen_vert_spv)
-    embed_resource(${SHADER_BIN_DIR}/fullscreen.frag.spv      fullscreen_frag_spv)
-    embed_resource(${SHADER_BIN_DIR}/overlay.vert.spv         overlay_vert_spv)
-    embed_resource(${SHADER_BIN_DIR}/overlay.frag.spv         overlay_frag_spv)
-    embed_resource(${SHADER_BIN_DIR}/cosmos_rt.vert.spv       cosmos_rt_vert_spv)
-    embed_resource(${SHADER_BIN_DIR}/cosmos_rt.frag.spv       cosmos_rt_frag_spv)
-    embed_resource(${SHADER_BIN_DIR}/biochem_rt.vert.spv      biochem_rt_vert_spv)
-    embed_resource(${SHADER_BIN_DIR}/biochem_rt.frag.spv      biochem_rt_frag_spv)
+    embed_resource(${SHADER_BIN_DIR}/particle/physics.spv              physics_spv)
+    embed_resource(${SHADER_BIN_DIR}/particle/fullscreen.vert.spv      fullscreen_vert_spv)
+    embed_resource(${SHADER_BIN_DIR}/particle/fullscreen.frag.spv      fullscreen_frag_spv)
+    embed_resource(${SHADER_BIN_DIR}/particle/overlay.vert.spv         overlay_vert_spv)
+    embed_resource(${SHADER_BIN_DIR}/particle/overlay.frag.spv         overlay_frag_spv)
+    embed_resource(${SHADER_BIN_DIR}/cosmos/cosmos_rt.vert.spv       cosmos_rt_vert_spv)
+    embed_resource(${SHADER_BIN_DIR}/cosmos/cosmos_rt.frag.spv       cosmos_rt_frag_spv)
+    embed_resource(${SHADER_BIN_DIR}/biochem/biochem_rt.vert.spv      biochem_rt_vert_spv)
+    embed_resource(${SHADER_BIN_DIR}/biochem/biochem_rt.frag.spv      biochem_rt_frag_spv)
 
     # Icons
     embed_resource(${CMAKE_SOURCE_DIR}/assets/icon_32.png     icon_32_png)

@@ -9,7 +9,7 @@
 #include <cmath>
 
 #ifndef APP_VERSION
-#define APP_VERSION "1.1.0"
+#define APP_VERSION "1.2.0"
 #endif
 
 #ifdef _WIN32

@@ -13,7 +13,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Dates are YYYY-MM-DD
 
 ### Project-Wide
 - Unified launcher for selecting between Particle Physics, Cosmic Sandbox, and Biochemical Simulator
-- Per-simulation versioning (Particle Physics v1.2.0, Cosmic Sandbox v1.1.0, Biochemical Simulator v0.3.0)
+- Per-simulation versioning (Particle Physics v1.2.0, Cosmic Sandbox v1.2.0, Biochemical Simulator v0.3.0)
 - Shared Vulkan rendering framework (`pp_common` library)
 - Cross-platform support (Linux, Windows)
 - Steam integration (optional)
@@ -161,6 +161,22 @@ Initial particle physics simulation.
 - WASD camera movement
 - Lab mode with spawn tools
 - Basic UI with particle info cards
+
+---
+
+## Cosmic Sandbox v1.2.0 - 2026-03-08
+
+Orbital physics fixes and shader directory restructuring.
+
+### Changed
+
+- Shader files reorganized into per-simulation directories (`shaders/particle/`, `shaders/cosmos/`, `shaders/biochem/`)
+- J2 oblateness perturbation uses body's actual spin axis (from `axial_tilt`) instead of hardcoded Y-axis
+- Lense-Thirring frame-dragging uses per-body spin axis instead of hardcoded Y-axis
+
+### Fixed
+
+- Orbital substep dt clamping: when the 512-substep cap is hit at high time scales, dt is now auto-limited so every orbit gets at least 32 integration steps (prevents polygonal "snake-like" trajectories)
 
 ---
 

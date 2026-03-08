@@ -4,6 +4,22 @@ All notable changes to the Cosmic Sandbox simulation.
 
 ---
 
+## v1.2.0 - 2026-03-08
+
+Orbital physics fixes and shader directory restructuring.
+
+### Changed
+
+- Shader files moved to `shaders/cosmos/` subdirectory
+- J2 oblateness perturbation uses body's actual spin axis (from `axial_tilt`) instead of hardcoded Y-axis
+- Lense-Thirring frame-dragging uses per-body spin axis instead of hardcoded Y-axis
+
+### Fixed
+
+- Orbital substep dt clamping: when the 512-substep cap is hit at high time scales, dt is now auto-limited so every orbit gets at least 32 integration steps (prevents polygonal "snake-like" trajectories)
+
+---
+
 ## v1.1.0 - 2026-03-08
 
 Rendering realism audit and spawn menu redesign.

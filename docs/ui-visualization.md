@@ -221,7 +221,7 @@ energy slider and quick presets (Cell Colony, Virus Outbreak, Nutrient Burst, Im
 ## Procedural Celestial Rendering — Cosmic Sandbox
 
 The cosmos renderer now uses a shared full-screen raytracing fragment shader
-(`shaders/cosmos_rt.frag`) plus deterministic CPU-side visual metadata to render every
+(`shaders/cosmos/cosmos_rt.frag`) plus deterministic CPU-side visual metadata to render every
 major body class with a dedicated appearance model. Visual state remains derived from each
 body&rsquo;s persisted seed, mass, temperature, type, atmosphere, and cached planet properties.
 

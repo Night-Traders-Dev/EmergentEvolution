@@ -93,13 +93,16 @@ EmergentEvolution/
 │   ├── stb_image_write.h             # Image writing
 │   └── cjson/cJSON.h/.c              # JSON parser
 ├── shaders/
-│   ├── physics.comp                   # GPU: forces, collisions, bonds, fields, bloom
-│   ├── fullscreen.vert/.frag          # Physics render pipeline
-│   ├── overlay.vert/.frag             # Physics overlay pipeline
-│   ├── cosmos_rt.vert/.frag           # Cosmos GPU sphere raytracer (procedural planet textures)
-│   ├── cosmos_bh.comp                 # Cosmos GPU Barnes-Hut gravity compute
-│   ├── cosmos_nebula.comp             # Cosmos GPU nebula particle compute
-│   ├── biochem_rt.vert/.frag         # Biochem GPU SDF raytracer (organelle interiors)
+│   ├── particle/
+│   │   ├── physics.comp               # GPU: forces, collisions, bonds, fields, bloom
+│   │   ├── fullscreen.vert/.frag      # Physics render pipeline
+│   │   └── overlay.vert/.frag         # Physics overlay pipeline
+│   ├── cosmos/
+│   │   ├── cosmos_rt.vert/.frag       # Cosmos GPU sphere raytracer (procedural planet textures)
+│   │   ├── cosmos_bh.comp             # Cosmos GPU Barnes-Hut gravity compute
+│   │   └── cosmos_nebula.comp         # Cosmos GPU nebula particle compute
+│   └── biochem/
+│       └── biochem_rt.vert/.frag      # Biochem GPU SDF raytracer (organelle interiors)
 ├── assets/                            # Icons, music, Windows resources
 │   ├── particles/                     # 67 custom particle texture PNGs (128x128 RGBA)
 │   └── sfx/                           # 10 procedural WAV sound effects

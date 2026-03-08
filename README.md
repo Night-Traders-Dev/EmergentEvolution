@@ -13,7 +13,7 @@
 | Simulation | Version |
 | --- | --- |
 | Particle Physics | v1.2.0 |
-| Cosmic Sandbox | v1.1.0 |
+| Cosmic Sandbox | v1.2.0 |
 | Biochemical Simulator | v0.3.0 |
 
 </div>
