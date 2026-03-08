@@ -156,14 +156,29 @@ struct OrbitCamera {
 
     // Call every frame to animate smooth zoom + focus tracking + inertia
     void update(float dt) {
+        // NaN recovery: if target or distance became invalid, reset to safe defaults
+        if (!std::isfinite(target.x) || !std::isfinite(target.y) || !std::isfinite(target.z)) {
+            target = glm::vec3(0.0f);
+            focus_target = glm::vec3(0.0f);
+            release_focus();
+        }
+        if (!std::isfinite(distance) || distance <= 0.0f) {
+            distance = 600.0f;
+            target_distance = 600.0f;
+        }
+
         // Smooth zoom (exponential interpolation for consistent feel)
         float zoom_t = 1.0f - std::exp(-zoom_speed * dt);
         distance += (target_distance - distance) * zoom_t;
 
         // Focus tracking: smoothly move target toward focus_target
         if (focus_active) {
-            float t = 1.0f - std::exp(-focus_lerp_speed * dt);
-            target = glm::mix(target, focus_target, t);
+            if (std::isfinite(focus_target.x) && std::isfinite(focus_target.y) && std::isfinite(focus_target.z)) {
+                float t = 1.0f - std::exp(-focus_lerp_speed * dt);
+                target = glm::mix(target, focus_target, t);
+            } else {
+                release_focus();
+            }
         }
 
         // Orbit inertia: apply residual velocity when not actively dragging
@@ -181,7 +196,8 @@ struct OrbitCamera {
 
     // Update focus_target with a body's current position (call each frame)
     void track_body(glm::vec3 body_pos) {
-        if (focus_active)
+        if (focus_active &&
+            std::isfinite(body_pos.x) && std::isfinite(body_pos.y) && std::isfinite(body_pos.z))
             focus_target = body_pos;
     }
 

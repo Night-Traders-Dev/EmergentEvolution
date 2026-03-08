@@ -55,7 +55,7 @@ public:
     float  spawn_mass = 3.003e-6f;
 
     // Hit-test: find body under screen coordinates
-    int pick_body(float mx, float my, float W, float H) const;
+    int pick_body(float mx, float my, float W, float H, bool skip_fragments = false) const;
 
     // Double-click detection
     double last_click_time_ = 0.0;

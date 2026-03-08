@@ -148,6 +148,10 @@ void CosmosApp::process_collisions(float dt) {
     auto& bodies = state.bodies;
     size_t n = bodies.size();
 
+    // Pre-reserve capacity so fragment spawning during collision processing
+    // doesn't reallocate the vector and invalidate pointers/references.
+    bodies.reserve(n + std::max<size_t>(64, n / 2));
+
     // Build candidate pair list -- spatial hash grid for n >= 64, brute force otherwise.
     std::vector<std::pair<size_t, size_t>> pairs;
 

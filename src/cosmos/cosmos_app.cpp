@@ -58,6 +58,12 @@ void CosmosApp::init(GLFWwindow* window, ProgressCB progress_cb) {
 // ── Screen → world spawn position ────────────────────────────────────────────
 
 glm::vec3 CosmosApp::screen_to_spawn_pos(double mx, double my, int fb_w, int fb_h) const {
+    // Guard against NaN camera state — return origin so spawn validation rejects it gracefully
+    if (!std::isfinite(camera.target.x) || !std::isfinite(camera.target.y) ||
+        !std::isfinite(camera.target.z) || !std::isfinite(camera.distance) ||
+        fb_w <= 0 || fb_h <= 0)
+        return glm::vec3(std::numeric_limits<float>::quiet_NaN());
+
     float W = (float)fb_w, H = (float)fb_h;
     float aspect = W / H;
     glm::dmat4 inv_vp = glm::inverse(camera.proj_matrix_d(aspect) * camera.view_matrix_d());
@@ -82,7 +88,7 @@ glm::vec3 CosmosApp::screen_to_spawn_pos(double mx, double my, int fb_w, int fb_
 
 // ── Body picking (screen-space hit test) ─────────────────────────────────────
 
-int CosmosApp::pick_body(float mx, float my, float W, float H) const {
+int CosmosApp::pick_body(float mx, float my, float W, float H, bool skip_fragments) const {
     float aspect = W / H;
     glm::dmat4 vp = camera.proj_matrix_d(aspect) * camera.view_matrix_d();
     float fov_rad = glm::radians(camera.fov);
@@ -91,6 +97,10 @@ int CosmosApp::pick_body(float mx, float my, float W, float H) const {
     float best_dist = 30.0f;
     for (size_t i = 0; i < state.bodies.size(); i++) {
         const auto& b = state.bodies[i];
+        if (b.marked_for_removal) continue;
+        // In spawn mode, skip small fragments/dust so they don't block spawning
+        if (skip_fragments && (b.non_attracting || fragment_like_body(b) || b.type == CTYPE_DUST))
+            continue;
         glm::dvec4 clip = vp * glm::dvec4(b.pos, 1.0);
         if (clip.w <= 0.0) continue;
         glm::dvec3 ndc = glm::dvec3(clip) / clip.w;
@@ -299,9 +309,15 @@ void CosmosApp::tick(GLFWwindow* window, float dt) {
     // Track focused body (update position each frame so camera follows)
     if (camera.focus_active && camera.focus_body >= 0 &&
         camera.focus_body < (int)state.bodies.size()) {
-        camera.track_body(state.bodies[camera.focus_body].pos);
+        const auto& fb = state.bodies[camera.focus_body];
+        if (fb.marked_for_removal ||
+            !std::isfinite(fb.pos.x) || !std::isfinite(fb.pos.y) || !std::isfinite(fb.pos.z)) {
+            camera.release_focus();
+        } else {
+            camera.track_body(fb.pos);
+        }
     } else if (camera.focus_active && camera.focus_body >= 0) {
-        // Body was removed
+        // Body was removed or index out of bounds
         camera.release_focus();
     }
 
@@ -351,9 +367,10 @@ void CosmosApp::tick(GLFWwindow* window, float dt) {
                                    std::isfinite(spawn_preview_pos_.y) &&
                                    std::isfinite(spawn_preview_pos_.z);
 
-            // Only show preview when no body is under cursor (click would select, not spawn)
+            // Only show preview when no significant body is under cursor
+            // (skip fragments/dust so they don't block the spawn preview)
             int hover_body = pick_body((float)last_mouse_x, (float)last_mouse_y,
-                                        (float)fb_w, (float)fb_h);
+                                        (float)fb_w, (float)fb_h, true);
             if (hover_body < 0 && spawn_pos_valid) {
                 preview_body_.pos = spawn_preview_pos_;
                 raytracer_.preview.body = &preview_body_;

@@ -21,6 +21,13 @@
 static glm::vec3 viewport_spawn_position(CosmosApp* app, GLFWwindow* window, double mx, double my) {
     int fb_w, fb_h;
     glfwGetFramebufferSize(window, &fb_w, &fb_h);
+    if (fb_w <= 0 || fb_h <= 0) return app->camera.target;
+
+    // Guard against NaN camera state
+    if (!std::isfinite(app->camera.target.x) || !std::isfinite(app->camera.target.y) ||
+        !std::isfinite(app->camera.target.z) || !std::isfinite(app->camera.distance))
+        return glm::vec3(0.0f);
+
     float W = (float)fb_w, H = (float)fb_h;
     float aspect = W / H;
 
@@ -80,7 +87,8 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
             int fb_w, fb_h;
             glfwGetFramebufferSize(window, &fb_w, &fb_h);
             app->click_candidate_ = app->pick_body((float)mx, (float)my,
-                                                    (float)fb_w, (float)fb_h);
+                                                    (float)fb_w, (float)fb_h,
+                                                    app->is_spawn_mode());
 
             // In spawn mode clicking empty space: start spawn drag (no camera orbit)
             if (app->is_spawn_mode() && app->click_candidate_ < 0) {
@@ -120,14 +128,16 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
 
                 bool is_double = (now - app->last_click_time_ < 0.4) && (click_dist < 20.0f);
 
-                if (is_double && app->click_candidate_ >= 0) {
+                if (is_double && app->click_candidate_ >= 0 &&
+                    app->click_candidate_ < (int)app->state.bodies.size()) {
                     // Double-click on body → focus camera on it
                     const auto& b = app->state.bodies[app->click_candidate_];
                     app->selected_body = app->click_candidate_;
                     app->camera.focus_on(b.pos, app->click_candidate_, b.radius);
                     app->camera.target_distance = std::max(b.radius * 8.0f, 30.0f);
                 } else {
-                    if (app->click_candidate_ >= 0) {
+                    if (app->click_candidate_ >= 0 &&
+                        app->click_candidate_ < (int)app->state.bodies.size()) {
                         app->selected_body = app->click_candidate_;
                     } else {
                         app->selected_body = -1;

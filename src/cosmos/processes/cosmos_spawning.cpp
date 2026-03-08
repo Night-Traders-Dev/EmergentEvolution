@@ -25,6 +25,8 @@ uint32_t CosmosApp::draft_settings_hash() const {
 }
 
 int CosmosApp::spawn_at(glm::vec3 pos) {
+    if (!std::isfinite(pos.x) || !std::isfinite(pos.y) || !std::isfinite(pos.z))
+        return -1;
     const bool is_small_body = (spawn_type == CTYPE_ASTEROID || spawn_type == CTYPE_COMET || spawn_type == CTYPE_DUST);
     const int requested_count = std::clamp(spawn_draft_.small_body_spawn_count, 1, 1000);
     const bool use_batch = is_small_body && requested_count > 1;
