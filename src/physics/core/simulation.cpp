@@ -1661,6 +1661,24 @@ void PhysicsSimulation::tick(GLFWwindow* window, double dt) {
     frame_counter_++;
     iface.wobble_time += static_cast<float>(dt);
 
+    // Ensure auxiliary particle vectors are sized to match cfg.particle_count
+    // (prevents OOB crashes when particle count changes between frames)
+    {
+        size_t n = cfg.particle_count;
+        if (particles.orbital_parent.size() < n)
+            particles.orbital_parent.resize(n, -1);
+        if (particles.orbital_shell.size() < n)
+            particles.orbital_shell.resize(n, -1);
+        if (particles.excitation_timer.size() < n)
+            particles.excitation_timer.resize(n, 0);
+        if (particles.entangled_partner.size() < n)
+            particles.entangled_partner.resize(n, UINT32_MAX);
+        if (particles.cascade_tag.size() < n)
+            particles.cascade_tag.resize(n, 0);
+        if (particles.birth_frames.size() < n)
+            particles.birth_frames.resize(n, 0);
+    }
+
     // Apply thread count from settings (only when changed to avoid runtime overhead)
 #ifdef HAS_OPENMP
     {

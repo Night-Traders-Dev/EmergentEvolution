@@ -336,6 +336,30 @@ target_compile_definitions(cosmos_tests PRIVATE APP_VERSION="test")
 
 add_test(NAME cosmos_tests COMMAND cosmos_tests)
 
+# Physics (Particle Playground) CPU tests
+add_executable(physics_tests
+    tests/physics_tests.cpp
+)
+target_include_directories(physics_tests PRIVATE
+    tests/
+)
+target_link_libraries(physics_tests PRIVATE pp_common)
+target_compile_definitions(physics_tests PRIVATE APP_VERSION="test")
+
+add_test(NAME physics_tests COMMAND physics_tests)
+
+# Biochem CPU tests
+add_executable(biochem_tests
+    tests/biochem_tests.cpp
+)
+target_include_directories(biochem_tests PRIVATE
+    tests/
+)
+target_link_libraries(biochem_tests PRIVATE pp_common)
+target_compile_definitions(biochem_tests PRIVATE APP_VERSION="test")
+
+add_test(NAME biochem_tests COMMAND biochem_tests)
+
 # GPU tests — requires Vulkan device (headless compute)
 add_executable(cosmos_gpu_tests
     tests/cosmos_gpu_tests.cpp
