@@ -58,19 +58,43 @@ void CosmosApp::step_physics(float dt) {
     if (n == 0) return;
     apply_dust_debug_mode();
 
-    std::vector<glm::vec3> pos0(n, glm::vec3(0.0f));
-    std::vector<glm::vec3> vel0(n, glm::vec3(0.0f));
-    std::vector<uint8_t> source_active(n, 0u);
-    std::vector<float> source_mass(n, 0.0f);
-    std::vector<float> source_spin_y(n, 0.0f);
-    std::vector<float> source_radius(n, 0.0f);
-    std::vector<float> source_angular_vel(n, 0.0f);
-    std::vector<glm::vec3> source_spin_axis(n, glm::vec3(0.0f, 1.0f, 0.0f));
+    // Use persistent scratch buffers to avoid per-frame heap allocations.
+    // Only resize when body count changes (amortized O(1)).
+    auto resize_scratch = [&](size_t sz) {
+        if (scratch_pos0_.size() < sz) {
+            scratch_pos0_.resize(sz);    scratch_vel0_.resize(sz);
+            scratch_source_active_.resize(sz);
+            scratch_source_mass_.resize(sz);  scratch_source_spin_y_.resize(sz);
+            scratch_source_radius_.resize(sz); scratch_source_angular_vel_.resize(sz);
+            scratch_source_spin_axis_.resize(sz);
+            scratch_accel0_.resize(sz);
+            scratch_int_pos_.resize(sz);  scratch_int_vel_.resize(sz);
+            scratch_int_accel_.resize(sz); scratch_int_accel2_.resize(sz);
+            scratch_int_pos2_.resize(sz); scratch_int_vel2_.resize(sz);
+        }
+    };
+    resize_scratch(n);
+    auto& pos0 = scratch_pos0_;
+    auto& vel0 = scratch_vel0_;
+    auto& source_active = scratch_source_active_;
+    auto& source_mass = scratch_source_mass_;
+    auto& source_spin_y = scratch_source_spin_y_;
+    auto& source_radius = scratch_source_radius_;
+    auto& source_angular_vel = scratch_source_angular_vel_;
+    auto& source_spin_axis = scratch_source_spin_axis_;
+
+    // Clear and fill (parallel memset + fill is faster than allocate+construct)
+    std::memset(source_active.data(), 0, n * sizeof(uint8_t));
     parallel_for(n, 512, [&](size_t begin, size_t end) {
         for (size_t i = begin; i < end; ++i) {
             const auto& b = bodies[i];
             pos0[i] = b.pos;
             vel0[i] = b.vel;
+            source_mass[i] = 0.0f;
+            source_spin_y[i] = 0.0f;
+            source_radius[i] = 0.0f;
+            source_angular_vel[i] = 0.0f;
+            source_spin_axis[i] = glm::vec3(0.0f, 1.0f, 0.0f);
             if (!b.marked_for_removal && !b.non_attracting && b.mass > 0.0f) {
                 source_active[i] = 1u;
                 source_mass[i] = b.mass;
@@ -78,18 +102,18 @@ void CosmosApp::step_physics(float dt) {
                 source_angular_vel[i] = b.angular_vel;
                 float r = std::max(b.radius, 1.0e-4f);
                 source_spin_y[i] = b.mass * r * r * b.angular_vel;
-                // Compute spin axis from axial tilt (tilt from Y toward X)
                 float tilt = b.axial_tilt;
                 source_spin_axis[i] = glm::vec3(std::sin(tilt), std::cos(tilt), 0.0f);
             }
         }
     });
-    std::vector<size_t> source_indices;
-    source_indices.reserve(n);
+    scratch_source_indices_.clear();
+    scratch_source_indices_.reserve(n);
     for (size_t i = 0; i < n; ++i) {
         if (source_active[i] && source_mass[i] > 0.0f)
-            source_indices.push_back(i);
+            scratch_source_indices_.push_back(i);
     }
+    auto& source_indices = scratch_source_indices_;
 
     float c2 = cfg.speed_of_light * cfg.speed_of_light;
     float soft2 = cfg.softening * cfg.softening;
@@ -452,89 +476,84 @@ void CosmosApp::step_physics(float dt) {
                                     const std::vector<glm::vec3>* initial_accel,
                                     std::vector<glm::vec3>& out_pos,
                                     std::vector<glm::vec3>& out_vel) {
-        out_pos.assign(n, glm::vec3(0.0f));
-        out_vel.assign(n, glm::vec3(0.0f));
-        if (n == 0)
-            return;
+        // Reuse scratch buffers instead of allocating new vectors each call
+        out_pos.resize(n);
+        out_vel.resize(n);
+        if (n == 0) return;
+
+        auto& accel_a = scratch_int_accel_;
+        auto& accel_b = scratch_int_accel2_;
+        auto& tmp_pos = scratch_int_pos2_;
+        auto& tmp_vel = scratch_int_vel2_;
 
         auto ensure_accel = [&](std::vector<glm::vec3>& accel) {
-            if (initial_accel) accel = *initial_accel;
-            else compute_accel(in_pos, in_vel, accel);
+            if (initial_accel) {
+                std::memcpy(accel.data(), initial_accel->data(), n * sizeof(glm::vec3));
+            } else {
+                compute_accel(in_pos, in_vel, accel);
+            }
         };
 
         switch (cfg.integrator_type) {
         case INTEGRATOR_EULER_EXPLICIT: {
-            std::vector<glm::vec3> accel(n, glm::vec3(0.0f));
-            ensure_accel(accel);
+            std::fill_n(accel_a.data(), n, glm::vec3(0.0f));
+            ensure_accel(accel_a);
             parallel_for(n, 384, [&](size_t begin, size_t end) {
                 for (size_t i = begin; i < end; ++i) {
                     if (bodies[i].marked_for_removal || bodies[i].locked) {
-                        out_pos[i] = in_pos[i];
-                        out_vel[i] = in_vel[i];
-                        continue;
+                        out_pos[i] = in_pos[i]; out_vel[i] = in_vel[i]; continue;
                     }
                     out_pos[i] = in_pos[i] + in_vel[i] * step_scaled_dt;
-                    out_vel[i] = in_vel[i] + accel[i] * step_scaled_dt;
+                    out_vel[i] = in_vel[i] + accel_a[i] * step_scaled_dt;
                 }
             });
             break;
         }
         case INTEGRATOR_EULER_SEMI_IMPLICIT: {
-            std::vector<glm::vec3> accel(n, glm::vec3(0.0f));
-            ensure_accel(accel);
+            std::fill_n(accel_a.data(), n, glm::vec3(0.0f));
+            ensure_accel(accel_a);
             parallel_for(n, 384, [&](size_t begin, size_t end) {
                 for (size_t i = begin; i < end; ++i) {
                     if (bodies[i].marked_for_removal || bodies[i].locked) {
-                        out_pos[i] = in_pos[i];
-                        out_vel[i] = in_vel[i];
-                        continue;
+                        out_pos[i] = in_pos[i]; out_vel[i] = in_vel[i]; continue;
                     }
-                    out_vel[i] = in_vel[i] + accel[i] * step_scaled_dt;
+                    out_vel[i] = in_vel[i] + accel_a[i] * step_scaled_dt;
                     out_pos[i] = in_pos[i] + out_vel[i] * step_scaled_dt;
                 }
             });
             break;
         }
         case INTEGRATOR_RK2: {
-            std::vector<glm::vec3> accel0_local(n, glm::vec3(0.0f));
-            ensure_accel(accel0_local);
-            std::vector<glm::vec3> pos_mid(n, glm::vec3(0.0f));
-            std::vector<glm::vec3> vel_mid(n, glm::vec3(0.0f));
+            std::fill_n(accel_a.data(), n, glm::vec3(0.0f));
+            ensure_accel(accel_a);
             parallel_for(n, 384, [&](size_t begin, size_t end) {
                 for (size_t i = begin; i < end; ++i) {
                     if (bodies[i].marked_for_removal || bodies[i].locked) {
-                        pos_mid[i] = in_pos[i];
-                        vel_mid[i] = in_vel[i];
-                        continue;
+                        tmp_pos[i] = in_pos[i]; tmp_vel[i] = in_vel[i]; continue;
                     }
-                    pos_mid[i] = in_pos[i] + in_vel[i] * (step_scaled_dt * 0.5f);
-                    vel_mid[i] = in_vel[i] + accel0_local[i] * (step_scaled_dt * 0.5f);
+                    tmp_pos[i] = in_pos[i] + in_vel[i] * (step_scaled_dt * 0.5f);
+                    tmp_vel[i] = in_vel[i] + accel_a[i] * (step_scaled_dt * 0.5f);
                 }
             });
-            std::vector<glm::vec3> accel_mid(n, glm::vec3(0.0f));
-            compute_accel(pos_mid, vel_mid, accel_mid);
+            std::fill_n(accel_b.data(), n, glm::vec3(0.0f));
+            compute_accel(tmp_pos, tmp_vel, accel_b);
             parallel_for(n, 384, [&](size_t begin, size_t end) {
                 for (size_t i = begin; i < end; ++i) {
                     if (bodies[i].marked_for_removal || bodies[i].locked) {
-                        out_pos[i] = in_pos[i];
-                        out_vel[i] = in_vel[i];
-                        continue;
+                        out_pos[i] = in_pos[i]; out_vel[i] = in_vel[i]; continue;
                     }
-                    out_pos[i] = in_pos[i] + vel_mid[i] * step_scaled_dt;
-                    out_vel[i] = in_vel[i] + accel_mid[i] * step_scaled_dt;
+                    out_pos[i] = in_pos[i] + tmp_vel[i] * step_scaled_dt;
+                    out_vel[i] = in_vel[i] + accel_b[i] * step_scaled_dt;
                 }
             });
             break;
         }
         case INTEGRATOR_FOREST_RUTH: {
-            std::vector<glm::vec3> pos = in_pos;
-            std::vector<glm::vec3> vel = in_vel;
-            std::vector<glm::vec3> accel(n, glm::vec3(0.0f));
+            std::memcpy(tmp_pos.data(), in_pos.data(), n * sizeof(glm::vec3));
+            std::memcpy(tmp_vel.data(), in_vel.data(), n * sizeof(glm::vec3));
             constexpr float theta = 1.0f / (2.0f - 1.2599210498948732f);
             constexpr float c1 = theta * 0.5f;
             constexpr float c2 = (1.0f - theta) * 0.5f;
-            constexpr float c3 = c2;
-            constexpr float c4 = c1;
             constexpr float d1 = theta;
             constexpr float d2 = 1.0f - 2.0f * theta;
             constexpr float d3 = theta;
@@ -542,31 +561,30 @@ void CosmosApp::step_physics(float dt) {
                 parallel_for(n, 384, [&](size_t begin, size_t end) {
                     for (size_t i = begin; i < end; ++i) {
                         if (bodies[i].marked_for_removal || bodies[i].locked) continue;
-                        pos[i] += vel[i] * (step_scaled_dt * coeff);
+                        tmp_pos[i] += tmp_vel[i] * (step_scaled_dt * coeff);
                     }
                 });
             };
             auto kick = [&](float coeff) {
-                compute_accel(pos, vel, accel);
+                compute_accel(tmp_pos, tmp_vel, accel_a);
                 parallel_for(n, 384, [&](size_t begin, size_t end) {
                     for (size_t i = begin; i < end; ++i) {
                         if (bodies[i].marked_for_removal || bodies[i].locked) continue;
-                        vel[i] += accel[i] * (step_scaled_dt * coeff);
+                        tmp_vel[i] += accel_a[i] * (step_scaled_dt * coeff);
                     }
                 });
             };
             drift(c1); kick(d1);
             drift(c2); kick(d2);
-            drift(c3); kick(d3);
-            drift(c4);
-            out_pos = std::move(pos);
-            out_vel = std::move(vel);
+            drift(c2); kick(d3);
+            drift(c1);
+            std::memcpy(out_pos.data(), tmp_pos.data(), n * sizeof(glm::vec3));
+            std::memcpy(out_vel.data(), tmp_vel.data(), n * sizeof(glm::vec3));
             break;
         }
         case INTEGRATOR_PEFRL: {
-            std::vector<glm::vec3> pos = in_pos;
-            std::vector<glm::vec3> vel = in_vel;
-            std::vector<glm::vec3> accel(n, glm::vec3(0.0f));
+            std::memcpy(tmp_pos.data(), in_pos.data(), n * sizeof(glm::vec3));
+            std::memcpy(tmp_vel.data(), in_vel.data(), n * sizeof(glm::vec3));
             constexpr float xi = 0.1786178958448091f;
             constexpr float lambda = -0.2123418310626054f;
             constexpr float chi = -0.06626458266981849f;
@@ -576,16 +594,16 @@ void CosmosApp::step_physics(float dt) {
                 parallel_for(n, 384, [&](size_t begin, size_t end) {
                     for (size_t i = begin; i < end; ++i) {
                         if (bodies[i].marked_for_removal || bodies[i].locked) continue;
-                        pos[i] += vel[i] * (step_scaled_dt * coeff);
+                        tmp_pos[i] += tmp_vel[i] * (step_scaled_dt * coeff);
                     }
                 });
             };
             auto kick = [&](float coeff) {
-                compute_accel(pos, vel, accel);
+                compute_accel(tmp_pos, tmp_vel, accel_a);
                 parallel_for(n, 384, [&](size_t begin, size_t end) {
                     for (size_t i = begin; i < end; ++i) {
                         if (bodies[i].marked_for_removal || bodies[i].locked) continue;
-                        vel[i] += accel[i] * (step_scaled_dt * coeff);
+                        tmp_vel[i] += accel_a[i] * (step_scaled_dt * coeff);
                     }
                 });
             };
@@ -594,39 +612,33 @@ void CosmosApp::step_physics(float dt) {
             drift(drift_mid); kick(lambda);
             drift(chi);       kick(c_half);
             drift(xi);
-            out_pos = std::move(pos);
-            out_vel = std::move(vel);
+            std::memcpy(out_pos.data(), tmp_pos.data(), n * sizeof(glm::vec3));
+            std::memcpy(out_vel.data(), tmp_vel.data(), n * sizeof(glm::vec3));
             break;
         }
         case INTEGRATOR_VELOCITY_VERLET:
         default: {
-            std::vector<glm::vec3> accel0_local(n, glm::vec3(0.0f));
-            ensure_accel(accel0_local);
-            std::vector<glm::vec3> pos1_local(n, glm::vec3(0.0f));
-            std::vector<glm::vec3> vel_half_local(n, glm::vec3(0.0f));
+            std::fill_n(accel_a.data(), n, glm::vec3(0.0f));
+            ensure_accel(accel_a);
             float dt2 = step_scaled_dt * step_scaled_dt;
             parallel_for(n, 384, [&](size_t begin, size_t end) {
                 for (size_t i = begin; i < end; ++i) {
                     if (bodies[i].marked_for_removal || bodies[i].locked) {
-                        pos1_local[i] = in_pos[i];
-                        vel_half_local[i] = in_vel[i];
-                        continue;
+                        tmp_pos[i] = in_pos[i]; tmp_vel[i] = in_vel[i]; continue;
                     }
-                    pos1_local[i] = in_pos[i] + in_vel[i] * step_scaled_dt + 0.5f * accel0_local[i] * dt2;
-                    vel_half_local[i] = in_vel[i] + 0.5f * accel0_local[i] * step_scaled_dt;
+                    tmp_pos[i] = in_pos[i] + in_vel[i] * step_scaled_dt + 0.5f * accel_a[i] * dt2;
+                    tmp_vel[i] = in_vel[i] + 0.5f * accel_a[i] * step_scaled_dt;
                 }
             });
-            std::vector<glm::vec3> accel1(n, glm::vec3(0.0f));
-            compute_accel(pos1_local, vel_half_local, accel1);
+            std::fill_n(accel_b.data(), n, glm::vec3(0.0f));
+            compute_accel(tmp_pos, tmp_vel, accel_b);
             parallel_for(n, 384, [&](size_t begin, size_t end) {
                 for (size_t i = begin; i < end; ++i) {
                     if (bodies[i].marked_for_removal || bodies[i].locked) {
-                        out_pos[i] = in_pos[i];
-                        out_vel[i] = in_vel[i];
-                        continue;
+                        out_pos[i] = in_pos[i]; out_vel[i] = in_vel[i]; continue;
                     }
-                    out_pos[i] = pos1_local[i];
-                    out_vel[i] = in_vel[i] + 0.5f * (accel0_local[i] + accel1[i]) * step_scaled_dt;
+                    out_pos[i] = tmp_pos[i];
+                    out_vel[i] = in_vel[i] + 0.5f * (accel_a[i] + accel_b[i]) * step_scaled_dt;
                 }
             });
             break;
@@ -664,7 +676,8 @@ void CosmosApp::step_physics(float dt) {
         });
     };
 
-    std::vector<glm::vec3> accel0(n, glm::vec3(0.0f));
+    auto& accel0 = scratch_accel0_;
+    std::fill_n(accel0.data(), n, glm::vec3(0.0f));
     compute_accel(pos0, vel0, accel0);
 
     float scaled_dt = scaled_dt_nominal;
@@ -710,7 +723,7 @@ void CosmosApp::step_physics(float dt) {
     // to maintain stable integration at high time scales (e.g. TRAPPIST-1 at 1yr/s).
     if (!adaptive_substep_refining_ && n > 1 && std::abs(scaled_dt) > 1.0e-9f) {
         constexpr int kMinStepsPerOrbit = 32;
-        constexpr int kOrbitSubstepCap = 512;
+        constexpr int kOrbitSubstepCap = 128;
         constexpr float kTwoPi = 6.283185307f;
 
         // Cache shortest period — only recompute every 30 frames
@@ -778,10 +791,18 @@ void CosmosApp::step_physics(float dt) {
 
     if (cfg.adaptive_substepping && !adaptive_substep_refining_ &&
         n > 0 && std::abs(scaled_dt) > 1.0e-9f) {
-        // Pre-allocate integration scratch buffers (avoid per-estimate allocation)
-        std::vector<glm::vec3> full_pos(n), full_vel(n);
-        std::vector<glm::vec3> half_pos(n), half_vel(n);
-        std::vector<glm::vec3> half2_pos(n), half2_vel(n);
+        // Use persistent scratch buffers for adaptive error estimation
+        auto resize_adapt = [&](size_t sz) {
+            if (scratch_adapt_full_pos_.size() < sz) {
+                scratch_adapt_full_pos_.resize(sz); scratch_adapt_full_vel_.resize(sz);
+                scratch_adapt_half_pos_.resize(sz); scratch_adapt_half_vel_.resize(sz);
+                scratch_adapt_half2_pos_.resize(sz); scratch_adapt_half2_vel_.resize(sz);
+            }
+        };
+        resize_adapt(n);
+        auto& full_pos = scratch_adapt_full_pos_;  auto& full_vel = scratch_adapt_full_vel_;
+        auto& half_pos = scratch_adapt_half_pos_;   auto& half_vel = scratch_adapt_half_vel_;
+        auto& half2_pos = scratch_adapt_half2_pos_; auto& half2_vel = scratch_adapt_half2_vel_;
 
         auto estimate_segment_error = [&](float segment_scaled_dt) {
             if (std::abs(segment_scaled_dt) <= 1.0e-9f)
@@ -801,13 +822,16 @@ void CosmosApp::step_physics(float dt) {
 
         float tolerance = std::clamp(cfg.adaptive_substep_tolerance, 1.0e-6f, 1.0e6f);
         int required_substeps = 1;
-        // Cap search iterations to 6 (max 64 substeps from error estimation)
-        // Higher substep counts come from orbital-period refinement above
-        constexpr int kSearchCap = 64;
+        // Cap search to 4 iterations (max 16 substeps from error estimation).
+        // Each iteration does 3 full gravity evaluations, so limit cost.
+        // Orbital-period refinement (above) handles the high-substep case.
+        constexpr int kSearchCap = 16;
         float segment_error = estimate_segment_error(scaled_dt);
-        while (segment_error > tolerance && required_substeps < kSearchCap) {
+        int search_iters = 0;
+        while (segment_error > tolerance && required_substeps < kSearchCap && search_iters < 4) {
             required_substeps *= 2;
             segment_error = estimate_segment_error(scaled_dt / (float)required_substeps);
+            ++search_iters;
         }
 
         adaptive_substeps_required_ = std::max(required_substeps, 1);
@@ -840,7 +864,8 @@ void CosmosApp::step_physics(float dt) {
         displayed_time_rate_ = 0.0;
     cfg.sim_time_accumulated += (double)scaled_dt;
 
-    std::vector<glm::vec3> pos1, vel1;
+    auto& pos1 = scratch_int_pos_;
+    auto& vel1 = scratch_int_vel_;
     integrate_kinematics(scaled_dt, pos0, vel0, &accel0, pos1, vel1);
     parallel_for(n, 384, [&](size_t begin, size_t end) {
         for (size_t i = begin; i < end; ++i) {
@@ -854,19 +879,28 @@ void CosmosApp::step_physics(float dt) {
         }
     });
 
-    // Physics subsystems
-    if (cfg.roche_limit || cfg.tidal_forces) process_roche_limit(scaled_dt);
-    if (cfg.collisions)         process_collisions(scaled_dt);
-    if (cfg.spin_fragmentation) process_spin_fragmentation(scaled_dt);
-    if (cfg.temperature_system) process_temperature(scaled_dt);
-    if (cfg.temperature_system || cfg.evaporation) process_space_weather(scaled_dt);
-    if (cfg.material_phases)    process_material_phases(scaled_dt);
-    if (cfg.evaporation)        process_evaporation(scaled_dt);
-    if (cfg.stellar_evolution)  process_stellar_evolution(scaled_dt);
-    if (cfg.tidal_locking)      process_tidal_locking(scaled_dt);
-    if (cfg.hawking_radiation)  process_hawking_radiation(scaled_dt);
-    if (cfg.yarkovsky_effect)   process_yarkovsky(scaled_dt);
-    process_orbital_elements();
+    // Physics subsystems — during recursive substeps (orbit/adaptive refinement),
+    // only run essential subsystems (gravity integration above is always done).
+    // Heavy per-body processes are deferred to the outermost frame to avoid
+    // O(substeps × N²) cost that causes the simulation to crawl.
+    if (!adaptive_substep_refining_) {
+        // Full physics — only on the outermost call
+        if (cfg.roche_limit || cfg.tidal_forces) process_roche_limit(scaled_dt);
+        if (cfg.collisions)         process_collisions(scaled_dt);
+        if (cfg.spin_fragmentation) process_spin_fragmentation(scaled_dt);
+        if (cfg.temperature_system) process_temperature(scaled_dt);
+        if (cfg.temperature_system || cfg.evaporation) process_space_weather(scaled_dt);
+        if (cfg.material_phases)    process_material_phases(scaled_dt);
+        if (cfg.evaporation)        process_evaporation(scaled_dt);
+        if (cfg.stellar_evolution)  process_stellar_evolution(scaled_dt);
+        if (cfg.tidal_locking)      process_tidal_locking(scaled_dt);
+        if (cfg.hawking_radiation)  process_hawking_radiation(scaled_dt);
+        if (cfg.yarkovsky_effect)   process_yarkovsky(scaled_dt);
+        process_orbital_elements();
+    } else {
+        // Substep: only collisions (critical for correctness) and cleanup
+        if (cfg.collisions) process_collisions(scaled_dt);
+    }
     cleanup_bodies();
 
     n = bodies.size();
@@ -875,29 +909,32 @@ void CosmosApp::step_physics(float dt) {
             enforce_body_physical_limits(bodies[i]);
     });
 
-    // Refresh cached planet properties in parallel (independent per body).
-    parallel_for(n, 256, [&](size_t begin, size_t end) {
-        for (size_t i = begin; i < end; ++i)
-            refresh_planet_props(bodies[i]);
-    });
-    // Visual refresh reads broader system context, so keep it ordered.
-    for (auto& b : state.bodies)
-        refresh_body_visuals(b, &state);
+    // Skip expensive per-body property + visual refresh during recursive substeps.
+    // These only affect rendering and don't influence physics integration.
+    if (!adaptive_substep_refining_) {
+        parallel_for(n, 256, [&](size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i)
+                refresh_planet_props(bodies[i]);
+        });
+        for (auto& b : state.bodies)
+            refresh_body_visuals(b, &state);
+        update_body_tracking_cache();
+    }
 
-    update_body_tracking_cache();
+    // Update trails (skip during recursive substeps — only render the outermost frame)
+    if (!adaptive_substep_refining_) {
+        n = bodies.size();
+        while (state.trails.size() < n)
+            state.trails.emplace_back();
+        parallel_for(n, 256, [&](size_t begin, size_t end) {
+            for (size_t i = begin; i < end; i++) {
+                state.trails[i].push_back(bodies[i].pos);
+                while (state.trails[i].size() > cfg.trail_length)
+                    state.trails[i].pop_front();
+            }
+        });
+    }
 
-    // Update trails
-    n = bodies.size();
-    while (state.trails.size() < n)
-        state.trails.emplace_back();
-    parallel_for(n, 256, [&](size_t begin, size_t end) {
-        for (size_t i = begin; i < end; i++) {
-            state.trails[i].push_back(bodies[i].pos);
-            while (state.trails[i].size() > cfg.trail_length)
-                state.trails[i].pop_front();
-        }
-    });
-
-    if (diagnostics_enabled_)
+    if (diagnostics_enabled_ && !adaptive_substep_refining_)
         validate_body_state("step_physics/post", true);
 }

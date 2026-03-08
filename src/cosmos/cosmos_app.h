@@ -174,6 +174,23 @@ private:
     float cached_shortest_period_ = std::numeric_limits<float>::max();
     int   cached_shortest_period_frame_ = -1;
 
+    // Reusable scratch buffers for step_physics (avoid per-frame heap allocations)
+    std::vector<glm::vec3> scratch_pos0_, scratch_vel0_;
+    std::vector<uint8_t>   scratch_source_active_;
+    std::vector<float>     scratch_source_mass_, scratch_source_spin_y_;
+    std::vector<float>     scratch_source_radius_, scratch_source_angular_vel_;
+    std::vector<glm::vec3> scratch_source_spin_axis_;
+    std::vector<size_t>    scratch_source_indices_;
+    std::vector<glm::vec3> scratch_accel0_;
+    // Integrator scratch
+    std::vector<glm::vec3> scratch_int_pos_, scratch_int_vel_;
+    std::vector<glm::vec3> scratch_int_accel_, scratch_int_accel2_;
+    std::vector<glm::vec3> scratch_int_pos2_, scratch_int_vel2_;
+    // Adaptive substepping scratch
+    std::vector<glm::vec3> scratch_adapt_full_pos_, scratch_adapt_full_vel_;
+    std::vector<glm::vec3> scratch_adapt_half_pos_, scratch_adapt_half_vel_;
+    std::vector<glm::vec3> scratch_adapt_half2_pos_, scratch_adapt_half2_vel_;
+
     // Splash + menu background particles
     float splash_time_ = 0.0f;
     struct MenuParticle {
