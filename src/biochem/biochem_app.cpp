@@ -1654,189 +1654,227 @@ void BiochemApp::regenerate_environment(bool advance_seed) {
     switch (cfg.environment) {
     case BIO_ENV_HUMAN_LUNG:
     default:
+        // Anatomically: bronchioles (~500 μm) branch into terminal bronchioles (~200 μm)
+        // which end in alveolar ducts and sacs (~200 μm). Cells are ~15 μm.
+        // At world_radius=200, cells=radius ~8, so bronchioles=wr*0.18, alveoli=wr*0.12
+        // Two main bronchiolar branches flanking the scene
         for (int side = -1; side <= 1; side += 2) {
-            for (int branch = 0; branch < 3; ++branch) {
-                float t = -0.28f + branch * 0.28f;
-                glm::vec3 pos = flow_axis * (wr * t) +
-                                cross_axis * (float)side * (wr * 0.18f + branch * wr * 0.04f) +
-                                up_axis * randf(-wr * 0.08f, wr * 0.08f);
-                add_structure(BIO_ENV_STRUCTURE_LUNG_BRANCH, pos, randf(wr * 0.12f, wr * 0.16f),
-                              normalized_or(flow_axis * 0.60f + cross_axis * (float)side * 0.55f + up_axis * 0.18f, flow_axis),
-                              randf(0.85f, 1.10f), preset.tint * 0.70f + glm::vec3(0.22f, 0.18f, 0.16f),
-                              0.55f, randf(0.0f, 1.0f), 0.74f);
-                add_structure(BIO_ENV_STRUCTURE_ALVEOLAR_CLUSTER,
-                              pos + cross_axis * (float)side * wr * 0.08f + sample_local_offset(rng, wr * 0.04f),
-                              randf(wr * 0.10f, wr * 0.13f),
-                              normalized_or(cross_axis * (float)side + up_axis * 0.4f, up_axis),
-                              randf(0.80f, 1.05f), preset.tint * 0.82f + glm::vec3(0.28f, 0.18f, 0.16f),
-                              0.50f, randf(0.0f, 1.0f), 0.68f);
+            // Main bronchiole trunk running along flow axis
+            glm::vec3 trunk_pos = cross_axis * (float)side * (wr * 0.22f) +
+                                  up_axis * randf(-wr * 0.06f, wr * 0.06f);
+            add_structure(BIO_ENV_STRUCTURE_LUNG_BRANCH, trunk_pos, randf(wr * 0.16f, wr * 0.20f),
+                          normalized_or(flow_axis * 0.65f + cross_axis * (float)side * 0.50f + up_axis * 0.15f, flow_axis),
+                          randf(0.88f, 1.08f), preset.tint * 0.65f + glm::vec3(0.24f, 0.18f, 0.16f),
+                          0.55f, randf(0.0f, 1.0f), 0.78f);
+            // 3 alveolar clusters budding off each bronchiole
+            for (int sac = 0; sac < 3; ++sac) {
+                float t = -0.20f + sac * 0.22f;
+                glm::vec3 sac_pos = trunk_pos + flow_axis * (wr * t) +
+                                    cross_axis * (float)side * randf(wr * 0.06f, wr * 0.10f) +
+                                    sample_local_offset(rng, wr * 0.03f);
+                add_structure(BIO_ENV_STRUCTURE_ALVEOLAR_CLUSTER, sac_pos, randf(wr * 0.10f, wr * 0.14f),
+                              normalized_or(cross_axis * (float)side * 0.7f + up_axis * 0.4f + flow_axis * 0.2f, up_axis),
+                              randf(0.82f, 1.05f), preset.tint * 0.78f + glm::vec3(0.28f, 0.18f, 0.16f),
+                              0.48f, randf(0.0f, 1.0f), 0.68f);
             }
         }
+        // Alveolar membrane surfaces (type I pneumocyte epithelium) filling space
         for (int branch = 0; branch < 3; ++branch) {
             float branch_t = branch / 2.0f;
-            glm::vec3 branch_center = flow_axis * (-wr * 0.30f + branch_t * wr * 0.34f);
+            glm::vec3 branch_center = flow_axis * (-wr * 0.28f + branch_t * wr * 0.32f);
             for (int side = -1; side <= 1; side += 2) {
-                for (int sac = 0; sac < 5; ++sac) {
+                for (int sac = 0; sac < 4; ++sac) {
                     glm::vec3 pos = branch_center
-                        + cross_axis * (side * (wr * 0.12f + randf(0.0f, wr * 0.08f)))
-                        + up_axis * randf(-wr * 0.18f, wr * 0.18f)
+                        + cross_axis * (side * (wr * 0.10f + randf(0.0f, wr * 0.08f)))
+                        + up_axis * randf(-wr * 0.16f, wr * 0.16f)
                         + sample_local_offset(rng, wr * 0.03f);
-                    add_feature(BIO_ENV_FEATURE_MEMBRANE, pos, randf(wr * 0.10f, wr * 0.15f),
-                                cross_axis * (float)side + up_axis * randf(-0.4f, 0.4f),
+                    add_feature(BIO_ENV_FEATURE_MEMBRANE, pos, randf(wr * 0.09f, wr * 0.14f),
+                                cross_axis * (float)side + up_axis * randf(-0.3f, 0.3f),
                                 randf(0.7f, 1.0f), preset.tint * 0.9f + glm::vec3(0.08f, 0.12f, 0.10f),
                                 randf(0.4f, 0.7f), randf(0.0f, 1.0f));
                 }
             }
+            // Oxygen-rich nutrient zone near each alveolar cluster
             add_feature(BIO_ENV_FEATURE_NUTRIENT,
-                        branch_center + up_axis * randf(-wr * 0.10f, wr * 0.10f),
+                        branch_center + up_axis * randf(-wr * 0.08f, wr * 0.08f),
                         randf(wr * 0.08f, wr * 0.12f), up_axis,
-                        randf(0.45f, 0.75f), glm::vec3(0.20f, 0.48f, 0.30f), 0.35f, randf(0.0f, 1.0f));
+                        randf(0.50f, 0.80f), glm::vec3(0.20f, 0.48f, 0.30f), 0.35f, randf(0.0f, 1.0f));
         }
+        // Tidal airflow currents (rhythmic breathing)
         for (int i = 0; i < 5; ++i) {
             float t = -0.35f + 0.18f * (float)i;
             add_feature(BIO_ENV_FEATURE_CURRENT,
                         flow_axis * (wr * t) + sample_local_offset(rng, wr * 0.05f),
-                        randf(wr * 0.12f, wr * 0.18f), flow_axis + rand_dir() * 0.25f,
+                        randf(wr * 0.12f, wr * 0.18f), flow_axis + rand_dir() * 0.20f,
                         randf(0.65f, 0.95f), glm::vec3(0.24f, 0.42f, 0.36f), 0.30f, randf(0.0f, 1.0f));
         }
         break;
 
     case BIO_ENV_POND_WATER:
-        for (int i = 0; i < 7; ++i) {
-            glm::vec3 pos(randf(-wr * 0.62f, wr * 0.62f),
-                          -wr * 0.42f + randf(-wr * 0.03f, wr * 0.03f),
-                          randf(-wr * 0.62f, wr * 0.62f));
-            add_structure(BIO_ENV_STRUCTURE_POND_REED, pos, randf(wr * 0.12f, wr * 0.18f),
-                          normalized_or(up_axis * 0.92f + rand_dir() * 0.16f, up_axis),
-                          randf(0.68f, 0.92f), glm::vec3(0.20f, 0.30f, 0.12f),
-                          0.68f, randf(0.0f, 1.0f), 0.70f);
-        }
-        for (int i = 0; i < 5; ++i) {
-            glm::vec3 pos(randf(-wr * 0.70f, wr * 0.70f),
-                          -wr * 0.35f + randf(-wr * 0.06f, wr * 0.04f),
-                          randf(-wr * 0.70f, wr * 0.70f));
-            add_structure(BIO_ENV_STRUCTURE_POND_ROCK, pos, randf(wr * 0.08f, wr * 0.12f),
-                          rand_dir(), randf(0.70f, 0.96f), glm::vec3(0.24f, 0.22f, 0.16f),
-                          0.76f, randf(0.0f, 1.0f), 0.82f);
-        }
-        for (int i = 0; i < 12; ++i) {
+        // Pond micro-habitat: bottom substrate with rocks, rooted macrophytes rising up,
+        // organic detritus zones, suspended algae, slow convective currents.
+        // Rocks are massive compared to microorganisms (rocks ~mm, cells ~μm)
+        // Substrate layer: rocks along bottom
+        for (int i = 0; i < 6; ++i) {
             glm::vec3 pos(randf(-wr * 0.65f, wr * 0.65f),
-                          randf(-wr * 0.45f, wr * 0.15f),
+                          -wr * 0.38f + randf(-wr * 0.04f, wr * 0.02f),
                           randf(-wr * 0.65f, wr * 0.65f));
-            add_feature(BIO_ENV_FEATURE_MEMBRANE, pos, randf(wr * 0.06f, wr * 0.11f), rand_dir(),
-                        randf(0.45f, 0.70f), glm::vec3(0.18f, 0.28f, 0.18f), 0.65f, randf(0.0f, 1.0f));
+            float rock_size = randf(wr * 0.10f, wr * 0.16f);
+            add_structure(BIO_ENV_STRUCTURE_POND_ROCK, pos, rock_size,
+                          normalized_or(up_axis * 0.3f + rand_dir() * 0.7f, up_axis),
+                          randf(0.75f, 0.98f), glm::vec3(0.28f, 0.24f, 0.18f),
+                          0.72f, randf(0.0f, 1.0f), 0.84f);
         }
-        for (int i = 0; i < 8; ++i) {
-            glm::vec3 pos(randf(-wr * 0.70f, wr * 0.70f),
-                          randf(-wr * 0.20f, wr * 0.35f),
-                          randf(-wr * 0.70f, wr * 0.70f));
-            add_feature(BIO_ENV_FEATURE_NUTRIENT, pos, randf(wr * 0.07f, wr * 0.13f),
-                        rand_dir(), randf(0.55f, 0.95f), glm::vec3(0.22f, 0.50f, 0.24f),
+        // Rooted macrophytes (reeds/cattails) rising from substrate
+        for (int i = 0; i < 5; ++i) {
+            glm::vec3 pos(randf(-wr * 0.55f, wr * 0.55f),
+                          -wr * 0.38f + randf(-wr * 0.02f, wr * 0.01f),
+                          randf(-wr * 0.55f, wr * 0.55f));
+            add_structure(BIO_ENV_STRUCTURE_POND_REED, pos, randf(wr * 0.14f, wr * 0.22f),
+                          normalized_or(up_axis * 0.94f + rand_dir() * 0.12f, up_axis),
+                          randf(0.72f, 0.95f), glm::vec3(0.22f, 0.34f, 0.12f),
+                          0.65f, randf(0.0f, 1.0f), 0.72f);
+        }
+        // Organic detritus membranes (decomposing leaf litter, biofilms)
+        for (int i = 0; i < 10; ++i) {
+            glm::vec3 pos(randf(-wr * 0.60f, wr * 0.60f),
+                          randf(-wr * 0.42f, wr * 0.12f),
+                          randf(-wr * 0.60f, wr * 0.60f));
+            add_feature(BIO_ENV_FEATURE_MEMBRANE, pos, randf(wr * 0.06f, wr * 0.12f), rand_dir(),
+                        randf(0.45f, 0.72f), glm::vec3(0.18f, 0.28f, 0.18f), 0.65f, randf(0.0f, 1.0f));
+        }
+        // Dissolved nutrient plumes (from decay, photosynthesis)
+        for (int i = 0; i < 7; ++i) {
+            glm::vec3 pos(randf(-wr * 0.65f, wr * 0.65f),
+                          randf(-wr * 0.25f, wr * 0.30f),
+                          randf(-wr * 0.65f, wr * 0.65f));
+            add_feature(BIO_ENV_FEATURE_NUTRIENT, pos, randf(wr * 0.08f, wr * 0.14f),
+                        rand_dir(), randf(0.55f, 0.90f), glm::vec3(0.22f, 0.50f, 0.24f),
                         0.45f, randf(0.0f, 1.0f));
         }
-        for (int i = 0; i < 6; ++i) {
-            glm::vec3 pos(randf(-wr * 0.75f, wr * 0.75f),
-                          randf(-wr * 0.55f, wr * 0.10f),
-                          randf(-wr * 0.75f, wr * 0.75f));
-            add_feature(BIO_ENV_FEATURE_TOXIN, pos, randf(wr * 0.07f, wr * 0.15f),
-                        rand_dir(), randf(0.65f, 1.05f), glm::vec3(0.36f, 0.18f, 0.26f),
+        // Toxin zones (anaerobic pockets near substrate, H2S, ammonia)
+        for (int i = 0; i < 5; ++i) {
+            glm::vec3 pos(randf(-wr * 0.70f, wr * 0.70f),
+                          randf(-wr * 0.50f, -wr * 0.10f),
+                          randf(-wr * 0.70f, wr * 0.70f));
+            add_feature(BIO_ENV_FEATURE_TOXIN, pos, randf(wr * 0.08f, wr * 0.14f),
+                        rand_dir(), randf(0.55f, 0.95f), glm::vec3(0.36f, 0.18f, 0.26f),
                         0.55f, randf(0.0f, 1.0f));
         }
+        // Slow convective currents (thermal stratification)
         for (int i = 0; i < 4; ++i) {
-            add_feature(BIO_ENV_FEATURE_CURRENT, sample_local_offset(rng, wr * 0.55f),
-                        randf(wr * 0.14f, wr * 0.22f), normalized_or(flow_axis + rand_dir() * 0.8f, flow_axis),
-                        randf(0.45f, 0.80f), glm::vec3(0.16f, 0.32f, 0.30f), 0.30f, randf(0.0f, 1.0f));
+            add_feature(BIO_ENV_FEATURE_CURRENT, sample_local_offset(rng, wr * 0.50f),
+                        randf(wr * 0.14f, wr * 0.22f), normalized_or(flow_axis + rand_dir() * 0.7f, flow_axis),
+                        randf(0.40f, 0.75f), glm::vec3(0.16f, 0.32f, 0.30f), 0.30f, randf(0.0f, 1.0f));
         }
         break;
 
     case BIO_ENV_PETRI_DISH: {
-        float ring_r = wr * 0.58f;
+        // Standard 90mm Petri dish. At this scale bacteria (~1 μm) are radius ~5-8 units,
+        // so the dish rim (~90mm / 1μm = 90,000×) is effectively the world boundary.
+        // Agar gel fills the bottom ~3mm of the dish.
+        float ring_r = wr * 0.62f;
+        // Glass dish rim — large torus encircling the world
         add_structure(BIO_ENV_STRUCTURE_PETRI_RIM, glm::vec3(0.0f), ring_r,
-                      up_axis, 0.90f, glm::vec3(0.44f, 0.42f, 0.22f),
-                      0.88f, randf(0.0f, 1.0f), 0.82f);
-        for (int i = 0; i < 4; ++i) {
-            glm::vec3 pos = sample_local_offset(rng, wr * 0.22f);
-            pos.y *= 0.18f;
-            add_structure(BIO_ENV_STRUCTURE_PETRI_AGAR, pos, randf(wr * 0.10f, wr * 0.16f),
-                          up_axis, randf(0.76f, 1.04f), glm::vec3(0.52f, 0.50f, 0.24f),
-                          0.42f, randf(0.0f, 1.0f), 0.64f);
+                      up_axis, 0.92f, glm::vec3(0.48f, 0.46f, 0.38f),
+                      0.90f, randf(0.0f, 1.0f), 0.86f);
+        // Agar gel substrate — flat layer covering the bottom
+        // One large central agar pad + smaller streak regions
+        add_structure(BIO_ENV_STRUCTURE_PETRI_AGAR, glm::vec3(0.0f, -wr * 0.10f, 0.0f),
+                      wr * 0.50f, up_axis, 0.95f, glm::vec3(0.56f, 0.52f, 0.28f),
+                      0.38f, randf(0.0f, 1.0f), 0.58f);
+        // Streak plate inoculation zones (where bacteria were plated)
+        for (int i = 0; i < 3; ++i) {
+            float a = (float)i / 3.0f * 6.2831853f + randf(0.0f, 0.5f);
+            glm::vec3 pos(std::cos(a) * wr * 0.22f, -wr * 0.06f, std::sin(a) * wr * 0.22f);
+            add_structure(BIO_ENV_STRUCTURE_PETRI_AGAR, pos, randf(wr * 0.10f, wr * 0.14f),
+                          up_axis, randf(0.78f, 1.02f), glm::vec3(0.54f, 0.52f, 0.26f),
+                          0.42f, randf(0.0f, 1.0f), 0.62f);
         }
-        for (int i = 0; i < 14; ++i) {
-            float a = (float)i / 14.0f * 6.2831853f;
-            glm::vec3 ring_pos(std::cos(a) * ring_r, randf(-wr * 0.05f, wr * 0.05f), std::sin(a) * ring_r);
-            add_feature(BIO_ENV_FEATURE_MEMBRANE, ring_pos, randf(wr * 0.07f, wr * 0.10f),
-                        glm::vec3(-std::sin(a), 0.0f, std::cos(a)), randf(0.65f, 0.90f),
+        // Condensation/boundary membrane effects around rim
+        for (int i = 0; i < 12; ++i) {
+            float a = (float)i / 12.0f * 6.2831853f;
+            glm::vec3 ring_pos(std::cos(a) * ring_r, randf(-wr * 0.04f, wr * 0.04f), std::sin(a) * ring_r);
+            add_feature(BIO_ENV_FEATURE_MEMBRANE, ring_pos, randf(wr * 0.06f, wr * 0.10f),
+                        glm::vec3(-std::sin(a), 0.0f, std::cos(a)), randf(0.65f, 0.88f),
                         glm::vec3(0.34f, 0.34f, 0.18f), 0.75f, randf(0.0f, 1.0f));
         }
-        for (int i = 0; i < 5; ++i) {
-            glm::vec3 pos = sample_local_offset(rng, wr * 0.20f);
-            pos.y *= 0.2f;
+        // Nutrient-rich agar zones (LB broth, blood agar, etc.)
+        for (int i = 0; i < 6; ++i) {
+            glm::vec3 pos = sample_local_offset(rng, wr * 0.28f);
+            pos.y = pos.y * 0.15f - wr * 0.02f;
             add_feature(BIO_ENV_FEATURE_NUTRIENT, pos, randf(wr * 0.08f, wr * 0.14f),
-                        up_axis, randf(0.75f, 1.10f), glm::vec3(0.32f, 0.52f, 0.22f),
-                        0.32f, randf(0.0f, 1.0f));
+                        up_axis, randf(0.80f, 1.15f), glm::vec3(0.34f, 0.54f, 0.24f),
+                        0.30f, randf(0.0f, 1.0f));
         }
-        for (int i = 0; i < 3; ++i) {
-            add_feature(BIO_ENV_FEATURE_CURRENT, sample_local_offset(rng, wr * 0.28f),
-                        randf(wr * 0.10f, wr * 0.16f), rand_dir(),
-                        randf(0.25f, 0.45f), glm::vec3(0.26f, 0.30f, 0.18f), 0.25f, randf(0.0f, 1.0f));
-        }
+        // Minimal currents (still medium, only diffusion-driven)
         for (int i = 0; i < 2; ++i) {
-            add_feature(BIO_ENV_FEATURE_TOXIN, sample_local_offset(rng, wr * 0.25f),
-                        randf(wr * 0.05f, wr * 0.08f), rand_dir(),
-                        randf(0.25f, 0.40f), glm::vec3(0.40f, 0.20f, 0.28f), 0.50f, randf(0.0f, 1.0f));
+            add_feature(BIO_ENV_FEATURE_CURRENT, sample_local_offset(rng, wr * 0.24f),
+                        randf(wr * 0.10f, wr * 0.16f), rand_dir(),
+                        randf(0.15f, 0.35f), glm::vec3(0.26f, 0.30f, 0.18f), 0.25f, randf(0.0f, 1.0f));
         }
         break;
     }
 
     case BIO_ENV_CAT_BRAIN:
+        // Cat cerebral cortex: neurons ~20 μm, astrocytes ~10 μm, capillaries ~5-10 μm.
+        // Cortex has gyri (ridges) and sulci (grooves), ~2-3mm thick grey matter.
+        // At scale: gyri are wr*0.14-0.18, capillaries wr*0.10-0.14.
+        // Bilateral cortical folds forming the scene boundary
         for (int side = -1; side <= 1; side += 2) {
-            for (int fold = 0; fold < 4; ++fold) {
-                float t = -0.30f + fold * 0.20f;
-                glm::vec3 pos = cross_axis * (float)side * (wr * 0.18f + randf(0.0f, wr * 0.05f)) +
+            // 5 gyri per hemisphere (cat cortex has prominent gyri)
+            for (int fold = 0; fold < 5; ++fold) {
+                float t = -0.36f + fold * 0.18f;
+                glm::vec3 pos = cross_axis * (float)side * (wr * 0.20f + randf(0.0f, wr * 0.04f)) +
                                 flow_axis * (wr * t) +
-                                up_axis * randf(-wr * 0.04f, wr * 0.18f);
-                add_structure(BIO_ENV_STRUCTURE_BRAIN_FOLD, pos, randf(wr * 0.12f, wr * 0.16f),
-                              normalized_or(up_axis * 0.72f + flow_axis * 0.22f + cross_axis * (float)side * 0.20f, up_axis),
-                              randf(0.84f, 1.05f), glm::vec3(0.34f, 0.28f, 0.40f),
-                              0.60f, randf(0.0f, 1.0f), 0.72f);
+                                up_axis * randf(-wr * 0.02f, wr * 0.16f);
+                add_structure(BIO_ENV_STRUCTURE_BRAIN_FOLD, pos, randf(wr * 0.14f, wr * 0.18f),
+                              normalized_or(up_axis * 0.70f + flow_axis * 0.24f + cross_axis * (float)side * 0.22f, up_axis),
+                              randf(0.86f, 1.06f), glm::vec3(0.36f, 0.30f, 0.42f),
+                              0.58f, randf(0.0f, 1.0f), 0.74f);
             }
         }
-        for (int i = 0; i < 5; ++i) {
-            glm::vec3 pos = flow_axis * randf(-wr * 0.26f, wr * 0.26f) +
-                            up_axis * randf(-wr * 0.06f, wr * 0.22f) +
-                            cross_axis * randf(-wr * 0.16f, wr * 0.16f);
+        // Cerebral arterioles and capillary network
+        for (int i = 0; i < 6; ++i) {
+            glm::vec3 pos = flow_axis * randf(-wr * 0.28f, wr * 0.28f) +
+                            up_axis * randf(-wr * 0.04f, wr * 0.20f) +
+                            cross_axis * randf(-wr * 0.18f, wr * 0.18f);
             add_structure(BIO_ENV_STRUCTURE_BRAIN_VESSEL, pos, randf(wr * 0.10f, wr * 0.14f),
-                          normalized_or(flow_axis * 0.65f + up_axis * 0.42f + rand_dir() * 0.10f, flow_axis),
-                          randf(0.70f, 0.92f), glm::vec3(0.56f, 0.18f, 0.18f),
-                          0.50f, randf(0.0f, 1.0f), 0.72f);
+                          normalized_or(flow_axis * 0.60f + up_axis * 0.45f + rand_dir() * 0.12f, flow_axis),
+                          randf(0.72f, 0.94f), glm::vec3(0.58f, 0.18f, 0.18f),
+                          0.48f, randf(0.0f, 1.0f), 0.74f);
         }
+        // Neuropil membranes (dense synaptic regions between neurons)
         for (int side = -1; side <= 1; side += 2) {
-            for (int lobe = 0; lobe < 7; ++lobe) {
-                float u = lobe / 6.0f;
-                glm::vec3 pos = cross_axis * (side * (wr * 0.16f + randf(0.0f, wr * 0.10f)))
+            for (int lobe = 0; lobe < 6; ++lobe) {
+                float u = lobe / 5.0f;
+                glm::vec3 pos = cross_axis * (side * (wr * 0.14f + randf(0.0f, wr * 0.08f)))
                     + flow_axis * randf(-wr * 0.24f, wr * 0.24f)
-                    + up_axis * (-wr * 0.08f + u * wr * 0.30f)
-                    + sample_local_offset(rng, wr * 0.04f);
-                add_feature(BIO_ENV_FEATURE_MEMBRANE, pos, randf(wr * 0.09f, wr * 0.14f),
+                    + up_axis * (-wr * 0.06f + u * wr * 0.28f)
+                    + sample_local_offset(rng, wr * 0.03f);
+                add_feature(BIO_ENV_FEATURE_MEMBRANE, pos, randf(wr * 0.08f, wr * 0.13f),
                             up_axis + cross_axis * (float)side * 0.4f, randf(0.75f, 1.00f),
-                            glm::vec3(0.26f, 0.24f, 0.36f), 0.55f, randf(0.0f, 1.0f));
+                            glm::vec3(0.28f, 0.26f, 0.38f), 0.55f, randf(0.0f, 1.0f));
             }
         }
+        // Glucose/oxygen-rich nutrient zones (high metabolic demand tissue)
         for (int i = 0; i < 8; ++i) {
-            glm::vec3 pos = flow_axis * randf(-wr * 0.25f, wr * 0.25f)
-                + up_axis * randf(-wr * 0.10f, wr * 0.30f)
-                + cross_axis * randf(-wr * 0.20f, wr * 0.20f);
+            glm::vec3 pos = flow_axis * randf(-wr * 0.24f, wr * 0.24f)
+                + up_axis * randf(-wr * 0.08f, wr * 0.28f)
+                + cross_axis * randf(-wr * 0.18f, wr * 0.18f);
             add_feature(BIO_ENV_FEATURE_NUTRIENT, pos, randf(wr * 0.06f, wr * 0.10f),
-                        flow_axis + up_axis * 0.3f, randf(0.55f, 0.80f),
+                        flow_axis + up_axis * 0.3f, randf(0.58f, 0.82f),
                         glm::vec3(0.30f, 0.22f, 0.18f), 0.35f, randf(0.0f, 1.0f));
         }
+        // Cerebrospinal fluid currents (slow perfusion)
         for (int i = 0; i < 4; ++i) {
-            add_feature(BIO_ENV_FEATURE_CURRENT, sample_local_offset(rng, wr * 0.35f),
-                        randf(wr * 0.12f, wr * 0.18f), normalized_or(up_axis + rand_dir() * 0.4f, up_axis),
-                        randf(0.40f, 0.70f), glm::vec3(0.26f, 0.28f, 0.40f), 0.28f, randf(0.0f, 1.0f));
+            add_feature(BIO_ENV_FEATURE_CURRENT, sample_local_offset(rng, wr * 0.32f),
+                        randf(wr * 0.12f, wr * 0.18f), normalized_or(up_axis + rand_dir() * 0.35f, up_axis),
+                        randf(0.38f, 0.68f), glm::vec3(0.26f, 0.28f, 0.40f), 0.28f, randf(0.0f, 1.0f));
         }
+        // Toxin zones (metabolic waste, β-amyloid accumulation)
         for (int i = 0; i < 2; ++i) {
-            add_feature(BIO_ENV_FEATURE_TOXIN, sample_local_offset(rng, wr * 0.18f),
+            add_feature(BIO_ENV_FEATURE_TOXIN, sample_local_offset(rng, wr * 0.16f),
                         randf(wr * 0.05f, wr * 0.09f), rand_dir(), randf(0.15f, 0.35f),
                         glm::vec3(0.34f, 0.18f, 0.22f), 0.55f, randf(0.0f, 1.0f));
         }

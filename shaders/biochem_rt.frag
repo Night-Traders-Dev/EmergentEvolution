@@ -415,75 +415,7 @@ float virus_mask(vec3 p, vec3 center, float scale, int morph, float noise, float
     return mask_from_sdf(sdf, blur);
 }
 
-vec4 sample_nonfunctional_organelles(vec3 p0, vec3 p1, vec3 p2,
-                                     int morph, float phase, float noise,
-                                     float life_age, float corpse) {
-    vec3 color = vec3(0.0);
-    float density = 0.0;
-    vec3 stage_a = mix(vec3(0.34, 0.66, 0.88), vec3(0.58, 0.74, 0.92), smoothstep(0.15, 0.45, life_age));
-    vec3 stage_b = mix(vec3(0.92, 0.54, 0.64), vec3(0.78, 0.58, 0.34), smoothstep(0.35, 0.82, life_age));
-    vec3 stage_c = mix(vec3(0.52, 0.90, 0.70), vec3(0.44, 0.46, 0.40), smoothstep(0.45, 0.95, life_age));
-    if (corpse > 0.5) {
-        stage_a = vec3(0.28, 0.30, 0.32);
-        stage_b = vec3(0.30, 0.26, 0.22);
-        stage_c = vec3(0.24, 0.25, 0.22);
-    }
 
-    for (int i = 0; i < 2; ++i) {
-        float fi = float(i);
-        vec3 center = vec3(
-            sin(phase * 0.7 + fi * 2.9) * 0.26,
-            cos(phase * 1.1 + fi * 2.2) * (morph == 1 ? 0.09 : 0.16),
-            sin(phase * 0.9 + fi * 3.4) * 0.20);
-        float r = 0.11 + fi * 0.025 + noise * 0.03;
-        float vacuole = max(sphere_mask(p0, center, r, 0.06),
-                            sphere_mask(p1, center, r, 0.06));
-        color += stage_a * vacuole * mix(0.12, 0.07, life_age);
-        density += vacuole * mix(0.038, 0.020, life_age);
-    }
-
-    for (int i = 0; i < 4; ++i) {
-        float fi = float(i);
-        vec3 center = vec3(
-            cos(phase * 1.7 + fi * 1.3) * 0.24,
-            sin(phase * 0.8 + fi * 2.7) * 0.18,
-            cos(phase * 1.2 + fi * 1.9) * 0.22);
-        float lysosome = max(sphere_mask(p1, center, 0.045 + fi * 0.004, 0.035),
-                             sphere_mask(p2, center, 0.045 + fi * 0.004, 0.035));
-        color += stage_b * lysosome * mix(0.12, 0.08, life_age);
-        density += lysosome * mix(0.026, 0.016, life_age);
-    }
-
-    for (int i = 0; i < 3; ++i) {
-        float fi = float(i);
-        vec3 center = vec3(
-            sin(phase * 1.4 + fi * 2.4) * 0.20,
-            cos(phase * 1.0 + fi * 1.6) * 0.15,
-            sin(phase * 0.6 + fi * 2.8) * 0.24);
-        vec3 axis = normalize(vec3(
-            cos(fi + phase * 0.7),
-            sin(fi * 1.7 - phase),
-            cos(fi * 0.8 + phase * 1.4)));
-        float body = max(capsule_mask(p0, center - axis * 0.08, center + axis * 0.08, 0.03, 0.03),
-                         capsule_mask(p1, center - axis * 0.08, center + axis * 0.08, 0.03, 0.03));
-        color += mix(vec3(0.82, 0.78, 0.36), vec3(0.50, 0.42, 0.22), life_age) * body * 0.08;
-        density += body * mix(0.020, 0.010, life_age);
-    }
-
-    for (int i = 0; i < 3; ++i) {
-        float fi = float(i);
-        vec3 center = vec3(
-            cos(phase * 0.9 + fi * 1.5) * 0.17,
-            sin(phase * 1.8 + fi * 1.2) * 0.13,
-            cos(phase * 1.5 + fi * 2.5) * 0.16);
-        float peroxisome = max(sphere_mask(p0, center, 0.034, 0.028),
-                               sphere_mask(p2, center, 0.034, 0.028));
-        color += stage_c * peroxisome * 0.10;
-        density += peroxisome * mix(0.022, 0.012, life_age);
-    }
-
-    return vec4(color, clamp(density, 0.0, 0.22));
-}
 
 vec4 sample_viral_replication_overlay(vec3 p0, vec3 p1, vec3 p2, float progress,
                                       float load, int virus_morph, float phase,
@@ -582,66 +514,425 @@ vec4 sample_binary_fission_sequence(vec3 p0, vec3 p1, vec3 p2, float progress, i
     return vec4(color, clamp(density, 0.0, 0.32));
 }
 
+// ── Mitosis sub-helpers ───────────────────────────────────────────────────
+
+vec4 mitosis_centrosomes_and_asters(vec3 p1, vec3 pole_a, vec3 pole_b,
+                                     float progress, float phase, float cytokinesis) {
+    vec3 color = vec3(0.0);
+    float density = 0.0;
+    // Centrosome bodies — small bright dots at spindle poles
+    float centro_a = sphere_mask(p1, pole_a, 0.032, 0.025);
+    float centro_b = sphere_mask(p1, pole_b, 0.032, 0.025);
+    float centro_vis = smoothstep(0.02, 0.14, progress) * (1.0 - cytokinesis * 0.6);
+    color += vec3(0.92, 0.96, 0.40) * (centro_a + centro_b) * centro_vis * 0.32;
+    density += (centro_a + centro_b) * centro_vis * 0.08;
+
+    // Aster microtubule fibers radiating from centrosomes
+    float aster_vis = smoothstep(0.06, 0.22, progress) * (1.0 - smoothstep(0.80, 0.94, progress));
+    for (int i = 0; i < 6; ++i) {
+        float fi = float(i);
+        float a = fi * 1.047198 + phase * 0.3;
+        vec3 ray_dir = normalize(vec3(cos(a) * 0.4 - 1.0, sin(a), cos(a + 1.5) * 0.5));
+        float fiber_a = capsule_mask(p1, pole_a, pole_a + ray_dir * 0.22, 0.006, 0.015);
+        float fiber_b = capsule_mask(p1, pole_b, pole_b - ray_dir * 0.22, 0.006, 0.015);
+        color += vec3(0.48, 0.78, 0.92) * (fiber_a + fiber_b) * aster_vis * 0.06;
+        density += (fiber_a + fiber_b) * aster_vis * 0.015;
+    }
+    return vec4(color, density);
+}
+
+vec4 mitosis_nuclear_envelope(vec3 p1, float progress, float phase,
+                               float prometaphase, float metaphase) {
+    vec3 color = vec3(0.0);
+    float density = 0.0;
+    float envelope_vis = 1.0 - smoothstep(0.18, 0.36, progress);
+    // Early intact envelope
+    float envelope = torus_mask(p1, vec3(0.0), vec2(0.22, 0.014), 0.03) * envelope_vis;
+    color += vec3(0.56, 0.42, 0.68) * envelope * 0.18;
+    density += envelope * 0.04;
+    // Breakdown fragments during prometaphase
+    float breakdown = prometaphase * (1.0 - metaphase);
+    for (int i = 0; i < 4; ++i) {
+        float fi = float(i);
+        vec3 frag_pos = vec3(sin(fi * 2.3 + phase) * 0.28, cos(fi * 1.7 + phase) * 0.18,
+                             sin(fi * 3.1 - phase) * 0.14);
+        float frag = sphere_mask(p1, frag_pos, 0.025, 0.022) * breakdown;
+        color += vec3(0.50, 0.38, 0.62) * frag * 0.14;
+        density += frag * 0.025;
+    }
+    return vec4(color, density);
+}
+
+vec4 mitosis_chromosomes(vec3 p1, vec3 p2, vec3 pole_a, vec3 pole_b, float progress, float phase,
+                          float prophase, float prometaphase, float metaphase, float anaphase) {
+    vec3 color = vec3(0.0);
+    float density = 0.0;
+    float meta_vis = max(prometaphase, metaphase);
+    for (int i = 0; i < 8; ++i) {
+        float fi = float(i);
+        vec3 chr_axis = normalize(vec3(
+            cos(fi * 1.7 + phase * 0.4), sin(fi * 1.4 - phase * 0.3), cos(fi * 0.9 + phase * 0.5)));
+        vec3 chr_perp = normalize(cross(chr_axis, vec3(0.0, 1.0, 0.1)));
+
+        // Prophase: condensing X-shaped chromosomes near center
+        vec3 pro_c = vec3(sin(phase * 0.8 + fi * 1.3) * 0.13,
+                          cos(phase * 0.5 + fi * 1.6) * 0.12,
+                          sin(phase * 0.6 + fi * 1.9) * 0.10);
+        float arm = 0.065 + fi * 0.004;
+        float pro_chr = max(
+            capsule_mask(p1, pro_c - chr_axis * arm + chr_perp * 0.012,
+                             pro_c + chr_axis * arm - chr_perp * 0.012, 0.018, 0.022),
+            capsule_mask(p1, pro_c - chr_axis * arm - chr_perp * 0.012,
+                             pro_c + chr_axis * arm + chr_perp * 0.012, 0.018, 0.022));
+        float centromere = sphere_mask(p2, pro_c, 0.022, 0.018);
+        color += vec3(0.94, 0.44, 0.78) * pro_chr * prophase * 0.22;
+        color += vec3(1.0, 0.82, 0.36) * centromere * prophase * 0.16;
+        density += pro_chr * prophase * 0.07 + centromere * prophase * 0.03;
+
+        // Metaphase: aligned on metaphase plate
+        float plate_y = -0.22 + fi * 0.064;
+        vec3 meta_c = vec3(0.0, plate_y, 0.035 * sin(phase * 0.6 + fi * 1.2));
+        float meta_chr = max(
+            capsule_mask(p1, meta_c - vec3(0.0, 0.045, 0.0), meta_c + vec3(0.0, 0.045, 0.0), 0.020, 0.024),
+            capsule_mask(p2, meta_c - vec3(0.0, 0.045, 0.0), meta_c + vec3(0.0, 0.045, 0.0), 0.020, 0.024));
+        // Kinetochore attachment points
+        float kineto = sphere_mask(p2, meta_c + vec3(-0.028, 0.0, 0.0), 0.012, 0.012)
+                     + sphere_mask(p2, meta_c + vec3( 0.028, 0.0, 0.0), 0.012, 0.012);
+        // Spindle fibers from poles to kinetochores
+        float fibers = capsule_mask(p1, pole_a, meta_c + vec3(-0.024, 0.0, 0.0), 0.008, 0.016)
+                     + capsule_mask(p1, pole_b, meta_c + vec3( 0.024, 0.0, 0.0), 0.008, 0.016);
+        color += vec3(0.96, 0.58, 0.86) * meta_chr * meta_vis * 0.22;
+        color += vec3(1.0, 0.92, 0.28) * kineto * meta_vis * 0.14;
+        color += vec3(0.52, 0.86, 0.98) * fibers * meta_vis * 0.09;
+        density += (meta_chr * 0.08 + kineto * 0.025 + fibers * 0.03) * meta_vis;
+
+        // Anaphase: sister chromatids pulled to poles with V-shaped trailing arms
+        float split_off = 0.10 + smoothstep(0.50, 0.76, progress) * 0.22;
+        float ana_y = -0.18 + fi * 0.052;
+        vec3 ana_l = vec3(-split_off, ana_y,  0.024 * cos(phase + fi));
+        vec3 ana_r = vec3( split_off, ana_y, -0.024 * cos(phase + fi));
+        vec3 trail = chr_axis * 0.05;
+        float ana_chr = max(
+            max(capsule_mask(p1, ana_l - trail, ana_l + trail, 0.016, 0.022),
+                capsule_mask(p2, ana_l - trail, ana_l + trail, 0.016, 0.022)),
+            max(capsule_mask(p1, ana_r - trail, ana_r + trail, 0.016, 0.022),
+                capsule_mask(p2, ana_r - trail, ana_r + trail, 0.016, 0.022)));
+        float ana_fib = capsule_mask(p1, pole_a, ana_l, 0.007, 0.015)
+                      + capsule_mask(p1, pole_b, ana_r, 0.007, 0.015);
+        color += vec3(0.96, 0.64, 0.88) * ana_chr * anaphase * 0.20;
+        color += vec3(0.54, 0.90, 0.98) * ana_fib * anaphase * 0.08;
+        density += (ana_chr * 0.07 + ana_fib * 0.03) * anaphase;
+    }
+    return vec4(color, density);
+}
+
+vec4 mitosis_telophase_cytokinesis(vec3 p1, vec3 p2, float progress, float phase,
+                                    float telophase, float cytokinesis) {
+    vec3 color = vec3(0.0);
+    float density = 0.0;
+    // Two reforming nuclei
+    float tel_spread = 0.22 + smoothstep(0.72, 0.92, progress) * 0.08;
+    vec3 tel_a = vec3(-tel_spread, 0.0, 0.0);
+    vec3 tel_b = vec3( tel_spread, 0.0, 0.0);
+    vec3 tel_r = vec3(0.16, 0.14, 0.15);
+    float nuc_a = max(ellipsoid_mask(p1, tel_a, tel_r, 0.05),
+                      ellipsoid_mask(p2, tel_a, tel_r * 0.94, 0.05));
+    float nuc_b = max(ellipsoid_mask(p1, tel_b, tel_r, 0.05),
+                      ellipsoid_mask(p2, tel_b, tel_r * 0.94, 0.05));
+    // Reforming nuclear envelopes
+    float env_reform = smoothstep(0.74, 0.90, progress);
+    float env_a = torus_mask(p1, tel_a, vec2(0.16, 0.012), 0.025) * env_reform;
+    float env_b = torus_mask(p1, tel_b, vec2(0.16, 0.012), 0.025) * env_reform;
+    color += vec3(0.56, 0.32, 0.74) * (nuc_a + nuc_b) * telophase * 0.26;
+    color += vec3(0.50, 0.40, 0.66) * (env_a + env_b) * 0.15;
+    density += ((nuc_a + nuc_b) * 0.10 + (env_a + env_b) * 0.03) * telophase;
+
+    // Contractile ring constricting + midbody
+    float constrict = smoothstep(0.86, 0.98, progress);
+    float ring_r = mix(0.28, 0.08, constrict);
+    float ring = torus_mask(p1, vec3(0.0), vec2(ring_r, 0.018 + constrict * 0.010), 0.025);
+    ring += torus_mask(p2, vec3(0.0), vec2(ring_r * 0.94, 0.016), 0.025) * 0.6;
+    float midbody = capsule_mask(p1, vec3(-0.04, 0.0, 0.0), vec3(0.04, 0.0, 0.0), 0.022, 0.020)
+                  * smoothstep(0.92, 0.98, progress);
+    color += vec3(0.62, 0.94, 1.00) * ring * cytokinesis * 0.14;
+    color += vec3(0.88, 0.96, 0.44) * midbody * 0.22;
+    density += (ring * 0.05 + midbody * 0.04) * cytokinesis;
+    return vec4(color, density);
+}
+
+// ── Mitosis sequence (6 sub-stages) ──────────────────────────────────────
+
 vec4 sample_mitosis_sequence(vec3 p0, vec3 p1, vec3 p2, float progress, float phase) {
-    float prophase = stage_band(progress, 0.02, 0.28);
-    float metaphase = stage_band(progress, 0.24, 0.55);
-    float anaphase = stage_band(progress, 0.52, 0.82);
-    float telophase = smoothstep(0.78, 0.96, progress);
+    float prophase     = stage_band(progress, 0.04, 0.26);
+    float prometaphase = stage_band(progress, 0.22, 0.38);
+    float metaphase    = stage_band(progress, 0.34, 0.54);
+    float anaphase     = stage_band(progress, 0.50, 0.76);
+    float telophase    = stage_band(progress, 0.72, 0.90);
+    float cytokinesis  = smoothstep(0.86, 0.99, progress);
 
     vec3 color = vec3(0.0);
     float density = 0.0;
-    vec3 pole_a = vec3(-0.44, 0.0, 0.0);
-    vec3 pole_b = vec3(0.44, 0.0, 0.0);
 
+    // Centrosome positions migrate from near-nucleus to poles
+    float pole_spread = smoothstep(0.04, 0.32, progress);
+    vec3 pole_a = vec3(-0.14 - pole_spread * 0.30, 0.0, 0.0);
+    vec3 pole_b = vec3( 0.14 + pole_spread * 0.30, 0.0, 0.0);
+
+    // Centrosomes + aster fibers
+    vec4 ca = mitosis_centrosomes_and_asters(p1, pole_a, pole_b, progress, phase, cytokinesis);
+    color += ca.rgb; density += ca.a;
+
+    // Nuclear envelope breakdown/reform
+    vec4 ne = mitosis_nuclear_envelope(p1, progress, phase, prometaphase, metaphase);
+    color += ne.rgb; density += ne.a;
+
+    // Chromosomes through all stages
+    vec4 chr = mitosis_chromosomes(p1, p2, pole_a, pole_b, progress, phase,
+                                    prophase, prometaphase, metaphase, anaphase);
+    color += chr.rgb; density += chr.a;
+
+    // Telophase nuclei + cytokinesis contractile ring + midbody
+    vec4 tc = mitosis_telophase_cytokinesis(p1, p2, progress, phase, telophase, cytokinesis);
+    color += tc.rgb; density += tc.a;
+
+    return vec4(color, clamp(density, 0.0, 0.52));
+}
+
+// ── Cell interior organelle helpers ───────────────────────────────────────
+
+vec4 organelle_nucleus(vec3 p1, vec3 p2, vec3 nucleus_center, vec3 nucleus_radii,
+                        float phase, float life_age, float corpse) {
+    vec3 color = vec3(0.0);
+    float density = 0.0;
+
+    // Nuclear envelope — double membrane with pores
+    float nuc_shell = max(ellipsoid_mask(p1, nucleus_center, nucleus_radii, 0.06),
+                          ellipsoid_mask(p2, nucleus_center, nucleus_radii * 0.96, 0.06));
+    float nuc_inner = ellipsoid_mask(p1, nucleus_center, nucleus_radii * 0.88, 0.05);
+    float envelope = max(nuc_shell - nuc_inner * 0.7, 0.0);
+    // Nuclear pores — small holes in the envelope
+    float pore_pattern = smoothstep(0.88, 0.96,
+        sin(atan(p1.z - nucleus_center.z, p1.x - nucleus_center.x) * 8.0 + phase) *
+        sin(asin(clamp((p1.y - nucleus_center.y) / max(nucleus_radii.y, 0.01), -1.0, 1.0)) * 6.0));
+    envelope *= (1.0 - pore_pattern * 0.4);
+
+    vec3 nuc_col = mix(vec3(0.40, 0.22, 0.52), vec3(0.58, 0.40, 0.20), smoothstep(0.35, 0.85, life_age));
+    color += nuc_col * nuc_shell * mix(0.42, 0.22, corpse);
+    color += vec3(0.48, 0.36, 0.62) * envelope * 0.14;
+    density += nuc_shell * mix(0.28, 0.16, corpse) + envelope * 0.06;
+
+    // Nucleolus — dense RNA-rich body
+    float nucleolus = sphere_mask(p2,
+        nucleus_center + vec3(0.05 * cos(phase * 2.1), -0.03, 0.05 * sin(phase * 1.7)),
+        0.08, 0.05) * nuc_shell;
+    vec3 nucleolus_col = mix(vec3(0.82, 0.56, 0.86), vec3(0.42, 0.36, 0.30), corpse);
+    color += nucleolus_col * nucleolus * mix(0.40, 0.12, life_age);
+    density += nucleolus * mix(0.12, 0.04, corpse);
+
+    // Chromatin — diffuse DNA network inside nucleus
+    float chromatin = hash3d(p2 * 22.0 + nucleus_center + vec3(phase * 0.4));
+    chromatin = smoothstep(0.62, 0.88, chromatin) * nuc_inner;
+    color += mix(vec3(0.68, 0.38, 0.72), vec3(0.42, 0.28, 0.22), life_age) * chromatin * 0.12;
+    density += chromatin * 0.04;
+
+    return vec4(color, density);
+}
+
+vec4 organelle_mitochondria(vec3 p0, vec3 p1, int morph, float phase,
+                             float life_age, float corpse) {
+    vec3 color = vec3(0.0);
+    float density = 0.0;
+    // 6 mitochondria with double-membrane, cristae folds, and matrix
+    for (int i = 0; i < 6; ++i) {
+        float fi = float(i);
+        vec3 center = vec3(
+            sin(phase * 0.7 + fi * 1.7) * 0.32,
+            cos(phase * 1.1 + fi * 1.8) * (morph == 1 ? 0.10 : 0.20),
+            sin(phase * 0.6 + fi * 1.2) * 0.24);
+        vec3 axis = normalize(vec3(
+            cos(fi * 2.0 + phase * 0.5),
+            sin(fi * 1.4 - phase * 0.4),
+            cos(fi * 0.9 + phase * 0.8)));
+        float len = 0.10 + fi * 0.008;
+        // Outer membrane
+        float outer = max(capsule_mask(p0, center - axis * len, center + axis * len, 0.048, 0.04),
+                          capsule_mask(p1, center - axis * len, center + axis * len, 0.048, 0.04));
+        // Inner membrane with cristae — sinusoidal folding pattern
+        float along = dot(p1 - center, axis);
+        float cristae = 0.5 + 0.5 * sin(along * 48.0 + fi * 1.6 + phase * 2.0);
+        float cristae2 = 0.5 + 0.5 * sin(along * 36.0 - fi * 2.3 + phase * 1.4);
+        float cristae_mix = max(cristae, cristae2 * 0.6);
+        // Matrix — denser central region
+        float inner = capsule_mask(p1, center - axis * (len * 0.7), center + axis * (len * 0.7), 0.028, 0.035);
+        vec3 outer_col = mix(vec3(0.74, 0.40, 0.16), vec3(0.96, 0.60, 0.22), cristae_mix);
+        vec3 inner_col = mix(vec3(0.86, 0.52, 0.18), vec3(0.98, 0.70, 0.28), cristae_mix * 0.6);
+        outer_col = mix(outer_col, vec3(0.48, 0.34, 0.22), smoothstep(0.35, 0.85, life_age));
+        outer_col = mix(outer_col, vec3(0.26, 0.24, 0.22), corpse);
+        inner_col = mix(inner_col, vec3(0.36, 0.30, 0.20), corpse);
+        color += outer_col * outer * mix(0.16, 0.07, corpse);
+        color += inner_col * inner * cristae_mix * mix(0.08, 0.03, corpse);
+        density += outer * mix(0.08, 0.04, corpse) + inner * cristae_mix * 0.03;
+    }
+    return vec4(color, density);
+}
+
+vec4 organelle_er_and_golgi(vec3 p0, vec3 p1, vec3 p2, vec3 nucleus_center, vec3 nucleus_radii,
+                             int morph, float phase, float life_age, float corpse) {
+    vec3 color = vec3(0.0);
+    float density = 0.0;
+
+    // Rough endoplasmic reticulum — folded membrane sheets near nucleus, studded with ribosomes
+    float nuc_dist = length(p1 - nucleus_center);
+    float er_zone = smoothstep(0.50, 0.16, nuc_dist);  // strongest near nucleus
+    // Wavy membrane pattern (rough ER cisternae)
+    float er_wave = sin(p1.x * 18.0 + p1.z * 13.0 + phase * 1.4) *
+                    sin(p1.y * 15.0 + p1.x * 9.0 - phase * 1.1);
+    float rough_er = smoothstep(0.62, 0.92, 0.5 + 0.5 * er_wave) * er_zone;
+    // Ribosome dots on rough ER
+    float er_ribosomes = smoothstep(0.92, 0.99, hash3d(p1 * 42.0 + vec3(phase * 0.3))) * rough_er;
+    vec3 er_col = mix(vec3(0.58, 0.48, 0.72), vec3(0.42, 0.32, 0.22), smoothstep(0.35, 0.88, life_age));
+    er_col = mix(er_col, vec3(0.22, 0.22, 0.20), corpse);
+    color += er_col * rough_er * 0.10;
+    color += vec3(0.90, 0.84, 0.68) * er_ribosomes * 0.08;
+    density += rough_er * mix(0.04, 0.02, corpse) + er_ribosomes * 0.02;
+
+    // Smooth ER — tubular network further from nucleus (lipid synthesis)
+    float smooth_zone = smoothstep(0.14, 0.42, nuc_dist) * (1.0 - smoothstep(0.50, 0.72, nuc_dist));
+    float ser_tubes = sin(p1.x * 24.0 + p1.y * 11.0 + phase * 1.8) *
+                      sin(p1.z * 20.0 - p1.x * 7.0 + phase * 0.9);
+    float smooth_er = smoothstep(0.74, 0.96, 0.5 + 0.5 * ser_tubes) * smooth_zone;
+    vec3 ser_col = mix(vec3(0.52, 0.62, 0.44), vec3(0.38, 0.32, 0.22), smoothstep(0.40, 0.90, life_age));
+    ser_col = mix(ser_col, vec3(0.22, 0.20, 0.18), corpse);
+    color += ser_col * smooth_er * 0.08;
+    density += smooth_er * mix(0.03, 0.015, corpse);
+
+    // Golgi apparatus — stacked cisternae (4-6 flattened discs) near nucleus
+    vec3 golgi_base = nucleus_center + vec3(0.20, -0.04, 0.08);
+    if (morph == 1) golgi_base = nucleus_center + vec3(0.18, -0.10, 0.05);
+    if (morph == 2) golgi_base = nucleus_center + vec3(0.16, 0.02, -0.10);
     for (int i = 0; i < 5; ++i) {
         float fi = float(i);
-        vec3 axis = normalize(vec3(cos(fi * 1.7 + phase), sin(fi * 1.4 - phase), cos(fi * 0.9 + phase)));
-
-        vec3 pro_center = vec3(
-            sin(phase * 1.1 + fi * 1.5) * 0.14,
-            cos(phase * 0.7 + fi * 1.8) * 0.14,
-            sin(phase * 0.9 + fi * 2.1) * 0.12);
-        float pro_chr = max(capsule_mask(p1, pro_center - axis * 0.10, pro_center + axis * 0.10, 0.028, 0.03),
-                            capsule_mask(p2, pro_center - axis * 0.10, pro_center + axis * 0.10, 0.028, 0.03));
-    color += vec3(0.96, 0.48, 0.82) * pro_chr * prophase * 0.24;
-    density += pro_chr * prophase * 0.09;
-
-        vec3 meta_center = vec3(0.0, -0.20 + fi * 0.10, 0.04 * sin(phase + fi));
-        float meta_chr = max(capsule_mask(p1, meta_center - vec3(0.0, 0.055, 0.0), meta_center + vec3(0.0, 0.055, 0.0), 0.024, 0.03),
-                             capsule_mask(p2, meta_center - vec3(0.0, 0.055, 0.0), meta_center + vec3(0.0, 0.055, 0.0), 0.024, 0.03));
-        float left_fiber = capsule_mask(p1, pole_a, meta_center, 0.012, 0.02);
-        float right_fiber = capsule_mask(p1, pole_b, meta_center, 0.012, 0.02);
-        color += vec3(0.98, 0.62, 0.88) * meta_chr * metaphase * 0.24;
-        color += vec3(0.60, 0.90, 1.00) * (left_fiber + right_fiber) * metaphase * 0.10;
-        density += (meta_chr * 0.10 + (left_fiber + right_fiber) * 0.04) * metaphase;
-
-        float split_offset = 0.12 + fi * 0.04;
-        vec3 ana_left = vec3(-split_offset, -0.16 + fi * 0.08, 0.03 * cos(phase + fi));
-        vec3 ana_right = vec3(split_offset, -0.16 + fi * 0.08, -0.03 * cos(phase + fi));
-        float ana_chr = max(
-            max(capsule_mask(p1, ana_left - axis * 0.08, ana_left + axis * 0.08, 0.022, 0.028),
-                capsule_mask(p2, ana_left - axis * 0.08, ana_left + axis * 0.08, 0.022, 0.028)),
-            max(capsule_mask(p1, ana_right - axis * 0.08, ana_right + axis * 0.08, 0.022, 0.028),
-                capsule_mask(p2, ana_right - axis * 0.08, ana_right + axis * 0.08, 0.022, 0.028)));
-        float ana_fibers = capsule_mask(p1, pole_a, ana_left, 0.010, 0.02) +
-                           capsule_mask(p1, pole_b, ana_right, 0.010, 0.02);
-        color += vec3(0.98, 0.68, 0.90) * ana_chr * anaphase * 0.22;
-        color += vec3(0.62, 0.92, 1.00) * ana_fibers * anaphase * 0.09;
-        density += (ana_chr * 0.09 + ana_fibers * 0.04) * anaphase;
+        vec3 stack_pos = golgi_base + vec3(0.0, fi * 0.028 - 0.056, 0.0);
+        // Curved cisterna (slightly arc-shaped disc)
+        float curve = sin(fi * 0.8 + phase * 0.4) * 0.02;
+        stack_pos.x += curve;
+        vec3 disc_radii = vec3(0.12, 0.010 + fi * 0.001, 0.08);
+        float disc = max(ellipsoid_mask(p0, stack_pos, disc_radii, 0.025),
+                         ellipsoid_mask(p1, stack_pos, disc_radii, 0.025));
+        vec3 golgi_col = mix(vec3(0.82, 0.66, 0.28), vec3(0.56, 0.40, 0.22), smoothstep(0.30, 0.88, life_age));
+        golgi_col = mix(golgi_col, vec3(0.22, 0.20, 0.18), corpse);
+        // cis-face (near nucleus) lighter, trans-face darker
+        float cis_trans = smoothstep(0.0, 4.0, fi);
+        golgi_col = mix(golgi_col, golgi_col * 0.70, cis_trans);
+        color += golgi_col * disc * 0.11;
+        density += disc * mix(0.03, 0.015, corpse);
+    }
+    // Golgi vesicles budding off trans-face
+    for (int i = 0; i < 3; ++i) {
+        float fi = float(i);
+        vec3 bud = golgi_base + vec3(0.14 + fi * 0.04, fi * 0.02 - 0.06,
+                                      sin(phase * 1.2 + fi * 2.0) * 0.05);
+        float vesicle = sphere_mask(p1, bud, 0.018, 0.016);
+        color += vec3(0.78, 0.60, 0.26) * vesicle * 0.10;
+        density += vesicle * 0.02;
     }
 
-    float tel_nucleus_a = max(ellipsoid_mask(p1, vec3(-0.24, 0.0, 0.0), vec3(0.18, 0.15, 0.16), 0.05),
-                              ellipsoid_mask(p2, vec3(-0.24, 0.0, 0.0), vec3(0.18, 0.15, 0.16), 0.05));
-    float tel_nucleus_b = max(ellipsoid_mask(p1, vec3(0.24, 0.0, 0.0), vec3(0.18, 0.15, 0.16), 0.05),
-                              ellipsoid_mask(p2, vec3(0.24, 0.0, 0.0), vec3(0.18, 0.15, 0.16), 0.05));
-    float cleavage_ring = torus_mask(p1, vec3(0.0), vec2(0.28, 0.020), 0.03) +
-                          torus_mask(p2, vec3(0.0), vec2(0.26, 0.020), 0.03);
-    color += vec3(0.58, 0.34, 0.76) * (tel_nucleus_a + tel_nucleus_b) * telophase * 0.28;
-    color += vec3(0.66, 0.96, 1.00) * cleavage_ring * telophase * 0.11;
-    density += ((tel_nucleus_a + tel_nucleus_b) * 0.12 + cleavage_ring * 0.04) * telophase;
-
-    return vec4(color, clamp(density, 0.0, 0.42));
+    return vec4(color, density);
 }
+
+vec4 organelle_lysosomes_peroxisomes(vec3 p0, vec3 p1, vec3 p2, int morph,
+                                      float phase, float noise, float life_age, float corpse) {
+    vec3 color = vec3(0.0);
+    float density = 0.0;
+    vec3 stage_a = mix(vec3(0.34, 0.66, 0.88), vec3(0.58, 0.74, 0.92), smoothstep(0.15, 0.45, life_age));
+    vec3 stage_b = mix(vec3(0.92, 0.54, 0.64), vec3(0.78, 0.58, 0.34), smoothstep(0.35, 0.82, life_age));
+    vec3 stage_c = mix(vec3(0.52, 0.90, 0.70), vec3(0.44, 0.46, 0.40), smoothstep(0.45, 0.95, life_age));
+    if (corpse > 0.5) {
+        stage_a = vec3(0.28, 0.30, 0.32);
+        stage_b = vec3(0.30, 0.26, 0.22);
+        stage_c = vec3(0.24, 0.25, 0.22);
+    }
+
+    // Lysosomes — 5 digestive vesicles with acidic interior
+    for (int i = 0; i < 5; ++i) {
+        float fi = float(i);
+        vec3 center = vec3(
+            cos(phase * 1.7 + fi * 1.3) * 0.26,
+            sin(phase * 0.8 + fi * 2.7) * 0.18,
+            cos(phase * 1.2 + fi * 1.9) * 0.24);
+        float r = 0.038 + fi * 0.005;
+        float lyso = max(sphere_mask(p1, center, r, 0.030),
+                         sphere_mask(p2, center, r, 0.030));
+        // Enzyme granularity inside lysosomes
+        float enzyme = hash3d(p2 * 55.0 + center + vec3(fi)) * lyso;
+        color += stage_b * lyso * mix(0.13, 0.08, life_age);
+        color += vec3(0.96, 0.42, 0.28) * enzyme * 0.04;
+        density += lyso * mix(0.03, 0.018, life_age);
+    }
+
+    // Peroxisomes — 4 smaller oxidative vesicles with crystalline core
+    for (int i = 0; i < 4; ++i) {
+        float fi = float(i);
+        vec3 center = vec3(
+            cos(phase * 0.9 + fi * 1.5) * 0.20,
+            sin(phase * 1.8 + fi * 1.2) * 0.15,
+            cos(phase * 1.5 + fi * 2.5) * 0.18);
+        float peroxi = max(sphere_mask(p0, center, 0.030, 0.024),
+                           sphere_mask(p2, center, 0.030, 0.024));
+        // Crystalline core (urate oxidase crystal)
+        float crystal = sphere_mask(p2, center, 0.014, 0.012) * peroxi;
+        color += stage_c * peroxi * 0.10;
+        color += vec3(0.80, 0.88, 0.72) * crystal * 0.06;
+        density += peroxi * mix(0.022, 0.012, life_age) + crystal * 0.01;
+    }
+
+    // Transport vesicles — 3 moving between organelles
+    for (int i = 0; i < 3; ++i) {
+        float fi = float(i);
+        vec3 center = vec3(
+            sin(phase * 1.4 + fi * 2.4) * 0.24,
+            cos(phase * 1.0 + fi * 1.6) * 0.15,
+            sin(phase * 0.6 + fi * 2.8) * 0.22);
+        vec3 axis = normalize(vec3(cos(fi + phase * 0.7), sin(fi * 1.7 - phase), cos(fi * 0.8 + phase * 1.4)));
+        float body = max(capsule_mask(p0, center - axis * 0.05, center + axis * 0.05, 0.022, 0.025),
+                         capsule_mask(p1, center - axis * 0.05, center + axis * 0.05, 0.022, 0.025));
+        color += mix(vec3(0.82, 0.78, 0.36), vec3(0.50, 0.42, 0.22), life_age) * body * 0.08;
+        density += body * mix(0.020, 0.010, life_age);
+    }
+
+    return vec4(color, density);
+}
+
+vec4 organelle_cytoskeleton(vec3 p0, vec3 p1, float phase, float life_age, float corpse) {
+    vec3 color = vec3(0.0);
+    float density = 0.0;
+    // Microtubules — long fibers radiating from centrosome near nucleus
+    vec3 centrosome = vec3(0.06, 0.04, 0.02);
+    for (int i = 0; i < 5; ++i) {
+        float fi = float(i);
+        float a = fi * 1.2566 + phase * 0.2;  // 72-degree spacing
+        vec3 end_pt = vec3(cos(a) * 0.42, sin(a + fi * 0.3) * 0.38,
+                           cos(a * 1.3 + phase * 0.15) * 0.36);
+        float mt = capsule_mask(p1, centrosome, end_pt, 0.005, 0.012);
+        vec3 mt_col = mix(vec3(0.56, 0.72, 0.46), vec3(0.36, 0.40, 0.28), life_age);
+        mt_col = mix(mt_col, vec3(0.20, 0.20, 0.18), corpse);
+        color += mt_col * mt * 0.06;
+        density += mt * 0.012;
+    }
+    // Actin cortex — mesh near membrane surface
+    float cortex_dist = length(p0);
+    float cortex = smoothstep(0.58, 0.72, cortex_dist) * (1.0 - smoothstep(0.74, 0.82, cortex_dist));
+    float mesh = hash3d(p0 * 45.0 + vec3(phase * 0.2));
+    cortex *= smoothstep(0.70, 0.90, mesh);
+    vec3 actin_col = mix(vec3(0.44, 0.68, 0.52), vec3(0.30, 0.36, 0.24), life_age);
+    actin_col = mix(actin_col, vec3(0.18, 0.18, 0.16), corpse);
+    color += actin_col * cortex * 0.05;
+    density += cortex * 0.015;
+
+    return vec4(color, density);
+}
+
+// ── Cell interior compositing ────────────────────────────────────────────
 
 vec4 sample_cell_interior(vec3 surface_pt, vec3 local_view, int morph,
                           float aspect, float noise, float phase, float mitosis,
@@ -657,10 +948,8 @@ vec4 sample_cell_interior(vec3 surface_pt, vec3 local_view, int morph,
                         (0.45 + 0.55 * smoothstep(0.16, 0.96, mitosis)) * (1.0 - corpse);
 
     vec3 cytoplasm = vec3(0.18, 0.28, 0.34);
-    if (morph == 1)
-        cytoplasm = vec3(0.26, 0.34, 0.24);
-    else if (morph == 2)
-        cytoplasm = vec3(0.16, 0.34, 0.28);
+    if (morph == 1) cytoplasm = vec3(0.26, 0.34, 0.24);
+    else if (morph == 2) cytoplasm = vec3(0.16, 0.34, 0.28);
 
     vec3 young_cytoplasm = cytoplasm;
     vec3 mature_cytoplasm = mix(cytoplasm, cytoplasm + vec3(0.06, 0.05, 0.01), 0.5);
@@ -672,76 +961,45 @@ vec4 sample_cell_interior(vec3 surface_pt, vec3 local_view, int morph,
     vec3 color = cytoplasm_tint * (0.20 + hash3d(p1 * 7.0 + vec3(phase)) * 0.10);
     float density = mix(0.16, 0.11, corpse);
 
-    vec3 nucleus_center = vec3(0.12 * sin(phase * 1.1),
-                               0.07 * cos(phase * 0.8),
-                               0.08 * sin(phase * 1.6));
-    if (morph == 1)
-        nucleus_center += vec3(-0.05, -0.12, 0.02);
-    else if (morph == 2)
-        nucleus_center += vec3(0.10 * cos(phase * 0.7), 0.03, -0.05);
-
+    // Nucleus position and radii
+    vec3 nucleus_center = vec3(0.12 * sin(phase * 1.1), 0.07 * cos(phase * 0.8), 0.08 * sin(phase * 1.6));
+    if (morph == 1) nucleus_center += vec3(-0.05, -0.12, 0.02);
+    else if (morph == 2) nucleus_center += vec3(0.10 * cos(phase * 0.7), 0.03, -0.05);
     vec3 nucleus_radii = vec3(0.26, 0.22 + (1.0 - aspect) * 0.03, 0.24);
-    if (morph == 1)
-        nucleus_radii = vec3(0.23, 0.18, 0.21);
-    if (morph == 2)
-        nucleus_radii = vec3(0.24, 0.20, 0.28);
+    if (morph == 1) nucleus_radii = vec3(0.23, 0.18, 0.21);
+    if (morph == 2) nucleus_radii = vec3(0.24, 0.20, 0.28);
 
-    float nucleus = max(ellipsoid_mask(p1, nucleus_center, nucleus_radii, 0.08),
-                        ellipsoid_mask(p2, nucleus_center, nucleus_radii * 0.96, 0.08));
-    float nucleolus = sphere_mask(
-        p2,
-        nucleus_center + vec3(0.05 * cos(phase * 2.1), -0.03, 0.05 * sin(phase * 1.7)),
-        0.08, 0.05) * nucleus;
+    // Nucleus with envelope, nucleolus, chromatin
+    vec4 nuc = organelle_nucleus(p1, p2, nucleus_center, nucleus_radii, phase, life_age, corpse);
+    color += nuc.rgb; density += nuc.a;
 
-    vec3 nucleus_col = mix(vec3(0.40, 0.22, 0.52), vec3(0.58, 0.40, 0.20), smoothstep(0.35, 0.85, life_age));
-    vec3 nucleolus_col = mix(vec3(0.82, 0.56, 0.86), vec3(0.42, 0.36, 0.30), corpse);
-    color += nucleus_col * nucleus * mix(0.44, 0.24, corpse);
-    color += nucleolus_col * nucleolus * mix(0.40, 0.12, life_age);
-    density += nucleus * mix(0.30, 0.18, corpse) + nucleolus * mix(0.12, 0.04, corpse);
+    // Mitochondria with cristae and matrix
+    vec4 mito = organelle_mitochondria(p0, p1, morph, phase, life_age, corpse);
+    color += mito.rgb; density += mito.a;
 
-    float mitochondria = 0.0;
-    for (int i = 0; i < 4; ++i) {
-        float fi = float(i);
-        vec3 center = vec3(
-            sin(phase + fi * 1.7) * 0.30,
-            cos(phase * 1.3 + fi * 1.8) * (morph == 1 ? 0.08 : 0.18),
-            sin(phase * 0.9 + fi * 1.2) * 0.22);
-        vec3 axis = normalize(vec3(
-            cos(fi * 2.0 + phase),
-            sin(fi * 1.4 - phase * 0.7),
-            cos(fi * 0.9 + phase * 1.3)));
-        float mito = max(capsule_mask(p0, center - axis * 0.12, center + axis * 0.12, 0.055, 0.05),
-                         capsule_mask(p1, center - axis * 0.12, center + axis * 0.12, 0.055, 0.05));
-        float cristae = 0.5 + 0.5 * sin(dot(p1 - center, axis) * 42.0 + fi * 1.6 + phase * 2.7);
-        vec3 mito_col = mix(vec3(0.74, 0.40, 0.16), vec3(0.96, 0.60, 0.22), cristae);
-        mito_col = mix(mito_col, vec3(0.48, 0.34, 0.22), smoothstep(0.35, 0.85, life_age));
-        mito_col = mix(mito_col, vec3(0.26, 0.24, 0.22), corpse);
-        color += mito_col * mito * mix(0.18, 0.08, corpse);
-        mitochondria += mito;
-    }
-    density += mitochondria * mix(0.10, 0.05, corpse);
+    // ER (rough + smooth) and Golgi apparatus
+    vec4 er_golgi = organelle_er_and_golgi(p0, p1, p2, nucleus_center, nucleus_radii,
+                                            morph, phase, life_age, corpse);
+    color += er_golgi.rgb; density += er_golgi.a;
 
-    float vesicles = 0.0;
-    for (int i = 0; i < 3; ++i) {
-        float fi = float(i);
-        vec3 center = vec3(
-            cos(phase * 0.6 + fi * 2.2) * 0.22,
-            sin(phase * 1.1 + fi * 1.5) * 0.14,
-            cos(phase * 1.3 + fi * 1.1) * 0.18);
-        float radius = (morph == 2 ? 0.10 : 0.07) + fi * 0.01;
-        float vesicle = max(sphere_mask(p0, center, radius, 0.05),
-                            sphere_mask(p1, center, radius, 0.05));
-        vec3 vesicle_col = mix(vec3(0.58, 0.74, 0.82), vec3(0.66, 0.54, 0.32), smoothstep(0.35, 0.85, life_age));
-        vesicle_col = mix(vesicle_col, vec3(0.24, 0.22, 0.20), corpse);
-        color += vesicle_col * vesicle * 0.09;
-        vesicles += vesicle;
-    }
-    density += vesicles * mix(0.05, 0.03, corpse);
+    // Lysosomes, peroxisomes, transport vesicles
+    vec4 lyso = organelle_lysosomes_peroxisomes(p0, p1, p2, morph, phase, noise, life_age, corpse);
+    color += lyso.rgb; density += lyso.a;
 
-    vec4 decorative = sample_nonfunctional_organelles(p0, p1, p2, morph, phase, noise, life_age, corpse);
-    color += decorative.rgb;
-    density += decorative.a;
+    // Cytoskeleton — microtubules and actin cortex
+    vec4 cyto = organelle_cytoskeleton(p0, p1, phase, life_age, corpse);
+    color += cyto.rgb; density += cyto.a;
 
+    // Free ribosomes scattered throughout cytoplasm
+    float ribosomes = smoothstep(0.88, 0.995, hash3d(p0 * 30.0 + vec3(phase)));
+    ribosomes += smoothstep(0.90, 0.997, hash3d(p1 * 36.0 - vec3(phase * 0.7)));
+    ribosomes += smoothstep(0.93, 0.998, hash3d(p2 * 26.0 + vec3(phase * 0.4)));
+    vec3 ribosome_col = mix(vec3(0.94, 0.88, 0.74), vec3(0.54, 0.46, 0.30), smoothstep(0.45, 0.90, life_age));
+    ribosome_col = mix(ribosome_col, vec3(0.20, 0.20, 0.18), corpse);
+    color += ribosome_col * ribosomes * 0.10;
+    density += ribosomes * mix(0.03, 0.015, corpse);
+
+    // Viral infection overlay
     if (infection_progress > 0.0 && corpse < 0.5) {
         vec4 viral_overlay = sample_viral_replication_overlay(
             p0, p1, p2, infection_progress, infection_load, infection_morphology, phase, infection_axis);
@@ -750,34 +1008,7 @@ vec4 sample_cell_interior(vec3 surface_pt, vec3 local_view, int morph,
         density += viral_overlay.a;
     }
 
-    if (morph == 1) {
-        for (int i = 0; i < 3; ++i) {
-            float fi = float(i);
-            vec3 center = nucleus_center + vec3(0.18, -0.08 + fi * 0.07, 0.05 * sin(phase + fi));
-            float golgi = max(ellipsoid_mask(p0, center, vec3(0.18, 0.03, 0.10), 0.03),
-                              ellipsoid_mask(p1, center, vec3(0.18, 0.03, 0.10), 0.03));
-            vec3 golgi_col = mix(vec3(0.78, 0.62, 0.28), vec3(0.52, 0.36, 0.22), smoothstep(0.30, 0.88, life_age));
-            golgi_col = mix(golgi_col, vec3(0.22, 0.20, 0.18), corpse);
-            color += golgi_col * golgi * 0.12;
-            density += golgi * mix(0.03, 0.015, corpse);
-        }
-    } else {
-        float er = smoothstep(0.72, 1.0,
-            0.5 + 0.5 * sin(p1.x * 16.0 + p1.z * 11.0 + phase * 2.0));
-        er *= smoothstep(0.56, 0.12, length(p1 - nucleus_center));
-        vec3 er_col = mix(vec3(0.62, 0.50, 0.74), vec3(0.46, 0.34, 0.22), smoothstep(0.35, 0.88, life_age));
-        er_col = mix(er_col, vec3(0.22, 0.22, 0.20), corpse);
-        color += er_col * er * 0.10;
-        density += er * mix(0.04, 0.02, corpse);
-    }
-
-    float ribosomes = smoothstep(0.90, 0.995, hash3d(p0 * 28.0 + vec3(phase)));
-    ribosomes += smoothstep(0.92, 0.997, hash3d(p1 * 34.0 - vec3(phase * 0.7)));
-    vec3 ribosome_col = mix(vec3(0.94, 0.88, 0.74), vec3(0.54, 0.46, 0.30), smoothstep(0.45, 0.90, life_age));
-    ribosome_col = mix(ribosome_col, vec3(0.20, 0.20, 0.18), corpse);
-    color += ribosome_col * ribosomes * 0.12;
-    density += ribosomes * mix(0.03, 0.015, corpse);
-
+    // Mitosis overlay
     if (mitosis_mix > 0.0) {
         vec4 mitosis_overlay = sample_mitosis_sequence(p0, p1, p2, mitosis, phase);
         color = mix(color, cytoplasm_tint * 0.18 + mitosis_overlay.rgb, mitosis_mix);
@@ -946,12 +1177,14 @@ vec3 subsurface(vec3 normal, vec3 light_dir, vec3 view_dir, vec3 color, float ra
 
 float structure_bound_scale(int shape) {
     if (shape == STRUCT_PETRI_RIM)
-        return 1.40;
-    if (shape == STRUCT_LUNG_BRANCH || shape == STRUCT_BRAIN_VESSEL || shape == STRUCT_POND_REED)
+        return 1.45;
+    if (shape == STRUCT_LUNG_BRANCH || shape == STRUCT_BRAIN_VESSEL)
+        return 1.35;
+    if (shape == STRUCT_POND_REED)
+        return 1.32;
+    if (shape == STRUCT_BRAIN_FOLD || shape == STRUCT_ALVEOLAR_CLUSTER)
         return 1.28;
-    if (shape == STRUCT_BRAIN_FOLD)
-        return 1.24;
-    return 1.15;
+    return 1.18;
 }
 
 float sd_environment_structure_local(vec3 p, EnvFeature feature) {
@@ -961,61 +1194,159 @@ float sd_environment_structure_local(vec3 p, EnvFeature feature) {
     float detail_phase = noise * 6.2831853;
 
     if (shape == STRUCT_LUNG_BRANCH) {
-        float trunk = sd_capsule(p, vec3(0.0, -0.88, 0.0), vec3(0.0, 0.10, 0.0), 0.16);
-        float arm_a = sd_capsule(p, vec3(0.0, 0.02, 0.0), vec3(0.56, 0.74, 0.0), 0.12);
-        float arm_b = sd_capsule(p, vec3(0.0, 0.02, 0.0), vec3(-0.56, 0.74, 0.0), 0.12);
-        float branch = min(trunk, min(arm_a, arm_b));
-        float rings = sin(p.y * 14.0 + detail_phase) * 0.018;
-        return branch - rings;
+        // Bronchiole — cartilaginous tube with dichotomous branching
+        // Main trunk with tapering radius (proximal wider, distal narrow)
+        float trunk_r = mix(0.18, 0.12, smoothstep(-0.88, 0.10, p.y));
+        float trunk = sd_capsule(p, vec3(0.0, -0.88, 0.0), vec3(0.0, 0.10, 0.0), trunk_r);
+        // Primary daughter branches at 35-degree angle (anatomically correct)
+        float arm_a_r = mix(0.13, 0.08, smoothstep(0.0, 0.74, length(p - vec3(0.56, 0.74, 0.0))));
+        float arm_a = sd_capsule(p, vec3(0.0, 0.02, 0.0), vec3(0.56, 0.74, 0.08), arm_a_r);
+        float arm_b = sd_capsule(p, vec3(0.0, 0.02, 0.0), vec3(-0.56, 0.74, -0.08), arm_a_r);
+        // Tertiary branches (smaller terminal bronchioles)
+        float twig_a = sd_capsule(p, vec3(0.42, 0.54, 0.06), vec3(0.72, 0.92, 0.18), 0.055);
+        float twig_b = sd_capsule(p, vec3(-0.38, 0.50, -0.06), vec3(-0.68, 0.88, -0.22), 0.050);
+        float branch = min(trunk, min(min(arm_a, arm_b), min(twig_a, twig_b)));
+        // Cartilage rings — C-shaped ridges along trunk (real bronchi have incomplete rings)
+        float rings = sin(p.y * 18.0 + detail_phase) * 0.016 *
+                      (1.0 - smoothstep(0.08, 0.22, abs(p.y - (-0.40))));
+        // Mucosal texture on inner surface
+        float mucosa = sin(p.x * 22.0 + p.z * 18.0 + detail_phase * 1.4) * 0.006;
+        return branch - rings - mucosa;
     }
     if (shape == STRUCT_ALVEOLAR_CLUSTER) {
-        float cluster = sd_sphere(p, 0.52);
-        cluster = min(cluster, sd_sphere(p - vec3(0.48, 0.08, 0.0), 0.34));
-        cluster = min(cluster, sd_sphere(p + vec3(0.46, -0.04, 0.06), 0.32));
-        cluster = min(cluster, sd_sphere(p - vec3(0.12, 0.36, 0.26), 0.28));
-        cluster = min(cluster, sd_sphere(p + vec3(0.10, -0.30, -0.28), 0.30));
-        cluster -= (0.5 + 0.5 * sin(dot(p, vec3(9.0, 7.0, 11.0)) + detail_phase)) * 0.04;
-        return cluster;
+        // Alveolar sacs — grape-like cluster of thin-walled air spaces (~200 μm each)
+        // Central alveolar duct
+        float duct = sd_capsule(p, vec3(0.0, -0.38, 0.0), vec3(0.0, 0.10, 0.0), 0.08);
+        // Individual alveoli — hollow spheres budding from duct
+        float cluster = 1e5;
+        for (int i = 0; i < 8; ++i) {
+            float fi = float(i);
+            float theta = fi * 2.39996 + detail_phase;
+            float z = 1.0 - 2.0 * (fi + 0.5) / 8.0;
+            float r_xy = sqrt(max(1.0 - z * z, 0.0));
+            vec3 alv_center = vec3(cos(theta) * r_xy, z, sin(theta) * r_xy) * 0.38;
+            float alv_r = 0.22 + sin(fi * 1.7 + detail_phase) * 0.04;
+            // Hollow alveolus — thin wall
+            float outer = sd_sphere(p - alv_center, alv_r);
+            float inner = sd_sphere(p - alv_center, alv_r - 0.04);
+            float alveolus = max(outer, -inner);
+            cluster = min(cluster, alveolus);
+        }
+        float result = min(duct, cluster);
+        // Capillary network texture on alveolar walls
+        float capillaries = sin(dot(p, vec3(14.0, 11.0, 17.0)) + detail_phase) *
+                            sin(dot(p, vec3(-9.0, 16.0, 8.0)) - detail_phase * 0.7) * 0.012;
+        return result - capillaries;
     }
     if (shape == STRUCT_POND_REED) {
-        float stalk = sd_capsule(p, vec3(0.0, -0.90, 0.0), vec3(0.0, 0.95, 0.0), 0.07);
-        float leaf_a = sd_capsule(p, vec3(0.0, 0.06, 0.0), vec3(0.46, 0.56, 0.0), 0.05);
-        float leaf_b = sd_capsule(p, vec3(0.0, -0.08, 0.0), vec3(-0.40, 0.40, 0.12), 0.045);
-        return min(stalk, min(leaf_a, leaf_b));
+        // Aquatic macrophyte (Typha-like) — hollow stem, flat blade leaves, seed head
+        // Main stem — slightly tapered, hollow
+        float taper = mix(0.07, 0.04, smoothstep(-0.90, 0.95, p.y));
+        float stem = sd_capsule(p, vec3(0.0, -0.90, 0.0), vec3(0.0, 0.85, 0.0), taper);
+        // Seed head (cattail) at top
+        float head = sd_capsule(p, vec3(0.0, 0.68, 0.0), vec3(0.0, 0.95, 0.0), 0.09);
+        head -= sin(p.y * 32.0 + detail_phase) * 0.008; // fuzzy texture
+        // Blade leaves — flat and curving
+        vec3 leaf_a_start = vec3(0.0, 0.04, 0.0);
+        vec3 leaf_a_end = vec3(0.42, 0.48, 0.06);
+        float leaf_a = sd_capsule(p, leaf_a_start, leaf_a_end, 0.035);
+        // Make leaves flat (compress in one direction)
+        vec3 leaf_dir = normalize(leaf_a_end - leaf_a_start);
+        vec3 leaf_flat = normalize(cross(leaf_dir, vec3(0.0, 0.0, 1.0)));
+        float flatten_a = abs(dot(p - (leaf_a_start + leaf_a_end) * 0.5, leaf_flat));
+        leaf_a = max(leaf_a, flatten_a - 0.012);
+        vec3 leaf_b_start = vec3(0.0, -0.06, 0.0);
+        vec3 leaf_b_end = vec3(-0.38, 0.38, 0.10);
+        float leaf_b = sd_capsule(p, leaf_b_start, leaf_b_end, 0.032);
+        vec3 leaf_b_dir = normalize(leaf_b_end - leaf_b_start);
+        vec3 leaf_b_flat = normalize(cross(leaf_b_dir, vec3(0.0, 0.0, 1.0)));
+        float flatten_b = abs(dot(p - (leaf_b_start + leaf_b_end) * 0.5, leaf_b_flat));
+        leaf_b = max(leaf_b, flatten_b - 0.011);
+        // Third drooping leaf
+        vec3 leaf_c_end = vec3(0.30, -0.18, -0.12);
+        float leaf_c = sd_capsule(p, vec3(0.0, -0.20, 0.0), leaf_c_end, 0.028);
+        return min(min(stem, head), min(min(leaf_a, leaf_b), leaf_c));
     }
     if (shape == STRUCT_POND_ROCK) {
+        // Submerged rock with biofilm, erosion, and sediment
         vec3 q = p;
         q.y *= 1.28;
         float rock = sd_ellipsoid(q, vec3(0.96, 0.60, 0.82));
-        rock -= sin(p.x * 8.0 + detail_phase) * sin(p.z * 7.0 - detail_phase * 0.8) * 0.06;
-        return rock;
+        // Erosion channels
+        float erosion = sin(p.x * 6.0 + detail_phase) * sin(p.z * 5.0 - detail_phase * 0.8) * 0.065;
+        // Pitting from chemical weathering
+        float pits = sin(p.x * 14.0 + p.y * 11.0 + detail_phase * 1.3) *
+                     sin(p.z * 12.0 - p.x * 9.0 + detail_phase * 0.6) * 0.022;
+        // Sediment accumulation on top (flatter upper surface)
+        float sediment = sd_ellipsoid(q + vec3(0.0, -0.22, 0.0), vec3(0.80, 0.18, 0.70));
+        rock = min(rock, sediment);
+        return rock - erosion - max(pits, 0.0);
     }
     if (shape == STRUCT_PETRI_RIM) {
+        // Standard 90mm Petri dish — borosilicate glass rim with lid
         vec3 q = p;
         q.y *= 1.35;
-        float rim = sd_torus(q, vec2(1.04, 0.16 + opacity * 0.02));
-        float lip = sd_torus(q + vec3(0.0, 0.10, 0.0), vec2(0.96, 0.12));
-        return min(rim, lip);
+        // Bottom dish rim
+        float rim = sd_torus(q, vec2(1.04, 0.14));
+        // Flat base
+        float base_disk = max(sd_sphere(q + vec3(0.0, 0.16, 0.0), 1.10),
+                              -(sd_sphere(q + vec3(0.0, 0.16, 0.0), 1.06)));
+        base_disk = max(base_disk, q.y + 0.10);
+        base_disk = max(base_disk, -(q.y + 0.30));
+        // Lid rim (slightly larger, sits on top)
+        float lid = sd_torus(q + vec3(0.0, -0.14, 0.0), vec2(1.08, 0.10));
+        return min(min(rim, lid), base_disk);
     }
     if (shape == STRUCT_PETRI_AGAR) {
+        // Agar gel layer — translucent with streak marks and colony dimples
         vec3 q = p;
         q.y += 0.30;
-        float mound = sd_ellipsoid(q, vec3(0.96, 0.30, 0.96));
-        mound -= (0.5 + 0.5 * sin(dot(p, vec3(8.0, 0.0, 10.0)) + detail_phase)) * 0.04;
-        return mound;
+        float mound = sd_ellipsoid(q, vec3(0.96, 0.26, 0.96));
+        // Streak plate pattern (inoculation lines)
+        float streak = sin(q.x * 5.0 + q.z * 3.0 + detail_phase) * 0.018;
+        // Colony growth dimples
+        float colonies = 0.0;
+        for (int i = 0; i < 4; ++i) {
+            float fi = float(i);
+            vec3 col_pos = vec3(sin(fi * 2.3 + detail_phase) * 0.52,
+                                -0.06,
+                                cos(fi * 1.9 + detail_phase * 0.7) * 0.48);
+            colonies = max(colonies, -sd_sphere(q - col_pos, 0.06 + fi * 0.01));
+        }
+        return mound - streak + colonies * 0.3;
     }
     if (shape == STRUCT_BRAIN_FOLD) {
+        // Cerebral cortex gyrus — with sulcus groove and grey/white matter layering
         vec3 q = p;
-        q.y += sin(p.z * 5.0 + detail_phase) * 0.14;
-        q.x += sin(p.z * 3.5 - detail_phase * 0.6) * 0.08;
-        float fold = sd_ellipsoid(q, vec3(0.92, 0.48, 0.68));
-        float groove = sd_capsule(q, vec3(0.0, -0.18, -0.72), vec3(0.0, 0.26, 0.72), 0.18);
-        return max(fold, -groove);
+        // Gyrus undulation (realistic cortical folding pattern)
+        q.y += sin(p.z * 4.0 + detail_phase) * 0.16
+             + sin(p.z * 7.0 - detail_phase * 0.4) * 0.06;
+        q.x += sin(p.z * 3.0 - detail_phase * 0.6) * 0.10
+             + cos(p.z * 5.5 + detail_phase * 0.3) * 0.04;
+        float fold = sd_ellipsoid(q, vec3(0.92, 0.52, 0.72));
+        // Primary sulcus — deeper groove
+        float sulcus = sd_capsule(q, vec3(0.0, -0.14, -0.76), vec3(0.0, 0.22, 0.76), 0.16);
+        // Secondary sulcus (perpendicular, shallower)
+        float sulcus2 = sd_capsule(q, vec3(-0.56, 0.08, 0.0), vec3(0.56, 0.12, 0.0), 0.10);
+        float grooved = max(fold, -min(sulcus, sulcus2));
+        // Molecular layer texture (outermost cortical layer I)
+        float cortical_layer = sin(length(p.xz) * 18.0 + p.y * 12.0 + detail_phase) * 0.008;
+        return grooved - cortical_layer;
     }
     if (shape == STRUCT_BRAIN_VESSEL) {
-        float trunk = sd_capsule(p, vec3(0.0, -0.72, -0.18), vec3(0.0, 0.76, 0.18), 0.10);
-        float branch = sd_capsule(p, vec3(0.0, 0.12, 0.02), vec3(0.42, 0.58, 0.40), 0.07);
-        return min(trunk, branch);
+        // Cerebral blood vessel — branching arteriole with bifurcation
+        // Main vessel (arteriole, ~50 μm diameter)
+        float trunk = sd_capsule(p, vec3(0.0, -0.76, -0.20), vec3(0.0, 0.78, 0.20), 0.09);
+        // Primary bifurcation
+        float branch_a = sd_capsule(p, vec3(0.0, 0.18, 0.04), vec3(0.44, 0.62, 0.36), 0.065);
+        float branch_b = sd_capsule(p, vec3(0.0, 0.18, 0.04), vec3(-0.32, 0.54, -0.28), 0.058);
+        // Terminal capillary branches
+        float cap_a = sd_capsule(p, vec3(0.34, 0.50, 0.28), vec3(0.58, 0.78, 0.52), 0.035);
+        float cap_b = sd_capsule(p, vec3(-0.24, 0.42, -0.20), vec3(-0.50, 0.68, -0.44), 0.032);
+        float vessels = min(trunk, min(min(branch_a, branch_b), min(cap_a, cap_b)));
+        // Vessel wall texture (smooth muscle wrapping)
+        float wall = sin(p.y * 26.0 + p.z * 8.0 + detail_phase) * 0.005;
+        return vessels - wall;
     }
 
     return sd_sphere(p, 0.80);
@@ -1106,18 +1437,51 @@ vec3 shade_environment_structure(EnvFeature feature, vec3 pos, vec3 normal, vec3
     float detail = 0.5 + 0.5 * sin(dot(local_pos, vec3(11.0, 9.0, 7.0)) + feature.meta.y * 6.2831853 + time * 0.22);
     vec3 color = base;
 
-    if (shape == STRUCT_LUNG_BRANCH || shape == STRUCT_ALVEOLAR_CLUSTER) {
-        color = mix(base, vec3(0.88, 0.60, 0.54), detail * 0.45);
+    if (shape == STRUCT_LUNG_BRANCH) {
+        // Bronchiole: pink mucosa with cartilage ring highlights
+        float ring_band = 0.5 + 0.5 * sin(local_pos.y * 18.0 + time * 0.1);
+        color = mix(base, vec3(0.88, 0.62, 0.56), detail * 0.40);
+        color = mix(color, vec3(0.92, 0.82, 0.76), ring_band * 0.18); // cartilage
+    } else if (shape == STRUCT_ALVEOLAR_CLUSTER) {
+        // Alveoli: thin translucent walls with capillary network (red-pink)
+        float capillary = 0.5 + 0.5 * sin(dot(local_pos, vec3(14.0, 11.0, 17.0)) + time * 0.2);
+        color = mix(base, vec3(0.90, 0.68, 0.62), detail * 0.35);
+        color = mix(color, vec3(0.82, 0.28, 0.24), capillary * 0.22); // blood vessels
     } else if (shape == STRUCT_POND_REED) {
-        color = mix(base, vec3(0.34, 0.52, 0.18), detail * 0.55);
+        // Plant: chlorophyll-green with vein pattern
+        float veins = smoothstep(0.65, 0.85, abs(sin(local_pos.y * 22.0 + local_pos.z * 6.0)));
+        float tip_brown = smoothstep(0.60, 0.90, local_pos.y); // seed head is brown
+        color = mix(base, vec3(0.28, 0.52, 0.14), detail * 0.50);
+        color = mix(color, vec3(0.18, 0.38, 0.08), veins * 0.20); // darker veins
+        color = mix(color, vec3(0.48, 0.34, 0.16), tip_brown * 0.55); // cattail
     } else if (shape == STRUCT_POND_ROCK) {
-        color = mix(base, vec3(0.34, 0.30, 0.24), detail * 0.30);
-    } else if (shape == STRUCT_PETRI_RIM || shape == STRUCT_PETRI_AGAR) {
-        color = mix(base, vec3(0.70, 0.66, 0.36), detail * 0.26);
+        // Submerged rock: grey-brown with algae biofilm on top
+        float algae = smoothstep(-0.10, 0.20, -local_pos.y); // green on top
+        color = mix(base, vec3(0.38, 0.34, 0.26), detail * 0.28);
+        color = mix(color, vec3(0.22, 0.42, 0.16), algae * 0.35); // biofilm
+    } else if (shape == STRUCT_PETRI_RIM) {
+        // Glass: clear with slight blue-white tint and specular
+        color = mix(base, vec3(0.72, 0.74, 0.78), detail * 0.20);
+        color += vec3(0.04, 0.06, 0.08) * rim; // glass reflection
+    } else if (shape == STRUCT_PETRI_AGAR) {
+        // Agar: amber-yellow translucent gel with streak marks
+        float streaks = 0.5 + 0.5 * sin(local_pos.x * 5.0 + local_pos.z * 3.0);
+        color = mix(base, vec3(0.72, 0.64, 0.32), detail * 0.30);
+        color = mix(color, vec3(0.80, 0.72, 0.40), streaks * 0.15);
     } else if (shape == STRUCT_BRAIN_FOLD) {
-        color = mix(base, vec3(0.56, 0.48, 0.62), detail * 0.38);
+        // Cortex: grey matter (outer) with pink-white inner matter
+        // Depth-dependent: surface is grey, deeper is whiter (white matter)
+        float depth = smoothstep(0.0, 0.5, length(local_pos.xz));
+        color = mix(vec3(0.62, 0.56, 0.52), vec3(0.48, 0.42, 0.50), depth); // grey to white
+        color = mix(color, base, 0.25);
+        // Sulcus darkening (in the grooves)
+        float sulcus_dark = smoothstep(0.0, 0.12, abs(local_pos.x)) * 0.15;
+        color -= vec3(sulcus_dark);
     } else if (shape == STRUCT_BRAIN_VESSEL) {
-        color = mix(base, vec3(0.70, 0.18, 0.18), detail * 0.30);
+        // Blood vessel: dark red with smooth muscle wall
+        float vessel_stripe = 0.5 + 0.5 * sin(local_pos.y * 26.0 + local_pos.z * 8.0);
+        color = mix(base, vec3(0.72, 0.16, 0.14), detail * 0.35);
+        color = mix(color, vec3(0.84, 0.26, 0.20), vessel_stripe * 0.12); // endothelium
     }
 
     vec3 lit = color * (ambient * 0.90 + key * 0.70 + fill * 0.24);
