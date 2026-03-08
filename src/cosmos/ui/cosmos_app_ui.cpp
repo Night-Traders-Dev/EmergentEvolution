@@ -1445,9 +1445,11 @@ void CosmosApp::draw_spawn_menu() {
     if (!spawn_menu_visible_) return;
 
     ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowPos({io.DisplaySize.x * 0.5f - 540, io.DisplaySize.y - 520.0f}, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize({1080, 490}, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(900, 420), ImVec2(1400, 680));
+    float menu_w = io.DisplaySize.x * 0.85f;
+    float menu_h = 210.0f;
+    ImGui::SetNextWindowPos({io.DisplaySize.x * 0.5f - menu_w * 0.5f, io.DisplaySize.y - menu_h - 38.0f}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize({menu_w, menu_h}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(700, 170), ImVec2(io.DisplaySize.x * 0.95f, 340));
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
@@ -1499,8 +1501,8 @@ void CosmosApp::draw_spawn_menu() {
     if (catalog_tab == 2) { active_list = BHS; active_count = (int)IM_ARRAYSIZE(BHS); }
 
     // ── Left sidebar: vertical category tabs ──
-    constexpr float SIDEBAR_W = 52.0f;
-    const char* tab_icons[] = {"Bod", "Star", "BH", "Lib", "Mod"};
+    constexpr float SIDEBAR_W = 40.0f;
+    const char* tab_icons[] = {"Bd", "St", "BH", "Lb", "Md"};
     const char* tab_tooltips[] = {"Bodies", "Stars", "Black Holes", "Known Objects", "Existing Objects"};
 
     ImGui::BeginChild("##sidebar", ImVec2(SIDEBAR_W, 0), false);
@@ -1514,7 +1516,7 @@ void CosmosApp::draw_spawn_menu() {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(bg.x + 0.08f, bg.y + 0.08f, bg.z + 0.08f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(bg.x + 0.14f, bg.y + 0.14f, bg.z + 0.14f, 1.0f));
         ImGui::SetCursorPosX(4);
-        if (ImGui::Button(tab_icons[t], ImVec2(SIDEBAR_W - 8, 40))) {
+        if (ImGui::Button(tab_icons[t], ImVec2(SIDEBAR_W - 6, 32))) {
             if (catalog_tab != t) {
                 catalog_tab = t;
                 const TypeEntry* new_list = BASIC;
@@ -2231,14 +2233,14 @@ void CosmosApp::draw_spawn_menu() {
     ImGui::Dummy(ImVec2(0, 2));
 
     // Body card grid - left side
-    float props_panel_w = 320.0f;
+    float props_panel_w = 260.0f;
     float grid_w = ImGui::GetContentRegionAvail().x - props_panel_w - 8;
 
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8);
     if (ImGui::BeginChild("##body_grid", ImVec2(grid_w, 0), false)) {
     // Grid of body cards
-    float card_w = 148.0f;
-    float card_h = 68.0f;
+    float card_w = 120.0f;
+    float card_h = 52.0f;
     float padding = 6.0f;
     float avail = ImGui::GetContentRegionAvail().x;
     int cols = std::max(1, (int)((avail + padding) / (card_w + padding)));
@@ -2279,7 +2281,7 @@ void CosmosApp::draw_spawn_menu() {
 
         // Color accent bar on left edge
         ImU32 accent = IM_COL32((int)(cr * 255), (int)(cg * 255), (int)(cb * 255), sel ? 255 : 140);
-        dl->AddRectFilled(ImVec2(cursor.x, cursor.y + 4), ImVec2(cursor.x + 3, cursor.y + card_h - 4), accent, 2.0f);
+        dl->AddRectFilled(ImVec2(cursor.x, cursor.y + 3), ImVec2(cursor.x + 3, cursor.y + card_h - 3), accent, 2.0f);
 
         // Selection highlight border
         if (sel) {
@@ -2288,17 +2290,17 @@ void CosmosApp::draw_spawn_menu() {
         }
 
         // Type name
-        dl->AddText(ImVec2(cursor.x + 10, cursor.y + 8),
+        dl->AddText(ImVec2(cursor.x + 8, cursor.y + 5),
                     IM_COL32(240, 235, 225, sel ? 255 : 200), CTYPE_NAMES[t]);
 
         // Mass
         char mass_str[32];
         snprintf(mass_str, sizeof(mass_str), "%.2e M\xe2\x98\x89", default_mass);
-        dl->AddText(ImVec2(cursor.x + 10, cursor.y + 26),
+        dl->AddText(ImVec2(cursor.x + 8, cursor.y + 20),
                     IM_COL32(160, 155, 140, sel ? 220 : 160), mass_str);
 
         // Description
-        dl->AddText(ImVec2(cursor.x + 10, cursor.y + 44),
+        dl->AddText(ImVec2(cursor.x + 8, cursor.y + 35),
                     IM_COL32(120, 120, 130, sel ? 180 : 120), desc);
 
         ImGui::PopStyleVar();
@@ -2324,7 +2326,7 @@ void CosmosApp::draw_spawn_menu() {
     else
         snprintf(label, sizeof(label), "Spawn %s", CTYPE_NAMES[spawn_type % CTYPE_COUNT]);
 
-    if (ImGui::Button(label, ImVec2(-1, 36))) {
+    if (ImGui::Button(label, ImVec2(-1, 28))) {
         int spawned = spawn_preview_body(camera.target);
         if (spawned >= 0 && spawned < (int)state.bodies.size()) {
             const auto& b = state.bodies[spawned];

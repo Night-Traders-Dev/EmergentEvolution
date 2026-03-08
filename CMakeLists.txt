@@ -265,7 +265,7 @@ add_executable(particle_cosmos
     src/cosmos/cosmos_raytracer.cpp
 )
 target_link_libraries(particle_cosmos PRIVATE pp_common)
-target_compile_definitions(particle_cosmos PRIVATE APP_VERSION="1.0.0")
+target_compile_definitions(particle_cosmos PRIVATE APP_VERSION="1.1.0")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Biochemical Simulator — cells, bacteria, viruses

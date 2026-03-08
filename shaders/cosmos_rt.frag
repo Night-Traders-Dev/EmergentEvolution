@@ -405,6 +405,11 @@ float phase_hg(float g, float cos_theta) {
     return (1.0 - g2) / (12.5663706 * pow(max(1.0 + g2 - 2.0 * g * cos_theta, 1.0e-3), 1.5));
 }
 
+vec3 aces_tonemap(vec3 x) {
+    float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
 void build_basis(vec3 n, out vec3 t, out vec3 b) {
     vec3 up = abs(n.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     t = normalize(cross(up, n));
@@ -1092,11 +1097,27 @@ void accumulate_rings(vec3 ro, vec3 rd, int body_count, float scene_t,
                                     az * 3.4 + body.class_seed_temp.x * 0.07,
                                     body.class_seed_temp.x * 0.11), 4);
         float gaps = smoothstep(0.10, 0.24, abs(sin(ring_u * 36.0 + band_noise * 3.2)));
-        float bands = mix(0.48, 1.0, band_noise) * gaps;
+        // Cassini Division: broad gap at ~44% of ring width
+        float cassini = 1.0 - smoothstep(0.42, 0.44, ring_u) * (1.0 - smoothstep(0.46, 0.48, ring_u));
+        // Encke Gap: narrow gap near outer edge
+        float encke = 1.0 - smoothstep(0.88, 0.885, ring_u) * (1.0 - smoothstep(0.895, 0.90, ring_u));
+        gaps *= cassini * encke;
+        // Radial opacity: C ring (inner) thin, B ring (middle) thick, A ring (outer) moderate
+        float radial_opacity = mix(0.3, 1.0, smoothstep(0.0, 0.3, ring_u)) *
+                               mix(1.0, 0.7, smoothstep(0.7, 1.0, ring_u));
+        float bands = mix(0.48, 1.0, band_noise) * gaps * radial_opacity;
         float view_facing = 0.35 + 0.65 * clamp(1.0 - abs(dot(rd, axis)), 0.0, 1.0);
+        // Use first star as light source for ring shadows
+        vec3 ring_light_dir = normalize(vec3(0.45, 0.75, 0.35));
+        if (body_count > 0 && int(spheres[0].class_seed_temp.y + 0.5) == RENDER_STAR)
+            ring_light_dir = normalize(spheres[0].pos_radius.xyz - body.pos_radius.xyz);
         float shadow = 1.0;
-        float n_dot_l = dot(axis, normalize(vec3(0.45, 0.75, 0.35)));
+        float n_dot_l = dot(axis, ring_light_dir);
         shadow *= 0.78 + 0.22 * abs(n_dot_l);
+        // Forward/back scattering asymmetry (rings brighten dramatically in forward-scattered light)
+        float cos_phase = dot(rd, ring_light_dir);
+        float ring_phase = phase_hg(0.3, cos_phase);
+        float scatter_boost = 0.7 + 0.3 * ring_phase;
 
         vec3 dusty = mix(vec3(0.48, 0.40, 0.30), vec3(0.76, 0.66, 0.52), band_noise);
         vec3 icy = mix(vec3(0.70, 0.76, 0.84), vec3(0.95, 0.98, 1.0), bands);
@@ -1105,7 +1126,7 @@ void accumulate_rings(vec3 ro, vec3 rd, int body_count, float scene_t,
         vec3 col = mix(dusty, icy, ice_fraction);
         col = mix(col, vec3(0.92, 0.42, 0.12), hot * (1.0 - ice_fraction) * 0.55);
 
-        float alpha = density * annulus * bands * view_facing * shadow * 0.72;
+        float alpha = density * annulus * bands * view_facing * shadow * scatter_boost * 0.72;
         ring_col += col * alpha;
         ring_alpha = clamp(ring_alpha + alpha, 0.0, 0.82);
     }
@@ -1449,7 +1470,9 @@ vec3 shade_gas_giant(vec3 normal, Sphere hit, vec3 light_dir, vec3 view_dir) {
     col = mix(col, mix(col, rim_tint, 0.28), fresnel * (0.34 + storms * 0.18));
 
     float ndl = max(dot(normal, light_dir), 0.0);
-    return col * (0.28 + 0.72 * ndl);
+    float mu = max(dot(normal, -view_dir), 0.0);
+    float limb = mix(0.6, 1.0, pow(mu, 0.4));
+    return col * (0.28 + 0.72 * ndl) * limb;
 }
 
 vec3 rocky_palette(float style, float tone) {
@@ -2214,7 +2237,24 @@ vec3 raymarch_nebula(vec3 ro, vec3 rd, Sphere hit, int body_index, vec3 light_di
         // Beer-Powder style edge boost for denser, condensing cloud silhouettes.
         float view_edge = pow(clamp(1.0 - abs(dot(normalize(local + vec3(1.0e-4)), rd)), 0.0, 1.0), 1.5);
         float powder = (1.0 - exp(-density * (2.2 + dust_frac * 1.8) * dt_world)) * (0.45 + 0.55 * view_edge);
-        vec3 scatter = base_col * lit_col * (0.20 + phase * 1.30 + powder * 0.70);
+
+        // Shadow ray toward light source (4 steps for self-shadowing)
+        float shadow_tau = 0.0;
+        float shadow_dt = dt_local * 3.0;
+        vec3 light_dir_local = light_dir / max(march_radius, 1.0e-5);
+        for (int s = 1; s <= 4; s++) {
+            vec3 sp_raw = local_raw + light_dir_local * (shadow_dt * float(s));
+            vec3 sp = nebula_shape_space(sp_raw, seed, expansion);
+            vec3 sp_world = hit.pos_radius.xyz + sp_raw * march_radius;
+            float sd = nebula_density_sample(sp, sp_world, seed, dust_frac, metal_frac,
+                                             pressure, haze, cloud_detail, collapse, flow,
+                                             external_flow, turbulence);
+            sd *= density_scale * nebula_boundary_falloff(sp_raw, sp, seed, expansion);
+            shadow_tau += max(sd, 0.0) * sigma_t * shadow_dt * march_radius;
+        }
+        float light_trans = exp(-shadow_tau);
+
+        vec3 scatter = base_col * lit_col * light_trans * (0.20 + phase * 1.30 + powder * 0.70);
 
         accum += transmittance * scatter_weight * (emission + scatter);
         transmittance *= step_trans;
@@ -2664,7 +2704,7 @@ void main() {
             vec3 effect = black_hole_effect(ro, rd, spheres[i], body_count, false, effect_alpha);
             miss_col = mix(miss_col, effect, effect_alpha);
         }
-        outColor = vec4(pow(max(miss_col, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
+        outColor = vec4(pow(aces_tonemap(max(miss_col, vec3(0.0))), vec3(1.0 / 2.2)), 1.0);
         return;
     }
 
@@ -2963,7 +3003,7 @@ void main() {
     if (magnet_alpha > 0.0)
         final_color = mix(final_color, final_color + magnet_col, magnet_alpha);
 
-    vec3 body_final = pow(max(final_color, vec3(0.0)), vec3(1.0 / 2.2));
+    vec3 body_final = pow(aces_tonemap(max(final_color, vec3(0.0))), vec3(1.0 / 2.2));
     if (is_ghost) {
         float ga = 0.45 + 0.07 * sin(screen_info.w * 3.5);
         float edge = pow(1.0 - max(dot(normal, -rd), 0.0), 2.5);

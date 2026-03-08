@@ -13,7 +13,7 @@
 | Simulation | Version |
 | --- | --- |
 | Particle Physics | v1.2.0 |
-| Cosmic Sandbox | v1.0.0 |
+| Cosmic Sandbox | v1.1.0 |
 | Biochemical Simulator | v0.3.0 |
 
 </div>
@@ -53,6 +53,7 @@ T/B cell differentiation, quorum sensing, and complement cascade. 8 environment 
 
 **Cosmic Sandbox**
 
+- [Changelog](docs/UPDATES-cosmos.md)
 - [Cosmic Sandbox](docs/cosmos.md)
   - [Celestial Body Types](docs/cosmos.md#celestial-body-types)
   - [Stellar Evolution](docs/cosmos.md#stellar-evolution)
@@ -65,6 +66,7 @@ T/B cell differentiation, quorum sensing, and complement cascade. 8 environment 
 
 **Biochemical Simulator**
 
+- [Changelog](docs/UPDATES-biochem.md)
 - [Biochemical Simulator](docs/biochem.md)
   - [Entity Types](docs/biochem.md#entity-types)
   - [Gene System](docs/biochem.md#gene-system)
@@ -75,6 +77,7 @@ T/B cell differentiation, quorum sensing, and complement cascade. 8 environment 
 
 **Particle Physics**
 
+- [Changelog](docs/UPDATES-physics.md)
 - [Physics Engine](docs/physics-engine.md)
 - [Particle Types](docs/particle-types.md)
 - [Forces](docs/forces.md)

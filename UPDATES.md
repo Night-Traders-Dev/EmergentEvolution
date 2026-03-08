@@ -1,6 +1,7 @@
 # Changelog
 
 All notable changes to Emergent Evolution are documented in this file.
+Per-simulation changelogs: [Particle Physics](docs/UPDATES-physics.md) | [Cosmic Sandbox](docs/UPDATES-cosmos.md) | [Biochemical Simulator](docs/UPDATES-biochem.md)
 
 Versions follow [Semantic Versioning](https://semver.org/). Dates are YYYY-MM-DD.
 
@@ -12,7 +13,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Dates are YYYY-MM-DD
 
 ### Project-Wide
 - Unified launcher for selecting between Particle Physics, Cosmic Sandbox, and Biochemical Simulator
-- Per-simulation versioning (Particle Physics v1.2.0, Cosmic Sandbox v1.0.0, Biochemical Simulator v0.3.0)
+- Per-simulation versioning (Particle Physics v1.2.0, Cosmic Sandbox v1.1.0, Biochemical Simulator v0.3.0)
 - Shared Vulkan rendering framework (`pp_common` library)
 - Cross-platform support (Linux, Windows)
 - Steam integration (optional)
@@ -163,6 +164,23 @@ Initial particle physics simulation.
 
 ---
 
+## Cosmic Sandbox v1.1.0 - 2026-03-08
+
+Rendering realism audit and spawn menu redesign.
+
+### Changed
+- ACES filmic tone mapping replaces raw gamma (prevents highlight clipping on stars/nebulae)
+- Gas giant limb darkening: view-dependent `pow(mu, 0.4)` darkens edges realistically
+- Planetary rings: Cassini Division (42-48%), Encke Gap (88-90%), radial opacity profile (thin C ring, thick B ring, moderate A ring)
+- Ring lighting uses actual primary star position instead of hardcoded direction
+- Ring forward/back scattering via Henyey-Greenstein phase function (g=0.3)
+- Nebula self-shadowing: 4-step shadow rays toward light source give dark cloud interiors and bright lit edges
+- Spawn menu redesigned: 1080x490 fixed panel reduced to compact 85%-width x 210px bottom strip
+- Spawn cards shrunk from 148x68 to 120x52, properties panel from 320px to 260px
+- Tab sidebar narrowed from 52px to 40px
+
+---
+
 ## Cosmic Sandbox v1.0.0 - 2026-03-06
 
 Full-featured celestial mechanics simulator.
@@ -201,6 +219,7 @@ Full-featured celestial mechanics simulator.
 - Loading screen with progress bar
 
 ### Fixed
+
 - Black hole rendering and physics
 - Moon and planet orbit stability
 - Solar fuel consumption bug
@@ -214,28 +233,49 @@ Full-featured celestial mechanics simulator.
 
 ## Biochemical Simulator v0.3.0 - 2026-03-08
 
-Early-access cellular biology sandbox.
+Immune system expansion and advanced biology.
 
-### Added (Mar 6-8)
-- GPU SDF-raytraced rendering with 16 structure shapes
-- 9 entity types: Cell, Bacterium, Virus, Nutrient, Toxin, Antibody, RBC, WBC, Phagocyte
-- 19 morphological variants (8 cell, 6 bacteria, 5 virus) with unique SDF shapes
-- 18-gene heritable genome system (metabolic efficiency, telomere length, defense, sensing, resistance, quorum threshold)
+### Added
+
 - ATP-based metabolism: aerobic (36 ATP) vs anaerobic (2 ATP), O2-dependent
-- Cell division with telomere tracking and senescence
-- Multi-stage viral infection with replication gates and lysis bursts
-- Bacterial antibiotic film warfare
 - Quorum sensing with autoinducer signals and threshold-gated defense
 - Antibiotic resistance: heritable gene + adaptive epigenetic resistance from exposure
-- Immune system: WBC/antibody spawning, 3 immune subtypes (Generic, T-cell, B-cell)
-- T-cell prioritization of infected hosts, B-cell antibody production
+- Immune subtypes: T-cell (prioritizes infected hosts), B-cell (produces antibodies)
 - Complement cascade: opsonization (classical/lectin pathways), MAC damage at >70%
+- 2 new genome traits: resistance, quorum_threshold (18 total)
+
+---
+
+## Biochemical Simulator v0.2.0 - 2026-03-07
+
+Entity systems, environment presets, and UI polish.
+
+### Added
+
+- Multi-stage viral infection with replication gates and lysis bursts (30-120 virions)
+- Bacterial antibiotic film warfare
 - Phagocyte corpse cleanup
 - AI-driven entity movement (seek/flee/spacing with passive Brownian diffusion)
 - 8 environment presets (Human Lung, Pond Water, Petri Dish, Cat Brain, Gut Microbiome, Blood Stream, Soil Rhizosphere, Wound Site)
+- 16 SDF structure shapes with CPU collision detection
 - Color-coded event log
-- WASD camera panning and auto-hiding taskbar
 - Collapsible settings sections with parameter tooltips
+
+---
+
+## Biochemical Simulator v0.1.0 - 2026-03-06
+
+Initial biochemical simulator.
+
+### Added
+
+- GPU SDF-raytraced rendering engine
+- 9 entity types: Cell, Bacterium, Virus, Nutrient, Toxin, Antibody, RBC, WBC, Phagocyte
+- 19 morphological variants (8 cell, 6 bacteria, 5 virus) with unique SDF shapes
+- 16-gene heritable genome system
+- Cell division with telomere tracking and senescence
+- Immune system: WBC/antibody spawning
+- WASD camera panning
 
 ---
 
