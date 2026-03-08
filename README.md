@@ -82,6 +82,7 @@ panning and auto-hiding bottom taskbar with panel management.
 
 **General**
 
+- [Changelog](UPDATES.md)
 - [Controls](docs/controls.md)
 - [Build](docs/build.md)
   - [CMake Options](docs/build.md#cmake-options)
