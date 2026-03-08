@@ -1,6 +1,7 @@
 #pragma once
 
 #include "imgui.h"
+#include "common/app_settings.h"
 #include "physics/core/types.h"
 #include "physics/rendering/particles.h"
 #include "physics/gameplay/achievements.h"
@@ -187,6 +188,7 @@ public:
     bool request_quit = false;
     bool request_launcher = false;
     UserPrefs prefs;
+    AppSettings app_settings_;  // shared settings (display, audio, accessibility, controls)
     KeyBindings keybindings;
     int rebinding_action = -1;  // -1=not rebinding, else KeyAction index
     bool settings_visible = false;

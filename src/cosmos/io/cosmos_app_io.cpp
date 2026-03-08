@@ -1276,4 +1276,7 @@ void CosmosApp::load_persistent_settings() {
 
     if (rewrite_legacy_settings)
         save_persistent_settings();
+
+    // Load shared app settings (display, audio, accessibility, controls)
+    load_app_settings(app_settings_, "cosmos_settings.ppcfg");
 }

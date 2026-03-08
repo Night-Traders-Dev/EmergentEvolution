@@ -4,6 +4,7 @@
 #include "biochem/biochem_types.h"
 #include "biochem/biochem_raytracer.h"
 #include "common/simple_renderer.h"
+#include "common/app_settings.h"
 #include <array>
 #include <deque>
 #include <string>
@@ -129,4 +130,9 @@ private:
     };
     std::deque<EventLogEntry> event_log_;
     void  draw_bottom_bar();
+
+    // Shared app settings (display, audio, accessibility, controls)
+    AppSettings app_settings_;
+    bool  show_settings_menu_ = false;
+    int   settings_tab_ = 0;
 };

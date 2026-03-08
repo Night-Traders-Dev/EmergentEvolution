@@ -27,10 +27,71 @@ namespace fs = std::filesystem;
 
 // scan_theme_directory declared in interface.h
 
+// Sync overlapping fields from shared AppSettings into physics UserPrefs.
+// Called after loading AppSettings so launcher-configured values take effect.
+static void sync_app_settings_to_prefs(const AppSettings& a, UserPrefs& p) {
+    p.window_mode        = a.window_mode;
+    p.window_w           = a.window_w;
+    p.window_h           = a.window_h;
+    p.vsync              = a.vsync;
+    p.fps_cap            = a.fps_cap;
+    p.render_scale       = a.render_scale;
+    p.show_fps           = a.show_fps;
+    p.ui_scale           = a.ui_scale;
+    p.preferred_monitor  = a.preferred_monitor;
+    p.preferred_gpu      = a.preferred_gpu;
+    p.quality_preset     = a.quality_preset;
+    p.bloom_enabled      = a.bloom_enabled;
+    p.music_volume       = a.music_volume;
+    p.music_muted        = a.music_muted;
+    p.sfx_volume         = a.sfx_volume;
+    p.sfx_muted          = a.sfx_muted;
+    p.colorblind_mode    = a.colorblind_mode;
+    p.high_contrast      = a.high_contrast;
+    p.reduced_motion     = a.reduced_motion;
+    p.mouse_sensitivity  = a.mouse_sensitivity;
+    p.max_threads        = a.max_threads;
+    p.physics_quality    = a.physics_quality;
+    p.autosave_interval  = a.autosave_interval;
+}
+
+// Sync overlapping fields from physics UserPrefs back to shared AppSettings.
+// Called when saving so the launcher sees physics-side changes.
+static void sync_prefs_to_app_settings(const UserPrefs& p, AppSettings& a) {
+    a.window_mode        = p.window_mode;
+    a.window_w           = p.window_w;
+    a.window_h           = p.window_h;
+    a.vsync              = p.vsync;
+    a.fps_cap            = p.fps_cap;
+    a.render_scale       = p.render_scale;
+    a.show_fps           = p.show_fps;
+    a.ui_scale           = p.ui_scale;
+    a.preferred_monitor  = p.preferred_monitor;
+    a.preferred_gpu      = p.preferred_gpu;
+    a.quality_preset     = p.quality_preset;
+    a.bloom_enabled      = p.bloom_enabled;
+    a.music_volume       = p.music_volume;
+    a.music_muted        = p.music_muted;
+    a.sfx_volume         = p.sfx_volume;
+    a.sfx_muted          = p.sfx_muted;
+    a.colorblind_mode    = p.colorblind_mode;
+    a.high_contrast      = p.high_contrast;
+    a.reduced_motion     = p.reduced_motion;
+    a.mouse_sensitivity  = p.mouse_sensitivity;
+    a.max_threads        = p.max_threads;
+    a.physics_quality    = p.physics_quality;
+    a.autosave_interval  = p.autosave_interval;
+}
+
 void PhysicsInterface::init() {
     std::random_device rd;
     seed_value = static_cast<int>(rd() % 100000);
     load_prefs();
+
+    // Load shared app settings (from launcher) and sync into UserPrefs
+    if (load_app_settings(app_settings_, "physics_settings.ppcfg"))
+        sync_app_settings_to_prefs(app_settings_, prefs);
+
     load_keybindings();
     load_molecule_bestiary();
     scan_theme_directory();
@@ -56,6 +117,10 @@ void PhysicsInterface::save_prefs() {
     f.write(reinterpret_cast<const char*>(&PPCFG_MAGIC), sizeof(uint32_t));
     f.write(reinterpret_cast<const char*>(&PPCFG_VERSION), sizeof(uint32_t));
     f.write(reinterpret_cast<const char*>(&prefs), sizeof(UserPrefs));
+
+    // Keep shared app settings in sync for the launcher
+    sync_prefs_to_app_settings(prefs, app_settings_);
+    save_app_settings(app_settings_, "physics_settings.ppcfg");
 }
 
 void PhysicsInterface::load_prefs() {

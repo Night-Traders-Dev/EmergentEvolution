@@ -1,5 +1,6 @@
 #include "common/simple_renderer.h"
 #include "common/error_dialog.h"
+#include "common/app_settings.h"
 #include "imgui.h"
 #include <GLFW/glfw3.h>
 #include <cstdlib>
@@ -449,9 +450,26 @@ static int focused_card = 0;
 static const char* kb_selected_exe = nullptr;
 static float launch_fade = 0.0f;
 
+// ── Settings state ──────────────────────────────────────────────────────────
+static bool show_settings = false;
+static int  settings_sim_tab = 0;   // 0=Physics, 1=Cosmos, 2=Biochem
+static int  settings_tab = 0;       // inner tab (Display/Graphics/Audio/etc.)
+static AppSettings physics_settings;
+static AppSettings cosmos_settings;
+static AppSettings biochem_settings;
+static bool settings_loaded = false;
+
+static const char* SETTINGS_PATHS[] = {
+    "physics_settings.ppcfg",
+    "cosmos_settings.ppcfg",
+    "biochem_settings.ppcfg",
+};
+static const char* SIM_TAB_LABELS[] = {"Particle Physics", "Cosmic Sandbox", "Biochem Simulator"};
+
 static void key_callback(GLFWwindow* window, int key, int /*scancode*/, int action, int /*mods*/) {
     if (action != GLFW_PRESS) return;
     if (key == GLFW_KEY_ESCAPE) {
+        if (show_settings) { show_settings = false; return; }
         glfwSetWindowShouldClose(window, GLFW_TRUE);
         return;
     }
@@ -547,6 +565,14 @@ int main() {
     float card_select_anim[EXPANSION_COUNT] = {};
     float intro_anim = 0.0f; // 0 to 1 intro fade-in
 
+    // Load settings once at startup
+    if (!settings_loaded) {
+        load_app_settings(physics_settings, SETTINGS_PATHS[0]);
+        load_app_settings(cosmos_settings,  SETTINGS_PATHS[1]);
+        load_app_settings(biochem_settings, SETTINGS_PATHS[2]);
+        settings_loaded = true;
+    }
+
     while (!glfwWindowShouldClose(window) && !selected_exe) {
         glfwPollEvents();
 
@@ -609,7 +635,9 @@ int main() {
             ImGui::End();
         }
 
-        // ── Expansion cards ────────────────────────────────────────────────
+        // ── Expansion cards (hidden when settings overlay is open) ─────────
+        if (!show_settings)
+        { // begin cards block
         // Responsive card sizing
         float avail_w = W - 60.0f;
         float spacing = std::max(16.0f, std::min(35.0f, avail_w * 0.02f));
@@ -799,6 +827,103 @@ int main() {
                             ImVec2(x + card_w + 2, y + card_h + 2),
                             focus_col, 10.0f, 0, 2.0f);
             }
+        }
+
+        } // end cards block
+
+        // ── Settings overlay (drawn after cards so it's on top) ─────────────
+        if (show_settings) {
+            ImGui::SetNextWindowPos(ImVec2(0, 0));
+            ImGui::SetNextWindowSize(io.DisplaySize);
+            ImGuiWindowFlags sflags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar;
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.03f, 0.06f, 0.97f));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+
+            if (ImGui::Begin("##LauncherSettings", nullptr, sflags)) {
+                float cx = W * 0.5f;
+
+                // Simulation selector tabs
+                float sim_tab_w = 540.0f;
+                float sim_tab_x = cx - sim_tab_w * 0.5f;
+                float sim_tab_y = 40.0f;
+                float per_tab_w = sim_tab_w / 3.0f;
+
+                ImGui::SetCursorPos(ImVec2(sim_tab_x, sim_tab_y));
+                for (int t = 0; t < 3; t++) {
+                    if (t > 0) ImGui::SameLine(0, 0);
+                    bool active = (settings_sim_tab == t);
+                    ImVec4 sim_bg = active ? ImVec4(0.10f, 0.12f, 0.22f, 0.95f)
+                                           : ImVec4(0.04f, 0.05f, 0.08f, 0.70f);
+                    ImGui::PushStyleColor(ImGuiCol_Button, sim_bg);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.12f, 0.14f, 0.26f, 0.90f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, sim_bg);
+                    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
+                    char sim_label[64];
+                    snprintf(sim_label, sizeof(sim_label), "%s##sim%d", SIM_TAB_LABELS[t], t);
+                    if (ImGui::Button(sim_label, ImVec2(per_tab_w, 32.0f))) {
+                        settings_sim_tab = t;
+                        settings_tab = 0;
+                    }
+                    ImGui::PopStyleVar();
+                    ImGui::PopStyleColor(3);
+
+                    if (active) {
+                        ImVec2 p = ImGui::GetItemRectMin();
+                        ImVec2 q = ImGui::GetItemRectMax();
+                        ImGui::GetWindowDrawList()->AddRectFilled(
+                            ImVec2(p.x, q.y - 2.0f), ImVec2(q.x, q.y),
+                            IM_COL32(120, 150, 255, 255));
+                    }
+                }
+
+                // Draw the shared settings panel for the selected sim
+                float panel_y_start = sim_tab_y + 50.0f;
+                AppSettings* active_settings = nullptr;
+                if (settings_sim_tab == 0) active_settings = &physics_settings;
+                else if (settings_sim_tab == 1) active_settings = &cosmos_settings;
+                else active_settings = &biochem_settings;
+
+                // Offset the settings panel drawing area
+                ImGui::SetCursorPos(ImVec2(0, panel_y_start));
+                if (draw_app_settings_menu(*active_settings, settings_tab, W, H - panel_y_start + 100.0f)) {
+                    // Back pressed — save all and close
+                    save_app_settings(physics_settings, SETTINGS_PATHS[0]);
+                    save_app_settings(cosmos_settings,  SETTINGS_PATHS[1]);
+                    save_app_settings(biochem_settings, SETTINGS_PATHS[2]);
+                    show_settings = false;
+                }
+            }
+            ImGui::End();
+            ImGui::PopStyleVar(2);
+            ImGui::PopStyleColor();
+        }
+
+        // ── Settings gear button (top-right) ───────────────────────────────
+        if (!show_settings) {
+            float gear_x = W - 50.0f;
+            float gear_y = 14.0f;
+            ImGui::SetNextWindowPos(ImVec2(gear_x, gear_y));
+            ImGui::SetNextWindowSize(ImVec2(36, 36));
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.10f, 0.12f, 0.18f, 0.60f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.18f, 0.22f, 0.35f, 0.90f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.25f, 0.30f, 0.45f, 1.00f));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 18.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+            ImGui::Begin("##GearBtn", nullptr,
+                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_AlwaysAutoResize);
+            if (ImGui::Button("*##gear", ImVec2(32, 32)))
+                show_settings = true;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Settings");
+            ImGui::End();
+            ImGui::PopStyleVar(3);
+            ImGui::PopStyleColor(4);
         }
 
         // ── Footer ─────────────────────────────────────────────────────────

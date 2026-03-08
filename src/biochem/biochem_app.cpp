@@ -2501,6 +2501,9 @@ void BiochemApp::init(GLFWwindow* window) {
     cfg.entity_count = static_cast<uint32_t>(state.count_alive());
     autospawn_timer_ = 0.0f;
     push_event(BIO_EVENT_SYSTEM, "Simulation initialized.");
+
+    // Load shared app settings (display, audio, accessibility, controls)
+    load_app_settings(app_settings_, "biochem_settings.ppcfg");
 }
 
 void BiochemApp::reset_population_metrics() {
@@ -4678,8 +4681,14 @@ void BiochemApp::draw_pause_menu() {
             paused = false;
         }
 
-        // Return to Launcher
+        // Settings
         ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 3));
+        if (ImGui::Button("Settings", ImVec2(btn_w, btn_h))) {
+            show_settings_menu_ = true;
+        }
+
+        // Return to Launcher
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 4));
         if (ImGui::Button("Return to Launcher", ImVec2(btn_w, btn_h))) {
             request_launcher = true;
             request_quit = true;
@@ -4691,7 +4700,7 @@ void BiochemApp::draw_pause_menu() {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,  ImVec4(0.50f, 0.12f, 0.12f, 0.95f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,   ImVec4(0.60f, 0.15f, 0.15f, 1.00f));
 
-        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 4));
+        ImGui::SetCursorPos(ImVec2(btn_x, btn_y + btn_spacing * 5));
         if (ImGui::Button("Quit", ImVec2(btn_w, btn_h))) {
             request_quit = true;
         }
@@ -4699,14 +4708,37 @@ void BiochemApp::draw_pause_menu() {
         ImGui::PopStyleColor(3);
         ImGui::PopStyleVar();
 
-        const char* hint = "Press Escape to resume";
-        ImVec2 hint_size = ImGui::CalcTextSize(hint);
-        dl->AddText(ImVec2(cx - hint_size.x * 0.5f, H - 60.0f),
-            IM_COL32(140, 170, 150, 100), hint);
+        if (!show_settings_menu_) {
+            const char* hint = "Press Escape to resume";
+            ImVec2 hint_size = ImGui::CalcTextSize(hint);
+            dl->AddText(ImVec2(cx - hint_size.x * 0.5f, H - 60.0f),
+                IM_COL32(140, 170, 150, 100), hint);
+        }
     }
     ImGui::End();
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor();
+
+    // Settings overlay (separate fullscreen window on top of pause menu)
+    if (show_settings_menu_) {
+        ImGui::SetNextWindowPos(ImVec2(0, 0));
+        ImGui::SetNextWindowSize(ImVec2(W, H));
+        ImGuiWindowFlags sflags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                                  ImGuiWindowFlags_NoBringToFrontOnFocus;
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.04f, 0.06f, 0.92f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        if (ImGui::Begin("##BiochemSettings", nullptr, sflags)) {
+            if (draw_app_settings_menu(app_settings_, settings_tab_, W, H)) {
+                show_settings_menu_ = false;
+                save_app_settings(app_settings_, "biochem_settings.ppcfg");
+            }
+        }
+        ImGui::End();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
+    }
 }
 
 // ── Spawn menu ──────────────────────────────────────────────────────────────

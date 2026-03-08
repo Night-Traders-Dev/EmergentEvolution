@@ -5,6 +5,7 @@
 #include "cosmos/rendering/cosmos_raytracer.h"
 #include "cosmos/rendering/cosmos_gravity_compute.h"
 #include "common/simple_renderer.h"
+#include "common/app_settings.h"
 #include <glm/glm.hpp>
 #include <vector>
 #include <string>
@@ -266,4 +267,9 @@ private:
     // Debug window
     bool  debug_window_visible_ = false;
     void  draw_debug_window();
+
+    // Shared app settings (display, audio, accessibility, controls)
+    AppSettings app_settings_;
+    bool  show_settings_menu_ = false;
+    int   settings_tab_ = 0;
 };
