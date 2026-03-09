@@ -3,7 +3,9 @@
 
 #include "cosmos/cosmos_types.h"
 #include "cosmos/rendering/cosmos_raytracer.h"
+#include "cosmos/rendering/cosmos_mesh_renderer.h"
 #include "cosmos/rendering/cosmos_gravity_compute.h"
+#include "cosmos/terrain/cosmos_terrain.h"
 #include "common/simple_renderer.h"
 #include "common/app_settings.h"
 #include <glm/glm.hpp>
@@ -155,7 +157,16 @@ private:
                         float screen_h) const;
 
     CosmosRaytracer raytracer_;
+    CosmosMeshRenderer mesh_renderer_;
     CosmosGravityCompute gravity_compute_;
+    CosmosTerrain terrain_;
+
+    // Per-body terrain mesh cache (indexed by body index, regenerated on demand)
+    std::vector<TerrainMeshEntry> terrain_cache_;
+    bool terrain_meshes_dirty_ = true;
+    void rebuild_terrain_cache();
+    void upload_terrain_meshes();
+
     float sim_time_ = 0.0f;
     float smoothed_fps_ = 60.0f;
     double displayed_time_rate_ = 10.0;

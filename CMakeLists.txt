@@ -318,8 +318,9 @@ add_executable(particle_cosmos
     src/cosmos/processes/cosmos_hawking.cpp
     src/cosmos/processes/cosmos_yarkovsky.cpp
 
-    # Rendering — GPU raytracer, compute pipelines, projection
+    # Rendering — GPU raytracer, mesh renderer, compute pipelines, projection
     src/cosmos/rendering/cosmos_raytracer.cpp
+    src/cosmos/rendering/cosmos_mesh_renderer.cpp
     src/cosmos/rendering/cosmos_gravity_compute.cpp
     src/cosmos/rendering/cosmos_nebula_compute.cpp
     src/cosmos/rendering/cosmos_projection.cpp
@@ -448,10 +449,12 @@ compile_shader(particle/fullscreen.vert   particle/fullscreen.vert.spv)
 compile_shader(particle/fullscreen.frag   particle/fullscreen.frag.spv)
 compile_shader(particle/overlay.vert      particle/overlay.vert.spv)
 compile_shader(particle/overlay.frag      particle/overlay.frag.spv)
-compile_shader(cosmos/cosmos_rt.vert    cosmos/cosmos_rt.vert.spv)
-compile_shader(cosmos/cosmos_rt.frag    cosmos/cosmos_rt.frag.spv)
-compile_shader(cosmos/cosmos_bh.comp    cosmos/cosmos_bh.spv)
-compile_shader(cosmos/cosmos_nebula.comp cosmos/cosmos_nebula.spv)
+compile_shader(cosmos/cosmos_rt.vert       cosmos/cosmos_rt.vert.spv)
+compile_shader(cosmos/cosmos_rt.frag       cosmos/cosmos_rt.frag.spv)
+compile_shader(cosmos/cosmos_terrain.vert  cosmos/cosmos_terrain.vert.spv)
+compile_shader(cosmos/cosmos_terrain.frag  cosmos/cosmos_terrain.frag.spv)
+compile_shader(cosmos/cosmos_bh.comp       cosmos/cosmos_bh.spv)
+compile_shader(cosmos/cosmos_nebula.comp   cosmos/cosmos_nebula.spv)
 compile_shader(biochem/biochem_rt.vert   biochem/biochem_rt.vert.spv)
 compile_shader(biochem/biochem_rt.frag   biochem/biochem_rt.frag.spv)
 
@@ -463,6 +466,8 @@ add_custom_target(shaders ALL DEPENDS
     ${SHADER_BIN_DIR}/particle/overlay.frag.spv
     ${SHADER_BIN_DIR}/cosmos/cosmos_rt.vert.spv
     ${SHADER_BIN_DIR}/cosmos/cosmos_rt.frag.spv
+    ${SHADER_BIN_DIR}/cosmos/cosmos_terrain.vert.spv
+    ${SHADER_BIN_DIR}/cosmos/cosmos_terrain.frag.spv
     ${SHADER_BIN_DIR}/cosmos/cosmos_bh.spv
     ${SHADER_BIN_DIR}/cosmos/cosmos_nebula.spv
     ${SHADER_BIN_DIR}/biochem/biochem_rt.vert.spv

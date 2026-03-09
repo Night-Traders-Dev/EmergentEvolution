@@ -1,4 +1,5 @@
 #include "cosmos/cosmos_app_internal.h"
+#include "cosmos/data/cosmos_astro_data.h"
 #include "imgui.h"
 #include <GLFW/glfw3.h>
 #include <chrono>
@@ -26,15 +27,24 @@ void CosmosApp::init(GLFWwindow* window, ProgressCB progress_cb) {
     glfwPollEvents(); // keep window responsive during init
 
     report(0.15f, "Creating renderer...");
-    renderer.init(vk, window);
+    renderer.init(vk, window, true); // enable depth buffer for terrain mesh rendering
     glfwPollEvents();
 
     report(0.30f, "Compiling shaders...");
     raytracer_.init(vk, renderer.render_pass());
+    mesh_renderer_.init(vk, renderer.render_pass());
     glfwPollEvents();
 
-    report(0.70f, "Initializing physics...");
+    report(0.60f, "Initializing physics...");
     gravity_compute_.init(vk);
+    glfwPollEvents();
+
+    report(0.70f, "Loading astronomical data...");
+    AstroData::init("external/SSCore/SSData");
+    glfwPollEvents();
+
+    report(0.80f, "Initializing terrain generator...");
+    terrain_.init();
     glfwPollEvents();
 
     report(0.90f, "Loading settings...");
@@ -205,8 +215,10 @@ void CosmosApp::capture_screenshot(GLFWwindow* window) {
 
 void CosmosApp::destroy() {
     save_persistent_settings();
+    AstroData::shutdown();
     vkDeviceWaitIdle(vk.device);
     gravity_compute_.destroy(vk);
+    mesh_renderer_.destroy(vk);
     raytracer_.destroy(vk);
     renderer.destroy(vk);
     vk.destroy();
@@ -215,6 +227,8 @@ void CosmosApp::destroy() {
 void CosmosApp::load_preset(int index) {
     if (index < 0 || index >= COSMOS_PRESET_COUNT) return;
     state.clear();
+    terrain_cache_.clear();
+    terrain_meshes_dirty_ = true;
 
     // Reset config to clean defaults (preserves display-only settings)
     const int preserved_nebula_render_mode = cfg.nebula_render_mode;
@@ -408,6 +422,16 @@ void CosmosApp::tick(GLFWwindow* window, float dt) {
         paused = true;
     }
 
+    // Terrain mesh rendering (after raytracer, with depth testing)
+    try {
+        rebuild_terrain_cache();
+        upload_terrain_meshes();
+        mesh_renderer_.draw(renderer.current_cmd(), state.bodies, camera,
+                            io.DisplaySize.x, io.DisplaySize.y, sim_time_);
+    } catch (...) {
+        // Terrain rendering is non-critical — continue without it
+    }
+
     // DrawList overlays (trails, selection, focus indicator)
     if (!show_splash && !show_pause_menu)
         render_overlay();
@@ -421,4 +445,48 @@ void CosmosApp::tick(GLFWwindow* window, float dt) {
         screenshot_requested_ = false;
         capture_screenshot(window);
     }
+}
+
+// ── Terrain mesh cache ──────────────────────────────────────────────────────
+
+void CosmosApp::rebuild_terrain_cache() {
+    // Resize cache if body count changed
+    if (terrain_cache_.size() != state.bodies.size()) {
+        terrain_cache_.resize(state.bodies.size());
+        terrain_meshes_dirty_ = true;
+    }
+
+    for (size_t i = 0; i < state.bodies.size(); ++i) {
+        const auto& body = state.bodies[i];
+        auto& entry = terrain_cache_[i];
+
+        // Skip non-renderable types (dust, nebula fragments, black holes)
+        if (body.type == CTYPE_DUST || body.type == CTYPE_NEBULA ||
+            is_black_hole_type(body.type)) {
+            if (entry.valid) terrain_meshes_dirty_ = true;
+            entry.valid = false;
+            continue;
+        }
+
+        // Only regenerate if seed or radius changed
+        if (entry.valid && entry.seed == body.seed &&
+            std::abs(entry.radius - body.radius) < 0.01f) {
+            continue;
+        }
+
+        // Generate mesh centered at origin (body-relative) with fixed resolution
+        // LOD is handled by screen-size gating in the draw call
+        TerrainParams params = TerrainParams::from_body(body);
+        entry.mesh = terrain_.generate_terrain_mesh(32, params);
+        entry.seed = body.seed;
+        entry.radius = body.radius;
+        entry.valid = true;
+        terrain_meshes_dirty_ = true;
+    }
+}
+
+void CosmosApp::upload_terrain_meshes() {
+    if (!terrain_meshes_dirty_) return;
+    terrain_meshes_dirty_ = false;
+    mesh_renderer_.upload_meshes(vk, terrain_cache_, state.bodies);
 }

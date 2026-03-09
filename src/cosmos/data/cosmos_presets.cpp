@@ -1,13 +1,73 @@
 #include "cosmos/cosmos_app_internal.h"
+#include "cosmos/data/cosmos_astro_data.h"
 #include <cmath>
 #include <random>
 
 // ── Default System (used by preset_solar_system) ─────────────────────────────
+// Uses SSCore real astronomical data when available, falls back to hand-tuned values.
 
 static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
     state.clear();
 
-    // Sun at origin
+    // ── Try SSCore-powered solar system ────────────────────────────────────
+    if (AstroData::is_initialized()) {
+        // Real planetary data from VSOP2013 ephemeris
+        // orbit_compression squashes AU-scale distances into visual sim range
+        // (real Mercury is 83× R_sun away; we compress to ~6× for visual sim)
+        auto bodies = AstroData::build_solar_system(
+            0.01f,     // orbit compression (1 AU → ~1880 sim units)
+            cfg.G,     // use sim's gravity constant
+            true,      // include moons
+            true       // include Pluto
+        );
+
+        if (!bodies.empty()) {
+            // SSCore gives us real names — use them
+            for (auto& b : bodies) {
+                // Ensure star classification and visual properties
+                if (is_star_type(b.type)) {
+                    b.type = classify_star_spectral(b.temperature, b.mass);
+                    b.stellar_stage = SSTAGE_MAIN_SEQUENCE;
+                    b.luminosity = expected_stellar_luminosity(
+                        b.mass, b.temperature, b.radius, b.stellar_stage, b.fuel);
+                }
+                state.bodies.push_back(b);
+            }
+
+            // Add asteroid belt (SSCore has asteroid catalogs, but we generate
+            // procedurally for performance — 20 representative asteroids)
+            float sun_r = state.bodies[0].radius;
+            float belt_inner = sun_r * 16.0f; // between Mars and Jupiter analogue
+            float belt_outer = sun_r * 20.0f;
+            std::mt19937 rng(42);
+            auto randf = [&](float lo, float hi) {
+                return std::uniform_real_distribution<float>(lo, hi)(rng);
+            };
+            for (int i = 0; i < 20; i++) {
+                CelestialBody a;
+                float r = randf(belt_inner, belt_outer);
+                float angle = randf(0.0f, 6.2832f);
+                a.pos = glm::vec3(std::cos(angle) * r, randf(-10.0f, 10.0f),
+                                   std::sin(angle) * r);
+                float v = std::sqrt(cfg.G * state.bodies[0].mass / r) * randf(0.9f, 1.1f);
+                a.vel = glm::vec3(-std::sin(angle) * v, 0.0f, std::cos(angle) * v);
+                a.mass = randf(5.0e-11f, 3.0e-9f);
+                a.radius = randf(0.4f, 1.6f);
+                a.temperature = 100.0f;
+                a.type = CTYPE_ASTEROID;
+                a.seed = static_cast<uint32_t>(rng());
+                a.name = generate_body_name(a.seed, a.type);
+                state.bodies.push_back(a);
+            }
+
+            state.trails.resize(state.bodies.size());
+            for (auto& b : state.bodies) refresh_body_render_state(b, &state);
+            return;
+        }
+    }
+
+    // ── Fallback: hand-tuned solar system (no SSCore available) ────────────
+
     CelestialBody sun;
     sun.pos  = {0.0f, 0.0f, 0.0f};
     sun.vel  = {0.0f, 0.0f, 0.0f};
@@ -24,14 +84,12 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
     sun.name = generate_body_name(sun.seed, sun.type);
     state.bodies.push_back(sun);
 
-    // Planets in circular orbits in the XZ plane
     const float orbit_radii[] = {
         sun.radius * 6.0f,
         sun.radius * 9.5f,
         sun.radius * 14.0f,
         sun.radius * 22.0f
     };
-    // Solar-mass units: roughly Mercury, Earth, Mars, Jupiter class worlds.
     const float planet_mass[] = {1.66e-7f, 3.00e-6f, 3.22e-7f, 9.54e-4f};
     const float planet_temp[] = {700.0f, 300.0f, 200.0f, 120.0f};
     for (int i = 0; i < 4; i++) {
@@ -51,7 +109,6 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
         state.bodies.push_back(p);
     }
 
-    // A moon
     {
         CelestialBody moon;
         moon.pos = state.bodies[2].pos + glm::vec3(25.0f, 0.0f, 0.0f);
@@ -67,7 +124,6 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
         state.bodies.push_back(moon);
     }
 
-    // Asteroids
     std::mt19937 rng(42);
     auto randf = [&](float lo, float hi) {
         return std::uniform_real_distribution<float>(lo, hi)(rng);
@@ -90,8 +146,6 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
     }
 
     state.trails.resize(state.bodies.size());
-
-    // Initialize cached planet properties for all bodies
     for (auto& b : state.bodies) refresh_body_render_state(b, &state);
 }
 

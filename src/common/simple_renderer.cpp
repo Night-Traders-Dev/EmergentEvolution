@@ -8,8 +8,10 @@
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 
-void SimpleRenderer::init(VulkanContext& vk, GLFWwindow* window) {
+void SimpleRenderer::init(VulkanContext& vk, GLFWwindow* window, bool with_depth) {
+    depth_enabled_ = with_depth;
     create_render_pass(vk);
+    if (depth_enabled_) create_depth_resources(vk);
     create_framebuffers(vk);
 
     // Command pool + buffers
@@ -77,6 +79,7 @@ void SimpleRenderer::destroy(VulkanContext& vk) {
     ImGui::DestroyContext();
 
     destroy_framebuffers(vk);
+    if (depth_enabled_) destroy_depth_resources(vk);
 
     for (int i = 0; i < MAX_FRAMES; i++) {
         vkDestroySemaphore(vk.device, img_available_[i], nullptr);
@@ -113,15 +116,16 @@ bool SimpleRenderer::begin_frame(VulkanContext& vk, GLFWwindow* window) {
     VkCommandBufferBeginInfo begin_ci{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     vkBeginCommandBuffer(cmd_bufs_[frame_idx_], &begin_ci);
 
-    VkClearValue clear{};
-    clear.color = {{0.06f, 0.06f, 0.10f, 1.0f}};
+    VkClearValue clears[2]{};
+    clears[0].color = {{0.06f, 0.06f, 0.10f, 1.0f}};
+    clears[1].depthStencil = {1.0f, 0};
 
     VkRenderPassBeginInfo rp_ci{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     rp_ci.renderPass        = render_pass_;
     rp_ci.framebuffer       = framebuffers_[image_idx_];
     rp_ci.renderArea.extent = vk.swapchain_extent;
-    rp_ci.clearValueCount   = 1;
-    rp_ci.pClearValues      = &clear;
+    rp_ci.clearValueCount   = depth_enabled_ ? 2u : 1u;
+    rp_ci.pClearValues      = clears;
     vkCmdBeginRenderPass(cmd_bufs_[frame_idx_], &rp_ci, VK_SUBPASS_CONTENTS_INLINE);
 
     ImGui_ImplVulkan_NewFrame();
@@ -166,36 +170,56 @@ void SimpleRenderer::end_frame(VulkanContext& vk) {
 // ── Internal ─────────────────────────────────────────────────────────────────
 
 void SimpleRenderer::create_render_pass(VulkanContext& vk) {
-    VkAttachmentDescription color{};
-    color.format         = vk.swapchain_format;
-    color.samples        = VK_SAMPLE_COUNT_1_BIT;
-    color.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    color.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
-    color.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    color.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
-    color.finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    VkAttachmentDescription attachments[2]{};
 
-    VkAttachmentReference ref{};
-    ref.attachment = 0;
-    ref.layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    // Color attachment (always present)
+    attachments[0].format         = vk.swapchain_format;
+    attachments[0].samples        = VK_SAMPLE_COUNT_1_BIT;
+    attachments[0].loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachments[0].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+    attachments[0].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[0].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachments[0].finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    // Depth attachment (optional)
+    attachments[1].format         = DEPTH_FORMAT;
+    attachments[1].samples        = VK_SAMPLE_COUNT_1_BIT;
+    attachments[1].loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachments[1].storeOp        = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[1].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[1].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachments[1].finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference color_ref{};
+    color_ref.attachment = 0;
+    color_ref.layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference depth_ref{};
+    depth_ref.attachment = 1;
+    depth_ref.layout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments    = &ref;
+    subpass.pColorAttachments    = &color_ref;
+    subpass.pDepthStencilAttachment = depth_enabled_ ? &depth_ref : nullptr;
 
     VkSubpassDependency dep{};
     dep.srcSubpass    = VK_SUBPASS_EXTERNAL;
     dep.dstSubpass    = 0;
-    dep.srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dep.dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep.srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dep.dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
     dep.srcAccessMask = 0;
-    dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                        (depth_enabled_ ? VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : 0u);
 
     VkRenderPassCreateInfo ci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-    ci.attachmentCount = 1;
-    ci.pAttachments    = &color;
+    ci.attachmentCount = depth_enabled_ ? 2u : 1u;
+    ci.pAttachments    = attachments;
     ci.subpassCount    = 1;
     ci.pSubpasses      = &subpass;
     ci.dependencyCount = 1;
@@ -203,13 +227,57 @@ void SimpleRenderer::create_render_pass(VulkanContext& vk) {
     vkCreateRenderPass(vk.device, &ci, nullptr, &render_pass_);
 }
 
+void SimpleRenderer::create_depth_resources(VulkanContext& vk) {
+    VkImageCreateInfo img_ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    img_ci.imageType     = VK_IMAGE_TYPE_2D;
+    img_ci.format        = DEPTH_FORMAT;
+    img_ci.extent.width  = vk.swapchain_extent.width;
+    img_ci.extent.height = vk.swapchain_extent.height;
+    img_ci.extent.depth  = 1;
+    img_ci.mipLevels     = 1;
+    img_ci.arrayLayers   = 1;
+    img_ci.samples       = VK_SAMPLE_COUNT_1_BIT;
+    img_ci.tiling        = VK_IMAGE_TILING_OPTIMAL;
+    img_ci.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    img_ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    vkCreateImage(vk.device, &img_ci, nullptr, &depth_image_);
+
+    VkMemoryRequirements mem_req;
+    vkGetImageMemoryRequirements(vk.device, depth_image_, &mem_req);
+
+    VkMemoryAllocateInfo alloc_ci{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    alloc_ci.allocationSize  = mem_req.size;
+    alloc_ci.memoryTypeIndex = vk.find_memory_type(mem_req.memoryTypeBits,
+                                                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    vkAllocateMemory(vk.device, &alloc_ci, nullptr, &depth_memory_);
+    vkBindImageMemory(vk.device, depth_image_, depth_memory_, 0);
+
+    VkImageViewCreateInfo view_ci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    view_ci.image                           = depth_image_;
+    view_ci.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
+    view_ci.format                          = DEPTH_FORMAT;
+    view_ci.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_DEPTH_BIT;
+    view_ci.subresourceRange.baseMipLevel   = 0;
+    view_ci.subresourceRange.levelCount     = 1;
+    view_ci.subresourceRange.baseArrayLayer = 0;
+    view_ci.subresourceRange.layerCount     = 1;
+    vkCreateImageView(vk.device, &view_ci, nullptr, &depth_view_);
+}
+
+void SimpleRenderer::destroy_depth_resources(VulkanContext& vk) {
+    if (depth_view_)   { vkDestroyImageView(vk.device, depth_view_, nullptr); depth_view_ = VK_NULL_HANDLE; }
+    if (depth_image_)  { vkDestroyImage(vk.device, depth_image_, nullptr); depth_image_ = VK_NULL_HANDLE; }
+    if (depth_memory_) { vkFreeMemory(vk.device, depth_memory_, nullptr); depth_memory_ = VK_NULL_HANDLE; }
+}
+
 void SimpleRenderer::create_framebuffers(VulkanContext& vk) {
     framebuffers_.resize(vk.swapchain_views.size());
     for (size_t i = 0; i < vk.swapchain_views.size(); i++) {
+        VkImageView views[2] = { vk.swapchain_views[i], depth_view_ };
         VkFramebufferCreateInfo ci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
         ci.renderPass      = render_pass_;
-        ci.attachmentCount = 1;
-        ci.pAttachments    = &vk.swapchain_views[i];
+        ci.attachmentCount = depth_enabled_ ? 2u : 1u;
+        ci.pAttachments    = views;
         ci.width           = vk.swapchain_extent.width;
         ci.height          = vk.swapchain_extent.height;
         ci.layers          = 1;
@@ -233,6 +301,8 @@ void SimpleRenderer::rebuild_swapchain(VulkanContext& vk, GLFWwindow* window) {
 
     vkDeviceWaitIdle(vk.device);
     destroy_framebuffers(vk);
+    if (depth_enabled_) destroy_depth_resources(vk);
     vk.recreate_swapchain(window);
+    if (depth_enabled_) create_depth_resources(vk);
     create_framebuffers(vk);
 }
