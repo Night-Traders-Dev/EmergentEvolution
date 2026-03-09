@@ -40,9 +40,9 @@ public:
               float sim_time);
 
     // Minimum screen-space diameter (pixels) before a body gets terrain mesh.
-    // Must be high enough that the raytracer handles most rendering —
-    // the mesh renderer only kicks in for close-up views where 3D terrain geometry matters.
-    float min_screen_pixels = 400.0f;
+    // Set very high so the raytracer handles virtually all rendering —
+    // the mesh renderer only kicks in for extreme close-up where 3D geometry matters.
+    float min_screen_pixels = 4000.0f;
 
 private:
     VkPipeline       pipeline_    = VK_NULL_HANDLE;

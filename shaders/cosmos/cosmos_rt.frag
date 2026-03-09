@@ -630,54 +630,70 @@ void impact_masks(vec3 normal, Sphere hit, out float basin, out float rim, out f
     ejecta = ejecta_band * ejecta_strength * smoothstep(0.42, 0.88, ejecta_noise);
 }
 
-float starfield_layer(vec3 rd, float scale, float threshold, float sharpness) {
-    vec3 p = normalize(rd) * scale;
-    float n = fbm(p + vec3(17.0, 31.0, 47.0), 3);
-    float s = smoothstep(threshold, 1.0, n);
-    return pow(max(s, 0.0), sharpness);
-}
+// Cell-based point star placement — one star per 3D grid cell, sharp points
+// Each cell hashes to a random star position; distance to that point = star brightness
+float cell_star_layer(vec3 rd, float cell_size, float brightness, float point_size) {
+    vec3 p = rd * cell_size;
+    vec3 cell_id = floor(p);
+    float result = 0.0;
 
-// KaliSet-inspired volumetric star accumulation for natural star clustering
-float kaliset_stars(vec3 rd, float brightness) {
-    vec3 col_acc = vec3(0.0);
-    float intensity = 0.0;
-    int layers = (quality_params.x >= 2.0) ? 6 : 4;
-    for (int v = 0; v < 6; v++) {
-        if (v >= layers) break;
-        vec3 p = rd * (0.5 + float(v) * 0.18);
-        for (int i = 0; i < 14; i++) {
-            p = abs(p) / max(dot(p, p), 0.0001) - 0.52;
+    // Check 3x3x3 neighborhood for nearby stars
+    for (int dx = -1; dx <= 1; dx++) {
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                vec3 neighbor = cell_id + vec3(float(dx), float(dy), float(dz));
+                // Hash cell to get star position within cell
+                vec3 star_pos = neighbor + vec3(
+                    hash11(dot(neighbor, vec3(127.1, 311.7, 74.7))),
+                    hash11(dot(neighbor, vec3(269.5, 183.3, 246.1))),
+                    hash11(dot(neighbor, vec3(113.5, 271.9, 154.7)))
+                );
+                float dist = length(p - star_pos);
+                // Per-star brightness variation (some cells have no visible star)
+                float star_mag = hash11(dot(neighbor, vec3(419.2, 371.9, 523.1)));
+                if (star_mag < 0.35) continue; // 35% of cells are empty
+                float star_bright = (star_mag - 0.35) / 0.65; // normalize 0-1
+                star_bright *= star_bright; // emphasize bright stars
+                float glow = exp(-dist * dist / (point_size * point_size));
+                result += glow * star_bright * brightness;
+            }
         }
-        float star_i = dot(p, p);
-        star_i *= star_i; // contrast boost
-        intensity += star_i * brightness;
     }
-    return intensity;
+    return result;
 }
 
 vec3 sample_starfield(vec3 rd) {
-    float stars_faint = starfield_layer(rd, 64.0, 0.84, 2.0);
-    float stars_mid = starfield_layer(rd * 1.7 + 0.3, 138.0, 0.90, 3.5);
-    float stars_bright = starfield_layer(rd * 2.8 - 0.4, 240.0, 0.965, 9.0);
-    float stars_micro = 0.0;
+    vec3 n_rd = normalize(rd);
+    // Multiple layers at exponentially different scales for depth
+    float layer1 = cell_star_layer(n_rd, 18.0,  0.35, 0.08);  // sparse bright stars
+    float layer2 = cell_star_layer(n_rd, 42.0,  0.22, 0.065); // medium density
+    float layer3 = cell_star_layer(n_rd, 95.0,  0.14, 0.055); // dense faint stars
+    float layer4 = cell_star_layer(n_rd, 210.0, 0.08, 0.045); // very dense micro stars
+
+    // Extra micro layer at high quality
+    float layer5 = 0.0;
     if (quality_params.x >= 3.0) {
-        stars_micro = starfield_layer(rd * 4.2 + vec3(0.3, -0.2, 0.5), 420.0, 0.985, 12.0) * 0.55;
+        layer5 = cell_star_layer(n_rd, 480.0, 0.04, 0.038);
     }
-    // KaliSet volumetric star clustering — subtle density variation only
-    float kali = kaliset_stars(rd, 0.00003);
-    float twinkle = 0.96 + 0.04 * sin(screen_info.w * 0.16 + rd.x * 133.0 + rd.z * 91.0);
 
-    float tint_seed = hash11(rd.x * 71.0 + rd.y * 39.0 + rd.z * 113.0);
-    vec3 warm = vec3(1.00, 0.95, 0.82);
-    vec3 cool = vec3(0.72, 0.82, 1.00);
-    vec3 neutral = vec3(0.92, 0.93, 0.96);
-    vec3 tint = mix(neutral, mix(warm, cool, smoothstep(0.45, 0.92, tint_seed)), 0.75);
+    float twinkle = 0.94 + 0.06 * sin(screen_info.w * 0.18 + n_rd.x * 133.0 + n_rd.z * 91.0);
 
-    float dense = stars_faint * 0.95 + stars_mid * 0.85;
-    float bright = stars_bright * (1.2 + 0.6 * hash11(tint_seed * 91.0));
-    vec3 stars = tint * (dense + bright + stars_micro) * twinkle;
-    // KaliSet adds subtle star clusters and density variation (clamped to prevent blowout)
-    stars += tint * min(kali, 0.15) * twinkle;
+    // Per-star color temperature (warm, cool, neutral)
+    float tint_seed = hash11(n_rd.x * 71.0 + n_rd.y * 39.0 + n_rd.z * 113.0);
+    vec3 warm    = vec3(1.00, 0.92, 0.78);
+    vec3 cool    = vec3(0.72, 0.82, 1.00);
+    vec3 neutral = vec3(0.94, 0.95, 0.97);
+    vec3 tint = mix(neutral, mix(warm, cool, smoothstep(0.40, 0.90, tint_seed)), 0.70);
+
+    // Combine layers — bright stars get individual color, faint stars are neutral
+    float total = layer1 + layer2 + layer3 + layer4 + layer5;
+    vec3 stars = tint * total * twinkle;
+
+    // Subtle density variation from low-frequency noise (Milky Way clustering)
+    float cluster = fbm(n_rd * 3.5 + vec3(7.1, 13.3, 19.7), 3);
+    float density_mod = 0.65 + 0.35 * smoothstep(0.30, 0.75, cluster);
+    stars *= density_mod;
+
     return stars;
 }
 
@@ -1708,7 +1724,14 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
         float hot_style = floor(hash11(seed * 0.043) * 3.0);
         style = (hot_style < 0.5) ? 6.0 : (hot_style < 1.5) ? 1.0 : 7.0;
     } else if (coldness > 0.55 && ocean_cov < 0.18) {
-        style = 5.0;
+        // Cold/airless bodies: varied surface types instead of uniform grey
+        // Lunar grey, dark carbonaceous, icy blue-grey, reddish (sulfur), tan (Titan-like)
+        float cold_style = floor(hash11(seed * 0.037) * 5.0);
+        if (cold_style < 0.5) style = 0.0;       // lunar grey
+        else if (cold_style < 1.5) style = 6.0;  // dark basalt (carbonaceous)
+        else if (cold_style < 2.5) style = 5.0;  // slate blue-grey (icy)
+        else if (cold_style < 3.5) style = 7.0;  // terracotta/reddish (sulfur-like)
+        else style = 9.0;                         // chalk/limestone (Titan-like)
     } else if (dryness > 0.65 && temperature > 285.0) {
         // Arid worlds: desert tan, terracotta, or copper
         float arid_style = floor(hash11(seed * 0.057) * 3.0);
@@ -1721,8 +1744,8 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
         style = 1.0;
     }
 
-    // Stronger per-seed palette shift for more visual diversity
-    vec3 palette_shift = (hash31(seed * 0.113 + surface_type * 9.7) - 0.5) * vec3(0.22, 0.18, 0.16);
+    // Per-seed palette shift — stronger range for more visual diversity between bodies
+    vec3 palette_shift = (hash31(seed * 0.113 + surface_type * 9.7) - 0.5) * vec3(0.30, 0.24, 0.20);
     float rock_tone = clamp(elev + land_mask * 0.08 - valley_mask * 0.05, 0.0, 1.0);
     vec3 ice_col = vec3(0.72, 0.82, 0.95);
     vec3 col = rocky_palette(style, rock_tone);
@@ -2870,10 +2893,10 @@ void main() {
             bh = mix(bh, bh + ring_col, ring_alpha);
         vec3 bh_final = pow(max(bh, vec3(0.0)), vec3(1.0 / 2.2));
         if (is_ghost) {
-            float ga = 0.45 + 0.07 * sin(screen_info.w * 3.5);
-            float edge = pow(1.0 - max(dot(normal, -rd), 0.0), 2.5);
+            float ga = 0.72 + 0.05 * sin(screen_info.w * 3.5);
+            float edge = pow(1.0 - max(dot(normal, -rd), 0.0), 2.8);
             bh_final = mix(pow(max(background(rd), vec3(0.0)), vec3(1.0 / 2.2)), bh_final, ga);
-            bh_final += vec3(0.35, 0.55, 0.90) * edge * 0.4;
+            bh_final += vec3(0.35, 0.45, 0.75) * edge * 0.20;
         }
         outColor = vec4(bh_final, 1.0);
         return;
@@ -2924,7 +2947,7 @@ void main() {
 
         vec3 neb_final = pow(max(final_color, vec3(0.0)), vec3(1.0 / 2.2));
         if (is_ghost) {
-            float ga = 0.45 + 0.07 * sin(screen_info.w * 3.5);
+            float ga = 0.72 + 0.05 * sin(screen_info.w * 3.5);
             neb_final = mix(pow(max(background(rd), vec3(0.0)), vec3(1.0 / 2.2)), neb_final, ga);
         }
         outColor = vec4(neb_final, 1.0);
@@ -2945,10 +2968,11 @@ void main() {
             star_col = mix(star_col, star_col + magnet_col, magnet_alpha);
         vec3 star_final = pow(max(star_col, vec3(0.0)), vec3(1.0 / 2.2));
         if (is_ghost) {
-            float ga = 0.45 + 0.07 * sin(screen_info.w * 3.5);
-            float edge = pow(1.0 - max(dot(normal, -rd), 0.0), 2.5);
+            float ga = 0.72 + 0.05 * sin(screen_info.w * 3.5);
+            float edge = pow(1.0 - max(dot(normal, -rd), 0.0), 2.8);
             star_final = mix(pow(max(background(rd), vec3(0.0)), vec3(1.0 / 2.2)), star_final, ga);
-            star_final += vec3(0.35, 0.55, 0.90) * edge * 0.3;
+            vec3 star_edge = mix(vec3(0.40, 0.55, 0.85), hit.base_emit.rgb * 0.6 + 0.4, 0.40);
+            star_final += star_edge * edge * 0.18;
         }
         outColor = vec4(star_final, 1.0);
         return;
@@ -3132,10 +3156,14 @@ void main() {
 
     vec3 body_final = pow(aces_tonemap(max(final_color, vec3(0.0))), vec3(1.0 / 2.2));
     if (is_ghost) {
-        float ga = 0.45 + 0.07 * sin(screen_info.w * 3.5);
-        float edge = pow(1.0 - max(dot(normal, -rd), 0.0), 2.5);
-        body_final = mix(pow(max(background(rd), vec3(0.0)), vec3(1.0 / 2.2)), body_final, ga);
-        body_final += vec3(0.35, 0.55, 0.90) * edge * 0.3;
+        // Show actual body colors at higher opacity so preview matches spawned result
+        float ga = 0.72 + 0.05 * sin(screen_info.w * 3.5);
+        float edge = pow(1.0 - max(dot(normal, -rd), 0.0), 2.8);
+        vec3 bg = pow(max(background(rd), vec3(0.0)), vec3(1.0 / 2.2));
+        body_final = mix(bg, body_final, ga);
+        // Subtle edge glow using body's own tint (not hardcoded blue)
+        vec3 edge_tint = mix(vec3(0.40, 0.55, 0.85), hit.base_emit.rgb * 0.8 + 0.2, 0.35);
+        body_final += edge_tint * edge * 0.18;
     }
     outColor = vec4(body_final, 1.0);
 }

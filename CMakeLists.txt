@@ -411,6 +411,25 @@ add_test(NAME cosmos_gpu_tests
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# Visual rendering tests — renders each body type to PNG for inspection
+add_executable(cosmos_visual_tests
+    tests/cosmos_visual_tests.cpp
+    src/cosmos/core/cosmos_body_model.cpp
+    src/cosmos/rendering/cosmos_raytracer.cpp
+    src/cosmos/rendering/cosmos_nebula_compute.cpp
+    src/cosmos/data/cosmos_astro_data.cpp
+)
+target_include_directories(cosmos_visual_tests PRIVATE
+    tests/
+)
+target_link_libraries(cosmos_visual_tests PRIVATE pp_common SSCore)
+target_compile_definitions(cosmos_visual_tests PRIVATE APP_VERSION="test")
+
+add_test(NAME cosmos_visual_tests
+    COMMAND cosmos_visual_tests
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # ── Shader compilation ────────────────────────────────────────────────────────
 
 # glslc is shipped with the Vulkan SDK; CMake 3.20+ exposes it
