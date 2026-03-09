@@ -17,7 +17,8 @@ public:
     void update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
                          const CosmosState& state, const OrbitCamera& camera,
                          const CosmosConfig& cfg,
-                         float screen_w, float screen_h, float time);
+                         float screen_w, float screen_h, float time,
+                         const std::vector<bool>* skip_bodies = nullptr);
 
 private:
     VkDescriptorSetLayout desc_layout_ = VK_NULL_HANDLE;

@@ -164,8 +164,10 @@ private:
     // Per-body terrain mesh cache (indexed by body index, regenerated on demand)
     std::vector<TerrainMeshEntry> terrain_cache_;
     bool terrain_meshes_dirty_ = true;
+    std::vector<bool> mesh_covered_bodies_; // bodies covered by terrain mesh this frame
     void rebuild_terrain_cache();
     void upload_terrain_meshes();
+    void compute_mesh_coverage(float screen_w, float screen_h);
 
     float sim_time_ = 0.0f;
     float smoothed_fps_ = 60.0f;

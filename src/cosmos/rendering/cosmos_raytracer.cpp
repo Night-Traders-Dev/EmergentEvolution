@@ -375,7 +375,8 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
                                        const OrbitCamera& camera,
                                        const CosmosConfig& cfg,
                                        float screen_w, float screen_h,
-                                       float time) {
+                                       float time,
+                                       const std::vector<bool>* skip_bodies) {
     float aspect = screen_w / screen_h;
     glm::dvec3 target_origin = glm::dvec3(camera.target);
     glm::dvec3 eye_rel = camera.eye_position_d() - target_origin;
@@ -464,6 +465,10 @@ void CosmosRaytracer::update_and_draw(VulkanContext& vk, VkCommandBuffer cmd,
             emissive = -1.0f;
 
         float render_radius = b.radius;
+        // Skip bodies that will be covered by terrain mesh rendering
+        if (skip_bodies && i < (int)skip_bodies->size() && (*skip_bodies)[i]) {
+            render_radius = 0.0f;
+        }
         if (b.type == CTYPE_DUST) {
             // Keep dust rings visible at normal zoom without changing physics radius.
             render_radius = std::max(render_radius, 0.16f);

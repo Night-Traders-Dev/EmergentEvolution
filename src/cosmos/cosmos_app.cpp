@@ -410,10 +410,19 @@ void CosmosApp::tick(GLFWwindow* window, float dt) {
         cfg.cosmos_space_fabric_grid_size = std::max(snapped, 1.0f);
     }
 
+    // Pre-compute which bodies will be covered by terrain meshes
+    // so the raytracer can skip them (avoids double-rendering artifacts)
+    try {
+        rebuild_terrain_cache();
+        upload_terrain_meshes();
+        compute_mesh_coverage(io.DisplaySize.x, io.DisplaySize.y);
+    } catch (...) {}
+
     // GPU raytraced scene (draws within the active render pass)
     try {
         raytracer_.update_and_draw(vk, renderer.current_cmd(), state, camera, cfg,
-                                   io.DisplaySize.x, io.DisplaySize.y, sim_time_);
+                                   io.DisplaySize.x, io.DisplaySize.y, sim_time_,
+                                   &mesh_covered_bodies_);
     } catch (const std::exception& e) {
         debug_logf("raytracer exception: %s", e.what());
         paused = true;
@@ -424,8 +433,6 @@ void CosmosApp::tick(GLFWwindow* window, float dt) {
 
     // Terrain mesh rendering (after raytracer, with depth testing)
     try {
-        rebuild_terrain_cache();
-        upload_terrain_meshes();
         mesh_renderer_.draw(renderer.current_cmd(), state.bodies, camera,
                             io.DisplaySize.x, io.DisplaySize.y, sim_time_);
     } catch (...) {
@@ -494,4 +501,24 @@ void CosmosApp::upload_terrain_meshes() {
     if (!terrain_meshes_dirty_) return;
     terrain_meshes_dirty_ = false;
     mesh_renderer_.upload_meshes(vk, terrain_cache_, state.bodies);
+}
+
+void CosmosApp::compute_mesh_coverage(float screen_w, float screen_h) {
+    mesh_covered_bodies_.assign(state.bodies.size(), false);
+
+    float fov_rad = glm::radians(camera.fov);
+    float half_screen_proj = screen_h / (2.0f * std::tan(fov_rad * 0.5f));
+    glm::dvec3 target_origin = glm::dvec3(camera.target);
+    glm::dvec3 eye_rel = camera.eye_position_d() - target_origin;
+
+    for (size_t i = 0; i < state.bodies.size(); ++i) {
+        if (i >= terrain_cache_.size() || !terrain_cache_[i].valid) continue;
+        const auto& body = state.bodies[i];
+        glm::dvec3 body_cam_rel = glm::dvec3(body.pos) - target_origin;
+        double dist = glm::length(body_cam_rel - eye_rel);
+        if (dist < 0.01) dist = 0.01;
+        float screen_diam = (2.0f * body.radius / (float)dist) * half_screen_proj;
+        if (screen_diam >= mesh_renderer_.min_screen_pixels)
+            mesh_covered_bodies_[i] = true;
+    }
 }

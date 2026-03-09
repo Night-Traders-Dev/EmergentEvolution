@@ -101,7 +101,7 @@ void CosmosMeshRenderer::init(VulkanContext& vk, VkRenderPass render_pass) {
     // ── Rasterizer: back-face culling for performance ───────────────────
     VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
     raster.polygonMode = VK_POLYGON_MODE_FILL;
-    raster.cullMode    = VK_CULL_MODE_BACK_BIT;
+    raster.cullMode    = VK_CULL_MODE_NONE; // mixed winding across cube faces
     raster.frontFace   = VK_FRONT_FACE_CLOCKWISE;
     raster.lineWidth   = 1.0f;
 
@@ -258,6 +258,10 @@ void CosmosMeshRenderer::draw(VkCommandBuffer cmd,
     glm::dmat4 view = glm::lookAt(eye_rel, glm::dvec3(0.0), glm::dvec3(0.0, 1.0, 0.0));
     glm::dmat4 proj = camera.proj_matrix_d(aspect);
     proj[1][1] *= -1.0; // Vulkan Y-flip (GLM uses OpenGL convention)
+    // Convert OpenGL depth range [-1,1] to Vulkan [0,1]
+    // Z_clip_new = (Z_clip_old + W_clip) * 0.5
+    proj[2][2] = (proj[2][2] + proj[2][3]) * 0.5;
+    proj[3][2] = (proj[3][2] + proj[3][3]) * 0.5;
     glm::dmat4 vp   = proj * view;
 
     float fov_rad = glm::radians(camera.fov);
@@ -323,8 +327,11 @@ void CosmosMeshRenderer::draw(VkCommandBuffer cmd,
         float emissive = is_star_type(body.type) ? 1.4f : 0.0f;
         pc.color_params = glm::vec4(col, emissive);
 
+        // Use clamped terrain_amp matching the mesh generation (cosmos_app.cpp)
+        // so height normalization in the shader matches actual vertex displacement.
+        float mesh_terrain_amp = std::min(body.cached_visuals.terrain_amp, 0.05f);
         pc.surface_params = glm::vec4(
-            body.cached_visuals.terrain_amp,
+            mesh_terrain_amp,
             body.cached_visuals.ice_sheet_coverage,
             body.cached_visuals.rock_frac,
             body.cached_props.ocean_coverage / 100.0f);
