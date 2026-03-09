@@ -2,4 +2,21 @@
 build/
 build-win64/
 dist-win64/
+*.log
+*.bin
+*.obj
+*.dll
+*.exe
+*.pdb
+*.cache
+*.ppcfg
+*.spv
+saves/
 
+Screenshot From 2026-03-08 23-38-07.png
+Screenshot From 2026-03-08 23-38-42.png
+Screenshot From 2026-03-08 23-38-50.png
+Screenshot From 2026-03-08 23-38-54.png
+pipeline_cache.bin
+cosmos_settings.bin
+cosmos_debug.log

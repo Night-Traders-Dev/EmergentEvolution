@@ -477,6 +477,11 @@ void CosmosApp::rebuild_terrain_cache() {
         // Generate mesh centered at origin (body-relative) with fixed resolution
         // LOD is handled by screen-size gating in the draw call
         TerrainParams params = TerrainParams::from_body(body);
+        // Clamp terrain amplitude for mesh geometry — visual properties can have
+        // terrain_amp up to 1.0 which creates wild deformations. Real terrain is
+        // tiny relative to body radius (Earth: ~0.14%). Cap at 5% for meshes.
+        params.terrain_amp = std::min(params.terrain_amp, 0.05f);
+        params.ridge_amp   = std::min(params.ridge_amp, 0.02f);
         entry.mesh = terrain_.generate_terrain_mesh(32, params);
         entry.seed = body.seed;
         entry.radius = body.radius;
