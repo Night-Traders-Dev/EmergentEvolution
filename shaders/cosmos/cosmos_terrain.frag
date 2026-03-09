@@ -35,8 +35,12 @@ float hash31(vec3 p) {
 }
 
 void main() {
-    vec3 N = normalize(frag_normal);
+    // Compute geometry-aware normal from screen-space derivatives of world position.
+    // This gives proper terrain normals instead of the smooth sphere normal.
+    vec3 N_geom = normalize(cross(dFdx(frag_pos), dFdy(frag_pos)));
+    // Ensure normal faces toward camera (back-face triangles get flipped normal)
     vec3 V = normalize(cam_pos_time.xyz - frag_pos);
+    vec3 N = faceforward(N_geom, -V, N_geom);
 
     float radius      = body_params.w;
     float terrain_amp = surface_params.x;
@@ -111,8 +115,9 @@ void main() {
         float noise = hash31(frag_pos * 50.0) * 0.06 - 0.03;
         color += noise;
 
-        // Ice caps based on latitude (using sphere normal Y component)
-        float lat = abs(N.y);
+        // Ice caps based on latitude (using sphere normal, not terrain normal)
+        vec3 sphere_N = normalize(frag_normal);
+        float lat = abs(sphere_N.y);
         if (lat > (1.0 - ice_cov) && ice_cov > 0.01) {
             float ice_blend = smoothstep(1.0 - ice_cov, 1.0 - ice_cov * 0.6, lat);
             color = mix(color, snow, ice_blend);

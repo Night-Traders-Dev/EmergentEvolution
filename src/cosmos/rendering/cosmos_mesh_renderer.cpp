@@ -102,7 +102,7 @@ void CosmosMeshRenderer::init(VulkanContext& vk, VkRenderPass render_pass) {
     VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
     raster.polygonMode = VK_POLYGON_MODE_FILL;
     raster.cullMode    = VK_CULL_MODE_BACK_BIT;
-    raster.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    raster.frontFace   = VK_FRONT_FACE_CLOCKWISE;
     raster.lineWidth   = 1.0f;
 
     // ── Multisampling (off) ─────────────────────────────────────────────
@@ -257,6 +257,7 @@ void CosmosMeshRenderer::draw(VkCommandBuffer cmd,
     float aspect = screen_w / screen_h;
     glm::dmat4 view = glm::lookAt(eye_rel, glm::dvec3(0.0), glm::dvec3(0.0, 1.0, 0.0));
     glm::dmat4 proj = camera.proj_matrix_d(aspect);
+    proj[1][1] *= -1.0; // Vulkan Y-flip (GLM uses OpenGL convention)
     glm::dmat4 vp   = proj * view;
 
     float fov_rad = glm::radians(camera.fov);
