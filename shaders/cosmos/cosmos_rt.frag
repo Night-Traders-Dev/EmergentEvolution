@@ -663,8 +663,8 @@ vec3 sample_starfield(vec3 rd) {
     if (quality_params.x >= 3.0) {
         stars_micro = starfield_layer(rd * 4.2 + vec3(0.3, -0.2, 0.5), 420.0, 0.985, 12.0) * 0.55;
     }
-    // KaliSet volumetric star clustering — adds natural star density variation
-    float kali = kaliset_stars(rd, 0.0008);
+    // KaliSet volumetric star clustering — subtle density variation only
+    float kali = kaliset_stars(rd, 0.00003);
     float twinkle = 0.96 + 0.04 * sin(screen_info.w * 0.16 + rd.x * 133.0 + rd.z * 91.0);
 
     float tint_seed = hash11(rd.x * 71.0 + rd.y * 39.0 + rd.z * 113.0);
@@ -676,8 +676,8 @@ vec3 sample_starfield(vec3 rd) {
     float dense = stars_faint * 0.95 + stars_mid * 0.85;
     float bright = stars_bright * (1.2 + 0.6 * hash11(tint_seed * 91.0));
     vec3 stars = tint * (dense + bright + stars_micro) * twinkle;
-    // KaliSet adds subtle star clusters and density variation
-    stars += tint * kali * twinkle;
+    // KaliSet adds subtle star clusters and density variation (clamped to prevent blowout)
+    stars += tint * min(kali, 0.15) * twinkle;
     return stars;
 }
 
@@ -3111,10 +3111,11 @@ void main() {
     float fabric_alpha = 0.0;
     float fabric_t = -1.0;
     if (sample_space_fabric(ro, rd, body_count, fabric_col, fabric_alpha, fabric_t)) {
-        float overlay = fabric_alpha * 0.75;
-        if (fabric_t > closest_t)
-            overlay *= 0.85;
-        final_color = mix(final_color, final_color + fabric_col, overlay);
+        // Only show fabric if it's in front of the body (not occluded)
+        if (fabric_t < closest_t || closest_t < 0.0) {
+            float overlay = fabric_alpha * 0.75;
+            final_color = mix(final_color, final_color + fabric_col, overlay);
+        }
     }
 
     vec3 ring_col = vec3(0.0);
