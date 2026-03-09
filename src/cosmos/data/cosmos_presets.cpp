@@ -2,6 +2,166 @@
 #include "cosmos/data/cosmos_astro_data.h"
 #include <cmath>
 #include <random>
+#include <algorithm>
+
+// ── Real Solar System Overrides ──────────────────────────────────────────────
+// Apply accurate surface types, atmospheres, ring systems, and properties
+// to solar system bodies after SSCore has loaded their orbital mechanics.
+// This ensures planets look like their real counterparts rather than
+// getting randomized procedural surfaces.
+
+static void apply_solar_system_overrides(std::vector<CelestialBody>& bodies) {
+    for (auto& b : bodies) {
+        if (b.name.empty()) continue;
+
+        // ── Planets ─────────────────────────────────────────────────────
+        if (b.name == "Mercury") {
+            b.forced_surface = 0;           // rocky
+            b.atmosphere_retention = 0.0f;  // no atmosphere
+            b.temperature = 440.0f;
+        }
+        else if (b.name == "Venus") {
+            b.forced_surface = 0;           // rocky surface under thick clouds
+            b.atmosphere_retention = 1.0f;  // massive CO2 atmosphere
+            b.temperature = 737.0f;
+        }
+        else if (b.name == "Earth") {
+            b.forced_surface = 3;           // earth-like (ocean + continents + vegetation)
+            b.atmosphere_retention = 1.0f;
+            b.temperature = 288.0f;
+        }
+        else if (b.name == "Mars") {
+            b.forced_surface = 0;           // rocky (thin CO2 atmosphere, some ice caps)
+            b.atmosphere_retention = 0.12f; // very thin atmosphere (~0.6% of Earth)
+            b.temperature = 210.0f;
+        }
+        else if (b.name == "Jupiter") {
+            b.forced_surface = 4;           // gas giant
+            b.atmosphere_retention = 1.0f;
+            b.temperature = 165.0f;
+            // Jupiter's faint ring system (gossamer rings)
+            set_ring_system(b,
+                b.radius * 1.72f,           // inner edge ~1.72 R_J (main ring)
+                b.radius * 3.08f,           // outer edge ~3.08 R_J (gossamer ring)
+                0.03f,                       // very faint
+                0.15f,                       // mostly dust, little ice
+                0.05f);                      // ~3° axial tilt
+        }
+        else if (b.name == "Saturn") {
+            b.forced_surface = 4;           // gas giant
+            b.atmosphere_retention = 1.0f;
+            b.temperature = 134.0f;
+            // Saturn's prominent ring system (C, B, A rings + Cassini Division)
+            set_ring_system(b,
+                b.radius * 1.53f,           // inner edge (C ring) ~1.53 R_S
+                b.radius * 4.0f,            // outer edge (F ring) ~4.0 R_S
+                0.55f,                       // prominent, dense
+                0.92f,                       // >90% water ice
+                0.47f);                      // 26.7° axial tilt
+        }
+        else if (b.name == "Uranus") {
+            b.forced_surface = 4;           // ice giant
+            b.atmosphere_retention = 1.0f;
+            b.temperature = 76.0f;
+            // Uranus narrow dark rings
+            set_ring_system(b,
+                b.radius * 1.64f,           // inner edge (6 ring)
+                b.radius * 2.0f,            // outer edge (epsilon ring)
+                0.08f,                       // thin, dark rings
+                0.35f,                       // mix of ice and dark organics
+                1.30f);                      // 97.8° extreme axial tilt (capped at max)
+        }
+        else if (b.name == "Neptune") {
+            b.forced_surface = 4;           // ice giant
+            b.atmosphere_retention = 1.0f;
+            b.temperature = 72.0f;
+            // Neptune's faint ring system (Adams, Le Verrier, Galle)
+            set_ring_system(b,
+                b.radius * 1.69f,           // inner edge (Galle ring)
+                b.radius * 2.54f,           // outer edge (Adams ring)
+                0.04f,                       // very faint
+                0.20f,                       // dust-dominated
+                0.49f);                      // 28.3° axial tilt
+        }
+        else if (b.name == "Pluto") {
+            b.forced_surface = 2;           // ice
+            b.atmosphere_retention = 0.04f; // tenuous N2 atmosphere
+            b.temperature = 44.0f;
+        }
+
+        // ── Major Moons ─────────────────────────────────────────────────
+        else if (b.name == "Luna" || b.name == "Moon") {
+            b.forced_surface = 0;           // rocky (regolith)
+            b.atmosphere_retention = 0.0f;
+            b.temperature = 220.0f;
+        }
+        else if (b.name == "Io") {
+            b.forced_surface = 0;           // rocky/volcanic
+            b.atmosphere_retention = 0.02f; // trace SO2
+            b.temperature = 110.0f;         // surface avg (volcanoes much hotter)
+        }
+        else if (b.name == "Europa") {
+            b.forced_surface = 2;           // ice shell over subsurface ocean
+            b.atmosphere_retention = 0.01f; // trace O2
+            b.temperature = 102.0f;
+        }
+        else if (b.name == "Ganymede") {
+            b.forced_surface = 2;           // ice + rock terrain
+            b.atmosphere_retention = 0.02f; // trace O2
+            b.temperature = 110.0f;
+        }
+        else if (b.name == "Callisto") {
+            b.forced_surface = 2;           // heavily cratered ice/rock
+            b.atmosphere_retention = 0.01f;
+            b.temperature = 134.0f;
+        }
+        else if (b.name == "Titan") {
+            b.forced_surface = 0;           // rocky/organic under thick atmosphere
+            b.atmosphere_retention = 1.0f;  // 1.5× Earth pressure N2 atmosphere
+            b.temperature = 94.0f;
+        }
+        else if (b.name == "Enceladus") {
+            b.forced_surface = 2;           // ice (geysers at south pole)
+            b.atmosphere_retention = 0.0f;
+            b.temperature = 75.0f;
+        }
+        else if (b.name == "Triton") {
+            b.forced_surface = 2;           // nitrogen ice
+            b.atmosphere_retention = 0.02f; // trace N2
+            b.temperature = 38.0f;
+        }
+        else if (b.name == "Mimas") {
+            b.forced_surface = 2;           // ice
+            b.atmosphere_retention = 0.0f;
+            b.temperature = 64.0f;
+        }
+        else if (b.name == "Rhea") {
+            b.forced_surface = 2;           // ice/rock
+            b.atmosphere_retention = 0.0f;
+            b.temperature = 76.0f;
+        }
+        else if (b.name == "Iapetus") {
+            b.forced_surface = 2;           // ice (two-toned: dark leading/bright trailing)
+            b.atmosphere_retention = 0.0f;
+            b.temperature = 110.0f;
+        }
+        else if (b.name == "Miranda") {
+            b.forced_surface = 2;           // ice/rock (extreme geology)
+            b.atmosphere_retention = 0.0f;
+            b.temperature = 60.0f;
+        }
+        else if (b.name == "Charon") {
+            b.forced_surface = 2;           // water ice
+            b.atmosphere_retention = 0.0f;
+            b.temperature = 53.0f;
+        }
+        else if (b.name == "Phobos" || b.name == "Deimos") {
+            b.forced_surface = 0;           // carbonaceous rock (captured asteroids)
+            b.atmosphere_retention = 0.0f;
+            b.temperature = 233.0f;
+        }
+    }
+}
 
 // ── Default System (used by preset_solar_system) ─────────────────────────────
 // Uses SSCore real astronomical data when available, falls back to hand-tuned values.
@@ -59,6 +219,9 @@ static void seed_default_system(CosmosState& state, const CosmosConfig& cfg) {
                 a.name = generate_body_name(a.seed, a.type);
                 state.bodies.push_back(a);
             }
+
+            // Apply accurate surface/atmosphere/ring overrides for real solar system bodies
+            apply_solar_system_overrides(state.bodies);
 
             state.trails.resize(state.bodies.size());
             for (auto& b : state.bodies) refresh_body_render_state(b, &state);

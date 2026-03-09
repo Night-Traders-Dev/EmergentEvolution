@@ -212,6 +212,12 @@ struct BodyScenario {
     float       angular_vel = 0.001f;
     float       fuel = 1.0f;
     uint32_t    stellar_stage = SSTAGE_MAIN_SEQUENCE;
+    // Ring system (0 = no rings)
+    float       ring_inner = 0.0f;   // multiplier of radius
+    float       ring_outer = 0.0f;   // multiplier of radius
+    float       ring_density = 0.0f;
+    float       ring_ice_frac = 0.5f;
+    float       ring_tilt = 0.1f;
 };
 
 static void render_scenario(const BodyScenario& sc) {
@@ -275,6 +281,14 @@ static void render_scenario(const BodyScenario& sc) {
                                                     b.stellar_stage, b.fuel);
     }
 
+    // Apply ring system if specified
+    if (sc.ring_density > 0.0f && sc.ring_outer > 0.0f) {
+        set_ring_system(b,
+            b.radius * sc.ring_inner,
+            b.radius * sc.ring_outer,
+            sc.ring_density, sc.ring_ice_frac, sc.ring_tilt);
+    }
+
     refresh_body_render_state(b, &state);
     state.bodies.push_back(b);
 
@@ -295,11 +309,15 @@ static void render_scenario(const BodyScenario& sc) {
         camera.distance = sc.radius * star_dist_mult;  // stars: far enough to see corona + surface
     } else if (sc.type == CTYPE_BLACK_HOLE) {
         camera.distance = sc.radius * 6.0f;   // black holes: show accretion disk + lensing
+    } else if (sc.ring_density > 0.0f && sc.ring_outer > 1.0f) {
+        // Ringed bodies: frame to show full ring extent, higher elevation
+        camera.distance = sc.radius * sc.ring_outer * 1.8f;
     } else {
         camera.distance = sc.radius * 3.0f;   // planets/moons/asteroids: fill more of the frame
     }
     camera.azimuth = 0.3f;
-    camera.elevation = 0.25f;
+    // Higher elevation for ringed bodies to show ring plane
+    camera.elevation = (sc.ring_density > 0.0f) ? 0.65f : 0.35f;
     camera.fov = 45.0f;
 
     // Allocate command buffer
@@ -392,6 +410,14 @@ static const BodyScenario SCENARIOS[] = {
 
     // ── Black hole ──────────────────────────────────────────────────────
     {"black_hole",          CTYPE_BLACK_HOLE, 10.0f, 0.0f, 60.0f, -1, 3001, 1},
+
+    // ── Ringed planets ──────────────────────────────────────────────────
+    //  Saturn-like: prominent icy rings                                           ring_in ring_out density ice  tilt
+    {"ringed_saturn_like",  CTYPE_PLANET,  9.54e-4f, 134.0f,100.0f, 4, 4001, 0, 0.001f, 1.0f, SSTAGE_MAIN_SEQUENCE, 1.53f, 4.0f, 0.55f, 0.92f, 0.47f},
+    //  Uranus-like: thin dark rings, extreme tilt
+    {"ringed_ice_giant",    CTYPE_PLANET,  5.0e-5f,   76.0f, 65.0f, 4, 4002, 0, 0.001f, 1.0f, SSTAGE_MAIN_SEQUENCE, 1.64f, 2.0f, 0.08f, 0.35f, 1.30f},
+    //  Rocky planet with faint dusty ring
+    {"ringed_rocky",        CTYPE_PLANET,  2.0e-6f,  220.0f, 32.0f, 0, 4003, 0, 0.001f, 1.0f, SSTAGE_MAIN_SEQUENCE, 1.40f, 2.8f, 0.25f, 0.15f, 0.20f},
 
     // ── Skybox variety (use tiny asteroid so corona/glow doesn't wash out background) ──
     {"skybox_default",      CTYPE_ASTEROID,1.0e-15f,100.0f, 0.01f,-1, 42,   0},
