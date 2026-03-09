@@ -637,6 +637,24 @@ float starfield_layer(vec3 rd, float scale, float threshold, float sharpness) {
     return pow(max(s, 0.0), sharpness);
 }
 
+// KaliSet-inspired volumetric star accumulation for natural star clustering
+float kaliset_stars(vec3 rd, float brightness) {
+    vec3 col_acc = vec3(0.0);
+    float intensity = 0.0;
+    int layers = (quality_params.x >= 2.0) ? 6 : 4;
+    for (int v = 0; v < 6; v++) {
+        if (v >= layers) break;
+        vec3 p = rd * (0.5 + float(v) * 0.18);
+        for (int i = 0; i < 14; i++) {
+            p = abs(p) / max(dot(p, p), 0.0001) - 0.52;
+        }
+        float star_i = dot(p, p);
+        star_i *= star_i; // contrast boost
+        intensity += star_i * brightness;
+    }
+    return intensity;
+}
+
 vec3 sample_starfield(vec3 rd) {
     float stars_faint = starfield_layer(rd, 64.0, 0.84, 2.0);
     float stars_mid = starfield_layer(rd * 1.7 + 0.3, 138.0, 0.90, 3.5);
@@ -645,6 +663,8 @@ vec3 sample_starfield(vec3 rd) {
     if (quality_params.x >= 3.0) {
         stars_micro = starfield_layer(rd * 4.2 + vec3(0.3, -0.2, 0.5), 420.0, 0.985, 12.0) * 0.55;
     }
+    // KaliSet volumetric star clustering — adds natural star density variation
+    float kali = kaliset_stars(rd, 0.0008);
     float twinkle = 0.96 + 0.04 * sin(screen_info.w * 0.16 + rd.x * 133.0 + rd.z * 91.0);
 
     float tint_seed = hash11(rd.x * 71.0 + rd.y * 39.0 + rd.z * 113.0);
@@ -655,7 +675,10 @@ vec3 sample_starfield(vec3 rd) {
 
     float dense = stars_faint * 0.95 + stars_mid * 0.85;
     float bright = stars_bright * (1.2 + 0.6 * hash11(tint_seed * 91.0));
-    return tint * (dense + bright + stars_micro) * twinkle;
+    vec3 stars = tint * (dense + bright + stars_micro) * twinkle;
+    // KaliSet adds subtle star clusters and density variation
+    stars += tint * kali * twinkle;
+    return stars;
 }
 
 vec3 background(vec3 rd) {
@@ -1007,20 +1030,43 @@ vec3 atmosphere_scatter(vec3 normal, vec3 view_dir, vec3 light_dir, vec3 base_co
                         float temperature) {
     if (pressure < 0.01) return vec3(0.0);
     float ndv = max(dot(normal, -view_dir), 0.0);
+    float ndl = max(dot(normal, light_dir), 0.0);
     float fresnel = pow(clamp(1.0 - ndv, 0.0, 1.0), 2.5);
     float forward = phase_hg(clamp(0.25 + mie_strength * 0.45, 0.0, 0.85), dot(-view_dir, light_dir));
-    vec3 ray_col = mix(vec3(0.55, 0.70, 1.0), vec3(0.90, 0.55, 0.35), clamp((temperature - 240.0) / 600.0, 0.0, 1.0));
-    ray_col *= 0.25 + rayleigh_strength * 0.9;
+
+    // Wavelength-dependent Rayleigh scattering coefficients
+    // Blue scatters ~5.5x more than red (λ^-4 dependence)
+    vec3 ray_coeff = vec3(0.35, 0.55, 1.0); // proportional to 1/λ^4
+    // Temperature-based atmosphere tint (hot = more dust/haze = warmer scattering)
+    float warm_shift = clamp((temperature - 240.0) / 600.0, 0.0, 1.0);
+    ray_coeff = mix(ray_coeff, vec3(0.75, 0.50, 0.30), warm_shift * 0.55);
+    ray_coeff *= 0.25 + rayleigh_strength * 0.9;
+
     vec3 mie_col = mix(vec3(1.0), base_col * 1.1, 0.35);
     float density = clamp(pressure * 0.05 + haze_density * 0.9, 0.0, 1.2);
-    vec3 scatter = ray_col * fresnel * density + mie_col * forward * mie_strength * density * 0.8;
+
+    // Sunset/terminator reddening — light passes through more atmosphere at the terminator
+    // At the day-night boundary, the optical path is longest → blue scatters out, red remains
+    float terminator = smoothstep(-0.1, 0.3, ndl);
+    float sunset_strength = pow(1.0 - terminator, 3.0) * density;
+    vec3 sunset_col = vec3(1.0, 0.40, 0.10) * sunset_strength * 0.45;
+
+    // Blue sky on the lit hemisphere, darkening toward terminator
+    vec3 scatter = ray_coeff * fresnel * density * (0.3 + 0.7 * ndl);
+    scatter += mie_col * forward * mie_strength * density * 0.8;
+    scatter += sunset_col;
+
     // Atmospheric rim glow — thick atmospheres produce a visible limb glow
     float rim = pow(clamp(1.0 - ndv, 0.0, 1.0), 3.5);
     float rim_strength = clamp(pressure * 0.12, 0.0, 0.6) * density;
-    float ndl = max(dot(normal, light_dir), 0.0);
     float backscatter = 0.25 + 0.75 * ndl; // brighter on lit side
-    vec3 rim_col = ray_col * 1.4 + vec3(0.08);
+
+    // Rim color shifts toward sunset tones at the terminator
+    vec3 rim_col = mix(ray_coeff * 1.4 + vec3(0.08),
+                       vec3(1.0, 0.50, 0.20),
+                       sunset_strength * 0.6);
     scatter += rim_col * rim * rim_strength * backscatter;
+
     return scatter;
 }
 
@@ -1243,9 +1289,16 @@ vec3 shade_star(vec3 normal, vec3 rd, Sphere hit) {
         lon * (gran_freq * (1.8 + differential_rotation * 0.8)) + spin_phase,
         lat * (gran_freq * 3.0),
         seed * 0.11 + screen_info.w * pulsation * 0.18);
-    float granulation = fbm(nwarp, 5);
-    float cells = smoothstep(0.40 - gran_amp * 0.10, 0.64 + gran_amp * 0.10, granulation);
-    vec3 gran_col = mix(tint * (0.76 + fuel * 0.10), tint * (1.14 + gran_amp * 0.22), cells);
+    // Voronoi-based convection cell granulation (realistic solar surface)
+    vec2 cell = voronoi_f1_f2(nwarp * vec3(8.0, 12.0, 1.0));
+    float cell_edges = smoothstep(0.02, 0.12, cell.y - cell.x); // dark intergranular lanes
+    float cell_center = smoothstep(0.28, 0.02, cell.x); // hot upwelling centers
+    float granulation_fbm = fbm(nwarp, 5); // add some fBm variation for natural look
+    float cells = mix(cell_center, granulation_fbm, 0.35); // blend Voronoi + fBm
+    cells = smoothstep(0.20 - gran_amp * 0.10, 0.70 + gran_amp * 0.10, cells);
+    vec3 gran_col = mix(tint * (0.72 + fuel * 0.10), tint * (1.18 + gran_amp * 0.24), cells);
+    // Dark intergranular lanes between convection cells
+    gran_col = mix(gran_col, tint * 0.62, (1.0 - cell_edges) * 0.25 * gran_amp);
 
     float active_lat = 0.16 + differential_rotation * 0.24;
     float magnetic_band = 1.0 - smoothstep(0.08, 0.44, abs(abs(normal.y) - active_lat));
@@ -1565,11 +1618,18 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     float lat = asin(clamp(sample_normal.y, -1.0, 1.0));
     vec3 cube_np = cube_sphere_coords(sample_normal) * max(terrain_freq, 1.0) + seed_offset;
     vec3 np = cube_np;
-    vec3 warp = vec3(
+    // Cascaded domain warping (IQ technique) — two passes for organic continent shapes
+    vec3 warp_q = vec3(
         simplex3D(np + vec3(0.0, 5.2, 1.3)),
         simplex3D(np + vec3(5.2, 1.3, 0.0)),
         simplex3D(np + vec3(1.3, 0.0, 5.2))
     );
+    vec3 warp_r = vec3(
+        simplex3D(np + 4.0 * warp_q + vec3(1.7, 9.2, 0.0)),
+        simplex3D(np + 4.0 * warp_q + vec3(8.3, 2.8, 0.0)),
+        simplex3D(np + 4.0 * warp_q + vec3(3.1, 6.5, 0.0))
+    );
+    vec3 warp = mix(warp_q, warp_r, 0.45); // blend both warp passes
     vec3 warped_np = domain_warp(np + warp * terrain_amp * 0.35, 0.22 + ridge_amp * 0.30);
     float base_fbm = fbm(warped_np * 0.95, 6);
     float simplex_elev = simplex3D(warped_np * 1.15) * 0.5 + 0.5;
@@ -1693,6 +1753,10 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
         land_col = mix(land_col, biome_col, land_mask * (0.45 + 0.18 * temperate));
     }
     land_col = clamp(land_col + palette_shift * 0.08, 0.0, 1.0);
+    // Slope-based cliff blending — steep terrain shows exposed rock face
+    float cliff_slope = smoothstep(0.15, 0.55, slope);
+    vec3 cliff_col = rocky_palette(style, 0.30 + rock_frac * 0.15);
+    land_col = mix(land_col, cliff_col, cliff_slope * 0.65 * (1.0 - ice_frac * 0.5));
     col = mix(col, land_col, land_mask * (0.60 + 0.30 * continent_cov + 0.10 * island_cov));
 
     if (surface_type > 1.5 && surface_type < 2.5)
@@ -1761,6 +1825,36 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
         vec3 wave_normal = normalize(normal + tangent * waves.y * 0.08 + bitangent * waves.z * 0.08);
         surf_normal = mix(surf_normal, wave_normal, water_world ? 0.92 : 0.68);
         roughness_out = min(roughness_out, water_world ? 0.07 : 0.10);
+
+        // Fresnel reflectivity — water reflects more at grazing angles
+        float ndv_ocean = max(dot(wave_normal, -rd), 0.0);
+        float F0 = 0.02; // water index of refraction
+        float fresnel_ocean = F0 + (1.0 - F0) * pow(1.0 - ndv_ocean, 5.0);
+
+        // Physical depth-based absorption (red absorbs first, blue last)
+        vec3 absorption = vec3(0.18, 0.04, 0.018); // per-unit absorption coefficients
+        float depth_meters = depth * 40.0; // scale normalized depth to approximate meters
+        vec3 water_tint = exp(-absorption * depth_meters);
+        ocean_col *= mix(vec3(1.0), water_tint, 0.6);
+
+        // Specular sun glint on water surface
+        vec3 ocean_H = normalize(light_dir - rd);
+        float ndh_ocean = max(dot(wave_normal, ocean_H), 0.0);
+        float sun_glint = pow(ndh_ocean, 256.0) * 2.5; // sharp specular
+        float sun_glint_broad = pow(ndh_ocean, 32.0) * 0.15; // broad halo
+
+        // Shoreline foam where waves meet land
+        float foam_mask = smoothstep(sea_level + 0.01, sea_level - 0.01, elev) *
+                          smoothstep(sea_level - 0.04, sea_level - 0.01, elev);
+        float foam_noise = fbm(vec3(wave_uv * 40.0, seed * 0.11 + wave_time * 0.3), 3);
+        foam_mask *= smoothstep(0.35, 0.65, foam_noise);
+
+        // Blend ocean with Fresnel reflection (reflects sky/atmosphere color)
+        vec3 reflect_col = mix(vec3(0.15, 0.22, 0.35), vec3(0.45, 0.55, 0.72), fresnel_ocean);
+        ocean_col = mix(ocean_col, reflect_col, fresnel_ocean * 0.55);
+        ocean_col += vec3(sun_glint + sun_glint_broad);
+        ocean_col = mix(ocean_col, vec3(0.85, 0.90, 0.95), foam_mask * 0.45);
+
         col = mix(col, ocean_col, depth);
     }
 
@@ -1775,9 +1869,26 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     }
 
     if (volcanic > 0.01 && temperature > 650.0 && surface_type < 0.5) {
-        float cracks = smoothstep(0.46, 0.54, fbm(warped_np * 0.7 + 4.0, 4));
-        float lava_glow = 0.65 + 0.35 * sin(screen_info.w * 1.3 + seed * 0.1 + cracks * 5.0);
-        col = mix(col, vec3(1.0, 0.42, 0.08) * lava_glow, cracks * volcanic * 0.7);
+        // Voronoi-based tectonic plates with lava in cracks
+        vec2 lava_cell = voronoi_f1_f2(warped_np * 2.0 + vec3(seed * 0.07));
+        float crack = smoothstep(0.08, 0.02, lava_cell.y - lava_cell.x); // bright thin cracks
+        float plate = smoothstep(0.15, 0.4, lava_cell.x); // plate interiors darker
+
+        // Temperature-based blackbody emission in cracks
+        float lava_temp_n = mix(0.0, 1.0, crack);
+        vec3 lava_hot = mix(vec3(0.85, 0.12, 0.02), vec3(1.0, 0.65, 0.15), lava_temp_n);
+        float lava_glow = 0.65 + 0.35 * sin(screen_info.w * 1.3 + seed * 0.1 + crack * 5.0);
+        lava_hot *= lava_glow;
+
+        // Animated lava flow in wider fissures
+        float flow_n = fbm(warped_np * 3.0 + vec3(screen_info.w * 0.08, 0.0, 0.0), 4);
+        float flow_glow = smoothstep(0.55, 0.80, flow_n) * (1.0 - plate) * 0.3;
+        vec3 flow_col = mix(vec3(0.90, 0.20, 0.04), vec3(1.0, 0.55, 0.12), flow_n);
+
+        // Cooling crust darkens plate interiors
+        vec3 crust = col * (0.70 + 0.30 * plate);
+        col = mix(crust, lava_hot, crack * volcanic * 0.8);
+        col += flow_col * flow_glow * volcanic;
     }
 
     if (cloud_cov > 0.01 && surface_type < 3.5) {
@@ -1814,12 +1925,27 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     }
 
     if (frozen_world) {
+        // Depth-dependent subsurface scattering through ice
         float backlit = pow(clamp(dot(-light_dir, surf_normal), 0.0, 1.0), 1.4);
         float edge = pow(clamp(1.0 - max(dot(surf_normal, -rd), 0.0), 0.0, 1.0), 1.9);
         float sss = backlit * edge * (0.12 + 0.42 * clamp(ice_frac + ice_sheet_cov * 0.45, 0.0, 1.0));
-        col += vec3(0.18, 0.28, 0.38) * sss;
+        vec3 ice_sss_col = mix(vec3(0.08, 0.18, 0.35), vec3(0.22, 0.42, 0.65), edge);
+        col += ice_sss_col * sss;
+
+        // High-frequency frost crystalline patterns
+        vec2 frost_cell = voronoi_f1_f2(warped_np * 50.0 + vec3(seed * 0.13));
+        float frost_pattern = smoothstep(0.01, 0.06, frost_cell.y - frost_cell.x);
+        col = mix(col, col * 1.18, frost_pattern * 0.12 * ice_frac);
+
+        // Multi-scale sparkle (large crystal glints + fine dust)
         float sparkle = pow(white_noise(warped_np * 170.0 + vec3(screen_info.w * 0.16)), 26.0);
-        col += vec3(0.70, 0.80, 0.95) * sparkle * (0.05 + 0.08 * ice_frac);
+        float sparkle_fine = pow(white_noise(warped_np * 340.0 - vec3(screen_info.w * 0.22)), 30.0);
+        col += vec3(0.70, 0.80, 0.95) * sparkle * (0.06 + 0.10 * ice_frac);
+        col += vec3(0.85, 0.92, 1.0) * sparkle_fine * 0.04 * ice_frac;
+
+        // Fresnel-like rim brightness on ice (ice is highly reflective at grazing angles)
+        float ice_fresnel = pow(1.0 - max(dot(surf_normal, -rd), 0.0), 4.0);
+        col += vec3(0.30, 0.38, 0.50) * ice_fresnel * 0.12 * ice_frac;
     }
 
     if (hit.impact_params.x > 0.001) {
