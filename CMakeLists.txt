@@ -58,6 +58,34 @@ endif()
 # Threads (required by miniaudio audio engine)
 find_package(Threads REQUIRED)
 
+# FastNoise2 — SIMD-accelerated procedural noise for terrain generation
+FetchContent_Declare(FastNoise2
+    GIT_REPOSITORY https://github.com/Auburn/FastNoise2.git
+    GIT_TAG        v1.1.1
+)
+set(FASTNOISE2_NOISETOOL OFF CACHE BOOL "" FORCE)
+set(FASTNOISE2_TESTS     OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(FastNoise2)
+
+# SSCore — astronomical computation library (vendored, no CMake support)
+file(GLOB SSCORE_SOURCES
+    external/SSCore/SSCode/*.cpp
+    external/SSCore/SSCode/VSOP2013/*.cpp
+)
+# Exclude telescope/serial/socket/GAIA/Tetra3 — we only need ephemeris + catalogs
+list(FILTER SSCORE_SOURCES EXCLUDE REGEX "SSMount\\.cpp|SSMountModel\\.cpp|SSSerial\\.cpp|SSSocket\\.cpp|SSView\\.cpp|SSImportGAIA|Tetra3|cnpy")
+add_library(SSCore STATIC ${SSCORE_SOURCES})
+target_include_directories(SSCore PUBLIC
+    external/SSCore/SSCode
+    external/SSCore/SSCode/VSOP2013
+)
+target_compile_options(SSCore PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-w>
+    $<$<CXX_COMPILER_ID:MSVC>:/W0>
+)
+# SSCore uses std::string and std::vector with "using namespace std" in headers
+target_compile_definitions(SSCore PRIVATE _CRT_SECURE_NO_WARNINGS)
+
 # ImGui via FetchContent (no install needed)
 FetchContent_Declare(imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
@@ -265,8 +293,13 @@ add_executable(particle_cosmos
     src/cosmos/core/cosmos_cleanup.cpp
     src/cosmos/core/cosmos_diagnostics.cpp
 
-    # Data — preset scenarios
+    # Data — preset scenarios + astronomical data
     src/cosmos/data/cosmos_presets.cpp
+    src/cosmos/data/cosmos_astro_data.cpp
+
+    # Terrain — quad-sphere mesh + procedural noise
+    src/cosmos/terrain/cosmos_quadsphere.cpp
+    src/cosmos/terrain/cosmos_terrain.cpp
 
     # Processes — physics subsystems
     src/cosmos/processes/cosmos_spawning.cpp
@@ -303,7 +336,7 @@ add_executable(particle_cosmos
     src/cosmos/ui/cosmos_bottom_bar.cpp
     src/cosmos/ui/cosmos_dialogs.cpp
 )
-target_link_libraries(particle_cosmos PRIVATE pp_common)
+target_link_libraries(particle_cosmos PRIVATE pp_common FastNoise SSCore)
 target_compile_definitions(particle_cosmos PRIVATE APP_VERSION="1.2.0")
 
 # ═══════════════════════════════════════════════════════════════════════════════
