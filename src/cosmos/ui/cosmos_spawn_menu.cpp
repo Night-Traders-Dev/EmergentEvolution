@@ -158,6 +158,48 @@ void draw_spawn_preview_thumb(const char* thumb_id, int preview_type, float mass
             float nr = rf(r * 0.13f, r * 0.34f);
             dl->AddCircleFilled(np, nr, IM_COL32((int)rf(100.0f, 170.0f), (int)rf(80.0f, 140.0f), (int)rf(170.0f, 250.0f), 55), 18);
         }
+    } else if (is_galaxy_type((uint32_t)preview_type)) {
+        // Draw a simple spiral galaxy preview
+        float tilt_y = 0.45f; // slight tilt to show disk shape
+        int n_arms = (preview_type == CTYPE_GALAXY_ELLIPTICAL) ? 0 :
+                     (preview_type == CTYPE_GALAXY_DWARF) ? 1 : 2;
+        // Central bulge
+        float bulge_r = r * ((preview_type == CTYPE_GALAXY_ELLIPTICAL) ? 0.55f : 0.22f);
+        draw_radial_glow(dl, c.x, c.y, bulge_r * 2.0f,
+            IM_COL32(255, 240, 200, 120), IM_COL32(255, 230, 180, 0));
+        dl->AddCircleFilled(c, bulge_r, IM_COL32(255, 235, 190, 200), 36);
+        // Spiral arms (point cloud)
+        if (n_arms > 0) {
+            for (int arm = 0; arm < n_arms; ++arm) {
+                float arm_offset = (float)arm / (float)n_arms * 6.2831853f;
+                for (int j = 0; j < 80; ++j) {
+                    float t = (float)j / 79.0f;
+                    float angle = arm_offset + t * 4.5f; // winding
+                    float dist = r * (0.15f + t * 0.75f);
+                    float jitter_a = rf(-0.25f, 0.25f);
+                    float jitter_r = rf(-r * 0.06f, r * 0.06f);
+                    float px = c.x + std::cos(angle + jitter_a) * (dist + jitter_r);
+                    float py = c.y + std::sin(angle + jitter_a) * (dist + jitter_r) * tilt_y;
+                    float bright = 1.0f - t * 0.6f;
+                    int alpha = (int)(bright * rf(80.0f, 200.0f));
+                    ImU32 col = (preview_type == CTYPE_GALAXY_IRREGULAR)
+                        ? IM_COL32((int)(180 + rf(0, 60)), (int)(160 + rf(0, 60)), (int)(220 + rf(0, 35)), alpha)
+                        : IM_COL32((int)(220 * bright), (int)(210 * bright), (int)(240 * bright), alpha);
+                    dl->AddCircleFilled(ImVec2(px, py), rf(0.8f, 2.0f), col, 8);
+                }
+            }
+        } else {
+            // Elliptical: smooth blob of stars
+            for (int i = 0; i < 200; ++i) {
+                float a = rf(0.0f, 6.2831853f);
+                float d = r * std::sqrt(rf(0.0f, 1.0f)) * 0.8f;
+                float px = c.x + std::cos(a) * d;
+                float py = c.y + std::sin(a) * d * 0.7f;
+                int alpha = (int)(rf(50.0f, 180.0f) * (1.0f - d / (r * 0.8f)));
+                dl->AddCircleFilled(ImVec2(px, py), rf(0.6f, 1.5f),
+                    IM_COL32(245, 230, 200, std::max(alpha, 20)), 8);
+            }
+        }
     } else {
         dl->AddCircleFilled(c, r, ImColor(base_b), 72);
         for (int i = 0; i < 24; ++i) {
@@ -263,6 +305,11 @@ void CosmosApp::draw_spawn_menu() {
         {CTYPE_COMET, 8.0e-11f, "Icy body with tail"},
         {CTYPE_DUST, 5.0e-12f, "Ring/disk particle"},
         {CTYPE_NEBULA, 0.02f, "Gas cloud"},
+        {CTYPE_GALAXY_SPIRAL, 1.0e10f, "Spiral galaxy"},
+        {CTYPE_GALAXY_ELLIPTICAL, 5.0e11f, "Elliptical galaxy"},
+        {CTYPE_GALAXY_IRREGULAR, 1.0e9f, "Irregular galaxy"},
+        {CTYPE_GALAXY_LENTICULAR, 2.0e11f, "Lenticular (S0) galaxy"},
+        {CTYPE_GALAXY_DWARF, 1.0e8f, "Dwarf galaxy"},
     };
     static const TypeEntry STARS[] = {
         {CTYPE_STAR, 1.0f, "Generic star"},
@@ -341,9 +388,9 @@ void CosmosApp::draw_spawn_menu() {
         static int known_subtab = 0;
         static int kuiper_count = 450;
         static int oort_count = 900;
-        static int known_preview_choice[4] = {0, 0, 0, 0};
+        static int known_preview_choice[6] = {0, 0, 0, 0, 0, 0};
         static uint32_t known_preview_seed = 0x7A11B55Du;
-        const char* known_tabs[] = {"Basic", "Stars", "Black Holes", "System"};
+        const char* known_tabs[] = {"Basic", "Stars", "Exoplanets", "Black Holes", "Galaxies", "System"};
 
         auto hash_name_seed = [](const char* name, uint32_t salt) -> uint32_t {
             uint32_t h = 2166136261u ^ salt;
@@ -398,6 +445,11 @@ void CosmosApp::draw_spawn_menu() {
                     b.custom_silicate = 0.06f;
                     b.custom_water = 0.03f;
                     b.custom_iron = 0.01f;
+                }
+                if (is_galaxy_type(type)) {
+                    b.material_phase = PHASE_GAS;
+                    b.phase_intensity = 0.3f;
+                    b.temperature = 3.0f; // cosmic background
                 }
             }
             return b;
@@ -681,14 +733,14 @@ void CosmosApp::draw_spawn_menu() {
         };
 
         ImGui::Separator();
-        for (int t = 0; t < 4; ++t) {
+        for (int t = 0; t < 6; ++t) {
             if (t > 0) ImGui::SameLine();
             if (known_subtab == t) {
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.34f, 0.26f, 0.10f, 0.95f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.40f, 0.30f, 0.12f, 1.0f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.46f, 0.34f, 0.15f, 1.0f));
             }
-            if (ImGui::Button(known_tabs[t], ImVec2(130, 24))) known_subtab = t;
+            if (ImGui::Button(known_tabs[t], ImVec2(88, 24))) known_subtab = t;
             if (known_subtab == t) ImGui::PopStyleColor(3);
         }
 
@@ -717,12 +769,30 @@ void CosmosApp::draw_spawn_menu() {
                 {"Proxima Centauri", CTYPE_STAR_M, 0.122f, false, 0, false, false, 0},
                 {"Betelgeuse", CTYPE_STAR_M, 16.5f, false, 0, false, false, 0},
                 {"Vega", CTYPE_STAR_A, 2.135f, false, 0, false, false, 0},
+                {"TRAPPIST-1", CTYPE_STAR_M, 0.089f, false, 0, false, false, 0},
+                {"Eta Carinae", CTYPE_STAR_O, 100.0f, false, 0, false, false, 0},
+                {"UY Scuti", CTYPE_STAR_M, 7.0f, false, 0, false, false, 0},
+            };
+            static const KnownPreviewOption PREV_EXOPLANETS[] = {
+                {"TRAPPIST-1e", CTYPE_PLANET, 4.15e-6f, false, 4, false, false, 0},
+                {"Proxima Centauri b", CTYPE_PLANET, 3.9e-6f, false, 0, false, false, 0},
+                {"Kepler-186f", CTYPE_PLANET, 4.5e-6f, false, 4, false, false, 0},
+                {"55 Cancri e", CTYPE_PLANET, 2.4e-5f, false, 0, false, false, 0},
+                {"HD 189733 b", CTYPE_PLANET, 3.54e-4f, false, 5, false, false, 0},
             };
             static const KnownPreviewOption PREV_BH[] = {
                 {"Cygnus X-1", CTYPE_BH_STELLAR, 21.0f, false, 0, false, false, 0},
                 {"Sagittarius A*", CTYPE_BH_SUPERMASSIVE, 4.297e6f, false, 0, false, false, 0},
                 {"M87*", CTYPE_BH_SUPERMASSIVE, 6.5e9f, false, 0, false, false, 0},
                 {"TON 618", CTYPE_BH_SUPERMASSIVE, 6.6e10f, false, 0, false, false, 0},
+            };
+            static const KnownPreviewOption PREV_GALAXIES[] = {
+                {"Milky Way (Barred Spiral)", CTYPE_GALAXY_SPIRAL, 1.5e12f, false, 0, false, false, 0},
+                {"Andromeda (M31)", CTYPE_GALAXY_SPIRAL, 1.23e12f, false, 0, false, false, 0},
+                {"M87 (Giant Elliptical)", CTYPE_GALAXY_ELLIPTICAL, 6.5e12f, false, 0, false, false, 0},
+                {"Large Magellanic Cloud", CTYPE_GALAXY_IRREGULAR, 1.0e10f, false, 0, false, false, 0},
+                {"Sombrero (M104)", CTYPE_GALAXY_LENTICULAR, 8.0e11f, false, 0, false, false, 0},
+                {"Sagittarius Dwarf", CTYPE_GALAXY_DWARF, 4.0e8f, false, 0, false, false, 0},
             };
             static const KnownPreviewOption PREV_SYSTEM[] = {
                 {"Our Solar System", CTYPE_PLANET, 3.003e-6f, true, 4, true, true, 5},
@@ -736,13 +806,19 @@ void CosmosApp::draw_spawn_menu() {
                 preview_list = PREV_STARS;
                 preview_count = (int)IM_ARRAYSIZE(PREV_STARS);
             } else if (known_subtab == 2) {
+                preview_list = PREV_EXOPLANETS;
+                preview_count = (int)IM_ARRAYSIZE(PREV_EXOPLANETS);
+            } else if (known_subtab == 3) {
                 preview_list = PREV_BH;
                 preview_count = (int)IM_ARRAYSIZE(PREV_BH);
-            } else if (known_subtab == 3) {
+            } else if (known_subtab == 4) {
+                preview_list = PREV_GALAXIES;
+                preview_count = (int)IM_ARRAYSIZE(PREV_GALAXIES);
+            } else if (known_subtab == 5) {
                 preview_list = PREV_SYSTEM;
                 preview_count = (int)IM_ARRAYSIZE(PREV_SYSTEM);
             }
-            int& kp = known_preview_choice[std::clamp(known_subtab, 0, 3)];
+            int& kp = known_preview_choice[std::clamp(known_subtab, 0, 5)];
             kp = std::clamp(kp, 0, std::max(preview_count - 1, 0));
             ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Known Object Preview");
             ImGui::Combo("Preview Target##Known", &kp,
@@ -807,31 +883,189 @@ void CosmosApp::draw_spawn_menu() {
                     spawn_pluto_system();
             } else if (known_subtab == 1) {
                 ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Known Objects - Stars");
-                if (ImGui::Button("Sirius A", ImVec2(-1, 26))) {
+                ImGui::TextWrapped("Real stars with accurate mass, radius, temperature, and spectral class.");
+                // ── Nearby stars ──
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.70f, 0.75f, 0.85f, 1.0f), "Nearby & Bright Stars");
+                if (ImGui::Button("Sirius A (A1V, brightest star)", ImVec2(-1, 26))) {
                     CelestialBody s = make_body("Sirius A", CTYPE_STAR_A, 2.063f, 1189640.0f, 9940.0f,
                                                 120.0f, SSTAGE_MAIN_SEQUENCE, 0.68f);
-                    s.pos = camera.target;
-                    append_body(std::move(s));
+                    s.pos = camera.target; append_body(std::move(s));
                 }
-                if (ImGui::Button("Proxima Centauri", ImVec2(-1, 26))) {
+                if (ImGui::Button("Proxima Centauri (M5.5V, nearest)", ImVec2(-1, 26))) {
                     CelestialBody s = make_body("Proxima Centauri", CTYPE_STAR_M, 0.122f, 107280.0f, 3042.0f,
                                                 2000.0f, SSTAGE_MAIN_SEQUENCE, 0.82f);
-                    s.pos = camera.target;
-                    append_body(std::move(s));
+                    s.pos = camera.target; append_body(std::move(s));
                 }
-                if (ImGui::Button("Betelgeuse", ImVec2(-1, 26))) {
-                    CelestialBody s = make_body("Betelgeuse", CTYPE_STAR_M, 16.5f, 617000000.0f, 3500.0f,
-                                                1500.0f, SSTAGE_RED_GIANT, 0.20f);
-                    s.pos = camera.target;
-                    append_body(std::move(s));
+                if (ImGui::Button("Alpha Centauri A (G2V, Sun-twin)", ImVec2(-1, 26))) {
+                    CelestialBody s = make_body("Alpha Centauri A", CTYPE_STAR_G, 1.1f, 852680.0f, 5790.0f,
+                                                22.0f * 24.0f, SSTAGE_MAIN_SEQUENCE, 0.70f);
+                    s.pos = camera.target; append_body(std::move(s));
                 }
-                if (ImGui::Button("Vega", ImVec2(-1, 26))) {
+                if (ImGui::Button("Vega (A0V, pole-on rapid rotator)", ImVec2(-1, 26))) {
                     CelestialBody s = make_body("Vega", CTYPE_STAR_A, 2.135f, 1099000.0f, 9602.0f,
                                                 12.5f, SSTAGE_MAIN_SEQUENCE, 0.60f);
-                    s.pos = camera.target;
-                    append_body(std::move(s));
+                    s.pos = camera.target; append_body(std::move(s));
+                }
+                if (ImGui::Button("Barnard's Star (M4V, high proper motion)", ImVec2(-1, 26))) {
+                    CelestialBody s = make_body("Barnard's Star", CTYPE_STAR_M, 0.144f, 136480.0f, 3134.0f,
+                                                130.4f * 24.0f, SSTAGE_MAIN_SEQUENCE, 0.90f);
+                    s.pos = camera.target; append_body(std::move(s));
+                }
+                // ── Giant / evolved stars ──
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.85f, 0.70f, 0.55f, 1.0f), "Giants & Evolved Stars");
+                if (ImGui::Button("Betelgeuse (M1-2Ia, red supergiant)", ImVec2(-1, 26))) {
+                    CelestialBody s = make_body("Betelgeuse", CTYPE_STAR_M, 16.5f, 617000000.0f, 3500.0f,
+                                                1500.0f, SSTAGE_RED_GIANT, 0.20f);
+                    s.pos = camera.target; append_body(std::move(s));
+                }
+                if (ImGui::Button("Aldebaran (K5III, orange giant)", ImVec2(-1, 26))) {
+                    CelestialBody s = make_body("Aldebaran", CTYPE_STAR_K, 1.16f, 30593000.0f, 3910.0f,
+                                                520.0f * 24.0f, SSTAGE_RED_GIANT, 0.15f);
+                    s.pos = camera.target; append_body(std::move(s));
+                }
+                if (ImGui::Button("Arcturus (K1.5III, red giant)", ImVec2(-1, 26))) {
+                    CelestialBody s = make_body("Arcturus", CTYPE_STAR_K, 1.08f, 17642000.0f, 4286.0f,
+                                                0.0f, SSTAGE_RED_GIANT, 0.12f);
+                    s.pos = camera.target; append_body(std::move(s));
+                }
+                if (ImGui::Button("UY Scuti (M4Ia, largest known star)", ImVec2(-1, 26))) {
+                    CelestialBody s = make_body("UY Scuti", CTYPE_STAR_M, 7.0f, 1188830000.0f, 3365.0f,
+                                                0.0f, SSTAGE_RED_GIANT, 0.08f);
+                    s.pos = camera.target; append_body(std::move(s));
+                }
+                if (ImGui::Button("Rigel (B8Ia, blue supergiant)", ImVec2(-1, 26))) {
+                    CelestialBody s = make_body("Rigel", CTYPE_STAR_B, 21.0f, 54177000.0f, 12100.0f,
+                                                0.0f, SSTAGE_MAIN_SEQUENCE, 0.45f);
+                    s.pos = camera.target; append_body(std::move(s));
+                }
+                // ── Extreme / exotic stars ──
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.80f, 0.55f, 0.90f, 1.0f), "Extreme & Exotic Stars");
+                if (ImGui::Button("Eta Carinae (LBV, ~100 M_sun)", ImVec2(-1, 26))) {
+                    CelestialBody s = make_body("Eta Carinae", CTYPE_STAR_O, 100.0f, 168000000.0f, 36000.0f,
+                                                0.0f, SSTAGE_MAIN_SEQUENCE, 0.30f);
+                    s.pos = camera.target; append_body(std::move(s));
+                }
+                if (ImGui::Button("R136a1 (WN5h, most massive known)", ImVec2(-1, 26))) {
+                    CelestialBody s = make_body("R136a1", CTYPE_STAR_WR, 196.0f, 24500000.0f, 46000.0f,
+                                                0.0f, SSTAGE_MAIN_SEQUENCE, 0.55f);
+                    s.pos = camera.target; append_body(std::move(s));
+                }
+                if (ImGui::Button("Sirius B (DA2, white dwarf)", ImVec2(-1, 26))) {
+                    CelestialBody s = make_body("Sirius B", CTYPE_STAR_A, 1.018f, 5844.0f, 25200.0f,
+                                                0.0f, SSTAGE_WHITE_DWARF, 0.0f);
+                    s.pos = camera.target; append_body(std::move(s));
+                }
+                if (ImGui::Button("TRAPPIST-1 (M8V, 7 exoplanets)", ImVec2(-1, 26))) {
+                    CelestialBody s = make_body("TRAPPIST-1", CTYPE_STAR_M, 0.089f, 80360.0f, 2566.0f,
+                                                3.295f * 24.0f, SSTAGE_MAIN_SEQUENCE, 0.92f);
+                    s.pos = camera.target; append_body(std::move(s));
+                }
+                if (ImGui::Button("Polaris (F7Ib, Cepheid variable)", ImVec2(-1, 26))) {
+                    CelestialBody s = make_body("Polaris", CTYPE_STAR_F, 5.4f, 30200000.0f, 6015.0f,
+                                                119.0f * 24.0f, SSTAGE_MAIN_SEQUENCE, 0.40f);
+                    s.pos = camera.target; append_body(std::move(s));
                 }
             } else if (known_subtab == 2) {
+                ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Known Exoplanets");
+                ImGui::TextWrapped("Notable exoplanets discovered by Kepler, JWST, and ground telescopes.");
+                // ── Habitable zone / Earth-like ──
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.55f, 0.80f, 0.55f, 1.0f), "Habitable Zone Worlds");
+                if (ImGui::Button("TRAPPIST-1e (rocky, HZ, 0.77 R_E)", ImVec2(-1, 26))) {
+                    CelestialBody p = make_body("TRAPPIST-1e", CTYPE_PLANET, 4.15e-6f * 0.69f, 4900.0f, 251.0f,
+                                                6.1f * 24.0f, SSTAGE_MAIN_SEQUENCE, 0.0f);
+                    p.forced_surface = 3; // earth-like
+                    p.pos = camera.target + glm::vec3(200.0f, 0.0f, 0.0f); append_body(std::move(p));
+                }
+                if (ImGui::Button("TRAPPIST-1f (rocky, outer HZ, 1.04 R_E)", ImVec2(-1, 26))) {
+                    CelestialBody p = make_body("TRAPPIST-1f", CTYPE_PLANET, 4.15e-6f * 0.68f, 6630.0f, 219.0f,
+                                                9.2f * 24.0f, SSTAGE_MAIN_SEQUENCE, 0.0f);
+                    p.forced_surface = 2; // ice
+                    p.pos = camera.target + glm::vec3(250.0f, 0.0f, 0.0f); append_body(std::move(p));
+                }
+                if (ImGui::Button("Proxima Centauri b (1.17 M_E, nearest)", ImVec2(-1, 26))) {
+                    CelestialBody p = make_body("Proxima Centauri b", CTYPE_PLANET, 3.51e-6f, 7100.0f, 234.0f,
+                                                11.2f * 24.0f, SSTAGE_MAIN_SEQUENCE, 0.0f);
+                    p.forced_surface = 3;
+                    p.pos = camera.target + glm::vec3(200.0f, 0.0f, 0.0f); append_body(std::move(p));
+                }
+                if (ImGui::Button("Kepler-186f (1.11 R_E, first HZ Earth-size)", ImVec2(-1, 26))) {
+                    CelestialBody p = make_body("Kepler-186f", CTYPE_PLANET, 4.5e-6f, 7080.0f, 188.0f,
+                                                0.0f, SSTAGE_MAIN_SEQUENCE, 0.0f);
+                    p.forced_surface = 3;
+                    p.pos = camera.target + glm::vec3(200.0f, 0.0f, 0.0f); append_body(std::move(p));
+                }
+                if (ImGui::Button("Kepler-442b (1.34 R_E, ESI=0.84)", ImVec2(-1, 26))) {
+                    CelestialBody p = make_body("Kepler-442b", CTYPE_PLANET, 8.2e-6f, 8540.0f, 233.0f,
+                                                0.0f, SSTAGE_MAIN_SEQUENCE, 0.0f);
+                    p.forced_surface = 3;
+                    p.pos = camera.target + glm::vec3(200.0f, 0.0f, 0.0f); append_body(std::move(p));
+                }
+                if (ImGui::Button("LHS 1140 b (1.73 R_E, JWST target)", ImVec2(-1, 26))) {
+                    CelestialBody p = make_body("LHS 1140 b", CTYPE_PLANET, 2.0e-5f, 11030.0f, 235.0f,
+                                                24.7f * 24.0f, SSTAGE_MAIN_SEQUENCE, 0.0f);
+                    p.forced_surface = 3;
+                    p.pos = camera.target + glm::vec3(200.0f, 0.0f, 0.0f); append_body(std::move(p));
+                }
+                if (ImGui::Button("TOI-700 d (1.19 R_E, TESS find)", ImVec2(-1, 26))) {
+                    CelestialBody p = make_body("TOI-700 d", CTYPE_PLANET, 5.1e-6f, 7590.0f, 269.0f,
+                                                37.4f * 24.0f, SSTAGE_MAIN_SEQUENCE, 0.0f);
+                    p.forced_surface = 3;
+                    p.pos = camera.target + glm::vec3(200.0f, 0.0f, 0.0f); append_body(std::move(p));
+                }
+                // ── Hot / extreme ──
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.90f, 0.55f, 0.35f, 1.0f), "Extreme Worlds");
+                if (ImGui::Button("55 Cancri e (lava world, 8.6 M_E)", ImVec2(-1, 26))) {
+                    CelestialBody p = make_body("55 Cancri e", CTYPE_PLANET, 2.58e-5f, 12120.0f, 2573.0f,
+                                                18.0f, SSTAGE_MAIN_SEQUENCE, 0.0f);
+                    p.forced_surface = 0; // rocky/lava
+                    p.pos = camera.target + glm::vec3(200.0f, 0.0f, 0.0f); append_body(std::move(p));
+                }
+                if (ImGui::Button("HD 189733 b (blue hot Jupiter, rain glass)", ImVec2(-1, 26))) {
+                    CelestialBody p = make_body("HD 189733 b", CTYPE_PLANET, 3.54e-4f, 79810.0f, 1117.0f,
+                                                2.2f * 24.0f, SSTAGE_MAIN_SEQUENCE, 0.0f);
+                    p.forced_surface = 4; // gas giant
+                    p.pos = camera.target + glm::vec3(300.0f, 0.0f, 0.0f); append_body(std::move(p));
+                }
+                if (ImGui::Button("WASP-76b (iron rain, ultra-hot Jupiter)", ImVec2(-1, 26))) {
+                    CelestialBody p = make_body("WASP-76b", CTYPE_PLANET, 2.87e-4f, 130200.0f, 2228.0f,
+                                                1.8f * 24.0f, SSTAGE_MAIN_SEQUENCE, 0.0f);
+                    p.forced_surface = 4;
+                    p.pos = camera.target + glm::vec3(300.0f, 0.0f, 0.0f); append_body(std::move(p));
+                }
+                if (ImGui::Button("WASP-121b (stratosphere, puffed-up)", ImVec2(-1, 26))) {
+                    CelestialBody p = make_body("WASP-121b", CTYPE_PLANET, 3.72e-4f, 127400.0f, 2358.0f,
+                                                1.27f * 24.0f, SSTAGE_MAIN_SEQUENCE, 0.0f);
+                    p.forced_surface = 4;
+                    p.pos = camera.target + glm::vec3(300.0f, 0.0f, 0.0f); append_body(std::move(p));
+                }
+                if (ImGui::Button("GJ 1214 b (water world / mini-Neptune)", ImVec2(-1, 26))) {
+                    CelestialBody p = make_body("GJ 1214 b", CTYPE_PLANET, 1.89e-5f, 16500.0f, 596.0f,
+                                                1.58f * 24.0f, SSTAGE_MAIN_SEQUENCE, 0.0f);
+                    p.forced_surface = 1; // water
+                    p.pos = camera.target + glm::vec3(200.0f, 0.0f, 0.0f); append_body(std::move(p));
+                }
+                // ── JWST highlights ──
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.65f, 0.75f, 0.95f, 1.0f), "JWST Highlights");
+                if (ImGui::Button("K2-18 b (H2O atmosphere, JWST 2023)", ImVec2(-1, 26))) {
+                    CelestialBody p = make_body("K2-18 b", CTYPE_PLANET, 2.6e-5f, 15800.0f, 255.0f,
+                                                33.0f * 24.0f, SSTAGE_MAIN_SEQUENCE, 0.0f);
+                    p.forced_surface = 1; // water world
+                    p.pos = camera.target + glm::vec3(200.0f, 0.0f, 0.0f); append_body(std::move(p));
+                }
+                if (ImGui::Button("WASP-39b (CO2 atmosphere, JWST 2022)", ImVec2(-1, 26))) {
+                    CelestialBody p = make_body("WASP-39b", CTYPE_PLANET, 8.64e-5f, 91020.0f, 1166.0f,
+                                                4.1f * 24.0f, SSTAGE_MAIN_SEQUENCE, 0.0f);
+                    p.forced_surface = 4;
+                    p.pos = camera.target + glm::vec3(300.0f, 0.0f, 0.0f); append_body(std::move(p));
+                }
+            } else if (known_subtab == 3) {
+                // (was subtab 2)
                 ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Known Objects - Black Holes");
                 if (ImGui::Button("Cygnus X-1", ImVec2(-1, 26))) {
                     CelestialBody bh = make_body("Cygnus X-1", CTYPE_BH_STELLAR, 21.0f, 120.0f, 0.0f,
@@ -857,7 +1091,51 @@ void CosmosApp::draw_spawn_menu() {
                     bh.pos = camera.target;
                     append_body(std::move(bh));
                 }
-            } else {
+            } else if (known_subtab == 4) {
+                ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Known Galaxies");
+                ImGui::TextWrapped("Famous galaxies — spawned as star particle collections.");
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.70f, 0.75f, 0.90f, 1.0f), "Local Group");
+                if (ImGui::Button("Milky Way (SBbc barred spiral)", ImVec2(-1, 26)))
+                    spawn_galaxy_cloud(camera.target, glm::vec3(0), 1.5e12f, 500.0f, CTYPE_GALAXY_SPIRAL, 0xBAADF00Du);
+                if (ImGui::Button("Andromeda / M31 (SA(s)b spiral)", ImVec2(-1, 26)))
+                    spawn_galaxy_cloud(camera.target, glm::vec3(0), 1.23e12f, 600.0f, CTYPE_GALAXY_SPIRAL, 0xA31D04EDu);
+                if (ImGui::Button("Large Magellanic Cloud (SB(s)m)", ImVec2(-1, 26)))
+                    spawn_galaxy_cloud(camera.target, glm::vec3(0), 1.0e10f, 200.0f, CTYPE_GALAXY_IRREGULAR, 0x14C5EEDu);
+                if (ImGui::Button("Small Magellanic Cloud (SB(s)m pec)", ImVec2(-1, 26)))
+                    spawn_galaxy_cloud(camera.target, glm::vec3(0), 7.0e9f, 150.0f, CTYPE_GALAXY_DWARF, 0x544C5EEDu);
+                if (ImGui::Button("Triangulum / M33 (SA(s)cd)", ImVec2(-1, 26)))
+                    spawn_galaxy_cloud(camera.target, glm::vec3(0), 5.0e10f, 350.0f, CTYPE_GALAXY_SPIRAL, 0x7214C33u);
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.85f, 0.75f, 0.55f, 1.0f), "Famous Galaxies");
+                if (ImGui::Button("Sombrero / M104 (SA(s)a lenticular)", ImVec2(-1, 26)))
+                    spawn_galaxy_cloud(camera.target, glm::vec3(0), 8.0e11f, 400.0f, CTYPE_GALAXY_LENTICULAR, 0x504BE20u);
+                if (ImGui::Button("M87 (giant elliptical, jet)", ImVec2(-1, 26)))
+                    spawn_galaxy_cloud(camera.target, glm::vec3(0), 6.5e12f, 700.0f, CTYPE_GALAXY_ELLIPTICAL, 0x487EEDu);
+                if (ImGui::Button("Whirlpool / M51a (SA(s)bc grand design)", ImVec2(-1, 26)))
+                    spawn_galaxy_cloud(camera.target, glm::vec3(0), 1.6e11f, 300.0f, CTYPE_GALAXY_SPIRAL, 0x0051A51Au);
+                if (ImGui::Button("Pinwheel / M101 (SAB(rs)cd)", ImVec2(-1, 26)))
+                    spawn_galaxy_cloud(camera.target, glm::vec3(0), 1.0e12f, 500.0f, CTYPE_GALAXY_SPIRAL, 0x4101101u);
+                if (ImGui::Button("Centaurus A / NGC 5128 (S0 pec, radio)", ImVec2(-1, 26)))
+                    spawn_galaxy_cloud(camera.target, glm::vec3(0), 1.0e12f, 450.0f, CTYPE_GALAXY_LENTICULAR, 0x5128CEAu);
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.65f, 0.75f, 0.95f, 1.0f), "JWST / Deep Field");
+                if (ImGui::Button("JADES-GS-z14-0 (z=14.32, earliest known)", ImVec2(-1, 26)))
+                    spawn_galaxy_cloud(camera.target, glm::vec3(0), 1.0e9f, 100.0f, CTYPE_GALAXY_IRREGULAR, 0xADE514u);
+                if (ImGui::Button("GLASS-z12 (JWST early universe)", ImVec2(-1, 26)))
+                    spawn_galaxy_cloud(camera.target, glm::vec3(0), 5.0e8f, 80.0f, CTYPE_GALAXY_IRREGULAR, 0x612A55u);
+                if (ImGui::Button("Cartwheel Galaxy (ring galaxy, JWST)", ImVec2(-1, 26)))
+                    spawn_galaxy_cloud(camera.target, glm::vec3(0), 3.0e11f, 400.0f, CTYPE_GALAXY_IRREGULAR, 0xCA27EE1u);
+                if (ImGui::Button("Stephan's Quintet (compact group)", ImVec2(-1, 26))) {
+                    float offsets[][3] = {{-400,100,0},{-130,-70,170},{130,-100,-70},{330,30,100},{-200,200,-130}};
+                    uint32_t types[] = {CTYPE_GALAXY_ELLIPTICAL, CTYPE_GALAXY_SPIRAL, CTYPE_GALAXY_SPIRAL,
+                                       CTYPE_GALAXY_SPIRAL, CTYPE_GALAXY_SPIRAL};
+                    float masses[] = {2.0e11f, 1.5e11f, 1.8e11f, 2.5e11f, 8.0e10f};
+                    for (int gi = 0; gi < 5; ++gi)
+                        spawn_galaxy_cloud(camera.target + glm::vec3(offsets[gi][0], offsets[gi][1], offsets[gi][2]),
+                                          glm::vec3(0), masses[gi], 200.0f, types[gi], 0x57E9A4u + (uint32_t)gi);
+                }
+            } else if (known_subtab == 5) {
                 ImGui::TextColored(ImVec4(0.88f, 0.84f, 0.75f, 1.0f), "Known Objects - System");
                 ImGui::TextWrapped("System-level one-click presets built from the Known Objects catalog.");
                 if (ImGui::Button("Our Solar System (Known Objects)", ImVec2(-1, 30)))

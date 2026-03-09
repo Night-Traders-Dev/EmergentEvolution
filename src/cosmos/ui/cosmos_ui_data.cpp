@@ -45,6 +45,11 @@ ImU32 body_color(const CelestialBody& b) {
     case CTYPE_COMET:      return IM_COL32(160, 220, 255, 255);
     case CTYPE_NEBULA:     return IM_COL32(120, 60, 180, 255);
     case CTYPE_DUST:       return IM_COL32(205, 185, 160, 255);
+    case CTYPE_GALAXY_SPIRAL:     return IM_COL32(180, 160, 220, 255);
+    case CTYPE_GALAXY_ELLIPTICAL: return IM_COL32(220, 200, 150, 255);
+    case CTYPE_GALAXY_IRREGULAR:  return IM_COL32(140, 180, 220, 255);
+    case CTYPE_GALAXY_LENTICULAR: return IM_COL32(200, 190, 170, 255);
+    case CTYPE_GALAXY_DWARF:      return IM_COL32(160, 150, 180, 255);
     default:               return IM_COL32(200, 200, 200, 255);
     }
 }
@@ -55,6 +60,7 @@ const char* const CTYPE_NAMES[] = {
     "L Dwarf", "T Dwarf", "Y Dwarf", "Wolf-Rayet",
     "Stellar BH", "Intermediate BH", "Supermassive BH", "Primordial BH",
     "Dust",
+    "Spiral Galaxy", "Elliptical Galaxy", "Irregular Galaxy", "Lenticular Galaxy", "Dwarf Galaxy",
 };
 
 const char* const PLANET_CLASS_NAMES[] = {
@@ -89,6 +95,11 @@ const ImU32 CTYPE_COLORS[] = {
     IM_COL32(12, 12, 18, 255),     // Supermassive BH
     IM_COL32(32, 32, 40, 255),     // Primordial BH
     IM_COL32(205, 185, 160, 255),  // Dust
+    IM_COL32(180, 160, 220, 255),  // Spiral Galaxy - soft violet
+    IM_COL32(220, 200, 150, 255),  // Elliptical Galaxy - warm gold
+    IM_COL32(140, 180, 220, 255),  // Irregular Galaxy - blue
+    IM_COL32(200, 190, 170, 255),  // Lenticular Galaxy - pale bronze
+    IM_COL32(160, 150, 180, 255),  // Dwarf Galaxy - muted purple
 };
 
 std::string_view imgui_label_key(const char* label) {

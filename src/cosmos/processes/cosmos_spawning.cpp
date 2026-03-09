@@ -119,6 +119,17 @@ int CosmosApp::spawn_at(glm::vec3 pos) {
             return spawn_nebula_cloud(spawn_pos, vel, spawn_mass, cloud_r, nb.seed);
         }
 
+        // Galaxies spawn as a collection of star particles.
+        if (is_galaxy_type((uint32_t)spawn_type)) {
+            float gal_r = std::max(80.0f, std::cbrt(spawn_mass) * 40.0f);
+            if (spawn_draft_.override_radius)
+                gal_r = std::max(20.0f, spawn_draft_.radius);
+            glm::vec3 vel(0.0f);
+            if (spawn_draft_.override_velocity)
+                vel = spawn_draft_.velocity_kms / SIM_UNIT_TO_KM;
+            return spawn_galaxy_cloud(spawn_pos, vel, spawn_mass, gal_r, (uint32_t)spawn_type, nb.seed);
+        }
+
         clear_ring_system(nb);
         nb.material_phase = PHASE_SOLID;
         nb.phase_intensity = 0.0f;
@@ -469,6 +480,19 @@ int CosmosApp::spawn_preview_body(glm::vec3 pos) {
         if (spawn_draft_.override_velocity)
             vel = spawn_draft_.velocity_kms / SIM_UNIT_TO_KM;
         int idx = spawn_nebula_cloud(pos, vel, spawn_mass, cloud_r, preview_body_.seed);
+        reroll_spawn_preview();
+        return idx;
+    }
+
+    // Galaxies spawn as star particle collections
+    if (is_galaxy_type((uint32_t)spawn_type)) {
+        float gal_r = std::max(80.0f, std::cbrt(spawn_mass) * 40.0f);
+        if (spawn_draft_.override_radius)
+            gal_r = std::max(20.0f, spawn_draft_.radius);
+        glm::vec3 vel(0.0f);
+        if (spawn_draft_.override_velocity)
+            vel = spawn_draft_.velocity_kms / SIM_UNIT_TO_KM;
+        int idx = spawn_galaxy_cloud(pos, vel, spawn_mass, gal_r, (uint32_t)spawn_type, preview_body_.seed);
         reroll_spawn_preview();
         return idx;
     }

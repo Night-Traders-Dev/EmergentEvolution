@@ -43,6 +43,13 @@ enum CelestialType : uint32_t {
     CTYPE_BH_PRIMORDIAL   = 21,  // Sub-stellar mass, tiny
     CTYPE_DUST            = 22,  // Ring/disk dust grain aggregate
 
+    // Galaxy morphological types
+    CTYPE_GALAXY_SPIRAL     = 23,  // Spiral (Sa-Sd, SBa-SBd)
+    CTYPE_GALAXY_ELLIPTICAL = 24,  // Elliptical (E0-E7)
+    CTYPE_GALAXY_IRREGULAR  = 25,  // Irregular (Irr I, Irr II)
+    CTYPE_GALAXY_LENTICULAR = 26,  // Lenticular (S0)
+    CTYPE_GALAXY_DWARF      = 27,  // Dwarf galaxies
+
     CTYPE_COUNT
 };
 
@@ -54,6 +61,10 @@ inline bool is_star_type(uint32_t t) {
 
 inline bool is_black_hole_type(uint32_t t) {
     return t == CTYPE_BLACK_HOLE || (t >= CTYPE_BH_STELLAR && t <= CTYPE_BH_PRIMORDIAL);
+}
+
+inline bool is_galaxy_type(uint32_t t) {
+    return t >= CTYPE_GALAXY_SPIRAL && t <= CTYPE_GALAXY_DWARF;
 }
 
 // ── Stellar evolutionary stages ─────────────────────────────────────────────
@@ -124,6 +135,7 @@ enum BodyRenderClass : uint8_t {
     RENDER_COMET = 4,
     RENDER_BLACK_HOLE = 5,
     RENDER_NEBULA = 6,
+    RENDER_GALAXY = 7,
 };
 
 enum SmallBodyClass : uint8_t {
@@ -266,6 +278,16 @@ struct BodyVisualProperties {
     float island_coverage = 0.0f;
     float river_density = 0.0f;
     float ice_sheet_coverage = 0.0f;
+
+    // Galaxy visual properties
+    float galaxy_arm_count = 2.0f;       // number of spiral arms
+    float galaxy_arm_tightness = 0.4f;   // spiral winding (0=tight, 1=open)
+    float galaxy_bar_strength = 0.0f;    // central bar (0=none, 1=strong barred spiral)
+    float galaxy_bulge_ratio = 0.3f;     // bulge size relative to disk
+    float galaxy_disk_thickness = 0.08f; // disk thickness ratio
+    float galaxy_dust_lane = 0.5f;       // dust lane opacity
+    float galaxy_halo_extent = 2.0f;     // stellar halo size
+    float galaxy_star_density = 0.7f;    // overall star field density
 };
 
 // ── Hash helpers for procedural generation ──────────────────────────────────
@@ -1477,6 +1499,98 @@ inline BodyVisualProperties generate_body_visual_properties(const CelestialBody&
         vp.mie_strength = 1.30f;
         vp.cloud_detail = 0.95f;
         vp.weather_strength = 0.86f + std::clamp(b.collapse_progress, 0.0f, 1.0f) * 0.20f;
+        vp.spin_visual = spin_mag;
+        return vp;
+    }
+
+    if (is_galaxy_type(b.type)) {
+        vp.render_class = RENDER_GALAXY;
+        vp.subtype = (uint8_t)(b.type - CTYPE_GALAXY_SPIRAL); // 0-4 for galaxy subtypes
+
+        // Galaxy visual properties → packed into fields the shader reads
+        // composition_params: x=arm_count(scaled), y=arm_tightness, z=bar_strength, w=bulge_ratio
+        // feature_params: x=disk_thickness, y=dust_lane, z=halo_extent, w=star_density
+        //
+        // The shader rescales arm_count: floor(x * 6 + 0.5) → 1-6 arms
+        // So we store arm_count / 6.0 in rock_frac (→ composition_params.x)
+
+        // Generate galaxy properties purely from seed and type
+        float arm_count = 2.0f;
+        float arm_tightness = 0.4f;
+        float bar_strength = 0.0f;
+        float bulge_ratio = 0.3f;
+        float disk_thickness = 0.08f;
+        float dust_lane = 0.5f;
+        float halo_extent = 2.0f;
+        float star_density = 0.7f;
+
+        switch (b.type) {
+        case CTYPE_GALAXY_SPIRAL:
+            arm_count = 2.0f + h0 * 4.0f;           // 2-6 arms
+            arm_tightness = 0.3f + h1 * 0.4f;
+            bar_strength = h2 * 0.3f;                // weak or no bar
+            bulge_ratio = 0.2f + h0 * 0.2f;
+            disk_thickness = 0.05f + h1 * 0.08f;
+            dust_lane = 0.4f + h2 * 0.4f;
+            star_density = 0.6f + h0 * 0.3f;
+            halo_extent = 1.8f + h1 * 1.0f;
+            break;
+        case CTYPE_GALAXY_ELLIPTICAL:
+            arm_count = 0.0f;
+            arm_tightness = 0.0f;
+            bar_strength = 0.0f;
+            bulge_ratio = 0.7f + h0 * 0.3f;          // mostly bulge
+            disk_thickness = 0.5f + h1 * 0.4f;        // thick/round
+            dust_lane = 0.02f + h2 * 0.05f;           // very little dust
+            star_density = 0.5f + h0 * 0.4f;
+            halo_extent = 2.0f + h1 * 1.5f;
+            break;
+        case CTYPE_GALAXY_LENTICULAR:
+            arm_count = h0 * 1.0f;                    // 0-1 very faint arms
+            arm_tightness = 0.1f + h1 * 0.15f;
+            bar_strength = h2 * 0.4f;                 // some have weak bars
+            bulge_ratio = 0.5f + h0 * 0.3f;           // large bulge
+            disk_thickness = 0.15f + h1 * 0.2f;       // thicker disk
+            dust_lane = 0.05f + h2 * 0.1f;            // low dust
+            star_density = 0.5f + h0 * 0.3f;
+            halo_extent = 1.5f + h1 * 1.0f;
+            break;
+        case CTYPE_GALAXY_IRREGULAR:
+            arm_count = 1.0f + h0 * 3.0f;             // 1-4 ragged arms
+            arm_tightness = 0.05f + h1 * 0.2f;        // loose
+            bar_strength = h2 * 0.15f;
+            bulge_ratio = 0.1f + h0 * 0.2f;           // small bulge
+            disk_thickness = 0.1f + h1 * 0.15f;
+            dust_lane = 0.3f + h2 * 0.4f;
+            star_density = 0.4f + h0 * 0.4f;
+            halo_extent = 1.2f + h1 * 0.8f;
+            break;
+        case CTYPE_GALAXY_DWARF:
+            arm_count = h0 * 2.0f;                    // 0-2 faint arms
+            arm_tightness = 0.1f + h1 * 0.15f;
+            bar_strength = 0.0f;
+            bulge_ratio = 0.15f + h0 * 0.25f;
+            disk_thickness = 0.1f + h1 * 0.1f;
+            dust_lane = 0.1f + h2 * 0.2f;
+            star_density = 0.2f + h2 * 0.3f;          // sparse
+            halo_extent = 1.2f + h1 * 0.6f;           // compact
+            break;
+        default: break;
+        }
+
+        // Pack into BodyVisualProperties fields that map to SphereGPU
+        vp.rock_frac = arm_count / 6.0f;       // → composition_params.x (shader does floor(x*6+0.5))
+        vp.ice_frac = arm_tightness;            // → composition_params.y
+        vp.metal_frac = bar_strength;           // → composition_params.z
+        vp.dust_frac = bulge_ratio;             // → composition_params.w
+
+        vp.continent_coverage = disk_thickness;  // → feature_params.x
+        vp.island_coverage = dust_lane;          // → feature_params.y
+        vp.river_density = halo_extent;          // → feature_params.z
+        vp.ice_sheet_coverage = star_density;    // → feature_params.w
+
+        vp.roughness = 1.0f;
+        vp.specular = 0.0f;
         vp.spin_visual = spin_mag;
         return vp;
     }

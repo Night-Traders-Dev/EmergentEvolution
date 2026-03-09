@@ -66,6 +66,7 @@ const int RENDER_ASTEROID = 3;
 const int RENDER_COMET = 4;
 const int RENDER_BLACK_HOLE = 5;
 const int RENDER_NEBULA = 6;
+const int RENDER_GALAXY = 7;
 const int MAX_TRACE_BODIES = 2048;
 const int MAX_GRAVITY_WELLS = 64;
 
@@ -1343,7 +1344,7 @@ vec3 shade_star(vec3 normal, vec3 rd, Sphere hit) {
                                  lat * 16.0,
                                  seed * 0.53), 4);
     float storm_cells = smoothstep(0.58, 0.86, storm_noise + storm_lat_band * 0.45 + storm_band_wave * 0.25);
-    gran_col += tint * (0.08 + 0.22 * flare_activity) * storm_cells * storm_strength * (0.45 + 0.55 * magnetic_band);
+    gran_col += tint * (0.15 + 0.35 * flare_activity) * storm_cells * storm_strength * (0.45 + 0.55 * magnetic_band);
 
     float mu = max(dot(normal, -rd), 0.0);
     float limb_dark = mix(0.45, 0.75, clamp(temperature / 18000.0, 0.0, 1.0));
@@ -1371,7 +1372,7 @@ vec3 shade_star(vec3 normal, vec3 rd, Sphere hit) {
             fbm(vec3(lon * 12.5 + screen_info.w * (0.65 + storm_strength * 1.1),
                      lat * 20.0 - screen_info.w * 0.4,
                      seed * 0.71), 4) + active_region * 0.35);
-        float cme = cme_ribbon * edge * storm_strength * (0.25 + 0.75 * flare_cycle);
+        float cme = cme_ribbon * edge * storm_strength * (0.40 + 0.95 * flare_cycle);
         float storm_glow = storm_cells * edge * (0.10 + 0.32 * storm_strength);
         float prominence_lat = 1.0 - smoothstep(0.05, 0.26 + differential_rotation * 0.10,
                                                 abs(abs(normal.y) - active_lat * 0.92));
@@ -1391,13 +1392,13 @@ vec3 shade_star(vec3 normal, vec3 rd, Sphere hit) {
 
         col += tint * corona_strength * edge * (0.72 + 0.24 * pulsation) * corona_scale;
         col += mix(tint, vec3(1.00, 0.96, 0.88), 0.35) * streamer * (0.24 + flare_activity * 0.72) * corona_scale;
-        col += vec3(1.0, 0.97, 0.92) * flare_fan * flare_activity * (0.18 + corona_strength * 0.40) * corona_scale;
+        col += vec3(1.0, 0.97, 0.92) * flare_fan * flare_activity * (0.27 + corona_strength * 0.60) * corona_scale;
         col += vec3(0.95, 0.98, 1.0) * flare_burst * edge * (0.32 + corona_strength * 0.78) * corona_scale;
         col += mix(tint, vec3(1.0, 0.88, 0.72), 0.62) * cme * (0.30 + flare_activity * 0.68) * corona_scale;
         col += prominence_tint * prominence_loop *
-               (0.16 + flare_activity * 0.34 + corona_strength * 0.20) * corona_scale;
+               (0.28 + flare_activity * 0.52 + corona_strength * 0.30) * corona_scale;
         col += prominence_hot * prominence_foot * prominence_track *
-               (0.08 + flare_activity * 0.20) * corona_scale;
+               (0.16 + flare_activity * 0.35) * corona_scale;
         col += tint * storm_glow * corona_scale;
     }
 
@@ -1915,18 +1916,42 @@ vec3 shade_planet_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     }
 
     if (cloud_cov > 0.01 && surface_type < 3.5) {
-        float cloud_phase = screen_info.w * (0.06 + hit.activity_params.x * 0.22 + hash11(seed * 0.071) * 0.08);
+        float weather = hit.activity_params.x;
+        float cloud_phase = screen_info.w * (0.06 + weather * 0.22 + hash11(seed * 0.071) * 0.08);
         vec3 cloud_np = vec3(lon * 7.5 + cloud_phase,
                              lat * 11.0 + sin(cloud_phase + lon * 2.0) * 0.8,
                              seed * 0.19);
-        float cloud_shape = smoothstep(0.42 - cloud_cov * 0.24, 0.74, fbm(cloud_np, 5));
-        float cloud_detail = smoothstep(0.52, 0.86, fbm(cloud_np * vec3(1.9, 1.4, 1.0) + vec3(3.2, 1.1, 0.7), 4));
-        float cloud_mask = cloud_shape * mix(0.65, 1.0, cloud_detail);
+        float cloud_shape = smoothstep(0.42 - cloud_cov * 0.28, 0.74, fbm(cloud_np, 5));
+        float cloud_fine = smoothstep(0.52, 0.86, fbm(cloud_np * vec3(1.9, 1.4, 1.0) + vec3(3.2, 1.1, 0.7), 4));
+        float cloud_mask = cloud_shape * mix(0.65, 1.0, cloud_fine);
+
+        // Cyclone/hurricane patterns at high weather strength
+        if (weather > 0.2) {
+            float storm_lat = hash11(seed * 0.342) * 1.2 - 0.6; // random latitude
+            float storm_lon = hash11(seed * 0.567) * 6.283;
+            float storm_r = length(vec2((lon - storm_lon) * cos(lat), lat - storm_lat));
+            float cyclone_angle = atan(lat - storm_lat, (lon - storm_lon) * cos(lat));
+            float spiral = sin(cyclone_angle * 3.0 - storm_r * 12.0 + cloud_phase * 4.0);
+            float eye_wall = smoothstep(0.08, 0.02, storm_r) * 0.4; // calm eye
+            float cyclone = smoothstep(0.35, 0.05, storm_r) * (0.5 + spiral * 0.35) * (1.0 - eye_wall);
+            cyclone *= weather * 1.5;
+            cloud_mask = max(cloud_mask, cyclone);
+
+            // Additional storm cells
+            float storm2_lat = hash11(seed * 0.891) * 1.0 - 0.5;
+            float storm2_lon = hash11(seed * 0.234) * 6.283;
+            float storm2_r = length(vec2((lon - storm2_lon) * cos(lat), lat - storm2_lat));
+            float storm2 = smoothstep(0.25, 0.03, storm2_r) * weather;
+            cloud_mask = max(cloud_mask, storm2 * 0.8);
+        }
+
         float shadow = smoothstep(0.52, 0.86, fbm(cloud_np + vec3(2.1, 0.7, 1.4), 5));
         float cloud_lit = 0.35 + 0.65 * max(dot(normal, light_dir), 0.0);
         vec3 cloud_col = mix(vec3(0.84, 0.88, 0.94), vec3(0.98, 0.99, 1.0), cloud_lit);
-        col = mix(col, cloud_col, cloud_mask * cloud_cov * (0.64 + 0.24 * cloud_lit));
-        col *= 1.0 - shadow * cloud_cov * 0.18;
+        // Storm clouds are darker
+        cloud_col = mix(cloud_col, vec3(0.60, 0.62, 0.66), weather * cloud_mask * 0.3);
+        col = mix(col, cloud_col, cloud_mask * cloud_cov * (0.78 + 0.18 * cloud_lit));
+        col *= 1.0 - shadow * cloud_cov * 0.28;
     }
 
     if (phase_kind > float(PHASE_ICE) - 0.5 && phase_kind < float(PHASE_ICE) + 0.5) {
@@ -2052,6 +2077,160 @@ vec3 shade_nebula_surface(vec3 normal, Sphere hit, vec3 rd, vec3 light_dir,
     roughness_out = 1.0;
     surf_normal = normal;
     return max(col, vec3(0.0));
+}
+
+// ── Galaxy rendering ────────────────────────────────────────────────────────
+// Renders galaxies as volumetric disc+bulge+arm structures using ray-sphere
+// intersection on an inflated bounding sphere, then procedural arm/dust tracing.
+
+vec3 shade_galaxy(vec3 ro, vec3 rd, Sphere hit, int body_idx,
+                  vec3 light_dir, vec3 light_col, out float transmittance) {
+    transmittance = 1.0;
+    vec3 center = hit.pos_radius.xyz;
+    float R = hit.pos_radius.w;
+    float seed = hit.class_seed_temp.x;
+
+    // Galaxy parameters from visual properties
+    // composition_params: x=rock(arm_count), y=ice(arm_tightness), z=metal(bar_strength), w=dust(bulge_ratio)
+    float arm_count = max(floor(hit.composition_params.x * 6.0 + 0.5), 1.0); // 1-6 arms
+    float arm_tightness = hit.composition_params.y; // 0-1, maps to winding
+    float bar_strength = hit.composition_params.z;  // 0-1
+    float bulge_ratio = hit.composition_params.w;   // 0-1
+
+    // feature_params: x=terrain_amp(disk_thickness), y=terrain_freq(dust_lane), z=ridge(halo_extent), w=crater(star_density)
+    float disk_thickness = max(hit.feature_params.x * 0.3, 0.02);
+    float dust_lane_opacity = hit.feature_params.y;
+    float halo_extent = max(hit.feature_params.z, 1.0);
+    float star_density = hit.feature_params.w;
+
+    // Raymarch through galaxy volume
+    float effective_r = R * max(halo_extent, 2.5);
+    vec3 oc = ro - center;
+    float b_coef = dot(oc, rd);
+    float c_coef = dot(oc, oc) - effective_r * effective_r;
+    float disc = b_coef * b_coef - c_coef;
+    if (disc < 0.0) return vec3(0.0);
+
+    float sqrt_disc = sqrt(disc);
+    float t_near = -b_coef - sqrt_disc;
+    float t_far = -b_coef + sqrt_disc;
+    if (t_far < 0.0) return vec3(0.0);
+    t_near = max(t_near, 0.0);
+
+    // Galaxy orientation from seed
+    // Bias toward moderate inclinations (20-50 deg) so spiral structure is usually visible
+    float tilt_angle = 0.35 + hash11(seed * 0.123) * 0.55; // ~20-51 degrees
+    float roll_angle = hash11(seed * 0.456) * 6.283;
+    vec3 up = normalize(vec3(sin(roll_angle) * sin(tilt_angle), cos(tilt_angle), cos(roll_angle) * sin(tilt_angle)));
+    vec3 right = normalize(cross(up, vec3(0.0, 0.0, 1.0)));
+    if (length(right) < 0.01) right = normalize(cross(up, vec3(1.0, 0.0, 0.0)));
+    vec3 forward = normalize(cross(right, up));
+
+    // Galaxy base colors
+    float color_seed = hash11(seed * 0.789);
+    vec3 arm_col = mix(vec3(0.55, 0.65, 0.90), vec3(0.70, 0.80, 1.0), color_seed); // blue star-forming regions
+    vec3 bulge_col = mix(vec3(0.95, 0.85, 0.55), vec3(1.0, 0.90, 0.65), color_seed); // warm old stars
+    vec3 dust_col = vec3(0.18, 0.10, 0.05); // dark dust lanes
+    vec3 halo_col = mix(vec3(0.45, 0.42, 0.50), vec3(0.55, 0.52, 0.60), color_seed); // old halo stars
+
+    vec3 accum = vec3(0.0);
+    int steps = 64;
+    float step_size = (t_far - t_near) / float(steps);
+    float norm_step = step_size / max(R, 0.01); // scale-independent optical depth
+
+    for (int i = 0; i < steps; i++) {
+        float t = t_near + (float(i) + 0.5) * step_size;
+        vec3 p = ro + rd * t;
+        vec3 local = p - center;
+
+        // Transform to galaxy-local coordinates
+        float gx = dot(local, right) / R;
+        float gy = dot(local, up) / R;
+        float gz = dot(local, forward) / R;
+
+        float r_cyl = length(vec2(gx, gz)); // cylindrical radius
+        float theta = atan(gz, gx);
+
+        // ── Disk profile ──
+        float disk_falloff = exp(-r_cyl * r_cyl * 2.5);
+        float disk_height = exp(-(gy * gy) / (disk_thickness * disk_thickness * max(0.3, 1.0 - r_cyl) * max(0.3, 1.0 - r_cyl)));
+        float disk = disk_falloff * disk_height;
+
+        // ── Spiral arms ──
+        float winding = 2.5 + arm_tightness * 6.0; // tighter = more revolutions
+        float arm_phase = theta - r_cyl * winding + seed * 0.37;
+        float arm = 0.0;
+        for (float a = 0.0; a < arm_count; a += 1.0) {
+            float offset = a * 6.283 / arm_count;
+            float arm_angle = arm_phase + offset;
+            // Smooth arm profile
+            float arm_dist = abs(sin(arm_angle * 0.5));
+            arm += exp(-arm_dist * arm_dist * 18.0);
+        }
+        arm = clamp(arm, 0.0, 1.0);
+
+        // Add some noise to break up arms
+        float noise = fbm(vec3(gx * 12.0, gy * 40.0, gz * 12.0) + seed * 0.17, 3) * 0.35;
+        arm = clamp(arm + noise * 0.4, 0.0, 1.0);
+
+        // ── Bar structure ──
+        float bar = exp(-(gz * gz) * 15.0) * exp(-(gx * gx) * 3.0) * exp(-(gy * gy) / (disk_thickness * disk_thickness * 4.0));
+        bar *= bar_strength;
+
+        // ── Bulge ──
+        float r_3d = length(vec3(gx, gy * 2.5, gz)); // vertically squashed
+        float bulge = exp(-r_3d * r_3d / (bulge_ratio * bulge_ratio * 0.5)) * bulge_ratio;
+
+        // ── Halo ──
+        float r_halo = length(local) / (R * halo_extent);
+        float halo = exp(-r_halo * r_halo * 6.0) * 0.04;
+
+        // ── Dust lanes ──
+        float dust_arm_phase = theta - r_cyl * (winding + 0.3) + seed * 0.37;
+        float dust = 0.0;
+        for (float a = 0.0; a < arm_count; a += 1.0) {
+            float offset = a * 6.283 / arm_count;
+            float da = dust_arm_phase + offset;
+            float dd = abs(sin(da * 0.5));
+            dust += exp(-dd * dd * 35.0); // thinner than star arms
+        }
+        dust = clamp(dust, 0.0, 1.0) * disk * dust_lane_opacity;
+
+        // ── Point stars (sparse bright points) ──
+        float star_sparkle = pow(white_noise(vec3(gx, gy, gz) * 80.0 + seed * 0.31), 12.0);
+        float bright_stars = star_sparkle * star_density * disk * 2.0;
+
+        // ── Combine ──
+        float total_density = (disk * arm * 0.9 + disk * 0.08 + bar * 0.35 + bulge + halo) * star_density;
+
+        // Apply dust extinction (scale-independent)
+        transmittance *= 1.0 - clamp(dust * 0.3 * norm_step * 2.0, 0.0, 0.04);
+
+        // Color mixing
+        float arm_weight = arm * disk_falloff;
+        float bulge_weight = bulge;
+        float halo_weight = halo;
+        float total_weight = arm_weight + bulge_weight + halo_weight + 0.001;
+        vec3 local_col = (arm_col * arm_weight + bulge_col * bulge_weight + halo_col * halo_weight) / total_weight;
+
+        // Dust darkening
+        local_col = mix(local_col, dust_col, dust * 0.6);
+
+        // HII region glow (pink/red) in arm cores
+        float hii = arm * disk * smoothstep(0.6, 0.9, fbm(vec3(gx * 8.0, gy * 30.0, gz * 8.0) + seed * 0.53, 3));
+        local_col += vec3(0.85, 0.25, 0.35) * hii * 0.4;
+
+        // Bright point stars
+        local_col += vec3(1.2, 1.1, 1.0) * bright_stars * 2.0;
+
+        float alpha = clamp(total_density * norm_step * 2.0, 0.0, 0.025);
+        accum += local_col * alpha * transmittance;
+        transmittance *= 1.0 - alpha;
+
+        if (transmittance < 0.01) break;
+    }
+
+    return accum;
 }
 
 int nebula_mode() {
@@ -2821,6 +3000,11 @@ void main() {
             float aabb_half = 2.8 + expansion * 0.70;
             float effective_r = march_r * aabb_half * 0.58; // ~cube-inscribed sphere
             t = intersect_sphere(ro, rd, spheres[i].pos_radius.xyz, effective_r);
+        } else if (render_class == RENDER_GALAXY) {
+            // Galaxies use inflated bounding sphere for volumetric marching
+            float halo_ext = max(spheres[i].feature_params.z, 1.0);
+            float galaxy_effective_r = spheres[i].pos_radius.w * max(halo_ext, 2.5);
+            t = intersect_sphere(ro, rd, spheres[i].pos_radius.xyz, galaxy_effective_r);
         } else {
             t = intersect_sphere(ro, rd, spheres[i].pos_radius.xyz, spheres[i].pos_radius.w);
         }
@@ -2951,6 +3135,21 @@ void main() {
             neb_final = mix(pow(max(background(rd), vec3(0.0)), vec3(1.0 / 2.2)), neb_final, ga);
         }
         outColor = vec4(neb_final, 1.0);
+        return;
+    }
+
+    if (render_class == RENDER_GALAXY) {
+        vec3 galaxy_light_dir = has_primary_light ? primary_light_dir : normalize(vec3(0.5, 0.8, 0.3));
+        vec3 galaxy_light_col = has_primary_light ? primary_light_color : vec3(1.0);
+        float galaxy_transmittance = 1.0;
+        vec3 final_color = shade_galaxy(ro, rd, hit, closest_idx, galaxy_light_dir, galaxy_light_col, galaxy_transmittance);
+        final_color += background(rd) * galaxy_transmittance;
+
+        if (is_ghost) {
+            float ga = 0.72 + 0.05 * sin(screen_info.w * 3.5);
+            final_color = mix(background(rd), final_color, ga);
+        }
+        outColor = vec4(pow(aces_tonemap(max(final_color, vec3(0.0))), vec3(1.0 / 2.2)), 1.0);
         return;
     }
 

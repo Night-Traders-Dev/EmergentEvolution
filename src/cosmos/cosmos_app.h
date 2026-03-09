@@ -124,6 +124,8 @@ private:
                          int ring_style = 4);
     int  spawn_nebula_cloud(glm::vec3 center, glm::vec3 base_vel, float total_mass,
                             float cloud_radius, uint32_t seed);
+    int  spawn_galaxy_cloud(glm::vec3 center, glm::vec3 base_vel, float total_mass,
+                            float galaxy_radius, uint32_t galaxy_type, uint32_t seed);
     void spawn_moons_for_host(int host_index, int moon_count,
                               int orbit_layout = 0,
                               float inclination_deg = 8.0f,

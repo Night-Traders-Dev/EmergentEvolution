@@ -279,6 +279,9 @@ static void render_scenario(const BodyScenario& sc) {
         b.fuel = sc.fuel;
         b.luminosity = expected_stellar_luminosity(b.mass, b.temperature, b.radius,
                                                     b.stellar_stage, b.fuel);
+    } else if (is_galaxy_type(b.type)) {
+        b.material_phase = PHASE_GAS;
+        b.phase_intensity = 0.3f;
     }
 
     // Apply ring system if specified
@@ -309,6 +312,8 @@ static void render_scenario(const BodyScenario& sc) {
         camera.distance = sc.radius * star_dist_mult;  // stars: far enough to see corona + surface
     } else if (sc.type == CTYPE_BLACK_HOLE) {
         camera.distance = sc.radius * 6.0f;   // black holes: show accretion disk + lensing
+    } else if (is_galaxy_type(sc.type)) {
+        camera.distance = sc.radius * 8.0f;   // galaxies: show full extent + halo
     } else if (sc.ring_density > 0.0f && sc.ring_outer > 1.0f) {
         // Ringed bodies: frame to show full ring extent, higher elevation
         camera.distance = sc.radius * sc.ring_outer * 1.8f;
@@ -316,8 +321,9 @@ static void render_scenario(const BodyScenario& sc) {
         camera.distance = sc.radius * 3.0f;   // planets/moons/asteroids: fill more of the frame
     }
     camera.azimuth = 0.3f;
-    // Higher elevation for ringed bodies to show ring plane
-    camera.elevation = (sc.ring_density > 0.0f) ? 0.65f : 0.35f;
+    // Higher elevation for ringed bodies and galaxies to show structure
+    camera.elevation = (sc.ring_density > 0.0f) ? 0.65f :
+                       is_galaxy_type(sc.type) ? 0.85f : 0.35f;
     camera.fov = 45.0f;
 
     // Allocate command buffer
@@ -418,6 +424,13 @@ static const BodyScenario SCENARIOS[] = {
     {"ringed_ice_giant",    CTYPE_PLANET,  5.0e-5f,   76.0f, 65.0f, 4, 4002, 0, 0.001f, 1.0f, SSTAGE_MAIN_SEQUENCE, 1.64f, 2.0f, 0.08f, 0.35f, 1.30f},
     //  Rocky planet with faint dusty ring
     {"ringed_rocky",        CTYPE_PLANET,  2.0e-6f,  220.0f, 32.0f, 0, 4003, 0, 0.001f, 1.0f, SSTAGE_MAIN_SEQUENCE, 1.40f, 2.8f, 0.25f, 0.15f, 0.20f},
+
+    // ── Galaxies ────────────────────────────────────────────────────────
+    {"galaxy_spiral",       CTYPE_GALAXY_SPIRAL,     1.0e10f, 3.0f, 200.0f, -1, 5001, 0},
+    {"galaxy_elliptical",   CTYPE_GALAXY_ELLIPTICAL,  5.0e11f, 3.0f, 250.0f, -1, 5002, 0},
+    {"galaxy_irregular",    CTYPE_GALAXY_IRREGULAR,   1.0e9f,  3.0f, 150.0f, -1, 5003, 0},
+    {"galaxy_lenticular",   CTYPE_GALAXY_LENTICULAR,  2.0e11f, 3.0f, 220.0f, -1, 5004, 0},
+    {"galaxy_dwarf",        CTYPE_GALAXY_DWARF,       1.0e8f,  3.0f, 100.0f, -1, 5005, 0},
 
     // ── Skybox variety (use tiny asteroid so corona/glow doesn't wash out background) ──
     {"skybox_default",      CTYPE_ASTEROID,1.0e-15f,100.0f, 0.01f,-1, 42,   0},
