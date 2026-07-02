@@ -80,6 +80,7 @@ enum BioEnvironmentType : uint32_t {
     BIO_ENV_BLOOD      = 5,
     BIO_ENV_SOIL       = 6,
     BIO_ENV_WOUND      = 7,
+    BIO_ENV_EMPTY      = 8,
     BIO_ENV_COUNT
 };
 
@@ -254,6 +255,21 @@ inline const BioEnvironmentPreset& bio_environment_preset(BioEnvironmentType env
             2.50f,
             0.968f,
             true,
+        },
+        {
+            "Empty",
+            "A blank void with no entities, no features, and neutral conditions. Use as a clean slate for manual spawning.",
+            {0.05f, 0.05f, 0.05f},
+            {1.0f, 0.0f, 0.0f},
+            25.0f,
+            7.00f,
+            0.50f,
+            0.00f,
+            0.0f,
+            0.00f,
+            0.00f,
+            0.980f,
+            false,
         },
     };
 
