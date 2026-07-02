@@ -1,3 +1,6 @@
 [submodule "tools/ParticleRepository"]
 	path = tools/ParticleRepository
 	url = https://github.com/Night-Traders-Dev/ParticleRepository
+[submodule "external/SSCore"]
+        path = external/SSCore
+        url = https://github.com/timmyd7777/SSCore
